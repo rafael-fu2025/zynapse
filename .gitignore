@@ -1,0 +1,59 @@
+# --- OS / editor noise ---
+.DS_Store
+Thumbs.db
+*.log
+*.bak
+*.swp
+.idea/
+.vscode/
+
+# --- Dev-only runtime state at workspace root ---
+# Local debug cookies from ad-hoc PowerShell probes
+cookies.txt
+
+# Local dev helper (the actual "dev" workflow is in backend + frontend)
+dev-fast.ps1
+
+# Anything inside writable/ (runtime caches, logs, uploads, backups, sessions)
+/writable/
+
+# Local scripts (sandboxed one-off tooling)
+/scripts/
+
+# --- Backend (CI4) ---
+/backend/vendor/
+/backend/.env
+/backend/writable/cache/*
+!/backend/writable/cache/index.html
+/backend/writable/logs/*
+!/backend/writable/logs/index.html
+/backend/writable/session/*
+!/backend/writable/session/index.html
+/backend/writable/uploads/*
+!/backend/writable/uploads/index.html
+/backend/writable/debugbar/
+/backend/writable/reports/
+/backend/writable/log/lint.txt
+/backend/scripts/
+/backend/build/
+/backend/user_guide/
+/backend/tests/_output/
+/backend/coverage/
+
+# --- Frontend (Vite) ---
+/frontend/node_modules/
+/frontend/dist/
+/frontend/.vite/
+/frontend/.cache/
+/frontend/.env
+/frontend/.env.local
+/frontend/coverage/
+/frontend/test-results/
+/frontend/playwright-report/
+/frontend/tsconfig.tsbuildinfo
+
+# --- E2E / test artifacts ---
+/frontend/e2e/artifacts/
+
+# --- Reports / drafts that aren't ready ---
+/writable/reports/

@@ -1,0 +1,14 @@
+/node_modules
+/dist
+/.vite
+/.cache
+/.env
+/.env.local
+*.log
+*.bak
+*.swp
+.DS_Store
+Thumbs.db
+/coverage
+/.idea
+/.vscode

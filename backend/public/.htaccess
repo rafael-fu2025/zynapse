@@ -1,0 +1,26 @@
+# SYNAPSE API — Apache rewrite root.
+# Block direct access to application files.
+
+RewriteEngine On
+
+# Pass the Authorization header through to PHP — Apache strips it for
+# CGI/FCGI and some mod_php setups, which breaks Bearer-token auth.
+RewriteCond %{HTTP:Authorization} .
+RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+
+# Block dotfiles / sensitive paths outright.
+RewriteRule ^(\.env|\.git|composer\.json|composer\.lock|spark|README\.md) - [F,L]
+
+# Rewrite all non-existent physical paths to index.php (front controller).
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteRule ^(.*)$ index.php [QSA,L]
+
+<IfModule mod_headers.c>
+    # Belt-and-suspenders security headers on every API response.
+    Header set X-Content-Type-Options "nosniff"
+    Header set X-Frame-Options "DENY"
+    Header set Referrer-Policy "no-referrer"
+    Header set Permissions-Policy "geolocation=(), microphone=(), camera=()"
+    Header always set Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
+</IfModule>
