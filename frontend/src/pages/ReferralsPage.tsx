@@ -18,6 +18,9 @@ import { toast } from 'sonner';
 
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { ConfirmDialog } from '@/components/ConfirmDialog';
+import { CopyButton } from '@/components/CopyButton';
+import { QueryErrorRow } from '@/components/QueryErrorState';
 import {
   Dialog,
   DialogContent,
@@ -177,7 +180,10 @@ function QrDialog({ referral, onClose }: { referral: Referral; onClose: () => vo
       {token !== null && (
         <div className="flex flex-col items-center gap-3">
           <QRCodeCanvas value={token} size={192} includeMargin />
-          <p className="break-all font-mono text-xs text-foreground">{token}</p>
+          <div className="flex items-center gap-2">
+            <p className="break-all font-mono text-xs text-foreground">{token}</p>
+            <CopyButton value={token} label="Copy QR token" successMessage="QR token copied." />
+          </div>
           <p className="text-xs text-muted-foreground">
             Expires {fmtUtcToApp(expiresAt ?? new Date().toISOString())} · artifact {artifactType}
           </p>
@@ -269,6 +275,7 @@ export default function ReferralsPage() {
   const [openQr, setOpenQr] = useState<Referral | null>(null);
   const [openScan, setOpenScan] = useState(false);
   const [verifyResult, setVerifyResult] = useState<VerifyResult | null>(null);
+  const [closing, setClosing] = useState<Referral | null>(null);
 
   const list = useReferrals(cursor, statusFilter === 'all' ? null : statusFilter, 25);
   const ack = useAcknowledgeReferral();
@@ -354,6 +361,9 @@ export default function ReferralsPage() {
                 </TableCell>
               </TableRow>
             )}
+            {list.isError && !list.isLoading && (
+              <QueryErrorRow colSpan={8} message="Failed to load referrals." onRetry={() => void list.refetch()} pending={list.isFetching} />
+            )}
             {rows.map((r) => (
               <TableRow key={r.id}>
                 <TableCell className="px-3 font-mono text-xs">{r.id}</TableCell>
@@ -368,10 +378,10 @@ export default function ReferralsPage() {
                 <TableCell className="px-3 text-right">
                   <div className="flex justify-end gap-2">
                     {r.status === 'Submitted' && (
-                      <Button size="sm" variant="secondary" onClick={() => ack.mutate(r.id)}>Acknowledge</Button>
+                      <Button size="sm" variant="secondary" disabled={ack.isPending} onClick={() => ack.mutate(r.id)}>Acknowledge</Button>
                     )}
                     {r.status === 'Acknowledged' && (
-                      <Button size="sm" variant="secondary" onClick={() => rev.mutate(r.id)}>Review</Button>
+                      <Button size="sm" variant="secondary" disabled={rev.isPending} onClick={() => rev.mutate(r.id)}>Review</Button>
                     )}
                     {(r.status === 'UnderReview' || r.status === 'Acknowledged') && (
                       <Button size="sm" variant="outline" onClick={() => setOpenQr(r)}>
@@ -379,7 +389,7 @@ export default function ReferralsPage() {
                       </Button>
                     )}
                     {r.status !== 'Closed' && (
-                      <Button size="sm" variant="outline" onClick={() => close.mutate(r.id)}>
+                      <Button size="sm" variant="outline" disabled={close.isPending} onClick={() => setClosing(r)}>
                         <X /> Close
                       </Button>
                     )}
@@ -418,6 +428,18 @@ export default function ReferralsPage() {
           <ScanDialog onClose={() => setOpenScan(false)} onResult={(r) => setVerifyResult(r)} />
         </Dialog>
       )}
+
+      <ConfirmDialog
+        open={closing !== null}
+        title={closing !== null ? `Close referral #${closing.id}?` : ''}
+        description="Closing is a final state transition and cannot be undone."
+        confirmLabel="Close referral"
+        pending={close.isPending}
+        onConfirm={() => {
+          if (closing !== null) close.mutate(closing.id, { onSuccess: () => setClosing(null) });
+        }}
+        onCancel={() => setClosing(null)}
+      />
     </main>
   );
 }

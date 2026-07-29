@@ -31,7 +31,7 @@ final class PermissionsAndGroupsSeeder extends Seeder
         'clinic.encounters.soft_delete'              => 'clinic',
         'clinic.inventory.read'                      => 'clinic',
         'clinic.inventory.write'                     => 'clinic',
-        'clinic.inventory.write'                     => 'clinic',
+        'clinic.inventory.delete'                    => 'clinic',
         'clinic.appointments.read'                   => 'clinic',
         'clinic.appointments.write'                  => 'clinic',
         'clinic.patients.read'                       => 'clinic',

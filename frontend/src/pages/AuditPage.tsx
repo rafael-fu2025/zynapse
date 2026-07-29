@@ -6,7 +6,7 @@
  * filters so back/forward navigation through the cache is stable.
  */
 import { type ColumnDef, flexRender, getCoreRowModel, useReactTable } from '@tanstack/react-table';
-import { ChevronLeft, ChevronRight, Download, Loader2, Search } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Download, Loader2, Search, X } from 'lucide-react';
 import { useState } from 'react';
 import { useAuditEvents } from '@/hooks/useAudit';
 import { useAuditExport } from '@/hooks/useAuditExport';
@@ -16,6 +16,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { QueryErrorRow } from '@/components/QueryErrorState';
 import {
   Table,
   TableBody,
@@ -29,13 +30,16 @@ import type { AuditEvent } from '@/schemas/audit';
 export default function AuditPage() {
   const [cursor, setCursor] = useState<string | null>(null);
   const [history, setHistory] = useState<Array<string | null>>([null]);
-  const [action, setAction] = useState('');
-  const [entityType, setEntityType] = useState('');
+  // Draft (typed) vs applied (queried) filters: typing must NOT fire a
+  // request per keystroke — only Apply/Enter commits the draft.
+  const [actionDraft, setActionDraft] = useState('');
+  const [entityDraft, setEntityDraft] = useState('');
+  const [applied, setApplied] = useState<{ action: string; entity_type: string }>({ action: '', entity_type: '' });
   const hasExport = useAuthStore((s) => s.permissions.includes('audit.export'));
   const export_ = useAuditExport();
 
   const limit = 50;
-  const q = useAuditEvents(cursor, limit, { action, entity_type: entityType });
+  const q = useAuditEvents(cursor, limit, applied);
 
   const columns: ColumnDef<AuditEvent>[] = [
     {
@@ -81,7 +85,17 @@ export default function AuditPage() {
     getCoreRowModel: getCoreRowModel(),
   });
 
-  function applyFilter() {
+  function applyFilter(e?: React.FormEvent) {
+    e?.preventDefault();
+    setApplied({ action: actionDraft.trim(), entity_type: entityDraft.trim() });
+    setCursor(null);
+    setHistory([null]);
+  }
+
+  function clearFilter() {
+    setActionDraft('');
+    setEntityDraft('');
+    setApplied({ action: '', entity_type: '' });
     setCursor(null);
     setHistory([null]);
   }
@@ -111,7 +125,7 @@ export default function AuditPage() {
         {hasExport && (
           <Button
             variant="secondary"
-            onClick={() => export_.mutate({ cursor, limit: 5000 })}
+            onClick={() => export_.mutate({ cursor, limit: 5000, action: applied.action, entity_type: applied.entity_type })}
             disabled={export_.isPending}
           >
             {export_.isPending ? <Loader2 className="animate-spin" /> : <Download />}
@@ -120,22 +134,28 @@ export default function AuditPage() {
         )}
       </header>
 
-      <section
+      <form
         aria-label="filters"
+        onSubmit={applyFilter}
         className="flex flex-wrap items-end gap-3 rounded-xl border bg-card p-4"
       >
         <div className="flex flex-col gap-1.5">
           <Label htmlFor="action">Action</Label>
-          <Input id="action" value={action} onChange={(e) => setAction(e.target.value)} placeholder="bmg.batch_started" />
+          <Input id="action" value={actionDraft} onChange={(e) => setActionDraft(e.target.value)} placeholder="bmg.batch_started" />
         </div>
         <div className="flex flex-col gap-1.5">
           <Label htmlFor="entity">Entity</Label>
-          <Input id="entity" value={entityType} onChange={(e) => setEntityType(e.target.value)} placeholder="facilities_bmg_batches" />
+          <Input id="entity" value={entityDraft} onChange={(e) => setEntityDraft(e.target.value)} placeholder="facilities_bmg_batches" />
         </div>
-        <Button onClick={applyFilter} variant="secondary">
+        <Button type="submit" variant="secondary">
           <Search /> Apply
         </Button>
-      </section>
+        {(applied.action !== '' || applied.entity_type !== '' || actionDraft !== '' || entityDraft !== '') && (
+          <Button type="button" variant="ghost" onClick={clearFilter}>
+            <X /> Clear
+          </Button>
+        )}
+      </form>
 
       <section className="overflow-hidden rounded-xl border bg-card">
         <Table className="table-fixed">
@@ -158,7 +178,10 @@ export default function AuditPage() {
                 </TableCell>
               </TableRow>
             )}
-            {!q.isLoading && table.getRowModel().rows.length === 0 && (
+            {q.isError && !q.isLoading && (
+              <QueryErrorRow colSpan={columns.length} message="Failed to load audit events." onRetry={() => void q.refetch()} pending={q.isFetching} />
+            )}
+            {!q.isLoading && !q.isError && table.getRowModel().rows.length === 0 && (
               <TableRow>
                 <TableCell colSpan={columns.length} className="px-3 py-6 text-center text-muted-foreground">
                   No events.
@@ -181,6 +204,9 @@ export default function AuditPage() {
       <nav className="flex items-center justify-between" aria-label="pagination">
         <p className="text-xs text-muted-foreground">
           Page {history.length} · {table.getRowModel().rows.length} rows
+          {q.isFetching && !q.isLoading && (
+            <Loader2 className="ml-1.5 inline size-3 animate-spin align-[-2px]" aria-label="Loading page" />
+          )}
         </p>
         <div className="flex gap-2">
           <Button variant="outline" onClick={prevPage} disabled={history.length < 2}>

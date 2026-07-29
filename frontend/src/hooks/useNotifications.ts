@@ -35,3 +35,13 @@ export function useMarkNotificationRead() {
     },
   });
 }
+
+export function useMarkAllNotificationsRead() {
+  const qc = useQueryClient();
+  return useMutation<unknown, ApiEnvelopeError, void>({
+    mutationFn: async () => apiClient.post('/notifications/read-all'),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['notifications'] });
+    },
+  });
+}

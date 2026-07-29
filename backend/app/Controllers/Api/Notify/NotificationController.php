@@ -80,4 +80,23 @@ final class NotificationController extends ApiController
 
         return $this->ok(['id' => $id, 'read' => true]);
     }
+
+    /**
+     * Marks every unread notification for the CURRENT user as read.
+     * Self-scoped like the rest of the controller — the recipient
+     * filter is always the token's user id.
+     */
+    public function markAllRead(): ResponseInterface
+    {
+        $this->authorize('notifications.read');
+        $userId = CurrentUser::assert();
+
+        $db = Services::database();
+        $db->table('notifications')
+            ->where('recipient_user_id', $userId)
+            ->where('read_at', null)
+            ->update(['read_at' => (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s')]);
+
+        return $this->ok(['read' => $db->affectedRows()]);
+    }
 }

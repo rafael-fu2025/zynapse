@@ -19,19 +19,45 @@ interface ReorderPage {
   next: string | null;
 }
 
-export function useReorders(cursor: string | null, status: string | null, limit = 25) {
+export function useReorders(
+  cursor: string | null,
+  status: string | null,
+  limit = 25,
+  q: string | null = null,
+) {
   return useQuery<ReorderPage, ApiEnvelopeError>({
-    queryKey: ['reorders', { cursor, status, limit }],
+    queryKey: ['reorders', { cursor, status, limit, q }],
     queryFn: async () => {
       const params = new URLSearchParams();
       if (cursor !== null) params.set('cursor', cursor);
       if (status !== null) params.set('status', status);
       params.set('limit', String(limit));
+      if (q !== null && q.trim() !== '') params.set('q', q.trim());
       const res = await apiClient.get<{ data: unknown[]; next: string | null }>(
         `/clinic/reorders?${params.toString()}`,
       );
       const data = z.array(reorderSchema).parse(res.data);
       return { data, next: res.data?.next ?? null };
+    },
+  });
+}
+
+/**
+ * The `received` reorder request awaiting stock entry for one item, or
+ * null. Drives the Receive dialogs: the delivered quantity is read
+ * from here and the submit is disabled when there is nothing to
+ * receive (backend enforces the same gate with a 409).
+ */
+export function useReceivableReorder(itemType: 'medicine' | 'supply', itemId: number | null) {
+  return useQuery<Reorder | null, ApiEnvelopeError>({
+    queryKey: ['reorders', 'receivable', itemType, itemId],
+    enabled: itemId !== null && itemId > 0,
+    queryFn: async () => {
+      const params = new URLSearchParams({ status: 'received', limit: '1' });
+      params.set(itemType === 'supply' ? 'supply_item_id' : 'medicine_id', String(itemId));
+      const res = await apiClient.get<{ data: unknown[] }>(`/clinic/reorders?${params.toString()}`);
+      const rows = z.array(reorderSchema).parse(res.data);
+      return rows[0] ?? null;
     },
   });
 }

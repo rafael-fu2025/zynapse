@@ -18,18 +18,24 @@ use Modules\Clinic\Policies\ClinicPolicy;
  * ReorderService — procurement workflow (Phase 13, recycled from
  * synapse_ag ProcurementRouter + ReorderRequestModel).
  *
- * Rules ported from the legacy module:
- *   - ONE open request (pending/approved/ordered) per medicine.
- *   - Auto-check scans every non-archived medicine with a positive
- *     threshold; when unexpired on-hand <= threshold and no open
- *     request exists, a `pending` request is auto-created with
+ * Rules ported from the legacy module + the supply/completion rework:
+ *   - ONE open request (pending/approved/ordered/received) per item.
+ *     `received` counts as OPEN so auto-check cannot file a duplicate
+ *     while the delivered stock still awaits entry.
+ *   - Requests cover medicines (batch stock) AND supply items (ledger
+ *     stock); exactly one of medicine_id / supply_item_id is set.
+ *   - Auto-check scans every non-archived item with a positive
+ *     threshold; when on-hand <= threshold and no open request
+ *     exists, a `pending` request is auto-created with
  *     quantity = max(threshold * 2 - on_hand, threshold).
- *   - Lifecycle: pending → approved → ordered → received;
- *     `cancelled` is reachable from any non-terminal state.
+ *   - Lifecycle: pending → approved → ordered → received → completed;
+ *     `cancelled` is reachable from pending/approved/ordered.
+ *     `completed` is set by the stock-entry flows (medicine batch
+ *     receive / supply receive), never by a direct transition.
  */
 final class ReorderService extends BaseService
 {
-    private const OPEN_STATUSES = ['pending', 'approved', 'ordered'];
+    private const OPEN_STATUSES = ['pending', 'approved', 'ordered', 'received'];
 
     /** @var array<string, array<int, string>> action => allowed current statuses */
     private const TRANSITIONS = [
@@ -57,18 +63,35 @@ final class ReorderService extends BaseService
     /**
      * @return array{data: array<int, array<string, mixed>>, next: ?string, count: int}
      */
-    public function list(?string $cursor, int $limit, ?string $status): array
+    public function list(?string $cursor, int $limit, ?string $status, ?string $q = null, ?int $medicineId = null, ?int $supplyItemId = null): array
     {
         $this->policy->check('reordersRead');
 
         $builder = $this->db->table('clinic_reorder_requests r')
-            ->select('r.*, m.generic_name, m.unit')
-            ->join('clinic_medicines m', 'm.id = r.medicine_id')
+            ->select('r.*, m.generic_name, COALESCE(m.generic_name, i.name) AS item_name, COALESCE(m.unit, i.unit) AS unit')
+            ->join('clinic_medicines m', 'm.id = r.medicine_id', 'left')
+            ->join('clinic_inventory_items i', 'i.id = r.supply_item_id', 'left')
             ->orderBy('r.created_at', 'DESC')
             ->orderBy('r.id', 'DESC');
 
         if ($status !== null && $status !== '') {
             $builder->where('r.status', $status);
+        }
+        if ($medicineId !== null) {
+            $builder->where('r.medicine_id', $medicineId);
+        }
+        if ($supplyItemId !== null) {
+            $builder->where('r.supply_item_id', $supplyItemId);
+        }
+
+        $qTrim = $q !== null ? trim($q) : '';
+        if ($qTrim !== '') {
+            $like  = '%' . $this->db->escapeLikeString($qTrim) . '%';
+            $builder->groupStart()
+                ->like('m.generic_name', $like)
+                ->orLike('i.name', $like)
+                ->orLike('r.procurement_note', $like)
+                ->groupEnd();
         }
 
         KeysetPaginator::apply($builder, $cursor, $limit, 'r.created_at', 'r.id');
@@ -83,30 +106,46 @@ final class ReorderService extends BaseService
         ];
     }
 
-    /** Manual request (legacy ReorderController::store). */
-    public function create(int $medicineId, int $quantity, string $urgency, ?string $note): ReorderDto
+    /** Manual request (legacy ReorderController::store). Supports both item types. */
+    public function create(string $itemType, int $itemId, int $quantity, string $urgency, ?string $note): ReorderDto
     {
         $this->policy->check('reordersManage');
         $userId = \App\Auth\CurrentUser::assert();
 
-        return $this->txn(function () use ($medicineId, $quantity, $urgency, $note, $userId): ReorderDto {
-            $med = $this->selectForUpdate('clinic_medicines', ['id' => $medicineId, 'archived_at' => null]);
+        return $this->txn(function () use ($itemType, $itemId, $quantity, $urgency, $note, $userId): ReorderDto {
+            if ($itemType === 'supply') {
+                $item = $this->selectForUpdate('clinic_inventory_items', ['id' => $itemId, 'archived_at' => null]);
+                if ($item === null) {
+                    throw new ApiException('resource.not_found', 404, [
+                        ['code' => 'resource.not_found', 'message' => "Inventory item #{$itemId} not found."],
+                    ]);
+                }
+                $this->assertNoOpenRequest('supply', $itemId);
+                $id = $this->insertRequest('supply', $itemId, $quantity, (int) $item['quantity_on_hand'], (int) $item['reorder_level'], $urgency, false, $userId, $note);
+
+                return $this->getDto($id);
+            }
+
+            $med = $this->selectForUpdate('clinic_medicines', ['id' => $itemId, 'archived_at' => null]);
             if ($med === null) {
                 throw new ApiException('resource.not_found', 404, [
-                    ['code' => 'resource.not_found', 'message' => "Medicine #{$medicineId} not found."],
+                    ['code' => 'resource.not_found', 'message' => "Medicine #{$itemId} not found."],
                 ]);
             }
 
-            $this->assertNoOpenRequest($medicineId);
+            $this->assertNoOpenRequest('medicine', $itemId);
 
-            $id = $this->insertRequest($medicineId, $quantity, $this->onHand($medicineId), (int) $med['reorder_threshold'], $urgency, false, $userId, $note);
+            $id = $this->insertRequest('medicine', $itemId, $quantity, $this->onHand($itemId), (int) $med['reorder_threshold'], $urgency, false, $userId, $note);
             return $this->getDto($id);
         });
     }
 
     /**
-     * Ports ProcurementRouter::checkAll — scan all medicines, create
-     * pending requests where stock has fallen to the threshold.
+     * Ports ProcurementRouter::checkAll — scan all medicines AND supply
+     * items, create pending requests where stock has fallen to the
+     * threshold. `hasOpenRequest` (which now includes `received`)
+     * guarantees one in-flight request per item, so re-running the
+     * check never duplicates an entry.
      *
      * @return array<int, array<string, mixed>> the created requests
      */
@@ -116,28 +155,53 @@ final class ReorderService extends BaseService
         $userId = \App\Auth\CurrentUser::assert();
 
         return $this->txn(function () use ($userId): array {
+            $created = [];
+
             $medicines = $this->db->table('clinic_medicines')
                 ->select('id, reorder_threshold')
                 ->where('archived_at', null)
                 ->where('reorder_threshold >', 0)
                 ->get()->getResultArray();
 
-            $created = [];
             foreach ($medicines as $med) {
                 $medicineId = (int) $med['id'];
                 $threshold  = (int) $med['reorder_threshold'];
 
                 $onHand = $this->onHand($medicineId);
-                if ($onHand > $threshold || $this->hasOpenRequest($medicineId)) {
+                if ($onHand > $threshold || $this->hasOpenRequest('medicine', $medicineId)) {
                     continue;
                 }
 
-                // Legacy heuristic: restock to twice the threshold.
+                // Legacy heuristic: restock to twice the threshold — this IS
+                // the quantity that will be ordered and later received.
                 $qty = max($threshold * 2 - $onHand, $threshold);
                 // Legacy urgency tiers by depletion ratio.
                 $urgency = $onHand === 0 ? 'critical' : ($onHand <= (int) floor($threshold / 2) ? 'high' : 'medium');
 
-                $id        = $this->insertRequest($medicineId, $qty, $onHand, $threshold, $urgency, true, $userId, 'Auto-triggered by low-stock check.');
+                $id        = $this->insertRequest('medicine', $medicineId, $qty, $onHand, $threshold, $urgency, true, $userId, 'Auto-triggered by low-stock check.');
+                $created[] = $this->getDto($id)->toArray();
+            }
+
+            // Supply items: same heuristic against the ledger counter.
+            $items = $this->db->table('clinic_inventory_items')
+                ->select('id, quantity_on_hand, reorder_level')
+                ->where('archived_at', null)
+                ->where('reorder_level >', 0)
+                ->get()->getResultArray();
+
+            foreach ($items as $item) {
+                $itemId    = (int) $item['id'];
+                $threshold = (int) $item['reorder_level'];
+                $onHand    = (int) $item['quantity_on_hand'];
+
+                if ($onHand > $threshold || $this->hasOpenRequest('supply', $itemId)) {
+                    continue;
+                }
+
+                $qty     = max($threshold * 2 - $onHand, $threshold);
+                $urgency = $onHand === 0 ? 'critical' : ($onHand <= (int) floor($threshold / 2) ? 'high' : 'medium');
+
+                $id        = $this->insertRequest('supply', $itemId, $qty, $onHand, $threshold, $urgency, true, $userId, 'Auto-triggered by low-stock check.');
                 $created[] = $this->getDto($id)->toArray();
             }
 
@@ -206,11 +270,13 @@ final class ReorderService extends BaseService
 
     // ------------------------------------------------------------ helpers
 
-    private function insertRequest(int $medicineId, int $qty, int $onHand, int $threshold, string $urgency, bool $auto, int $userId, ?string $note): int
+    private function insertRequest(string $itemType, int $itemId, int $qty, int $onHand, int $threshold, string $urgency, bool $auto, int $userId, ?string $note): int
     {
         $now = $this->utcNow();
         $this->db->table('clinic_reorder_requests')->insert([
-            'medicine_id'          => $medicineId,
+            'item_type'            => $itemType,
+            'medicine_id'          => $itemType === 'medicine' ? $itemId : null,
+            'supply_item_id'       => $itemType === 'supply' ? $itemId : null,
             'requested_quantity'   => $qty,
             'current_stock'        => $onHand,
             'reorder_level'        => $threshold,
@@ -229,25 +295,25 @@ final class ReorderService extends BaseService
             'clinic_reorder_requests',
             $id,
             $userId,
-            ['resource_code' => 'medicine#' . (string) $medicineId, 'outcome' => $auto ? 'auto' : 'manual'],
+            ['resource_code' => $itemType . '#' . (string) $itemId, 'outcome' => $auto ? 'auto' : 'manual'],
         );
 
         return $id;
     }
 
-    private function hasOpenRequest(int $medicineId): bool
+    private function hasOpenRequest(string $itemType, int $itemId): bool
     {
         return $this->db->table('clinic_reorder_requests')
-            ->where('medicine_id', $medicineId)
+            ->where($itemType === 'supply' ? 'supply_item_id' : 'medicine_id', $itemId)
             ->whereIn('status', self::OPEN_STATUSES)
             ->get()->getRowArray() !== null;
     }
 
-    private function assertNoOpenRequest(int $medicineId): void
+    private function assertNoOpenRequest(string $itemType, int $itemId): void
     {
-        if ($this->hasOpenRequest($medicineId)) {
+        if ($this->hasOpenRequest($itemType, $itemId)) {
             throw new ApiException('resource.conflict', 409, [
-                ['code' => 'resource.conflict', 'message' => 'An open reorder request already exists for this medicine.', 'field' => 'medicine_id'],
+                ['code' => 'resource.conflict', 'message' => 'An open reorder request already exists for this item.', 'field' => $itemType === 'supply' ? 'supply_item_id' : 'medicine_id'],
             ]);
         }
     }
@@ -271,8 +337,9 @@ final class ReorderService extends BaseService
     private function getDto(int $id): ReorderDto
     {
         $row = $this->db->table('clinic_reorder_requests r')
-            ->select('r.*, m.generic_name, m.unit')
-            ->join('clinic_medicines m', 'm.id = r.medicine_id')
+            ->select('r.*, m.generic_name, COALESCE(m.generic_name, i.name) AS item_name, COALESCE(m.unit, i.unit) AS unit')
+            ->join('clinic_medicines m', 'm.id = r.medicine_id', 'left')
+            ->join('clinic_inventory_items i', 'i.id = r.supply_item_id', 'left')
             ->where('r.id', $id)
             ->get()->getRowArray();
         return ReorderDto::fromRow($row);

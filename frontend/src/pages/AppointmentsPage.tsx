@@ -36,6 +36,11 @@ import { useMemo, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { ConfirmDialog, type ConfirmAction } from '@/components/ConfirmDialog';
+import { QueryErrorRow } from '@/components/QueryErrorState';
+import { useDebouncedValue } from '@/hooks/useDebouncedValue';
+import { DatePicker } from '@/components/ui/date-picker';
+import { TimePicker } from '@/components/ui/time-picker';
 import {
   Dialog,
   DialogContent,
@@ -76,7 +81,7 @@ import {
   type AppointmentTransition,
   type ScheduleAppointmentInput,
 } from '@/schemas/appointments';
-import { fmtUtcToApp } from '@/utils/date';
+import { appDateTimeToUtcSql, fmtUtcToApp, utcSqlToAppParts } from '@/utils/date';
 
 const STATUS_VARIANT: Record<Appointment['status'], 'info' | 'success' | 'warning' | 'destructive'> = {
   Scheduled: 'info',
@@ -110,7 +115,8 @@ function PatientPicker({
   onChange: (next: string) => void;
 }) {
   const [q, setQ] = useState(value);
-  const search = useStudentSearch(q);
+  const debouncedQ = useDebouncedValue(q, 300);
+  const search = useStudentSearch(debouncedQ);
   const showList = q.trim().length >= 2 && q.trim() !== value;
 
   return (
@@ -229,7 +235,25 @@ function ScheduleDialog({
 
   const patientId = watch('patient_school_id') ?? '';
   const providerId = watch('provider_user_id');
-  const scheduledAt = watch('scheduled_at') ?? '';
+
+  // The API contract for scheduled_at is a UTC `YYYY-MM-DD HH:mm:ss`
+  // string, but the user thinks in Asia/Manila. Keep the form field as
+  // the composed UTC string; drive it from local date + time pickers.
+  const initialParts = initial !== undefined
+    ? utcSqlToAppParts(initial.scheduled_at)
+    : { date: '', time: '' };
+  const [schedDate, setSchedDate] = useState(initialParts.date);
+  const [schedTime, setSchedTime] = useState(initialParts.time);
+
+  function updateSchedule(nextDate: string, nextTime: string) {
+    setSchedDate(nextDate);
+    setSchedTime(nextTime);
+    setValue(
+      'scheduled_at',
+      nextDate !== '' && nextTime !== '' ? appDateTimeToUtcSql(nextDate, nextTime) : '',
+      { shouldValidate: true },
+    );
+  }
 
   const onSubmit = handleSubmit((values) => {
     // Trim empty optional fields so the backend does not see explicit
@@ -277,16 +301,29 @@ function ScheduleDialog({
         )}
 
         <div className="space-y-1.5">
-          <Label htmlFor="scheduled_at">Scheduled at (UTC, YYYY-MM-DD HH:mm:ss)</Label>
-          <Input
-            id="scheduled_at"
-            placeholder="2026-08-01 02:00:00"
-            value={scheduledAt}
-            onChange={(e) => setValue('scheduled_at', e.target.value, { shouldValidate: true })}
-          />
+          <Label htmlFor="scheduled_at">Scheduled at (Asia/Manila)</Label>
+          <div className="flex flex-wrap items-center gap-2">
+            <DatePicker
+              id="scheduled_at"
+              value={schedDate}
+              onChange={(v) => updateSchedule(v, schedTime)}
+              className="w-44"
+              aria-invalid={errors.scheduled_at !== undefined}
+            />
+            <TimePicker
+              value={schedTime}
+              onChange={(v) => updateSchedule(schedDate, v)}
+              aria-invalid={errors.scheduled_at !== undefined}
+            />
+          </div>
+          {schedDate !== '' && schedTime !== '' && (
+            <p className="text-[11px] text-muted-foreground">
+              Stored as {appDateTimeToUtcSql(schedDate, schedTime)} UTC.
+            </p>
+          )}
           {errors.scheduled_at !== undefined && (
             <p role="alert" className="text-xs text-destructive">
-              {(errors.scheduled_at as { message?: string }).message ?? 'Use YYYY-MM-DD HH:mm:ss (UTC).'}
+              {(errors.scheduled_at as { message?: string }).message ?? 'Pick a date and time.'}
             </p>
           )}
         </div>
@@ -403,6 +440,7 @@ function AppointmentRow({
   onView,
   onEdit,
   transition,
+  onConfirm,
   transitionPending,
   canEdit,
 }: {
@@ -411,6 +449,7 @@ function AppointmentRow({
   onView: (a: Appointment) => void;
   onEdit: (a: Appointment) => void;
   transition: (vars: { id: number; status: AppointmentTransition }) => void;
+  onConfirm: (action: ConfirmAction) => void;
   transitionPending: boolean;
   canEdit: boolean;
 }) {
@@ -449,7 +488,12 @@ function AppointmentRow({
               <Button size="sm" variant="secondary" disabled={transitionPending} onClick={() => transition({ id: a.id, status: 'CheckedIn' })}>
                 <LogIn /> Check in
               </Button>
-              <Button size="sm" variant="outline" disabled={transitionPending} onClick={() => transition({ id: a.id, status: 'NoShow' })}>
+              <Button size="sm" variant="outline" disabled={transitionPending} onClick={() => onConfirm({
+                title: `Mark appointment #${a.id} as no-show?`,
+                description: 'This records a no-show, which counts toward the patient\u2019s three-strike counter.',
+                confirmLabel: 'Mark no-show',
+                run: () => transition({ id: a.id, status: 'NoShow' }),
+              })}>
                 No-show
               </Button>
             </>
@@ -460,7 +504,12 @@ function AppointmentRow({
             </Button>
           )}
           {(a.status === 'Scheduled' || a.status === 'CheckedIn') && (
-            <Button size="sm" variant="outline" disabled={transitionPending} onClick={() => transition({ id: a.id, status: 'Cancelled' })}>
+            <Button size="sm" variant="outline" disabled={transitionPending} onClick={() => onConfirm({
+              title: `Cancel appointment #${a.id}?`,
+              description: 'The appointment will be cancelled. This cannot be undone.',
+              confirmLabel: 'Cancel appointment',
+              run: () => transition({ id: a.id, status: 'Cancelled' }),
+            })}>
               <X /> Cancel
             </Button>
           )}
@@ -478,6 +527,7 @@ export default function AppointmentsPage() {
   const [openSchedule, setOpenSchedule] = useState(false);
   const [editing, setEditing] = useState<Appointment | null>(null);
   const [viewing, setViewing] = useState<Appointment | null>(null);
+  const [confirm, setConfirm] = useState<ConfirmAction | null>(null);
 
   // Status filter pushes a `?status=` query param to the backend;
   // the tabs are client-side over the loaded rows. This keeps the
@@ -588,12 +638,15 @@ export default function AppointmentsPage() {
                     </TableCell>
                   </TableRow>
                 )}
-                {!list.isLoading && visibleRows.length === 0 && (
+                {!list.isLoading && !list.isError && visibleRows.length === 0 && (
                   <TableRow>
                     <TableCell colSpan={7} className="px-3 py-6 text-center text-muted-foreground">
                       No appointments in this view.
                     </TableCell>
                   </TableRow>
+                )}
+                {list.isError && !list.isLoading && (
+                  <QueryErrorRow colSpan={7} message="Failed to load appointments." onRetry={() => void list.refetch()} pending={list.isFetching} />
                 )}
                 {visibleRows.map((a) => (
                   <AppointmentRow
@@ -603,6 +656,7 @@ export default function AppointmentsPage() {
                     onView={setViewing}
                     onEdit={setEditing}
                     transition={(vars) => transition.mutate(vars)}
+                    onConfirm={setConfirm}
                     transitionPending={transition.isPending}
                     canEdit={a.status === 'Scheduled'}
                   />
@@ -641,6 +695,19 @@ export default function AppointmentsPage() {
           <AppointmentDetailDialog appointmentId={viewing.id} onClose={() => setViewing(null)} />
         </Dialog>
       )}
+
+      <ConfirmDialog
+        open={confirm !== null}
+        title={confirm?.title ?? ''}
+        description={confirm?.description}
+        confirmLabel={confirm?.confirmLabel}
+        pending={transition.isPending}
+        onConfirm={() => {
+          confirm?.run();
+          setConfirm(null);
+        }}
+        onCancel={() => setConfirm(null)}
+      />
     </main>
   );
 }

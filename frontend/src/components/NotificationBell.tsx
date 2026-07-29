@@ -5,10 +5,10 @@
  * are strictly self-scoped (the API filters by the token's user);
  * clicking an unread row marks it read.
  */
-import { Bell } from 'lucide-react';
+import { Bell, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { useMarkNotificationRead, useNotifications } from '@/hooks/useNotifications';
+import { useMarkAllNotificationsRead, useMarkNotificationRead, useNotifications } from '@/hooks/useNotifications';
 import { fmtRelative } from '@/utils/date';
 
 function label(templateCode: string, context: Record<string, unknown> | null): string {
@@ -22,6 +22,7 @@ function label(templateCode: string, context: Record<string, unknown> | null): s
 export function NotificationBell() {
   const list = useNotifications(10);
   const markRead = useMarkNotificationRead();
+  const markAll = useMarkAllNotificationsRead();
 
   const items = list.data ?? [];
   const unread = items.filter((n) => n.read_at === null).length;
@@ -47,10 +48,36 @@ export function NotificationBell() {
         </Button>
       </PopoverTrigger>
       <PopoverContent align="end" sideOffset={8} className="w-80 p-2">
-        <p className="px-2 py-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-          Notifications
-        </p>
-        {items.length === 0 && (
+        <div className="flex items-center justify-between px-2 py-1">
+          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            Notifications
+          </p>
+          {unread > 0 && (
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-6 px-2 text-[11px]"
+              disabled={markAll.isPending}
+              onClick={() => markAll.mutate()}
+            >
+              Mark all read
+            </Button>
+          )}
+        </div>
+        {list.isLoading && (
+          <p className="flex items-center justify-center gap-2 px-2 py-4 text-center text-xs text-muted-foreground">
+            <Loader2 className="size-3.5 animate-spin" aria-hidden /> Loading…
+          </p>
+        )}
+        {list.isError && !list.isLoading && (
+          <div role="alert" className="px-2 py-4 text-center text-xs text-destructive">
+            <p>Couldn’t load notifications.</p>
+            <Button size="sm" variant="outline" className="mt-2" onClick={() => void list.refetch()} disabled={list.isFetching}>
+              Retry
+            </Button>
+          </div>
+        )}
+        {!list.isLoading && !list.isError && items.length === 0 && (
           <p className="px-2 py-4 text-center text-xs text-muted-foreground">Nothing yet.</p>
         )}
         <ul className="max-h-72 space-y-1 overflow-y-auto">

@@ -25,10 +25,15 @@ final class BmgController extends ApiController
 
     public function listUnits(): ResponseInterface
     {
-        $cursor = (string) ($this->request->getGet('cursor') ?? '');
-        $limit  = (int)    ($this->request->getGet('limit')  ?? 25);
+        $cursor   = (string) ($this->request->getGet('cursor') ?? '');
+        $limit    = (int)    ($this->request->getGet('limit')  ?? 25);
+        $archived = (string) ($this->request->getGet('include_archived') ?? '');
 
-        $page = $this->service->listUnits($cursor !== '' ? $cursor : null, $limit);
+        $page = $this->service->listUnits(
+            $cursor !== '' ? $cursor : null,
+            $limit,
+            $archived === '1' || $archived === 'true',
+        );
 
         return $this->ok(
             $page['data'],
@@ -76,6 +81,11 @@ final class BmgController extends ApiController
     public function archiveUnit(int $unitId): ResponseInterface
     {
         return $this->ok($this->service->archiveUnit($unitId));
+    }
+
+    public function unarchiveUnit(int $unitId): ResponseInterface
+    {
+        return $this->ok($this->service->unarchiveUnit($unitId));
     }
 
     public function startBatch(int $unitId): ResponseInterface
@@ -223,6 +233,11 @@ final class BmgController extends ApiController
     public function archiveWasteCategory(int $categoryId): ResponseInterface
     {
         return $this->ok($this->service->archiveWasteCategory($categoryId));
+    }
+
+    public function unarchiveWasteCategory(int $categoryId): ResponseInterface
+    {
+        return $this->ok($this->service->unarchiveWasteCategory($categoryId));
     }
 
     public function deleteWasteCategory(int $categoryId): ResponseInterface

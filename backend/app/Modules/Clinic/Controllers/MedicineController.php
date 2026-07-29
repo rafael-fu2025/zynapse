@@ -27,10 +27,17 @@ final class MedicineController extends ApiController
     public function list(): ResponseInterface
     {
         $this->authorize('clinic.inventory.read');
-        $cursor = (string) ($this->request->getGet('cursor') ?? '');
-        $limit  = (int)    ($this->request->getGet('limit')  ?? 25);
+        $cursor   = (string) ($this->request->getGet('cursor') ?? '');
+        $limit    = (int)    ($this->request->getGet('limit')  ?? 25);
+        $q        = (string) ($this->request->getGet('q')      ?? '');
+        $archived = (string) ($this->request->getGet('include_archived') ?? '');
 
-        $page = $this->service->listMedicines($cursor !== '' ? $cursor : null, $limit);
+        $page = $this->service->listMedicines(
+            $cursor !== '' ? $cursor : null,
+            $limit,
+            $q !== '' ? $q : null,
+            $archived === '1' || $archived === 'true',
+        );
 
         return $this->ok(
             $page['data'],
@@ -78,24 +85,70 @@ final class MedicineController extends ApiController
         return $this->ok($this->service->createMedicine($payload)->toArray(), null, 201);
     }
 
+    /**
+     * Receive a lot against a `received` reorder request. Quantity is
+     * taken from that request server-side — the payload only carries
+     * the batch identity (number, expiry, supplier).
+     */
     public function addBatch(int $id): ResponseInterface
     {
         $this->authorize('clinic.inventory.write');
         $payload = $this->request->getJSON(true) ?? [];
 
         $rules = [
-            'batch_number'      => 'required|max_length[100]',
-            'quantity_received' => 'required|is_natural_no_zero',
-            'expiration_date'   => 'required|valid_date[Y-m-d]',
-            'received_date'     => 'permit_empty|valid_date[Y-m-d]',
-            'supplier'          => 'permit_empty|max_length[200]',
-            'note'              => 'permit_empty|max_length[255]',
+            'batch_number'    => 'required|max_length[100]',
+            'expiration_date' => 'required|valid_date[Y-m-d]',
+            'received_date'   => 'permit_empty|valid_date[Y-m-d]',
+            'supplier'        => 'permit_empty|max_length[200]',
+            'note'            => 'permit_empty|max_length[255]',
         ];
         if (! $this->makeValidation($rules)->run($payload)) {
             throw ApiException::validationFailure($this->collectErrors());
         }
 
         return $this->ok($this->service->addBatch($id, $payload)->toArray(), null, 201);
+    }
+
+    /**
+     * Update the medicine catalog row. Restricted to the reorder
+     * threshold — every other catalog field is read-only after
+     * creation (the batch ledger must keep describing the same
+     * product).
+     */
+    public function update(int $id): ResponseInterface
+    {
+        $this->authorize('clinic.inventory.write');
+        $payload = $this->request->getJSON(true) ?? [];
+
+        $rules = [
+            'reorder_threshold' => 'required|is_natural',
+        ];
+        if (! $this->makeValidation($rules)->run($payload)) {
+            throw ApiException::validationFailure($this->collectErrors());
+        }
+
+        return $this->ok($this->service->updateMedicine($id, ['reorder_threshold' => (int) $payload['reorder_threshold']])->toArray());
+    }
+
+    /**
+     * Soft-archive a medicine. Batches and movement history remain
+     * in the database; the row simply drops off the default list.
+     * Idempotent — re-archiving returns the same row.
+     */
+    public function archive(int $id): ResponseInterface
+    {
+        $this->authorize('clinic.inventory.delete');
+        return $this->ok($this->service->archiveMedicine($id)->toArray());
+    }
+
+    /**
+     * Restore a soft-archived medicine back onto the default list.
+     * Idempotent — restoring an active medicine returns the same row.
+     */
+    public function unarchive(int $id): ResponseInterface
+    {
+        $this->authorize('clinic.inventory.delete');
+        return $this->ok($this->service->unarchiveMedicine($id)->toArray());
     }
 
     public function dispense(int $id): ResponseInterface

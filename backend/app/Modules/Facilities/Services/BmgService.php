@@ -37,7 +37,7 @@ final class BmgService extends BaseService
     /**
      * @return array<int, array<string, mixed>>
      */
-    public function listUnits(?string $cursor, int $limit): array
+    public function listUnits(?string $cursor, int $limit, bool $includeArchived = false): array
     {
         $this->policy->check('list');
 
@@ -50,9 +50,12 @@ final class BmgService extends BaseService
                 false, // no identifier escaping — the ON clause carries quoted literals
             )
             ->join('facilities_waste_categories AS c', 'c.id = u.default_category_id', 'left')
-            ->where('u.archived_at', null)
             ->orderBy('u.created_at', 'DESC')
             ->orderBy('u.id', 'DESC');
+
+        if (! $includeArchived) {
+            $builder->where('u.archived_at', null);
+        }
 
         KeysetPaginator::apply($builder, $cursor, $limit, 'u.created_at', 'u.id');
 
@@ -523,6 +526,57 @@ final class BmgService extends BaseService
     }
 
     /**
+     * Restore a soft-archived unit: clears `archived_at` so the drum
+     * rejoins the active list in Idle (its stored status is untouched
+     * — an archived drum can only ever be Idle or Maintenance since
+     * archiving refuses units with an active batch). Idempotent.
+     */
+    public function unarchiveUnit(int $unitId): BmgUnitDto
+    {
+        $this->policy->check('manage_units');
+        $userId = \App\Auth\CurrentUser::assert();
+
+        return $this->txn(function () use ($unitId, $userId): BmgUnitDto {
+            $unit = $this->selectForUpdate('facilities_bmg_units', ['id' => $unitId]);
+            if ($unit === null) {
+                throw new ApiException('resource.not_found', 404, [
+                    ['code' => 'resource.not_found', 'message' => "BMG unit #{$unitId} not found."],
+                ]);
+            }
+            if ($unit['archived_at'] === null) {
+                // Idempotent: already active — just return the row.
+                $fresh = $this->db->table('facilities_bmg_units AS u')
+                    ->select('u.*, c.name AS default_category_name')
+                    ->join('facilities_waste_categories AS c', 'c.id = u.default_category_id', 'left')
+                    ->where('u.id', $unitId)
+                    ->get()->getRowArray();
+                return BmgUnitDto::fromRow($fresh);
+            }
+
+            $now = $this->utcNow();
+            $this->db->table('facilities_bmg_units')->where('id', $unitId)->update([
+                'archived_at' => null,
+                'updated_at'  => $now,
+            ]);
+
+            $this->audit->enqueue(
+                'bmg.unit_restored',
+                'facilities_bmg_units',
+                $unitId,
+                $userId,
+                ['resource_code' => (string) $unit['code']],
+            );
+
+            $fresh = $this->db->table('facilities_bmg_units AS u')
+                ->select('u.*, c.name AS default_category_name')
+                ->join('facilities_waste_categories AS c', 'c.id = u.default_category_id', 'left')
+                ->where('u.id', $unitId)
+                ->get()->getRowArray();
+            return BmgUnitDto::fromRow($fresh);
+        });
+    }
+
+    /**
      * Active-batch dashboard feed: every batch in Processing or AwaitingOutput
      * joined to its unit and (optionally) its waste category, enriched with
      * `days_active`, `expected_completion_date`, `days_until_expected`, and
@@ -566,7 +620,9 @@ final class BmgService extends BaseService
         return array_map(static function (array $r) use ($a, $today): array {
             $startDate = substr((string) $r['started_at'], 0, 10);
             $refDays   = $r['reference_duration_days'] !== null ? (int) $r['reference_duration_days'] : 0;
-            $expected  = $refDays > 0 ? $a->expectedCompletionDate($startDate, $refDays) : null;
+            // expectedCompletionDate() falls back to 45 days when the batch has
+            // no category reference, so the widget's progress bar always moves.
+            $expected  = $a->expectedCompletionDate($startDate, $refDays);
 
             $daysActive = max(0, (int) ((new DateTimeImmutable($today))->diff(new DateTimeImmutable($startDate)))->days);
 
@@ -585,8 +641,8 @@ final class BmgService extends BaseService
                 'days_active'              => $daysActive,
                 'reference_duration_days'  => $refDays > 0 ? $refDays : null,
                 'expected_completion_date' => $expected,
-                'days_until_expected'      => $expected !== null ? $a->daysUntilExpected($expected, $today) : null,
-                'progress_pct'             => $expected !== null ? $a->progressPercent($startDate, $expected, $today) : 0,
+                'days_until_expected'      => $a->daysUntilExpected($expected, $today),
+                'progress_pct'             => $a->progressPercent($startDate, $expected, $today),
             ];
         }, $rows);
     }
@@ -863,6 +919,48 @@ final class BmgService extends BaseService
                 'code'      => (string) $cat['code'],
                 'name'      => (string) $cat['name'],
                 'is_active' => false,
+            ];
+        });
+    }
+
+    /**
+     * Restore an archived waste category (`is_active = 1`) so it
+     * reappears in pickers. Mirrors `archiveWasteCategory` — 409 when
+     * the category is already active, same-transaction audit row.
+     */
+    public function unarchiveWasteCategory(int $categoryId): array
+    {
+        $this->policy->check('categories_manage');
+        $userId = \App\Auth\CurrentUser::assert();
+
+        return $this->txn(function () use ($categoryId, $userId): array {
+            $cat = $this->selectForUpdate('facilities_waste_categories', ['id' => $categoryId]);
+            if ($cat === null) {
+                throw new ApiException('resource.not_found', 404, [
+                    ['code' => 'resource.not_found', 'message' => "Waste category #{$categoryId} not found."],
+                ]);
+            }
+            if ((int) $cat['is_active'] === 1) {
+                throw new ApiException('resource.conflict', 409, [
+                    ['code' => 'resource.conflict', 'message' => 'Category is already active.', 'field' => 'is_active'],
+                ]);
+            }
+
+            $now = $this->utcNow();
+            $this->db->table('facilities_waste_categories')->where('id', $categoryId)->update([
+                'is_active'  => 1,
+                'updated_at' => $now,
+            ]);
+
+            $this->audit->enqueue('bmg.waste_category_restored', 'facilities_waste_categories', $categoryId, $userId, [
+                'resource_code' => (string) $cat['code'],
+            ]);
+
+            return [
+                'id'        => (int) $cat['id'],
+                'code'      => (string) $cat['code'],
+                'name'      => (string) $cat['name'],
+                'is_active' => true,
             ];
         });
     }

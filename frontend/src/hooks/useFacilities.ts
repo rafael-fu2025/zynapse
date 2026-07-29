@@ -52,8 +52,8 @@ import {
 const UNITS_KEY = ['facilities', 'units'] as const;
 const ACTIVE_BATCHES_KEY = ['facilities', 'batches', 'active'] as const;
 
-function unitsQueryKey(cursor: string | null, limit: number) {
-  return [...UNITS_KEY, { cursor, limit }] as const;
+function unitsQueryKey(cursor: string | null, limit: number, includeArchived = false) {
+  return [...UNITS_KEY, { cursor, limit, includeArchived }] as const;
 }
 
 /**
@@ -106,13 +106,14 @@ function snapshotUnits(
   });
 }
 
-export function useBmgUnits(cursor: string | null, limit = 25) {
+export function useBmgUnits(cursor: string | null, limit = 25, includeArchived = false) {
   return useQuery<{ data: BmgUnit[]; next: string | null }, ApiEnvelopeError>({
-    queryKey: unitsQueryKey(cursor, limit),
+    queryKey: unitsQueryKey(cursor, limit, includeArchived),
     queryFn: async () => {
       const params = new URLSearchParams();
       if (cursor !== null) params.set('cursor', cursor);
       params.set('limit', String(limit));
+      if (includeArchived) params.set('include_archived', '1');
       const res = await apiClient.get<{ data: BmgUnit[]; next: string | null }>(
         `/facilities/units?${params.toString()}`,
       );
@@ -385,6 +386,25 @@ export function useArchiveWasteCategory() {
   });
 }
 
+/** Restore an archived waste category so it reappears in pickers. */
+export function useUnarchiveWasteCategory() {
+  const qc = useQueryClient();
+  return useMutation<WasteCategory, ApiEnvelopeError, { categoryId: number }>({
+    mutationFn: async ({ categoryId }) => {
+      const res = await apiClient.post<WasteCategory>(`/facilities/waste-categories/${categoryId}/unarchive`);
+      return wasteCategorySchema.parse(res.data);
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['facilities', 'waste-categories'] });
+      void qc.invalidateQueries({ queryKey: ['facilities', 'units'] });
+      toast.success('Waste category restored.');
+    },
+    onError: (err) => {
+      toast.error(err.errors[0]?.message ?? 'Failed to restore category.');
+    },
+  });
+}
+
 /**
  * Specialised toast for delete-409. The server's contract is: a waste
  * category that has batch or unit references cannot be hard-deleted;
@@ -598,6 +618,28 @@ export function useArchiveUnit() {
     },
     onSuccess: () => {
       toast.success('Drum archived.');
+    },
+  });
+}
+
+/**
+ * Restore a soft-archived drum. No optimistic patch — the archived row
+ * is only visible when the list was fetched with `includeArchived`, so
+ * a plain invalidate keeps every variant of the units query honest.
+ */
+export function useUnarchiveUnit() {
+  const qc = useQueryClient();
+  return useMutation<BmgUnit, ApiEnvelopeError, { unitId: number }>({
+    mutationFn: async ({ unitId }) => {
+      const res = await apiClient.post<BmgUnit>(`/facilities/units/${unitId}/unarchive`);
+      return bmgUnitSchema.parse(res.data);
+    },
+    onSuccess: (u) => {
+      invalidateFacilities(qc);
+      toast.success(`Drum ${u.code} restored.`);
+    },
+    onError: (err) => {
+      toast.error(err.errors[0]?.message ?? 'Failed to restore drum.');
     },
   });
 }

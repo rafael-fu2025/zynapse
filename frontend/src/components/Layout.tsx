@@ -59,11 +59,11 @@ export default function Layout() {
         >
           <SidebarTrigger className="-ml-1" />
           {/*
-            Mobile-only page title. Mirrors the page H1 so the user
-            always knows which screen they're on without scrolling to
-            the top of the content area. The in-page <p> description
-            (where present) is hidden on mobile via a global rule
-            in styles/index.css so we don't show it twice.
+            Page title — mirrors the page H1 as a location cue. On web
+            (desktop) the in-page H1 already provides this context, so
+            the topbar would be redundant; on mobile the topbar is the
+            only place a title appears because the in-page H1 is hidden
+            by the global mobile rule.
           */}
           {meta.title !== '' && (
             <div className="min-w-0 flex-1 truncate md:hidden">

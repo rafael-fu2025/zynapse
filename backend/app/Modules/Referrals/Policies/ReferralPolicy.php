@@ -40,4 +40,27 @@ final class ReferralPolicy extends BasePolicy
         }
         $this->enforce($code, $action, $record);
     }
+
+    /**
+     * Receiving-side gate (RBAC_SECURITY_REVIEW R6): acknowledge / review
+     * / close may only be performed by a user who belongs to the
+     * referral's TARGET module — a clinic->counselling referral is
+     * actioned by counselling staff, a counselling->clinic referral by
+     * clinic staff. The discriminating codes are chosen so a bare admin
+     * (wildcard) still qualifies for oversight, while clinic_staff and
+     * counsellor cannot act on the wrong side.
+     */
+    public function checkReceivingSide(string $targetModule): void
+    {
+        $ok = match ($targetModule) {
+            'clinic'      => $this->can('clinic.encounters.read'),
+            'counselling' => $this->can('counselling.records.read')
+                || $this->can('counselling.schedule.read'),
+            default       => false,
+        };
+
+        if (! $ok) {
+            $this->deny('rbac.referrals.wrong_side');
+        }
+    }
 }

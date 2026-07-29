@@ -27,7 +27,7 @@ final class ClinicService extends BaseService
     /**
      * @return array{data: array<int, array<string, mixed>>, next: ?string, count: int}
      */
-    public function listEncounters(?string $cursor, int $limit): array
+    public function listEncounters(?string $cursor, int $limit, ?string $status = null): array
     {
         $this->policy->check('list');
 
@@ -36,6 +36,10 @@ final class ClinicService extends BaseService
             ->where('archived_at', null)
             ->orderBy('created_at', 'DESC')
             ->orderBy('id', 'DESC');
+
+        if ($status !== null && in_array($status, ['Open', 'Closed'], true)) {
+            $builder->where('status', $status);
+        }
 
         KeysetPaginator::apply($builder, $cursor, $limit);
 

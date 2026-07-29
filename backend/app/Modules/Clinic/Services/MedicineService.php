@@ -41,15 +41,28 @@ final class MedicineService extends BaseService
     /**
      * @return array{data: array<int, array<string, mixed>>, next: ?string, count: int}
      */
-    public function listMedicines(?string $cursor, int $limit): array
+    public function listMedicines(?string $cursor, int $limit, ?string $q = null, bool $includeArchived = false): array
     {
         $this->policy->check('inventoryRead');
 
         $builder = $this->db->table('clinic_medicines')
             ->select(self::MED_COLS)
-            ->where('archived_at', null)
             ->orderBy('created_at', 'DESC')
             ->orderBy('id', 'DESC');
+
+        if (! $includeArchived) {
+            $builder->where('archived_at', null);
+        }
+
+        $qTrim = $q !== null ? trim($q) : '';
+        if ($qTrim !== '') {
+            $like  = '%' . $this->db->escapeLikeString($qTrim) . '%';
+            $builder->groupStart()
+                ->like('generic_name', $like)
+                ->orLike('brand_name', $like)
+                ->orLike('category', $like)
+                ->groupEnd();
+        }
 
         KeysetPaginator::apply($builder, $cursor, $limit);
 
@@ -140,7 +153,12 @@ final class MedicineService extends BaseService
     }
 
     /**
-     * Receive a lot: insert the batch + a `received` ledger row.
+     * Receive a lot against the procurement workflow: the medicine must
+     * have a reorder request in `received` status (delivery arrived).
+     * The batch quantity is taken from that request — the operator only
+     * supplies batch number, expiry and supplier. The reorder row is
+     * marked `completed` in the SAME transaction, closing the loop
+     * between the Reorders tab and the batch ledger.
      *
      * @param array<string, mixed> $input validated payload
      */
@@ -157,6 +175,20 @@ final class MedicineService extends BaseService
                 ]);
             }
 
+            // Gate: stock can only be entered for a delivery the Reorders
+            // tab has marked `received`. Locked so two clerks can't both
+            // consume the same request.
+            $reorder = $this->selectForUpdate('clinic_reorder_requests', [
+                'medicine_id' => $medicineId,
+                'item_type'   => 'medicine',
+                'status'      => 'received',
+            ]);
+            if ($reorder === null) {
+                throw new ApiException('statemachine.reorder.not_received', 409, [
+                    ['code' => 'statemachine.reorder.not_received', 'message' => 'No received delivery for this medicine. Mark the reorder request as received first.'],
+                ]);
+            }
+
             $batchNumber = (string) $input['batch_number'];
             $dup = $this->db->table('clinic_medicine_batches')
                 ->where(['medicine_id' => $medicineId, 'batch_number' => $batchNumber])
@@ -167,7 +199,8 @@ final class MedicineService extends BaseService
                 ]);
             }
 
-            $qty      = (int) $input['quantity_received'];
+            // Quantity comes from the fulfilled order, never the payload.
+            $qty      = (int) $reorder['requested_quantity'];
             $expires  = (string) $input['expiration_date'];
             $received = (string) ($input['received_date'] ?? (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d'));
             if ($expires <= $received) {
@@ -200,12 +233,24 @@ final class MedicineService extends BaseService
                 'created_at'           => $now,
             ]);
 
+            // Close the procurement loop.
+            $this->db->table('clinic_reorder_requests')
+                ->where('id', (int) $reorder['id'])
+                ->update(['status' => 'completed', 'fulfilled_at' => $now, 'updated_at' => $now]);
+
             $this->audit->enqueue(
                 'clinic.medicine_batch_received',
                 'clinic_medicine_batches',
                 $batchId,
                 $userId,
                 ['resource_code' => 'batch#' . $batchNumber],
+            );
+            $this->audit->enqueue(
+                'clinic.reorder_completed',
+                'clinic_reorder_requests',
+                (int) $reorder['id'],
+                $userId,
+                ['resource_code' => 'medicine#' . (string) $medicineId, 'outcome' => 'completed'],
             );
 
             return $this->getMedicine($medicineId);
@@ -492,6 +537,125 @@ final class MedicineService extends BaseService
     private function strOrNull(array $input, string $key): ?string
     {
         return isset($input[$key]) && $input[$key] !== '' ? (string) $input[$key] : null;
+    }
+
+    /**
+     * Update a medicine's catalog row. Locked down to the reorder
+     * threshold ONLY: the catalog identity (names, category, form,
+     * strength, unit, description) is immutable after creation so the
+     * batch ledger and forecasts always describe the same product.
+     *
+     * @param array<string, mixed> $input validated payload
+     */
+    public function updateMedicine(int $medicineId, array $input): MedicineDto
+    {
+        $this->policy->check('inventoryWrite');
+        $userId = \App\Auth\CurrentUser::assert();
+
+        return $this->txn(function () use ($medicineId, $input, $userId): MedicineDto {
+            $med = $this->selectForUpdate('clinic_medicines', ['id' => $medicineId, 'archived_at' => null]);
+            if ($med === null) {
+                throw new ApiException('resource.not_found', 404, [
+                    ['code' => 'resource.not_found', 'message' => "Medicine #{$medicineId} not found."],
+                ]);
+            }
+
+            $now = $this->utcNow();
+            $this->db->table('clinic_medicines')->where('id', $medicineId)->update([
+                'reorder_threshold' => (int) ($input['reorder_threshold'] ?? $med['reorder_threshold']),
+                'updated_at'        => $now,
+            ]);
+
+            $this->audit->enqueue(
+                'clinic.medicine_updated',
+                'clinic_medicines',
+                $medicineId,
+                $userId,
+                ['resource_code' => 'medicine#' . (string) $med['generic_name']],
+            );
+
+            return $this->getMedicine($medicineId);
+        });
+    }
+
+    /**
+     * Soft-archive a medicine. Archived rows disappear from the
+     * default list, but historical batches/forecasts stay intact
+     * for the audit trail. Hard delete is intentionally NOT
+     * supported — stock history is part of the clinical record.
+     */
+    public function archiveMedicine(int $medicineId): MedicineDto
+    {
+        $this->policy->check('inventoryDelete');
+        $userId = \App\Auth\CurrentUser::assert();
+
+        return $this->txn(function () use ($medicineId, $userId): MedicineDto {
+            $med = $this->selectForUpdate('clinic_medicines', ['id' => $medicineId]);
+            if ($med === null) {
+                throw new ApiException('resource.not_found', 404, [
+                    ['code' => 'resource.not_found', 'message' => "Medicine #{$medicineId} not found."],
+                ]);
+            }
+            if ($med['archived_at'] !== null) {
+                // Idempotent: already archived.
+                return $this->getMedicine($medicineId);
+            }
+
+            $now = $this->utcNow();
+            $this->db->table('clinic_medicines')
+                ->where('id', $medicineId)
+                ->update(['archived_at' => $now, 'updated_at' => $now]);
+
+            $this->audit->enqueue(
+                'clinic.medicine_archived',
+                'clinic_medicines',
+                $medicineId,
+                $userId,
+                ['resource_code' => 'medicine#' . (string) $med['generic_name']],
+            );
+
+            return $this->getMedicine($medicineId);
+        });
+    }
+
+    /**
+     * Restore a soft-archived medicine: clears `archived_at` so the row
+     * rejoins the default list. Batches, forecasts and the transaction
+     * ledger were never touched by the archive, so stock resumes as-is.
+     * Idempotent — restoring an active medicine returns the same row.
+     */
+    public function unarchiveMedicine(int $medicineId): MedicineDto
+    {
+        $this->policy->check('inventoryDelete');
+        $userId = \App\Auth\CurrentUser::assert();
+
+        return $this->txn(function () use ($medicineId, $userId): MedicineDto {
+            $med = $this->selectForUpdate('clinic_medicines', ['id' => $medicineId]);
+            if ($med === null) {
+                throw new ApiException('resource.not_found', 404, [
+                    ['code' => 'resource.not_found', 'message' => "Medicine #{$medicineId} not found."],
+                ]);
+            }
+            if ($med['archived_at'] === null) {
+                // Idempotent: already active.
+                return $this->getMedicine($medicineId);
+            }
+
+            $now = $this->utcNow();
+            $this->db->table('clinic_medicines')
+                ->where('id', $medicineId)
+                ->update(['archived_at' => null, 'updated_at' => $now]);
+
+            $this->audit->enqueue(
+                'clinic.medicine_restored',
+                'clinic_medicines',
+                $medicineId,
+                $userId,
+                ['resource_code' => 'medicine#' . (string) $med['generic_name']],
+            );
+
+            return $this->getMedicine($medicineId);
+        });
     }
 
     private function utcNow(): string

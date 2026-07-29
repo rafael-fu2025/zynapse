@@ -11,6 +11,8 @@
  * in sync with the server.
  */
 import { CirclePower, Moon, Sun } from 'lucide-react';
+import { useState } from 'react';
+import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { useLogout, useMe } from '@/hooks/useAuth';
 import { useTheme } from '@/hooks/useTheme';
@@ -45,6 +47,7 @@ export function UserMenu() {
   const me = useMe();
   const logout = useLogout();
   const { theme, toggleTheme } = useTheme();
+  const [confirmSignOut, setConfirmSignOut] = useState(false);
 
   const identity = me.data?.email ?? me.data?.username ?? null;
   const initials = initialsFor(identity);
@@ -55,11 +58,13 @@ export function UserMenu() {
         <button
           type="button"
           aria-label="Open user menu"
-          className="flex items-center justify-center gap-0 rounded-full bg-primary text-[11px] font-semibold text-primary-foreground transition-colors hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 size-9 p-0 sm:h-9 sm:max-w-64 sm:gap-2 sm:border sm:border-primary/60 sm:bg-background/60 sm:pl-1 sm:pr-3 sm:text-left sm:text-xs sm:hover:border-primary sm:hover:bg-accent sm:hover:text-foreground"
+          className="flex items-center justify-center rounded-full bg-primary text-primary-foreground transition-colors hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50
+            size-9 shrink-0 p-0
+            sm:size-auto sm:h-9 sm:max-w-64 sm:shrink sm:gap-2 sm:border sm:border-primary/60 sm:bg-background/60 sm:px-1 sm:py-0 sm:pr-3 sm:text-left sm:text-xs sm:text-foreground sm:justify-start sm:hover:border-primary sm:hover:bg-accent sm:hover:opacity-100"
         >
           <span
             aria-hidden
-            className="grid size-7 shrink-0 place-items-center rounded-full bg-primary text-[11px] font-semibold tracking-wide text-primary-foreground sm:bg-primary sm:text-primary-foreground"
+            className="grid size-7 shrink-0 place-items-center rounded-full bg-primary text-[11px] font-semibold tracking-wide text-primary-foreground"
           >
             {initials}
           </span>
@@ -91,7 +96,7 @@ export function UserMenu() {
         <div className="my-1 h-px bg-border" />
         <button
           type="button"
-          onClick={() => logout.mutate()}
+          onClick={() => setConfirmSignOut(true)}
           disabled={logout.isPending}
           className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm text-foreground transition-colors hover:bg-destructive/10 hover:text-destructive focus-visible:outline-none focus-visible:bg-destructive/10 disabled:pointer-events-none disabled:opacity-50"
         >
@@ -99,6 +104,15 @@ export function UserMenu() {
           <span>{logout.isPending ? 'Signing out…' : 'Sign out'}</span>
         </button>
       </PopoverContent>
+      <ConfirmDialog
+        open={confirmSignOut}
+        title="Sign out?"
+        description="You will need to sign in again to access SYNAPSE."
+        confirmLabel="Sign out"
+        pending={logout.isPending}
+        onConfirm={() => logout.mutate()}
+        onCancel={() => setConfirmSignOut(false)}
+      />
     </Popover>
   );
 }

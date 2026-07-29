@@ -34,6 +34,7 @@ export default defineConfig({
       'qrcode.react',
       'date-fns',
       'date-fns-tz',
+      'react-day-picker',
       'lucide-react',
       'clsx',
       'tailwind-merge',

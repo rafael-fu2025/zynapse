@@ -8,6 +8,8 @@
  */
 import { zodResolver } from '@hookform/resolvers/zod';
 import {
+  Archive,
+  ArchiveRestore,
   CheckCheck,
   ChevronLeft,
   ChevronRight,
@@ -29,6 +31,10 @@ import { useForm } from 'react-hook-form';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { ConfirmDialog, type ConfirmAction } from '@/components/ConfirmDialog';
+import { QueryErrorRow } from '@/components/QueryErrorState';
+import { useTabParam } from '@/hooks/useTabParam';
+import { TimePicker } from '@/components/ui/time-picker';
 import {
   Dialog,
   DialogContent,
@@ -73,6 +79,7 @@ import {
   useArchiveStaffSchedule,
   useCreateStaffSchedule,
   useStaffSchedules,
+  useUnarchiveStaffSchedule,
 } from '@/hooks/useStaffSchedules';
 import {
   createEncounterSchema,
@@ -563,6 +570,7 @@ function QueueTab() {
   const queue = useQueueToday();
   const callNext = useCallNext();
   const transition = useQueueTransition();
+  const [confirm, setConfirm] = useState<ConfirmAction | null>(null);
 
   const rows = queue.data ?? [];
   const hasWaiting = rows.some((q) => q.status === 'waiting');
@@ -605,6 +613,9 @@ function QueueTab() {
                 </TableCell>
               </TableRow>
             )}
+            {queue.isError && !queue.isLoading && (
+              <QueryErrorRow colSpan={5} message="Failed to load the queue." onRetry={() => void queue.refetch()} pending={queue.isFetching} />
+            )}
             {rows.map((q) => (
               <TableRow key={q.id}>
                 <TableCell className="px-3 font-mono text-sm font-semibold">{q.position}</TableCell>
@@ -625,7 +636,12 @@ function QueueTab() {
                           <Play /> Start
                         </Button>
                         <Button size="sm" variant="outline" disabled={transition.isPending}
-                          onClick={() => transition.mutate({ id: q.id, action: 'skip' })}>
+                          onClick={() => setConfirm({
+                            title: `Skip #${q.position} in the queue?`,
+                            description: 'Skipped entries are removed from the active queue and cannot be recovered from here.',
+                            confirmLabel: 'Skip',
+                            run: () => transition.mutate({ id: q.id, action: 'skip' }),
+                          })}>
                           <SkipForward /> Skip
                         </Button>
                       </>
@@ -643,19 +659,35 @@ function QueueTab() {
           </TableBody>
         </Table>
       </section>
+
+      <ConfirmDialog
+        open={confirm !== null}
+        title={confirm?.title ?? ''}
+        description={confirm?.description}
+        confirmLabel={confirm?.confirmLabel}
+        pending={transition.isPending}
+        onConfirm={() => {
+          confirm?.run();
+          setConfirm(null);
+        }}
+        onCancel={() => setConfirm(null)}
+      />
     </div>
   );
 }
 
 function StaffSchedulesTab() {
-  const schedules = useStaffSchedules();
+  const [showArchived, setShowArchived] = useState(false);
+  const schedules = useStaffSchedules(showArchived);
   const create = useCreateStaffSchedule();
   const archive = useArchiveStaffSchedule();
+  const unarchive = useUnarchiveStaffSchedule();
   const [userId, setUserId] = useState('');
   const [dow, setDow] = useState('1');
   const [start, setStart] = useState('09:00');
   const [end, setEnd] = useState('17:00');
   const [type, setType] = useState<ScheduleType>('regular');
+  const [confirm, setConfirm] = useState<ConfirmAction | null>(null);
 
   function submit() {
     const parsed = createStaffScheduleSchema.safeParse({
@@ -688,11 +720,11 @@ function StaffSchedulesTab() {
         </div>
         <div className="space-y-1">
           <Label htmlFor="ss-start" className="text-xs">Start</Label>
-          <Input id="ss-start" type="time" className="h-8 w-28" value={start} onChange={(e) => setStart(e.target.value)} />
+          <TimePicker id="ss-start" value={start} onChange={setStart} />
         </div>
         <div className="space-y-1">
           <Label htmlFor="ss-end" className="text-xs">End</Label>
-          <Input id="ss-end" type="time" className="h-8 w-28" value={end} onChange={(e) => setEnd(e.target.value)} />
+          <TimePicker id="ss-end" value={end} onChange={setEnd} />
         </div>
         <div className="space-y-1">
           <Label id="ss-type-label" className="text-xs">Type</Label>
@@ -703,6 +735,14 @@ function StaffSchedulesTab() {
         </div>
         <Button size="sm" onClick={submit} disabled={create.isPending}>
           {create.isPending ? <Loader2 className="animate-spin" /> : <Plus />} Add shift
+        </Button>
+        <Button
+          size="sm"
+          variant={showArchived ? 'secondary' : 'outline'}
+          aria-pressed={showArchived}
+          onClick={() => setShowArchived((v) => !v)}
+        >
+          <Archive /> {showArchived ? 'Hide archived' : 'Show archived'}
         </Button>
       </section>
 
@@ -732,6 +772,9 @@ function StaffSchedulesTab() {
                 </TableCell>
               </TableRow>
             )}
+            {schedules.isError && !schedules.isLoading && (
+              <QueryErrorRow colSpan={5} message="Failed to load staff schedules." onRetry={() => void schedules.refetch()} pending={schedules.isFetching} />
+            )}
             {schedules.data?.map((s) => (
               <TableRow key={s.id}>
                 <TableCell className="px-3 font-mono text-xs">#{s.user_id}</TableCell>
@@ -741,23 +784,54 @@ function StaffSchedulesTab() {
                   <Badge variant={s.schedule_type === 'leave' ? 'warning' : s.schedule_type === 'on_call' ? 'info' : 'secondary'}>
                     {s.schedule_type}
                   </Badge>
+                  {!s.is_active && <Badge variant="secondary" className="ml-1.5">Archived</Badge>}
                 </TableCell>
                 <TableCell className="px-3 text-right">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    aria-label={`Archive shift #${s.id}`}
-                    disabled={archive.isPending}
-                    onClick={() => archive.mutate(s.id)}
-                  >
-                    <Trash2 /> Archive
-                  </Button>
+                  {s.is_active ? (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      aria-label={`Archive shift #${s.id}`}
+                      disabled={archive.isPending}
+                      onClick={() => setConfirm({
+                        title: `Archive shift #${s.id}?`,
+                        description: 'The staff shift will be archived and removed from the schedule.',
+                        confirmLabel: 'Archive',
+                        run: () => archive.mutate(s.id),
+                      })}
+                    >
+                      <Trash2 /> Archive
+                    </Button>
+                  ) : (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      aria-label={`Restore shift #${s.id}`}
+                      disabled={unarchive.isPending}
+                      onClick={() => unarchive.mutate(s.id)}
+                    >
+                      <ArchiveRestore /> Restore
+                    </Button>
+                  )}
                 </TableCell>
               </TableRow>
             ))}
           </TableBody>
         </Table>
       </section>
+
+      <ConfirmDialog
+        open={confirm !== null}
+        title={confirm?.title ?? ''}
+        description={confirm?.description}
+        confirmLabel={confirm?.confirmLabel}
+        pending={archive.isPending}
+        onConfirm={() => {
+          confirm?.run();
+          setConfirm(null);
+        }}
+        onCancel={() => setConfirm(null)}
+      />
     </div>
   );
 }
@@ -765,13 +839,26 @@ function StaffSchedulesTab() {
 export default function ClinicPage() {
   const [cursor, setCursor] = useState<string | null>(null);
   const [history, setHistory] = useState<Array<string | null>>([null]);
+  const [tabParam, setTab] = useTabParam('open');
+  const tab = tabParam as 'open' | 'closed' | 'queue' | 'staff';
   const [openCreate, setOpenCreate] = useState(false);
   const [openImport, setOpenImport] = useState(false);
   const [openVitals, setOpenVitals] = useState<Encounter | null>(null);
   const [openCare, setOpenCare] = useState<Encounter | null>(null);
-  const list = useEncounters(cursor, 25);
+  // Server-side status filter: the Open/Closed tabs each fetch their
+  // own slice instead of client-filtering one shared page (which made
+  // tab counts misleading and could hide rows on later pages).
+  const status = tab === 'open' ? 'Open' : tab === 'closed' ? 'Closed' : null;
+  const list = useEncounters(cursor, 25, status);
   const close = useCloseEncounter();
   const enqueue = useEnqueue();
+  const [confirm, setConfirm] = useState<ConfirmAction | null>(null);
+
+  function switchTab(next: string) {
+    setTab(next);
+    setCursor(null);
+    setHistory([null]);
+  }
 
   function nextPage() {
     if (list.data?.next !== null && list.data?.next !== undefined) {
@@ -787,8 +874,7 @@ export default function ClinicPage() {
     setCursor(next[next.length - 1] ?? null);
   }
 
-  const open: Encounter[] = (list.data?.data ?? []).filter((e) => e.status === 'Open');
-  const closed: Encounter[] = (list.data?.data ?? []).filter((e) => e.status === 'Closed');
+  const rows: Encounter[] = list.data?.data ?? [];
 
   return (
     <main className="mx-auto max-w-7xl space-y-4 p-6">
@@ -813,18 +899,21 @@ export default function ClinicPage() {
         </div>
       </header>
 
-      <Tabs defaultValue="open">
+      <Tabs value={tab} onValueChange={switchTab}>
         <TabsList>
-          <TabsTrigger value="open">Open ({open.length})</TabsTrigger>
-          <TabsTrigger value="closed">Closed ({closed.length})</TabsTrigger>
+          <TabsTrigger value="open">Open</TabsTrigger>
+          <TabsTrigger value="closed">Closed</TabsTrigger>
           <TabsTrigger value="queue">Queue (today)</TabsTrigger>
           <TabsTrigger value="staff">Staff schedules</TabsTrigger>
         </TabsList>
 
         <TabsContent value="open">
           <EncounterTable
-            rows={open}
+            rows={rows}
             isLoading={list.isLoading}
+            isError={list.isError}
+            onRetry={() => void list.refetch()}
+            retrying={list.isFetching}
             page={history.length}
             onPrev={prevPage}
             onNext={nextPage}
@@ -850,7 +939,12 @@ export default function ClinicPage() {
                   size="sm"
                   variant="outline"
                   disabled={close.isPending}
-                  onClick={() => close.mutate(e.id)}
+                  onClick={() => setConfirm({
+                    title: `Close encounter #${e.id}?`,
+                    description: 'Closing an encounter is final — it can no longer be edited or have vitals/treatments added.',
+                    confirmLabel: 'Close encounter',
+                    run: () => close.mutate(e.id),
+                  })}
                 >
                   <X /> Close
                 </Button>
@@ -861,8 +955,11 @@ export default function ClinicPage() {
 
         <TabsContent value="closed">
           <EncounterTable
-            rows={closed}
+            rows={rows}
             isLoading={list.isLoading}
+            isError={list.isError}
+            onRetry={() => void list.refetch()}
+            retrying={list.isFetching}
             page={history.length}
             onPrev={prevPage}
             onNext={nextPage}
@@ -892,6 +989,19 @@ export default function ClinicPage() {
           <CareDialog encounter={openCare} onClose={() => setOpenCare(null)} />
         </Dialog>
       )}
+
+      <ConfirmDialog
+        open={confirm !== null}
+        title={confirm?.title ?? ''}
+        description={confirm?.description}
+        confirmLabel={confirm?.confirmLabel}
+        pending={close.isPending}
+        onConfirm={() => {
+          confirm?.run();
+          setConfirm(null);
+        }}
+        onCancel={() => setConfirm(null)}
+      />
     </main>
   );
 }
@@ -899,6 +1009,9 @@ export default function ClinicPage() {
 interface EncounterTableProps {
   rows: Encounter[];
   isLoading: boolean;
+  isError?: boolean;
+  onRetry?: () => void;
+  retrying?: boolean;
   page: number;
   canPrev: boolean;
   canNext: boolean;
@@ -930,7 +1043,10 @@ function EncounterTable(props: EncounterTableProps) {
                 </TableCell>
               </TableRow>
             )}
-            {!props.isLoading && props.rows.length === 0 && (
+            {props.isError === true && !props.isLoading && props.onRetry !== undefined && (
+              <QueryErrorRow colSpan={6} message="Failed to load encounters." onRetry={props.onRetry} pending={props.retrying === true} />
+            )}
+            {!props.isLoading && props.isError !== true && props.rows.length === 0 && (
               <TableRow>
                 <TableCell colSpan={6} className="px-3 py-6 text-center text-muted-foreground">
                   No encounters.

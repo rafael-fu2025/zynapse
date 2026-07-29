@@ -75,6 +75,7 @@ $routes->group('api/v1/admin', ['namespace' => 'App\Controllers\Api\Admin', 'fil
 $routes->group('api/v1/notifications', ['namespace' => 'App\Controllers\Api\Notify', 'filter' => 'api_auth'], static function (RouteCollection $r): void {
     $r->get('',                'NotificationController::index');
     $r->post('(:num)/read',    'NotificationController::markRead/$1');
+    $r->post('read-all',       'NotificationController::markAllRead');
 });
 
 // ---------------------------------------------------------------------

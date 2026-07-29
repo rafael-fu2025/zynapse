@@ -12,11 +12,13 @@ import {
   dispenseSchema,
   medicineForecastSchema,
   medicineSchema,
+  updateMedicineSchema,
   type AddBatchInput,
   type CreateMedicineInput,
   type DispenseInput,
   type Medicine,
   type MedicineForecast,
+  type UpdateMedicineInput,
 } from '@/schemas/medicines';
 
 interface MedicinePage {
@@ -24,13 +26,15 @@ interface MedicinePage {
   next: string | null;
 }
 
-export function useMedicines(cursor: string | null, limit = 25) {
+export function useMedicines(cursor: string | null, limit = 25, q: string | null = null, includeArchived = false) {
   return useQuery<MedicinePage, ApiEnvelopeError>({
-    queryKey: ['medicines', 'list', { cursor, limit }],
+    queryKey: ['medicines', 'list', { cursor, limit, q, includeArchived }],
     queryFn: async () => {
       const params = new URLSearchParams();
       if (cursor !== null) params.set('cursor', cursor);
       params.set('limit', String(limit));
+      if (q !== null && q.trim() !== '') params.set('q', q.trim());
+      if (includeArchived) params.set('include_archived', '1');
       const res = await apiClient.get<{ data: unknown[]; next: string | null }>(
         `/clinic/medicines?${params.toString()}`,
       );
@@ -79,6 +83,8 @@ export function useAddBatch() {
     },
     onSuccess: (m) => {
       void qc.invalidateQueries({ queryKey: ['medicines'] });
+      // Receiving a batch completes the medicine's `received` reorder.
+      void qc.invalidateQueries({ queryKey: ['reorders'] });
       toast.success(`Batch received — ${m.quantity_on_hand} ${m.unit} on hand.`);
     },
     onError: (err) => {
@@ -101,6 +107,72 @@ export function useDispense() {
     },
     onError: (err) => {
       toast.error(err.errors[0]?.message ?? 'Dispense failed.');
+    },
+  });
+}
+
+/**
+ * Update a medicine's catalog row. generic_name and unit are not
+ * editable here; stock/batches are unaffected. Invalidates both
+ * list and detail queries so every open dialog refreshes.
+ */
+export function useUpdateMedicine() {
+  const qc = useQueryClient();
+  return useMutation<Medicine, ApiEnvelopeError, { medicineId: number; input: UpdateMedicineInput }>({
+    mutationFn: async ({ medicineId, input }) => {
+      const valid = updateMedicineSchema.parse(input);
+      const res = await apiClient.post<unknown>(`/clinic/medicines/${medicineId}`, valid);
+      return medicineSchema.parse(res.data);
+    },
+    onSuccess: (m) => {
+      void qc.invalidateQueries({ queryKey: ['medicines'] });
+      toast.success(`${m.generic_name} updated.`);
+    },
+    onError: (err) => {
+      toast.error(err.errors[0]?.message ?? 'Update failed.');
+    },
+  });
+}
+
+/**
+ * Soft-archive a medicine. The row drops off the default list;
+ * batches & movement history remain in the database.
+ */
+export function useArchiveMedicine() {
+  const qc = useQueryClient();
+  return useMutation<Medicine, ApiEnvelopeError, number>({
+    mutationFn: async (medicineId) => {
+      const res = await apiClient.post<unknown>(`/clinic/medicines/${medicineId}/archive`, {});
+      return medicineSchema.parse(res.data);
+    },
+    onSuccess: (m) => {
+      void qc.invalidateQueries({ queryKey: ['medicines'] });
+      toast.success(`${m.generic_name} archived.`);
+    },
+    onError: (err) => {
+      toast.error(err.errors[0]?.message ?? 'Archive failed.');
+    },
+  });
+}
+
+/**
+ * Restore a soft-archived medicine back onto the default list.
+ * Batches & the transaction ledger were never touched, so stock
+ * resumes exactly where it left off.
+ */
+export function useUnarchiveMedicine() {
+  const qc = useQueryClient();
+  return useMutation<Medicine, ApiEnvelopeError, number>({
+    mutationFn: async (medicineId) => {
+      const res = await apiClient.post<unknown>(`/clinic/medicines/${medicineId}/unarchive`, {});
+      return medicineSchema.parse(res.data);
+    },
+    onSuccess: (m) => {
+      void qc.invalidateQueries({ queryKey: ['medicines'] });
+      toast.success(`${m.generic_name} restored.`);
+    },
+    onError: (err) => {
+      toast.error(err.errors[0]?.message ?? 'Restore failed.');
     },
   });
 }

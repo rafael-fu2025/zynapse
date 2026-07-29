@@ -16,11 +16,13 @@ import {
 
 const KEY = ['clinic', 'staff-schedules'] as const;
 
-export function useStaffSchedules() {
+export function useStaffSchedules(includeArchived = false) {
   return useQuery<StaffSchedule[], ApiEnvelopeError>({
-    queryKey: KEY,
+    queryKey: [...KEY, { includeArchived }],
     queryFn: async () => {
-      const res = await apiClient.get<unknown[]>('/clinic/staff-schedules');
+      const res = await apiClient.get<unknown[]>(
+        `/clinic/staff-schedules${includeArchived ? '?include_archived=1' : ''}`,
+      );
       return z.array(staffScheduleSchema).parse(res.data);
     },
   });
@@ -56,6 +58,24 @@ export function useArchiveStaffSchedule() {
     },
     onError: (err) => {
       toast.error(err.errors[0]?.message ?? 'Failed to archive.');
+    },
+  });
+}
+
+/** Restore an archived shift template back into the roster. */
+export function useUnarchiveStaffSchedule() {
+  const qc = useQueryClient();
+  return useMutation<StaffSchedule, ApiEnvelopeError, number>({
+    mutationFn: async (id) => {
+      const res = await apiClient.post<unknown>(`/clinic/staff-schedules/${id}/unarchive`, {});
+      return staffScheduleSchema.parse(res.data);
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: KEY });
+      toast.success('Staff schedule restored.');
+    },
+    onError: (err) => {
+      toast.error(err.errors[0]?.message ?? 'Failed to restore.');
     },
   });
 }

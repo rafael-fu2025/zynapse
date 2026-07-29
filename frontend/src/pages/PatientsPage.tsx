@@ -26,6 +26,10 @@ import { useForm } from 'react-hook-form';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
+import { ConfirmDialog, type ConfirmAction } from '@/components/ConfirmDialog';
+import { QueryErrorRow } from '@/components/QueryErrorState';
+import { useDebouncedValue } from '@/hooks/useDebouncedValue';
+import { useTabParam } from '@/hooks/useTabParam';
 import {
   Dialog,
   DialogContent,
@@ -415,11 +419,13 @@ function StudentDetailDialog({ studentId, onClose }: { studentId: number; onClos
 
 function CreateEmployeeDialog({ onClose }: { onClose: () => void }) {
   const create = useCreateEmployee();
-  const { register, handleSubmit, formState: { errors }, reset } =
+  const departments = useDepartments(true);
+  const { register, handleSubmit, formState: { errors }, reset, setValue, watch } =
     useForm<CreateEmployeeInput>({
       resolver: zodResolver(createEmployeeSchema),
       defaultValues: { employment_status: 'active' },
     });
+  const department = watch('department');
 
   const onSubmit = handleSubmit((values) => {
     create.mutate(values, {
@@ -458,8 +464,24 @@ function CreateEmployeeDialog({ onClose }: { onClose: () => void }) {
           )}
         </div>
         <div className="space-y-1.5">
-          <Label htmlFor="department">Department</Label>
-          <Input id="department" {...register('department')} />
+          <Label id="create-emp-dept-label">Department</Label>
+          {/*
+            Departments come from the clinic_departments registry (active
+            rows only) — same source as the edit dialog, so a typo can't
+            mint a phantom department. New entries are added from the
+            Departments panel below the employee table.
+          */}
+          <Select
+            {...(department !== undefined && department !== '' ? { value: department } : {})}
+            onValueChange={(v) => setValue('department', v, { shouldValidate: true })}
+          >
+            <SelectTrigger aria-labelledby="create-emp-dept-label"><SelectValue placeholder="Select…" /></SelectTrigger>
+            <SelectContent>
+              {(departments.data ?? []).map((d) => (
+                <SelectItem key={d.id} value={d.name}>{d.name}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
         <div className="space-y-1.5">
           <Label htmlFor="position">Position</Label>
@@ -699,6 +721,9 @@ function DepartmentsPanel() {
 export default function PatientsPage() {
   const [cursor, setCursor] = useState<string | null>(null);
   const [history, setHistory] = useState<Array<string | null>>([null]);
+  const [empCursor, setEmpCursor] = useState<string | null>(null);
+  const [empHistory, setEmpHistory] = useState<Array<string | null>>([null]);
+  const [tab, setTab] = useTabParam('students');
   const [query, setQuery] = useState('');
   const [empQuery, setEmpQuery] = useState('');
   const [openCreate, setOpenCreate] = useState(false);
@@ -707,14 +732,21 @@ export default function PatientsPage() {
   const [empDetailId, setEmpDetailId] = useState<number | null>(null);
   const [editStudent, setEditStudent] = useState<Student | null>(null);
   const [editEmp, setEditEmp] = useState<Employee | null>(null);
+  const [confirm, setConfirm] = useState<ConfirmAction | null>(null);
+  const [showArchived, setShowArchived] = useState(false);
+  const [showArchivedEmp, setShowArchivedEmp] = useState(false);
   const archiveEmp = useSetEmployeeArchived();
 
-  const searching = query.trim().length >= 2;
-  const empSearching = empQuery.trim().length >= 2;
-  const list = useStudents(cursor, 25);
-  const search = useStudentSearch(query);
-  const employees = useEmployees(null, 50);
-  const empSearch = useEmployeeSearch(empQuery);
+  // Debounce the search text so a request fires only after the user
+  // pauses — previously every keystroke created a fresh query key.
+  const debouncedQuery = useDebouncedValue(query, 300);
+  const debouncedEmpQuery = useDebouncedValue(empQuery, 300);
+  const searching = debouncedQuery.trim().length >= 2;
+  const empSearching = debouncedEmpQuery.trim().length >= 2;
+  const list = useStudents(cursor, 25, showArchived);
+  const search = useStudentSearch(debouncedQuery);
+  const employees = useEmployees(empCursor, 25, showArchivedEmp);
+  const empSearch = useEmployeeSearch(debouncedEmpQuery);
   const setArchived = useSetStudentArchived();
 
   function nextPage() {
@@ -731,8 +763,25 @@ export default function PatientsPage() {
     setCursor(next[next.length - 1] ?? null);
   }
 
+  function empNextPage() {
+    if (employees.data?.next !== null && employees.data?.next !== undefined) {
+      const n = employees.data.next;
+      setEmpHistory((h) => [...h, n]);
+      setEmpCursor(n);
+    }
+  }
+  function empPrevPage() {
+    if (empHistory.length < 2) return;
+    const next = empHistory.slice(0, -1);
+    setEmpHistory(next);
+    setEmpCursor(next[next.length - 1] ?? null);
+  }
+
   const rows: Student[] = searching ? (search.data ?? []) : (list.data?.data ?? []);
   const loading = searching ? search.isLoading : list.isLoading;
+  const errored = searching ? search.isError : list.isError;
+  const retrying = searching ? search.isFetching : list.isFetching;
+  const retry = () => void (searching ? search.refetch() : list.refetch());
 
   return (
     <main className="mx-auto max-w-7xl space-y-4 p-6">
@@ -745,7 +794,7 @@ export default function PatientsPage() {
         </div>
       </header>
 
-      <Tabs defaultValue="students">
+      <Tabs value={tab} onValueChange={setTab}>
         <TabsList>
           <TabsTrigger value="students">Students</TabsTrigger>
           <TabsTrigger value="employees">Employees</TabsTrigger>
@@ -763,12 +812,21 @@ export default function PatientsPage() {
                 onChange={(e) => setQuery(e.target.value)}
               />
             </div>
-            <Dialog open={openCreate} onOpenChange={setOpenCreate}>
-              <Button onClick={() => setOpenCreate(true)}>
-                <UserPlus /> Register student
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                variant={showArchived ? 'secondary' : 'outline'}
+                aria-pressed={showArchived}
+                onClick={() => { setShowArchived((v) => !v); setCursor(null); setHistory([null]); }}
+              >
+                <Archive /> {showArchived ? 'Hide archived' : 'Show archived'}
               </Button>
-              {openCreate && <CreateStudentDialog onClose={() => setOpenCreate(false)} />}
-            </Dialog>
+              <Dialog open={openCreate} onOpenChange={setOpenCreate}>
+                <Button onClick={() => setOpenCreate(true)}>
+                  <UserPlus /> Register student
+                </Button>
+                {openCreate && <CreateStudentDialog onClose={() => setOpenCreate(false)} />}
+              </Dialog>
+            </div>
           </section>
 
           <section className="overflow-hidden rounded-xl border bg-card">
@@ -799,6 +857,9 @@ export default function PatientsPage() {
                     </TableCell>
                   </TableRow>
                 )}
+                {errored && !loading && (
+                  <QueryErrorRow colSpan={7} message="Failed to load students." onRetry={retry} pending={retrying} />
+                )}
                 {rows.map((s) => (
                   <TableRow key={s.id}>
                     <TableCell className="px-3 font-mono text-xs">{s.student_number}</TableCell>
@@ -827,7 +888,18 @@ export default function PatientsPage() {
                           size="sm"
                           variant="outline"
                           disabled={setArchived.isPending}
-                          onClick={() => setArchived.mutate({ id: s.id, archived: !s.archived })}
+                          onClick={() => {
+                            if (s.archived) {
+                              setArchived.mutate({ id: s.id, archived: false });
+                            } else {
+                              setConfirm({
+                                title: `Archive ${s.student_number}?`,
+                                description: 'The student is soft-archived (never deleted) and removed from active workflows. You can restore them later.',
+                                confirmLabel: 'Archive',
+                                run: () => setArchived.mutate({ id: s.id, archived: true }),
+                              });
+                            }
+                          }}
                         >
                           {s.archived ? <ArchiveRestore /> : <Archive />}
                           {s.archived ? 'Restore' : 'Archive'}
@@ -872,12 +944,21 @@ export default function PatientsPage() {
                 onChange={(e) => setEmpQuery(e.target.value)}
               />
             </div>
-            <Dialog open={openCreateEmp} onOpenChange={setOpenCreateEmp}>
-              <Button onClick={() => setOpenCreateEmp(true)}>
-                <UserPlus /> Register employee
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                variant={showArchivedEmp ? 'secondary' : 'outline'}
+                aria-pressed={showArchivedEmp}
+                onClick={() => { setShowArchivedEmp((v) => !v); setEmpCursor(null); setEmpHistory([null]); }}
+              >
+                <Archive /> {showArchivedEmp ? 'Hide archived' : 'Show archived'}
               </Button>
-              {openCreateEmp && <CreateEmployeeDialog onClose={() => setOpenCreateEmp(false)} />}
-            </Dialog>
+              <Dialog open={openCreateEmp} onOpenChange={setOpenCreateEmp}>
+                <Button onClick={() => setOpenCreateEmp(true)}>
+                  <UserPlus /> Register employee
+                </Button>
+                {openCreateEmp && <CreateEmployeeDialog onClose={() => setOpenCreateEmp(false)} />}
+              </Dialog>
+            </div>
           </section>
 
           <section className="overflow-hidden rounded-xl border bg-card">
@@ -896,19 +977,30 @@ export default function PatientsPage() {
                 {(() => {
                   const empLoading = empSearching ? empSearch.isLoading : employees.isLoading;
                   const empRows: Employee[] = empSearching ? (empSearch.data ?? []) : (employees.data?.data ?? []);
+                  const empErrored = empSearching ? empSearch.isError : employees.isError;
                   if (empLoading) {
                     return (
                       <TableRow>
-                        <TableCell colSpan={7} className="px-3 py-6 text-center text-muted-foreground">
+                        <TableCell colSpan={6} className="px-3 py-6 text-center text-muted-foreground">
                           <Loader2 className="mx-auto size-4 animate-spin" />
                         </TableCell>
                       </TableRow>
                     );
                   }
+                  if (empErrored) {
+                    return (
+                      <QueryErrorRow
+                        colSpan={6}
+                        message="Failed to load employees."
+                        onRetry={() => void (empSearching ? empSearch.refetch() : employees.refetch())}
+                        pending={empSearching ? empSearch.isFetching : employees.isFetching}
+                      />
+                    );
+                  }
                   if (empRows.length === 0) {
                     return (
                       <TableRow>
-                        <TableCell colSpan={7} className="px-3 py-6 text-center text-muted-foreground">
+                        <TableCell colSpan={6} className="px-3 py-6 text-center text-muted-foreground">
                           {empSearching ? 'No matches.' : 'No employees registered.'}
                         </TableCell>
                       </TableRow>
@@ -942,7 +1034,18 @@ export default function PatientsPage() {
                             variant="outline"
                             aria-label={`${e.archived ? 'Restore' : 'Archive'} ${e.employee_number}`}
                             disabled={archiveEmp.isPending}
-                            onClick={() => archiveEmp.mutate({ id: e.id, archived: !e.archived })}
+                            onClick={() => {
+                              if (e.archived) {
+                                archiveEmp.mutate({ id: e.id, archived: false });
+                              } else {
+                                setConfirm({
+                                  title: `Archive ${e.employee_number}?`,
+                                  description: 'The employee is soft-archived (never deleted) and removed from active workflows. You can restore them later.',
+                                  confirmLabel: 'Archive',
+                                  run: () => archiveEmp.mutate({ id: e.id, archived: true }),
+                                });
+                              }
+                            }}
                           >
                             {e.archived ? <ArchiveRestore /> : <Archive />} {e.archived ? 'Restore' : 'Archive'}
                           </Button>
@@ -954,6 +1057,25 @@ export default function PatientsPage() {
               </TableBody>
             </Table>
           </section>
+
+          {!empSearching && (
+            <nav className="flex items-center justify-between" aria-label="pagination">
+              <p className="text-xs text-muted-foreground">Page {empHistory.length}</p>
+              <div className="flex gap-2">
+                <Button variant="outline" size="sm" onClick={empPrevPage} disabled={empHistory.length < 2}>
+                  <ChevronLeft /> Prev
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={empNextPage}
+                  disabled={employees.data?.next === null || employees.data?.next === undefined}
+                >
+                  Next <ChevronRight />
+                </Button>
+              </div>
+            </nav>
+          )}
 
           <DepartmentsPanel />
         </TabsContent>
@@ -982,6 +1104,19 @@ export default function PatientsPage() {
           <EmployeeDetailDialog employeeId={empDetailId} onClose={() => setEmpDetailId(null)} />
         </Dialog>
       )}
+
+      <ConfirmDialog
+        open={confirm !== null}
+        title={confirm?.title ?? ''}
+        description={confirm?.description}
+        confirmLabel={confirm?.confirmLabel}
+        pending={setArchived.isPending || archiveEmp.isPending}
+        onConfirm={() => {
+          confirm?.run();
+          setConfirm(null);
+        }}
+        onCancel={() => setConfirm(null)}
+      />
     </main>
   );
 }

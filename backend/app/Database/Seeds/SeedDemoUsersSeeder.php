@@ -17,6 +17,7 @@ use CodeIgniter\Database\Seeder;
  *   counsellor@synapse.dev     DevPassw0rd!  → group: counsellor
  *   facilities_op@synapse.dev  DevPassw0rd!  → group: facilities_op
  *   audit_reader@synapse.dev   DevPassw0rd!  → group: audit_reader
+ *   report_viewer@synapse.dev  DevPassw0rd!  → group: report_viewer
  *
  * Refuses to run in production. Idempotent — re-running is safe (skips
  * users whose email-password identity already exists).
@@ -32,6 +33,10 @@ final class SeedDemoUsersSeeder extends Seeder
         ['email' => 'counsellor@synapse.dev',    'username' => 'synapse-counsellor',    'group' => 'counsellor'],
         ['email' => 'facilities_op@synapse.dev', 'username' => 'synapse-facilities-op', 'group' => 'facilities_op'],
         ['email' => 'audit_reader@synapse.dev',  'username' => 'synapse-audit-reader',  'group' => 'audit_reader'],
+        // Phase 19 (ACTOR_ACCESS_ANALYSIS): read-only analytics role.
+        ['email' => 'report_viewer@synapse.dev', 'username' => 'synapse-report-viewer', 'group' => 'report_viewer'],
+        // RBAC_SECURITY_REVIEW R4: clinical oversight / break-glass role.
+        ['email' => 'clinical_supervisor@synapse.dev', 'username' => 'synapse-clinical-supervisor', 'group' => 'clinical_supervisor'],
     ];
 
     public function run(): void

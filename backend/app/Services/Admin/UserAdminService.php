@@ -69,6 +69,7 @@ final class UserAdminService extends BaseService
     public function create(string $email, string $password, ?string $username, array $groups): array
     {
         $actorId = \App\Auth\CurrentUser::assert();
+        $this->assertMayAssignGroups($actorId, $groups);
         $email = strtolower(trim($email));
 
         return $this->txn(function () use ($email, $password, $username, $groups, $actorId): array {
@@ -162,6 +163,10 @@ final class UserAdminService extends BaseService
                 throw ApiException::notFound('resource.not_found');
             }
 
+            // Escalation + availability guards (RBAC_SECURITY_REVIEW R3).
+            $this->assertMayAssignGroups($actorId, $groups);
+            $this->assertNotRemovingLastOrOwnAdmin($actorId, $userId, $groups);
+
             $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
             $this->replaceGroupsInTxn($userId, $groups, $now);
 
@@ -237,6 +242,66 @@ final class UserAdminService extends BaseService
                 'created_at' => $now,
             ]);
         }
+    }
+
+    /**
+     * Escalation guard (RBAC_SECURITY_REVIEW R3): only a member of the
+     * `admin` group may grant the `admin` group. This blocks a holder of
+     * `rbac.manage` (which is NOT the admin wildcard) from elevating
+     * anyone — including themselves — to full administrator.
+     *
+     * @param list<string> $groups
+     */
+    private function assertMayAssignGroups(int $actorId, array $groups): void
+    {
+        if (in_array('admin', $groups, true) && ! $this->userIsAdmin($actorId)) {
+            throw ApiException::forbidden('rbac.escalation_forbidden');
+        }
+    }
+
+    /**
+     * Availability guard (RBAC_SECURITY_REVIEW R3): an admin may not strip
+     * their OWN admin membership, and the LAST remaining admin may not be
+     * demoted — either would lock the platform out of all administrative
+     * control.
+     *
+     * @param list<string> $groups The user's new group set.
+     */
+    private function assertNotRemovingLastOrOwnAdmin(int $actorId, int $userId, array $groups): void
+    {
+        if (in_array('admin', $groups, true)) {
+            return; // target remains an admin
+        }
+        if (! $this->userIsAdmin($userId)) {
+            return; // target was not an admin; nothing to protect
+        }
+        if ($userId === $actorId) {
+            throw new ApiException('request.validation_failed', 422, [
+                ['code' => 'validation.invalid', 'message' => 'You cannot remove your own admin role.'],
+            ]);
+        }
+        if ($this->adminCount() <= 1) {
+            throw new ApiException('request.validation_failed', 422, [
+                ['code' => 'validation.invalid', 'message' => 'Cannot remove the last administrator.'],
+            ]);
+        }
+    }
+
+    private function userIsAdmin(int $userId): bool
+    {
+        return (int) $this->db->table('auth_groups_users gu')
+            ->join('auth_groups g', 'g.id = gu.group_id')
+            ->where('g.name', 'admin')
+            ->where('gu.user_id', $userId)
+            ->countAllResults() > 0;
+    }
+
+    private function adminCount(): int
+    {
+        return (int) $this->db->table('auth_groups_users gu')
+            ->join('auth_groups g', 'g.id = gu.group_id')
+            ->where('g.name', 'admin')
+            ->countAllResults();
     }
 
     /**

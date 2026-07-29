@@ -22,17 +22,56 @@ final class PermissionService
 {
     /** @var array<int|string, array<int, string>> */
     private array $userCache = [];
-
+    
+    /**
+     * Permission codes the admin wildcard does NOT satisfy on its own.
+     * They MUST be granted explicitly (via a group or a per-user grant),
+     * so a bare "system administrator" cannot read or write clinical
+     * counselling records without a deliberate, separate grant.
+     *
+     * Segregation of duties (RBAC_SECURITY_REVIEW R1): mental-health notes
+     * are the most sensitive data in the system; standing wildcard access
+     * violates least privilege.
+     *
+     * @var array<int, string>
+     */
+    public const WILDCARD_EXCLUSIONS = [
+        'counselling.records.create',
+        'counselling.records.read',
+        'counselling.records.write',
+    ];
+    
     public function userHas(int $userId, string $code): bool
     {
-        $effective = $this->allForUser($userId);
+        /** @var AuthGroups $groups */
+        $groups = config(AuthGroups::class);
 
-        /** @var \Config\AuthGroups $groups */
-        $groups = config('Config\AuthGroups');
-        if (in_array($groups->adminWildcard, $effective, true)) {
-            return true; // wildcard semantics: every permission granted
+        return $this->grants($this->allForUser($userId), $code, $groups->adminWildcard);
+    }
+    
+    /**
+     * Pure grant decision over an already-resolved effective list.
+     * Extracted so the wildcard-exclusion policy is unit-testable without
+     * a database.
+     *
+     * A code in WILDCARD_EXCLUSIONS is granted ONLY when it appears
+     * explicitly in `$effective`; the wildcard alone never satisfies it.
+     * Because `allForUser()` collapses a wildcard holder's list to
+     * `['*']`, an admin (even one carrying legacy per-user grants) is
+     * denied excluded codes — a dedicated non-admin role must hold them.
+     *
+     * @param array<int, string> $effective
+     */
+    public function grants(array $effective, string $code, string $wildcard = '*'): bool
+    {
+        if (in_array($code, self::WILDCARD_EXCLUSIONS, true)) {
+            return in_array($code, $effective, true);
         }
-
+    
+        if (in_array($wildcard, $effective, true)) {
+            return true;
+        }
+    
         return in_array($code, $effective, true);
     }
 

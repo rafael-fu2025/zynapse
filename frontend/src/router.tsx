@@ -7,8 +7,16 @@
  * dev server, and smaller chunks in production builds).
  */
 import { Suspense } from 'react';
-import { createBrowserRouter, Navigate, RouterProvider } from 'react-router-dom';
+import {
+  createBrowserRouter,
+  isRouteErrorResponse,
+  Link,
+  Navigate,
+  RouterProvider,
+  useRouteError,
+} from 'react-router-dom';
 import Layout from '@/components/Layout';
+import { Button } from '@/components/ui/button';
 import { ProtectedRoute } from '@/components/ProtectedRoute';
 import { useBootstrapSession } from '@/hooks/useBootstrapSession';
 import { lazyWithRetry } from '@/lib/lazy';
@@ -24,6 +32,8 @@ const ClinicPage = lazyWithRetry(() => import('@/pages/ClinicPage'));
 const CounsellingPage = lazyWithRetry(() => import('@/pages/CounsellingPage'));
 const DashboardPage = lazyWithRetry(() => import('@/pages/DashboardPage'));
 const FacilitiesPage = lazyWithRetry(() => import('@/pages/FacilitiesPage'));
+const WasteCategoriesPage = lazyWithRetry(() => import('@/pages/WasteCategoriesPage'));
+const DrumDetailPage = lazyWithRetry(() => import('@/pages/DrumDetailPage'));
 const ForbiddenPage = lazyWithRetry(() => import('@/pages/ForbiddenPage'));
 const InventoryPage = lazyWithRetry(() => import('@/pages/InventoryPage'));
 const KioskPage = lazyWithRetry(() => import('@/pages/KioskPage'));
@@ -38,6 +48,63 @@ function PageFallback() {
     <p className="grid min-h-40 place-items-center text-sm text-muted-foreground" role="status">
       Loading…
     </p>
+  );
+}
+
+/**
+ * RouteError — route-level error boundary. A render/loader error inside
+ * any page lands here instead of React Router's raw default screen, so
+ * the user gets a branded recovery surface with a reload affordance.
+ */
+function RouteError() {
+  const error = useRouteError();
+  const status = isRouteErrorResponse(error) ? error.status : null;
+  const detail =
+    isRouteErrorResponse(error)
+      ? `${error.status} ${error.statusText}`
+      : error instanceof Error
+        ? error.message
+        : 'An unexpected error occurred.';
+
+  return (
+    <main className="grid min-h-dvh place-items-center p-6">
+      <section className="max-w-md text-center" role="alert">
+        <h1 className="text-3xl font-semibold text-foreground">
+          {status === 404 ? 'Page not found' : 'Something went wrong'}
+        </h1>
+        <p className="mt-2 text-sm text-muted-foreground">{detail}</p>
+        <div className="mt-4 flex justify-center gap-2">
+          <Button variant="outline" onClick={() => window.location.reload()}>
+            Reload
+          </Button>
+          <Button asChild>
+            <Link to="/">Return to dashboard</Link>
+          </Button>
+        </div>
+      </section>
+    </main>
+  );
+}
+
+/**
+ * NotFoundPage — real 404 for unknown URLs. Authenticated users keep
+ * the shell (sidebar/topbar) since it is registered inside the
+ * protected branch; the previous behavior silently redirected every
+ * unknown path to the dashboard, giving no feedback on a typo.
+ */
+function NotFoundPage() {
+  return (
+    <main className="grid min-h-[60vh] place-items-center p-6">
+      <section className="max-w-md text-center">
+        <h1 className="text-3xl font-semibold text-foreground">404 — Page not found</h1>
+        <p className="mt-2 text-sm text-muted-foreground">
+          The page you’re looking for doesn’t exist or has moved.
+        </p>
+        <Button asChild className="mt-4">
+          <Link to="/">Return to dashboard</Link>
+        </Button>
+      </section>
+    </main>
   );
 }
 
@@ -80,6 +147,7 @@ const router = createBrowserRouter([
   // PUBLIC lobby-TV board — intentionally outside the protected shell.
   { path: '/queue-display', element: <QueueDisplayPage /> },
   {
+    errorElement: <RouteError />,
     element: (
       <ProtectedShell>
         <Layout />
@@ -161,6 +229,22 @@ const router = createBrowserRouter([
         ),
       },
       {
+        path: '/facilities/waste-categories',
+        element: (
+          <ProtectedRoute anyOf={['facilities.units.read']}>
+            <WasteCategoriesPage />
+          </ProtectedRoute>
+        ),
+      },
+      {
+        path: '/facilities/drums/:unitId',
+        element: (
+          <ProtectedRoute anyOf={['facilities.units.read']}>
+            <DrumDetailPage />
+          </ProtectedRoute>
+        ),
+      },
+      {
         path: '/referrals',
         element: (
           <ProtectedRoute anyOf={['referrals.read']}>
@@ -192,9 +276,11 @@ const router = createBrowserRouter([
           </ProtectedRoute>
         ),
       },
+      // Unknown paths under the shell render a real 404 (with nav)
+      // instead of silently redirecting to the dashboard.
+      { path: '*', element: <NotFoundPage /> },
     ],
   },
-  { path: '*', element: <Navigate to="/" replace /> },
 ]);
 
 export function AppRouter() {

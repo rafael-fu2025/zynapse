@@ -22,6 +22,7 @@ import { toast } from 'sonner';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { QueryErrorRow } from '@/components/QueryErrorState';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
@@ -91,6 +92,10 @@ export default function KioskPage() {
   const [result, setResult] = useState<ScanResult | null>(null);
   const [pending, setPending] = useState<number>(() => readBuffer().length);
   const [syncing, setSyncing] = useState(false);
+  // Buffered scans the server rejected on sync (e.g. unknown ID). We
+  // surface these so the operator can see what failed instead of
+  // silently dropping them.
+  const [rejected, setRejected] = useState<Array<{ identifier: string; message: string }>>([]);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => inputRef.current?.focus(), []);
@@ -129,8 +134,9 @@ export default function KioskPage() {
     const buffered = readBuffer();
     if (buffered.length === 0) return;
     setSyncing(true);
+    setRejected([]);
     let synced = 0;
-    let failed = 0;
+    const dropped: Array<{ identifier: string; message: string }> = [];
     const remaining: BufferedScan[] = [];
     for (const s of buffered) {
       try {
@@ -141,14 +147,19 @@ export default function KioskPage() {
         if (status === 0) {
           remaining.push(s); // still offline — keep buffered
         } else {
-          failed += 1; // rejected server-side (unknown ID etc.) — drop
+          // Rejected server-side (unknown ID etc.) — drop from the
+          // buffer but record it so the operator can re-key it.
+          const message =
+            (err as { errors?: { message: string }[] }).errors?.[0]?.message ?? 'Rejected by server.';
+          dropped.push({ identifier: s.identifier, message });
         }
       }
     }
     writeBuffer(remaining);
     setPending(remaining.length);
+    setRejected(dropped);
     setSyncing(false);
-    toast.success(`Sync complete. Synced: ${synced}, failed: ${failed}, still buffered: ${remaining.length}.`);
+    toast.success(`Sync complete. Synced: ${synced}, rejected: ${dropped.length}, still buffered: ${remaining.length}.`);
   }
 
   return (
@@ -216,6 +227,32 @@ export default function KioskPage() {
               <CloudOff className="size-3.5" /> {pending} scan{pending === 1 ? '' : 's'} buffered offline.
             </p>
           )}
+          {rejected.length > 0 && (
+            <Alert variant="destructive">
+              <AlertTriangle className="size-4" />
+              <AlertTitle className="flex items-center justify-between gap-2">
+                <span>{rejected.length} offline scan{rejected.length === 1 ? '' : 's'} rejected on sync</span>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-6 px-2 text-xs"
+                  onClick={() => setRejected([])}
+                >
+                  Dismiss
+                </Button>
+              </AlertTitle>
+              <AlertDescription>
+                <p className="mb-1">These were dropped from the buffer — re-key them manually if still needed:</p>
+                <ul className="list-disc space-y-0.5 pl-4">
+                  {rejected.map((r, i) => (
+                    <li key={`${r.identifier}-${i}`}>
+                      <span className="font-mono">{r.identifier}</span> — {r.message}
+                    </li>
+                  ))}
+                </ul>
+              </AlertDescription>
+            </Alert>
+          )}
         </article>
 
         <article className="space-y-3 rounded-xl border bg-card p-4" aria-live="polite">
@@ -281,6 +318,9 @@ export default function KioskPage() {
                   No check-ins yet today.
                 </TableCell>
               </TableRow>
+            )}
+            {trail.isError && !trail.isLoading && (
+              <QueryErrorRow colSpan={6} message="Failed to load today's check-ins." onRetry={() => void trail.refetch()} pending={trail.isFetching} />
             )}
             {trail.data?.map((c) => (
               <TableRow key={c.id}>

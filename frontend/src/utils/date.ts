@@ -4,7 +4,7 @@
  * Centralized so we never accidentally render UTC directly.
  */
 import { format, formatDistanceToNow, parseISO } from 'date-fns';
-import { formatInTimeZone } from 'date-fns-tz';
+import { formatInTimeZone, fromZonedTime } from 'date-fns-tz';
 import { useAuthStore } from '@/store/auth';
 
 const DEFAULT_TZ = 'Asia/Manila';
@@ -33,4 +33,30 @@ export function fmtRelative(isoUtc: string): string {
 
 export function fmtShort(isoUtc: string): string {
   return format(parseUtc(isoUtc), 'yyyy-MM-dd');
+}
+
+/**
+ * Inverse of fmtUtcToApp for form inputs: compose an app-timezone local
+ * date (`YYYY-MM-DD`) + time (`HH:mm` or `HH:mm:ss`) into the UTC MySQL
+ * string (`YYYY-MM-DD HH:mm:ss`) the API expects. Lets the user think in
+ * Asia/Manila while the payload stays UTC.
+ */
+export function appDateTimeToUtcSql(dateYmd: string, timeHhMm: string): string {
+  const tz = useAuthStore.getState().timezone ?? DEFAULT_TZ;
+  const time = timeHhMm.length === 5 ? `${timeHhMm}:00` : timeHhMm;
+  const utcInstant = fromZonedTime(`${dateYmd} ${time}`, tz);
+  return formatInTimeZone(utcInstant, 'UTC', 'yyyy-MM-dd HH:mm:ss');
+}
+
+/**
+ * Split a UTC timestamp into app-timezone `date` (`YYYY-MM-DD`) and
+ * `time` (`HH:mm`) parts for seeding the date/time pickers on edit.
+ */
+export function utcSqlToAppParts(isoUtc: string): { date: string; time: string } {
+  const tz = useAuthStore.getState().timezone ?? DEFAULT_TZ;
+  const instant = parseUtc(isoUtc);
+  return {
+    date: formatInTimeZone(instant, tz, 'yyyy-MM-dd'),
+    time: formatInTimeZone(instant, tz, 'HH:mm'),
+  };
 }

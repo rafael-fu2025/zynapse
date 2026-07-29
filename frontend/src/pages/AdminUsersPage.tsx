@@ -7,12 +7,15 @@
  * dialog and never stored.
  */
 import { zodResolver } from '@hookform/resolvers/zod';
-import { KeyRound, Loader2, UserPlus } from 'lucide-react';
+import { ChevronLeft, ChevronRight, KeyRound, Loader2, UserPlus } from 'lucide-react';
 import { useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
+import { ConfirmDialog, type ConfirmAction } from '@/components/ConfirmDialog';
+import { CopyButton } from '@/components/CopyButton';
+import { QueryErrorRow } from '@/components/QueryErrorState';
 import {
   Dialog,
   DialogContent,
@@ -130,15 +133,31 @@ function CreateUserDialog({ onClose }: { onClose: () => void }) {
 }
 
 export default function AdminUsersPage() {
-  const [cursor] = useState<string | null>(null);
+  const [cursor, setCursor] = useState<string | null>(null);
+  const [history, setHistory] = useState<Array<string | null>>([null]);
   const [openCreate, setOpenCreate] = useState(false);
   const [tempPassword, setTempPassword] = useState<string | null>(null);
+  const [confirm, setConfirm] = useState<ConfirmAction | null>(null);
   const list = useAdminUsers(cursor, 25);
   const setActive = useSetUserActive();
   const resetPw = useResetUserPassword();
   const myId = useAuthStore((s) => s.userId);
 
   const rows: AdminUser[] = list.data?.data ?? [];
+
+  function nextPage() {
+    if (list.data?.next !== null && list.data?.next !== undefined) {
+      const n = list.data.next;
+      setHistory((h) => [...h, n]);
+      setCursor(n);
+    }
+  }
+  function prevPage() {
+    if (history.length < 2) return;
+    const next = history.slice(0, -1);
+    setHistory(next);
+    setCursor(next[next.length - 1] ?? null);
+  }
 
   return (
     <main className="mx-auto max-w-7xl space-y-4 p-6">
@@ -175,6 +194,16 @@ export default function AdminUsersPage() {
                 </TableCell>
               </TableRow>
             )}
+            {list.isError && !list.isLoading && (
+              <QueryErrorRow colSpan={6} message="Failed to load users." onRetry={() => void list.refetch()} pending={list.isFetching} />
+            )}
+            {!list.isLoading && !list.isError && rows.length === 0 && (
+              <TableRow>
+                <TableCell colSpan={6} className="px-3 py-6 text-center text-muted-foreground">
+                  No users.
+                </TableCell>
+              </TableRow>
+            )}
             {rows.map((u) => (
               <TableRow key={u.id}>
                 <TableCell className="px-3 font-mono text-xs">{u.id}</TableCell>
@@ -194,7 +223,16 @@ export default function AdminUsersPage() {
                       size="sm"
                       variant="outline"
                       disabled={resetPw.isPending}
-                      onClick={() => resetPw.mutate(u.id, { onSuccess: (d) => setTempPassword(d.temporary_password) })}
+                      onClick={() =>
+                        setConfirm({
+                          title: `Reset password for ${u.email ?? `user #${u.id}`}?`,
+                          description:
+                            'This invalidates the current password and generates a one-time temporary password the user must change at next login.',
+                          confirmLabel: 'Reset password',
+                          run: () =>
+                            resetPw.mutate(u.id, { onSuccess: (d) => setTempPassword(d.temporary_password) }),
+                        })
+                      }
                     >
                       <KeyRound /> Reset
                     </Button>
@@ -202,7 +240,19 @@ export default function AdminUsersPage() {
                       size="sm"
                       variant={u.active ? 'outline' : 'secondary'}
                       disabled={setActive.isPending || u.id === myId}
-                      onClick={() => setActive.mutate({ id: u.id, active: !u.active })}
+                      onClick={() => {
+                        if (u.active) {
+                          setConfirm({
+                            title: `Deactivate ${u.email ?? `user #${u.id}`}?`,
+                            description:
+                              'The account will be soft-disabled and can no longer sign in. You can re-activate it later.',
+                            confirmLabel: 'Deactivate',
+                            run: () => setActive.mutate({ id: u.id, active: false }),
+                          });
+                        } else {
+                          setActive.mutate({ id: u.id, active: true });
+                        }
+                      }}
                     >
                       {u.active ? 'Deactivate' : 'Activate'}
                     </Button>
@@ -214,6 +264,23 @@ export default function AdminUsersPage() {
         </Table>
       </section>
 
+      <nav className="flex items-center justify-between" aria-label="pagination">
+        <p className="text-xs text-muted-foreground">Page {history.length}</p>
+        <div className="flex gap-2">
+          <Button variant="outline" size="sm" onClick={prevPage} disabled={history.length < 2}>
+            <ChevronLeft /> Prev
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={nextPage}
+            disabled={list.data?.next === null || list.data?.next === undefined}
+          >
+            Next <ChevronRight />
+          </Button>
+        </div>
+      </nav>
+
       {tempPassword !== null && (
         <Dialog open onOpenChange={(o) => !o && setTempPassword(null)}>
           <DialogContent>
@@ -224,13 +291,29 @@ export default function AdminUsersPage() {
                 must change it at next login.
               </DialogDescription>
             </DialogHeader>
-            <p className="rounded-lg bg-muted p-3 text-center font-mono text-sm">{tempPassword}</p>
+            <div className="flex items-center gap-2">
+              <p className="flex-1 rounded-lg bg-muted p-3 text-center font-mono text-sm">{tempPassword}</p>
+              <CopyButton value={tempPassword} label="Copy temporary password" successMessage="Temporary password copied." />
+            </div>
             <DialogFooter>
               <Button onClick={() => setTempPassword(null)}>Done</Button>
             </DialogFooter>
           </DialogContent>
         </Dialog>
       )}
+
+      <ConfirmDialog
+        open={confirm !== null}
+        title={confirm?.title ?? ''}
+        description={confirm?.description}
+        confirmLabel={confirm?.confirmLabel}
+        pending={resetPw.isPending || setActive.isPending}
+        onConfirm={() => {
+          confirm?.run();
+          setConfirm(null);
+        }}
+        onCancel={() => setConfirm(null)}
+      />
     </main>
   );
 }

@@ -6,11 +6,15 @@
  * the legacy landing page; each module tab shows its breakdown tables
  * and offers a CSV export (no patient identifiers in export surfaces).
  */
-import { Download, Loader2, Play, Plus, Sparkles, Trash2 } from 'lucide-react';
+import { Archive, ArchiveRestore, Download, Loader2, Play, Plus, Sparkles, Trash2 } from 'lucide-react';
 import { useState } from 'react';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { ConfirmDialog, type ConfirmAction } from '@/components/ConfirmDialog';
+import { QueryErrorRow } from '@/components/QueryErrorState';
+import { useTabParam } from '@/hooks/useTabParam';
+import { DateRangePicker } from '@/components/ui/date-range-picker';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
@@ -31,6 +35,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import {
   useArchiveReportConfig,
+  useUnarchiveReportConfig,
   useClinicReport,
   useCounsellingReport,
   useCreateReportConfig,
@@ -108,15 +113,18 @@ function KpiCard({ label, value, hint }: { label: string; value: number | string
 }
 
 function SavedReportsSection() {
-  const configs = useReportConfigs();
+  const [showArchived, setShowArchived] = useState(false);
+  const configs = useReportConfigs(showArchived);
   const generated = useGeneratedReports();
   const create = useCreateReportConfig();
   const run = useRunReportConfig();
   const archive = useArchiveReportConfig();
+  const unarchive = useUnarchiveReportConfig();
   const download = useDownloadGeneratedReport();
   const [name, setName] = useState('');
   const [module, setModule] = useState<ReportModule>('clinic');
   const [summarize, setSummarize] = useState(true);
+  const [confirm, setConfirm] = useState<ConfirmAction | null>(null);
 
   function save() {
     if (name.trim() === '') {
@@ -151,18 +159,42 @@ function SavedReportsSection() {
             <Button size="sm" onClick={save} disabled={create.isPending}>
               {create.isPending ? <Loader2 className="animate-spin" /> : <Plus />} Save
             </Button>
+            <Button
+              size="sm"
+              variant={showArchived ? 'secondary' : 'outline'}
+              aria-pressed={showArchived}
+              onClick={() => setShowArchived((v) => !v)}
+            >
+              <Archive /> {showArchived ? 'Hide archived' : 'Show archived'}
+            </Button>
           </div>
           <ul className="max-h-56 divide-y overflow-auto text-sm">
             {(configs.data ?? []).map((c) => (
               <li key={c.id} className="flex items-center justify-between gap-2 px-3 py-2">
-                <span className="truncate">{c.name} <Badge variant="secondary">{c.module}</Badge></span>
+                <span className="truncate">
+                  {c.name} <Badge variant="secondary">{c.module}</Badge>
+                  {!c.is_active && <Badge variant="secondary" className="ml-1">archived</Badge>}
+                </span>
                 <div className="flex shrink-0 gap-1">
-                  <Button size="sm" variant="outline" aria-label={`Run ${c.name}`} disabled={run.isPending} onClick={() => run.mutate(c.id)}>
-                    <Play /> Run
-                  </Button>
-                  <Button size="sm" variant="outline" aria-label={`Archive ${c.name}`} disabled={archive.isPending} onClick={() => archive.mutate(c.id)}>
-                    <Trash2 />
-                  </Button>
+                  {c.is_active ? (
+                    <>
+                      <Button size="sm" variant="outline" aria-label={`Run ${c.name}`} disabled={run.isPending} onClick={() => run.mutate(c.id)}>
+                        <Play /> Run
+                      </Button>
+                      <Button size="sm" variant="outline" aria-label={`Archive ${c.name}`} disabled={archive.isPending} onClick={() => setConfirm({
+                        title: `Archive “${c.name}”?`,
+                        description: 'The saved report configuration will be archived and removed from this list.',
+                        confirmLabel: 'Archive',
+                        run: () => archive.mutate(c.id),
+                      })}>
+                        <Trash2 />
+                      </Button>
+                    </>
+                  ) : (
+                    <Button size="sm" variant="outline" aria-label={`Restore ${c.name}`} disabled={unarchive.isPending} onClick={() => unarchive.mutate(c.id)}>
+                      <ArchiveRestore /> Restore
+                    </Button>
+                  )}
                 </div>
               </li>
             ))}
@@ -184,7 +216,10 @@ function SavedReportsSection() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {(generated.data ?? []).map((g) => (
+              {generated.isError && (
+                <QueryErrorRow colSpan={4} message="Failed to load generated reports." onRetry={() => void generated.refetch()} pending={generated.isFetching} />
+              )}
+              {!generated.isError && (generated.data ?? []).map((g) => (
                 <TableRow key={g.id}>
                   <TableCell className="px-3 text-xs"><Badge variant="secondary">{g.module}</Badge></TableCell>
                   <TableCell className="px-3 font-mono text-xs text-muted-foreground">{g.generated_at}</TableCell>
@@ -196,7 +231,7 @@ function SavedReportsSection() {
                   </TableCell>
                 </TableRow>
               ))}
-              {(generated.data?.length ?? 0) === 0 && (
+              {!generated.isError && (generated.data?.length ?? 0) === 0 && (
                 <TableRow>
                   <TableCell colSpan={4} className="px-3 py-4 text-center text-muted-foreground">
                     No generated reports yet.
@@ -207,6 +242,19 @@ function SavedReportsSection() {
           </Table>
         </article>
       </div>
+
+      <ConfirmDialog
+        open={confirm !== null}
+        title={confirm?.title ?? ''}
+        description={confirm?.description}
+        confirmLabel={confirm?.confirmLabel}
+        pending={archive.isPending}
+        onConfirm={() => {
+          confirm?.run();
+          setConfirm(null);
+        }}
+        onCancel={() => setConfirm(null)}
+      />
     </section>
   );
 }
@@ -221,7 +269,8 @@ export default function ReportsPage() {
   const inventory = useInventoryReport(start, end);
   const exporter = useReportExport();
   const narrative = useReportNarrative();
-  const [tab, setTab] = useState<ReportModule>('clinic');
+  const [tabParam, setTab] = useTabParam('clinic');
+  const tab = tabParam as ReportModule;
   const [narratives, setNarratives] = useState<Partial<Record<ReportModule, string>>>({});
 
   const range = summary.data?.range;
@@ -248,12 +297,17 @@ export default function ReportsPage() {
         </div>
         <div className="flex items-end gap-2">
           <div className="space-y-1">
-            <Label htmlFor="report-start" className="text-xs">Start</Label>
-            <Input id="report-start" type="date" value={start} onChange={(e) => setStart(e.target.value)} className="h-8" />
-          </div>
-          <div className="space-y-1">
-            <Label htmlFor="report-end" className="text-xs">End</Label>
-            <Input id="report-end" type="date" value={end} onChange={(e) => setEnd(e.target.value)} className="h-8" />
+            <Label htmlFor="report-range" className="text-xs">Date range</Label>
+            <DateRangePicker
+              id="report-range"
+              start={start}
+              end={end}
+              onChange={({ start: nextStart, end: nextEnd }) => {
+                setStart(nextStart);
+                setEnd(nextEnd);
+              }}
+              className="h-8 w-[280px]"
+            />
           </div>
         </div>
       </header>
@@ -265,7 +319,7 @@ export default function ReportsPage() {
         <KpiCard label="Referrals created" value={summary.data?.referrals.created ?? '—'} />
       </section>
 
-      <Tabs value={tab} onValueChange={(v) => setTab(v as ReportModule)}>
+      <Tabs value={tab} onValueChange={setTab}>
         <div className="flex items-center justify-between gap-2">
           <TabsList>
             <TabsTrigger value="clinic">Clinic</TabsTrigger>

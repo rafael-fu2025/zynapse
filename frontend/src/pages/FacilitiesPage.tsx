@@ -7,12 +7,14 @@
  * status badge and roll back on error. shadcn Table / Dialog /
  * Textarea primitives.
  */
-import { Play, Square, StopCircle, Loader2, Ban, ClipboardList, Boxes, LineChart, Plus, Wrench, Eye, Cylinder, Pencil, Archive, Trash2 as TrashIcon, Check, X, Save } from 'lucide-react';
-import { useEffect, useId, useState } from 'react';
+import { Play, Square, StopCircle, Loader2, Ban, ChevronLeft, ChevronRight, ClipboardList, Boxes, LineChart, Plus, Wrench, Eye, Cylinder, Pencil, Archive, ArchiveRestore } from 'lucide-react';
+import { useId, useState } from 'react';
+import { Link, Navigate, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { ConfirmDialog, type ConfirmAction } from '@/components/ConfirmDialog';
 import {
   Dialog,
   DialogContent,
@@ -50,31 +52,29 @@ import {
   useAddBatchIo,
   useAddProcessLog,
   useArchiveUnit,
-  useArchiveWasteCategory,
   useBatchAnalytics,
   useBmgUnits,
   useCancelBatch,
   useCreateUnit,
-  useCreateWasteCategory,
-  useDeleteWasteCategory,
   useFinishBatch,
   useProcessLogs,
   useRecordOutput,
   useSetUnitMaintenance,
   useStartBatch,
+  useUnarchiveUnit,
   useUpdateUnit,
-  useUpdateWasteCategory,
   useWasteCategories,
 } from '@/hooks/useFacilities';
 import {
   MOISTURE_LEVELS,
   OUTPUT_GRADES,
+  createUnitSchema,
   recordOutputSchema,
   startBatchSchema,
+  updateUnitSchema,
   type ActiveBatch,
   type BmgUnit,
   type MoistureLevel,
-  type WasteCategory,
 } from '@/schemas/facilities';
 import { fmtUtcToApp, fmtShort } from '@/utils/date';
 
@@ -316,246 +316,9 @@ function ProcessLogsDialog({ unit, batchId, onClose }: { unit: BmgUnit; batchId:
 }
 
 /**
- * WasteCategoryRow — read mode (default) + edit mode (inline).
- *
- * - Click `Edit` → switches to inline edit form (matches the legacy
- *   `bmg/categories/edit` form: code is immutable, name + yield % +
- *   ref days are editable, is_active toggle).
- * - Click `Archive` → soft-archives (sets `is_active = 0`). The
- *   service refuses if any unit still references this category as
- *   its default; the toast surfaces that error.
- * - Click `Delete` → hard-delete with confirm. The service refuses
- *   if any batch or unit still references the category.
+ * Waste-category management moved to its own screen —
+ * see `WasteCategoriesPage` (routed at `/facilities/waste-categories`).
  */
-function WasteCategoryRow({ cat }: { cat: WasteCategory }) {
-  const [editing, setEditing] = useState(false);
-  const [confirming, setConfirming] = useState<null | 'archive' | 'delete'>(null);
-  const update = useUpdateWasteCategory();
-  const archive = useArchiveWasteCategory();
-  const del = useDeleteWasteCategory();
-
-  const [name, setName] = useState(cat.name);
-  const [yieldPct, setYieldPct] = useState(
-    cat.expected_yield_pct !== null ? String(cat.expected_yield_pct) : '',
-  );
-  const [refDays, setRefDays] = useState(
-    cat.reference_duration_days !== null ? String(cat.reference_duration_days) : '',
-  );
-  const [isActive, setIsActive] = useState(cat.is_active);
-
-  // Reset the local form whenever the row switches back into read mode.
-  useEffect(() => {
-    if (!editing) {
-      setName(cat.name);
-      setYieldPct(cat.expected_yield_pct !== null ? String(cat.expected_yield_pct) : '');
-      setRefDays(cat.reference_duration_days !== null ? String(cat.reference_duration_days) : '');
-      setIsActive(cat.is_active);
-    }
-  }, [editing, cat]);
-
-  function save() {
-    update.mutate(
-      {
-        categoryId: cat.id,
-        input: {
-          name,
-          expected_yield_pct: yieldPct === '' ? '' : Number(yieldPct),
-          reference_duration_days: refDays === '' ? '' : Number(refDays),
-          is_active: isActive,
-        },
-      },
-      { onSuccess: () => setEditing(false) },
-    );
-  }
-
-  if (editing) {
-    return (
-      <li className="space-y-2 rounded-md border bg-muted/30 p-2">
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2">
-            <span className="font-medium">{cat.name}</span>
-            <span className="font-mono text-xs text-muted-foreground">({cat.code})</span>
-            {!cat.is_active && <Badge variant="secondary">archived</Badge>}
-          </div>
-        </div>
-        <div className="grid grid-cols-2 gap-2">
-          <div className="space-y-1">
-            <Label htmlFor={`wc-name-${cat.id}`} className="text-xs">Name *</Label>
-            <Input id={`wc-name-${cat.id}`} className="h-8" value={name} onChange={(e) => setName(e.target.value)} maxLength={100} />
-          </div>
-          <div className="space-y-1">
-            <Label htmlFor={`wc-yield-${cat.id}`} className="text-xs">Exp. yield %</Label>
-            <Input id={`wc-yield-${cat.id}`} type="number" min={0} max={100} step={0.1} className="h-8" value={yieldPct} onChange={(e) => setYieldPct(e.target.value)} />
-          </div>
-          <div className="space-y-1">
-            <Label htmlFor={`wc-days-${cat.id}`} className="text-xs">Ref. days</Label>
-            <Input id={`wc-days-${cat.id}`} type="number" min={1} step={1} className="h-8" value={refDays} onChange={(e) => setRefDays(e.target.value)} />
-          </div>
-          <div className="space-y-1">
-            <Label className="text-xs">Status</Label>
-            <label className="flex h-8 items-center gap-2 rounded-md border bg-background px-2 text-xs">
-              <input
-                type="checkbox"
-                checked={isActive}
-                onChange={(e) => setIsActive(e.target.checked)}
-                className="size-3.5"
-                aria-label="Active"
-              />
-              Active
-            </label>
-          </div>
-        </div>
-        <div className="flex justify-end gap-1.5">
-          <Button size="sm" variant="outline" onClick={() => setEditing(false)}>
-            <X className="size-3.5" /> Cancel
-          </Button>
-          <Button size="sm" onClick={save} disabled={update.isPending}>
-            {update.isPending ? <Loader2 className="animate-spin" /> : <Save className="size-3.5" />} Save
-          </Button>
-        </div>
-      </li>
-    );
-  }
-
-  return (
-    <li className="flex items-center justify-between gap-2 rounded-md border px-2 py-1.5">
-      <div className="flex min-w-0 flex-1 items-center gap-2">
-        <span className="truncate font-medium">{cat.name}</span>
-        <span className="shrink-0 font-mono text-xs text-muted-foreground">({cat.code})</span>
-        {!cat.is_active && <Badge variant="secondary" className="shrink-0">archived</Badge>}
-        <span className="ml-auto shrink-0 text-xs text-muted-foreground">
-          {cat.expected_yield_pct !== null ? `${cat.expected_yield_pct}% yield` : '—'} · {cat.reference_duration_days !== null ? `${cat.reference_duration_days}d` : '—'}
-        </span>
-      </div>
-      <div className="flex shrink-0 items-center gap-1">
-        {confirming === null && (
-          <>
-            <Button size="sm" variant="outline" onClick={() => setEditing(true)} aria-label={`Edit ${cat.code}`}>
-              <Pencil className="size-3.5" />
-            </Button>
-            {cat.is_active ? (
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => setConfirming('archive')}
-                aria-label={`Archive ${cat.code}`}
-                disabled={archive.isPending}
-              >
-                <Archive className="size-3.5" />
-              </Button>
-            ) : (
-              <span className="text-[10px] text-muted-foreground">—</span>
-            )}
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => setConfirming('delete')}
-              aria-label={`Delete ${cat.code}`}
-              className="hover:border-destructive hover:text-destructive focus-visible:border-destructive focus-visible:text-destructive"
-              disabled={del.isPending}
-            >
-              <TrashIcon className="size-3.5" />
-            </Button>
-          </>
-        )}
-        {confirming === 'archive' && (
-          <>
-            <span className="text-xs text-muted-foreground">Archive?</span>
-            <Button size="sm" variant="ghost" onClick={() => setConfirming(null)} aria-label="Cancel">
-              <X className="size-3.5" />
-            </Button>
-            <Button
-              size="sm"
-              variant="destructive"
-              onClick={() => archive.mutate({ categoryId: cat.id }, { onSuccess: () => setConfirming(null) })}
-              disabled={archive.isPending}
-            >
-              {archive.isPending ? <Loader2 className="animate-spin" /> : <Check className="size-3.5" />} Yes
-            </Button>
-          </>
-        )}
-        {confirming === 'delete' && (
-          <>
-            <span className="text-xs text-destructive">Delete forever?</span>
-            <Button size="sm" variant="ghost" onClick={() => setConfirming(null)} aria-label="Cancel">
-              <X className="size-3.5" />
-            </Button>
-            <Button
-              size="sm"
-              variant="destructive"
-              onClick={() => del.mutate({ categoryId: cat.id }, { onSuccess: () => setConfirming(null) })}
-              disabled={del.isPending}
-            >
-              {del.isPending ? <Loader2 className="animate-spin" /> : <TrashIcon className="size-3.5" />} Delete
-            </Button>
-          </>
-        )}
-      </div>
-    </li>
-  );
-}
-
-function WasteCategoriesDialog({ onClose }: { onClose: () => void }) {
-  const cats = useWasteCategories();
-  const create = useCreateWasteCategory();
-  const [code, setCode] = useState('');
-  const [name, setName] = useState('');
-  const [yieldPct, setYieldPct] = useState('');
-  const [refDays, setRefDays] = useState('');
-
-  function submit() {
-    if (code.trim() === '' || name.trim() === '') {
-      toast.error('Code and name are required.');
-      return;
-    }
-    create.mutate(
-      {
-        code: code.trim(),
-        name: name.trim(),
-        ...(yieldPct !== '' ? { expected_yield_pct: Number(yieldPct) } : {}),
-        ...(refDays !== '' ? { reference_duration_days: Number(refDays) } : {}),
-      },
-      { onSuccess: () => { setCode(''); setName(''); setYieldPct(''); setRefDays(''); } },
-    );
-  }
-
-  return (
-    <DialogContent className="max-w-2xl">
-      <DialogHeader>
-        <DialogTitle className="flex items-center gap-2">
-          <Boxes className="size-4" /> Waste categories
-        </DialogTitle>
-      </DialogHeader>
-
-      {/* Add form */}
-      <div className="flex flex-wrap items-end gap-2 rounded-md border p-3">
-        <div className="space-y-1"><Label htmlFor="wc-code" className="text-xs">Code *</Label><Input id="wc-code" className="h-8 w-24" value={code} onChange={(e) => setCode(e.target.value)} placeholder="VEG-SCRP" /></div>
-        <div className="space-y-1"><Label htmlFor="wc-name" className="text-xs">Name *</Label><Input id="wc-name" className="h-8 w-40" value={name} onChange={(e) => setName(e.target.value)} placeholder="Vegetable Scraps" /></div>
-        <div className="space-y-1"><Label htmlFor="wc-yield" className="text-xs">Exp. yield %</Label><Input id="wc-yield" type="number" className="h-8 w-24" value={yieldPct} onChange={(e) => setYieldPct(e.target.value)} /></div>
-        <div className="space-y-1"><Label htmlFor="wc-days" className="text-xs">Ref. days</Label><Input id="wc-days" type="number" className="h-8 w-20" value={refDays} onChange={(e) => setRefDays(e.target.value)} /></div>
-        <Button size="sm" onClick={submit} disabled={create.isPending}>
-          {create.isPending ? <Loader2 className="animate-spin" /> : <Plus />} Add
-        </Button>
-      </div>
-
-      {/* List with per-row Edit / Archive / Delete */}
-      <ul className="max-h-72 space-y-1.5 overflow-auto">
-        {(cats.data ?? []).map((c) => (
-          <WasteCategoryRow key={c.id} cat={c} />
-        ))}
-        {(cats.data?.length ?? 0) === 0 && (
-          <li className="rounded-md border border-dashed p-4 text-center text-sm text-muted-foreground">
-            No categories yet. Add one above.
-          </li>
-        )}
-      </ul>
-
-      <DialogFooter>
-        <Button variant="outline" onClick={onClose}>Close</Button>
-      </DialogFooter>
-    </DialogContent>
-  );
-}
 
 function AnalyticsDialog({ unit, batchId, onClose }: { unit: BmgUnit; batchId: number; onClose: () => void }) {
   const analytics = useBatchAnalytics(batchId);
@@ -619,10 +382,9 @@ function AnalyticsDialog({ unit, batchId, onClose }: { unit: BmgUnit; batchId: n
  * Mirrors the dashboard tile from the legacy Synapse project: a card grid
  * (auto-fill, ~220px min) where each tile shows the drum code, the
  * underlying batch, the waste category, input weight, expected completion
- * date, days active, and a gradient progress bar. Clicking "Open" jumps
- * the operator to the per-unit row in the table below (via the
- * `#unit-{id}` anchor; the BMG table row is given the matching id when
- * the card is rendered).
+ * date, days active, and a gradient progress bar. Clicking a card (or its
+ * "Open" affordance) navigates to the dedicated drum detail screen at
+ * `/facilities/drums/:unitId`, which focuses on that drum's information.
  *
  * Read-only: the widget is a status surface, not a control surface. All
  * state transitions still flow through the table actions below.
@@ -676,9 +438,14 @@ function DrumCard({ batch }: { batch: ActiveBatch }) {
   const dueToday = batch.days_until_expected === 0;
   const days = batch.days_active;
 
+  /**
+   * The whole tile is a router Link to the drum's dedicated detail
+   * screen — a full page focused on this drum's batch info, analytics
+   * and process log (replaces the old scroll-to-table-row behavior).
+   */
   return (
-    <a
-      href={`#unit-${batch.unit_id}`}
+    <Link
+      to={`/facilities/drums/${batch.unit_id}`}
       className="group flex flex-col gap-2 rounded-lg border border-l-4 border-l-primary/70 bg-card p-3 text-left transition-all hover:shadow-md hover:-translate-y-px focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
     >
       <header className="flex items-start justify-between gap-2 border-b border-border/60 pb-2">
@@ -748,11 +515,11 @@ function DrumCard({ batch }: { batch: ActiveBatch }) {
         <Badge variant={days > 30 ? 'warning' : 'info'}>
           {days} day{days === 1 ? '' : 's'} active
         </Badge>
-        <span className="inline-flex items-center gap-1 text-xs font-medium text-primary opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100">
+        <span className="inline-flex items-center gap-1 text-xs font-medium text-primary opacity-70 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100">
           <Eye className="size-3" /> Open
         </span>
       </footer>
-    </a>
+    </Link>
   );
 }
 
@@ -772,6 +539,7 @@ function CreateUnitDialog({ onClose }: { onClose: () => void }) {
   const [capacity, setCapacity] = useState('');
   const [categoryId, setCategoryId] = useState<string>('unset');
   const [notes, setNotes] = useState('');
+  const [errors, setErrors] = useState<Record<string, string>>({});
   const codeId = useId();
   const nameId = useId();
   const locId = useId();
@@ -780,27 +548,33 @@ function CreateUnitDialog({ onClose }: { onClose: () => void }) {
   const notesId = useId();
 
   function submit() {
-    create.mutate(
-      {
-        code,
-        display_name: name,
-        location_code: location,
-        spec_capacity_kg: capacity === '' ? undefined : Number(capacity),
-        default_category_id: categoryId === 'unset' || categoryId === '' ? undefined : Number(categoryId),
-        notes,
+    const payload = {
+      code,
+      display_name: name,
+      location_code: location,
+      spec_capacity_kg: capacity === '' ? undefined : Number(capacity),
+      default_category_id: categoryId === 'unset' || categoryId === '' ? undefined : Number(categoryId),
+      notes,
+    };
+    // Validate client-side against the shared schema so empty/invalid
+    // fields surface inline instead of only as a server-error toast.
+    const parsed = createUnitSchema.safeParse({ ...payload, spec_capacity_kg: capacity === '' ? '' : capacity, default_category_id: categoryId === 'unset' || categoryId === '' ? '' : categoryId });
+    if (!parsed.success) {
+      setErrors(Object.fromEntries(parsed.error.issues.map((i) => [String(i.path[0]), i.message])));
+      return;
+    }
+    setErrors({});
+    create.mutate(payload, {
+      onSuccess: () => {
+        setCode('');
+        setName('');
+        setLocation('');
+        setCapacity('');
+        setCategoryId('unset');
+        setNotes('');
+        onClose();
       },
-      {
-        onSuccess: () => {
-          setCode('');
-          setName('');
-          setLocation('');
-          setCapacity('');
-          setCategoryId('unset');
-          setNotes('');
-          onClose();
-        },
-      },
-    );
+    });
   }
 
   return (
@@ -820,13 +594,21 @@ function CreateUnitDialog({ onClose }: { onClose: () => void }) {
               onChange={(e) => setCode(e.target.value)}
               placeholder="DRUM-01"
               maxLength={32}
+              aria-invalid={errors['code'] !== undefined}
               autoFocus
             />
-            <p className="text-[10px] text-muted-foreground">Unique. Server uppercases it (e.g. DRUM-01).</p>
+            {errors['code'] !== undefined ? (
+              <p role="alert" className="text-xs text-destructive">{errors['code']}</p>
+            ) : (
+              <p className="text-[10px] text-muted-foreground">Unique. Server uppercases it (e.g. DRUM-01).</p>
+            )}
           </div>
           <div className="space-y-1.5">
             <Label htmlFor={nameId}>Name *</Label>
-            <Input id={nameId} value={name} onChange={(e) => setName(e.target.value)} placeholder="Drum 01 - North Canopy" maxLength={128} />
+            <Input id={nameId} value={name} onChange={(e) => setName(e.target.value)} placeholder="Drum 01 - North Canopy" maxLength={128} aria-invalid={errors['display_name'] !== undefined} />
+            {errors['display_name'] !== undefined && (
+              <p role="alert" className="text-xs text-destructive">{errors['display_name']}</p>
+            )}
           </div>
         </div>
         <div className="space-y-1.5">
@@ -894,6 +676,7 @@ function EditUnitDialog({ unit, onClose }: { unit: BmgUnit; onClose: () => void 
       : 'unset',
   );
   const [notes, setNotes] = useState(unit.notes ?? '');
+  const [errors, setErrors] = useState<Record<string, string>>({});
   const nameId = useId();
   const locId = useId();
   const capId = useId();
@@ -901,19 +684,20 @@ function EditUnitDialog({ unit, onClose }: { unit: BmgUnit; onClose: () => void 
   const notesId = useId();
 
   function submit() {
-    update.mutate(
-      {
-        unitId: unit.id,
-        input: {
-          display_name: name,
-          location_code: location,
-          spec_capacity_kg: capacity === '' ? undefined : Number(capacity),
-          default_category_id: categoryId === 'unset' || categoryId === '' ? undefined : Number(categoryId),
-          notes,
-        },
-      },
-      { onSuccess: () => onClose() },
-    );
+    const input = {
+      display_name: name,
+      location_code: location,
+      spec_capacity_kg: capacity === '' ? undefined : Number(capacity),
+      default_category_id: categoryId === 'unset' || categoryId === '' ? undefined : Number(categoryId),
+      notes,
+    };
+    const parsed = updateUnitSchema.safeParse({ ...input, spec_capacity_kg: capacity === '' ? '' : capacity, default_category_id: categoryId === 'unset' || categoryId === '' ? '' : categoryId });
+    if (!parsed.success) {
+      setErrors(Object.fromEntries(parsed.error.issues.map((i) => [String(i.path[0]), i.message])));
+      return;
+    }
+    setErrors({});
+    update.mutate({ unitId: unit.id, input }, { onSuccess: () => onClose() });
   }
 
   return (
@@ -931,7 +715,10 @@ function EditUnitDialog({ unit, onClose }: { unit: BmgUnit; onClose: () => void 
         </div>
         <div className="space-y-1.5">
           <Label htmlFor={nameId}>Name *</Label>
-          <Input id={nameId} value={name} onChange={(e) => setName(e.target.value)} maxLength={128} />
+          <Input id={nameId} value={name} onChange={(e) => setName(e.target.value)} maxLength={128} aria-invalid={errors['display_name'] !== undefined} />
+          {errors['display_name'] !== undefined && (
+            <p role="alert" className="text-xs text-destructive">{errors['display_name']}</p>
+          )}
         </div>
         <div className="space-y-1.5">
           <Label htmlFor={locId}>Location</Label>
@@ -1024,18 +811,44 @@ function ArchiveUnitDialog({ unit, onClose }: { unit: BmgUnit; onClose: () => vo
 }
 
 export default function FacilitiesPage() {
-  const units = useBmgUnits(null, 50);
+  const [cursor, setCursor] = useState<string | null>(null);
+  const [history, setHistory] = useState<Array<string | null>>([null]);
+  const [showArchived, setShowArchived] = useState(false);
+  const units = useBmgUnits(cursor, 50, showArchived);
   const finish = useFinishBatch();
   const cancel = useCancelBatch();
   const maintenance = useSetUnitMaintenance();
+  const unarchiveUnit = useUnarchiveUnit();
   const [openStart, setOpenStart] = useState<BmgUnit | null>(null);
   const [openOutput, setOpenOutput] = useState<BmgUnit | null>(null);
   const [openLogs, setOpenLogs] = useState<BmgUnit | null>(null);
-  const [openCats, setOpenCats] = useState(false);
   const [openAnalytics, setOpenAnalytics] = useState<BmgUnit | null>(null);
   const [openCreate, setOpenCreate] = useState(false);
   const [openEdit, setOpenEdit] = useState<BmgUnit | null>(null);
   const [openArchive, setOpenArchive] = useState<BmgUnit | null>(null);
+  const [confirm, setConfirm] = useState<ConfirmAction | null>(null);
+
+  // Legacy deep-link — the old sidebar entry pointed here with
+  // `?open=waste-categories` to auto-open a dialog. Waste categories
+  // now have their own screen, so redirect stale links there.
+  const [searchParams] = useSearchParams();
+  if (searchParams.get('open') === 'waste-categories') {
+    return <Navigate to="/facilities/waste-categories" replace />;
+  }
+
+  function nextPage() {
+    if (units.data?.next !== null && units.data?.next !== undefined) {
+      const n = units.data.next;
+      setHistory((h) => [...h, n]);
+      setCursor(n);
+    }
+  }
+  function prevPage() {
+    if (history.length < 2) return;
+    const next = history.slice(0, -1);
+    setHistory(next);
+    setCursor(next[next.length - 1] ?? null);
+  }
 
   return (
     <TooltipProvider delayDuration={150} skipDelayDuration={300}>
@@ -1048,16 +861,22 @@ export default function FacilitiesPage() {
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          <Button
+            variant={showArchived ? 'secondary' : 'outline'}
+            aria-pressed={showArchived}
+            onClick={() => { setShowArchived((v) => !v); setCursor(null); setHistory([null]); }}
+          >
+            <Archive /> {showArchived ? 'Hide archived' : 'Show archived'}
+          </Button>
           <Dialog open={openCreate} onOpenChange={setOpenCreate}>
             <Button onClick={() => setOpenCreate(true)}>
               <Plus /> New drum
             </Button>
             {openCreate && <CreateUnitDialog onClose={() => setOpenCreate(false)} />}
           </Dialog>
-          <Dialog open={openCats} onOpenChange={setOpenCats}>
-            <Button variant="outline" onClick={() => setOpenCats(true)}><Boxes /> Waste categories</Button>
-            {openCats && <WasteCategoriesDialog onClose={() => setOpenCats(false)} />}
-          </Dialog>
+          <Button variant="outline" asChild>
+            <Link to="/facilities/waste-categories"><Boxes /> Waste categories</Link>
+          </Button>
         </div>
       </header>
 
@@ -1084,6 +903,13 @@ export default function FacilitiesPage() {
                 </TableCell>
               </TableRow>
             )}
+            {!units.isLoading && (units.data?.data.length ?? 0) === 0 && (
+              <TableRow>
+                <TableCell colSpan={7} className="px-3 py-6 text-center text-muted-foreground">
+                  No drums yet. Create one to start composting.
+                </TableCell>
+              </TableRow>
+            )}
             {units.data?.data.map((u) => {
               const activeBatch = u.active_batch_id ?? null;
               return (
@@ -1092,6 +918,9 @@ export default function FacilitiesPage() {
                   <TableCell className="px-3">{u.display_name}</TableCell>
                   <TableCell className="px-3">
                     <Badge variant={unitStatusVariant(u.status)}>{u.status}</Badge>
+                    {u.archived_at !== null && u.archived_at !== undefined && (
+                      <Badge variant="secondary" className="ml-1.5">Archived</Badge>
+                    )}
                   </TableCell>
                   <TableCell className="px-3 font-mono text-xs text-muted-foreground">
                     {activeBatch === null ? '—' : `#${activeBatch}`}
@@ -1109,28 +938,23 @@ export default function FacilitiesPage() {
                   <TableCell className="px-3 font-mono text-xs text-muted-foreground">{fmtUtcToApp(u.created_at)}</TableCell>
                   <TableCell className="px-3 text-right">
                     {/*
-                     * Icon-only action rail. Each button collapses to its
-                     * icon by default and reveals its label on hover or
-                     * keyboard focus via the `group` / `group-hover` /
-                     * `group-focus-within` utilities. The shadcn Tooltip
-                     * remains wired for screen-reader users so the action
-                     * is announced on focus; the visible label is purely
-                     * a sighted-user affordance.
+                     * Icon-only action rail. The shadcn Tooltip provides
+                     * the action label on hover and on keyboard focus
+                     * (announcing the action to screen-reader users via
+                     * the button's aria-label). No text label is shown
+                     * inline — the rail is sized to its icons only so
+                     * long unit codes still fit on one line.
                      */}
-                    <div className="flex justify-end gap-1.5">
+                    <div className="flex justify-end gap-1">
                       <Tooltip>
                         <TooltipTrigger asChild>
                           <Button
-                            size="sm"
+                            size="icon-sm"
                             variant="outline"
-                            className="group h-8 gap-0 px-2 transition-[width,padding,gap] duration-150 hover:w-auto hover:gap-1.5 hover:px-3 focus-visible:w-auto focus-visible:gap-1.5 focus-visible:px-3"
                             onClick={() => setOpenEdit(u)}
                             aria-label={`Edit ${u.code}`}
                           >
-                            <Pencil className="size-4 shrink-0" />
-                            <span className="max-w-0 overflow-hidden whitespace-nowrap transition-[max-width] duration-150 group-hover:max-w-xs group-focus-visible:max-w-xs">
-                              Edit
-                            </span>
+                            <Pencil className="size-4" />
                           </Button>
                         </TooltipTrigger>
                         <TooltipContent>Edit {u.code}</TooltipContent>
@@ -1138,21 +962,31 @@ export default function FacilitiesPage() {
 
                       <Tooltip>
                         <TooltipTrigger asChild>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="group h-8 gap-0 px-2 transition-[width,padding,gap] duration-150 hover:w-auto hover:gap-1.5 hover:px-3 focus-visible:w-auto focus-visible:gap-1.5 focus-visible:px-3 hover:border-destructive hover:text-destructive focus-visible:border-destructive focus-visible:text-destructive"
-                            onClick={() => setOpenArchive(u)}
-                            disabled={u.archived_at !== null && u.archived_at !== undefined}
-                            aria-label={`Archive ${u.code}`}
-                          >
-                            <Archive className="size-4 shrink-0" />
-                            <span className="max-w-0 overflow-hidden whitespace-nowrap transition-[max-width] duration-150 group-hover:max-w-xs group-focus-visible:max-w-xs">
-                              Archive
-                            </span>
-                          </Button>
+                          {u.archived_at !== null && u.archived_at !== undefined ? (
+                            <Button
+                              size="icon-sm"
+                              variant="outline"
+                              onClick={() => unarchiveUnit.mutate({ unitId: u.id })}
+                              disabled={unarchiveUnit.isPending}
+                              aria-label={`Restore ${u.code}`}
+                            >
+                              <ArchiveRestore className="size-4" />
+                            </Button>
+                          ) : (
+                            <Button
+                              size="icon-sm"
+                              variant="outline"
+                              className="hover:border-destructive hover:text-destructive focus-visible:border-destructive focus-visible:text-destructive"
+                              onClick={() => setOpenArchive(u)}
+                              aria-label={`Archive ${u.code}`}
+                            >
+                              <Archive className="size-4" />
+                            </Button>
+                          )}
                         </TooltipTrigger>
-                        <TooltipContent>Archive {u.code}</TooltipContent>
+                        <TooltipContent>
+                          {u.archived_at !== null && u.archived_at !== undefined ? `Restore ${u.code}` : `Archive ${u.code}`}
+                        </TooltipContent>
                       </Tooltip>
 
                       <Tooltip>
@@ -1160,16 +994,12 @@ export default function FacilitiesPage() {
                           <Dialog open={openStart?.id === u.id} onOpenChange={(o) => setOpenStart(o ? u : null)}>
                             <DialogTrigger asChild>
                               <Button
-                                size="sm"
+                                size="icon-sm"
                                 variant="secondary"
-                                className="group h-8 gap-0 px-2 transition-[width,padding,gap] duration-150 hover:w-auto hover:gap-1.5 hover:px-3 focus-visible:w-auto focus-visible:gap-1.5 focus-visible:px-3"
                                 disabled={u.status !== 'Idle'}
                                 aria-label={`Start batch on ${u.code}`}
                               >
-                                <Play className="size-4 shrink-0" />
-                                <span className="max-w-0 overflow-hidden whitespace-nowrap transition-[max-width] duration-150 group-hover:max-w-xs group-focus-visible:max-w-xs">
-                                  Start
-                                </span>
+                                <Play className="size-4" />
                               </Button>
                             </DialogTrigger>
                             {openStart?.id === u.id && (
@@ -1183,17 +1013,13 @@ export default function FacilitiesPage() {
                       <Tooltip>
                         <TooltipTrigger asChild>
                           <Button
-                            size="sm"
+                            size="icon-sm"
                             variant="outline"
-                            className="group h-8 gap-0 px-2 transition-[width,padding,gap] duration-150 hover:w-auto hover:gap-1.5 hover:px-3 focus-visible:w-auto focus-visible:gap-1.5 focus-visible:px-3"
                             disabled={u.status !== 'Processing' || activeBatch === null}
                             onClick={() => setOpenOutput(u)}
                             aria-label={`Record output for ${u.code}`}
                           >
-                            <Square className="size-4 shrink-0" />
-                            <span className="max-w-0 overflow-hidden whitespace-nowrap transition-[max-width] duration-150 group-hover:max-w-xs group-focus-visible:max-w-xs">
-                              Output
-                            </span>
+                            <Square className="size-4" />
                           </Button>
                         </TooltipTrigger>
                         <TooltipContent>Record output for {u.code}</TooltipContent>
@@ -1202,23 +1028,24 @@ export default function FacilitiesPage() {
                       <Tooltip>
                         <TooltipTrigger asChild>
                           <Button
-                            size="sm"
+                            size="icon-sm"
                             variant="outline"
-                            className="group h-8 gap-0 px-2 transition-[width,padding,gap] duration-150 hover:w-auto hover:gap-1.5 hover:px-3 focus-visible:w-auto focus-visible:gap-1.5 focus-visible:px-3"
                             disabled={
                               u.status !== 'AwaitingOutput' ||
                               activeBatch === null ||
                               finish.isPending
                             }
                             onClick={() =>
-                              activeBatch !== null && finish.mutate({ unitId: u.id, batchId: activeBatch })
+                              activeBatch !== null && setConfirm({
+                                title: `Finish batch #${activeBatch} on ${u.code}?`,
+                                description: 'This finalizes the batch and returns the drum to Idle. This cannot be undone.',
+                                confirmLabel: 'Finish batch',
+                                run: () => finish.mutate({ unitId: u.id, batchId: activeBatch }),
+                              })
                             }
                             aria-label={`Finish batch on ${u.code}`}
                           >
-                            <StopCircle className="size-4 shrink-0" />
-                            <span className="max-w-0 overflow-hidden whitespace-nowrap transition-[max-width] duration-150 group-hover:max-w-xs group-focus-visible:max-w-xs">
-                              Finish
-                            </span>
+                            <StopCircle className="size-4" />
                           </Button>
                         </TooltipTrigger>
                         <TooltipContent>Finish batch on {u.code}</TooltipContent>
@@ -1227,17 +1054,13 @@ export default function FacilitiesPage() {
                       <Tooltip>
                         <TooltipTrigger asChild>
                           <Button
-                            size="sm"
+                            size="icon-sm"
                             variant="outline"
-                            className="group h-8 gap-0 px-2 transition-[width,padding,gap] duration-150 hover:w-auto hover:gap-1.5 hover:px-3 focus-visible:w-auto focus-visible:gap-1.5 focus-visible:px-3"
                             disabled={activeBatch === null}
                             onClick={() => setOpenLogs(u)}
                             aria-label={`Process logs for ${u.code}`}
                           >
-                            <ClipboardList className="size-4 shrink-0" />
-                            <span className="max-w-0 overflow-hidden whitespace-nowrap transition-[max-width] duration-150 group-hover:max-w-xs group-focus-visible:max-w-xs">
-                              Logs
-                            </span>
+                            <ClipboardList className="size-4" />
                           </Button>
                         </TooltipTrigger>
                         <TooltipContent>Process logs for {u.code}</TooltipContent>
@@ -1246,17 +1069,13 @@ export default function FacilitiesPage() {
                       <Tooltip>
                         <TooltipTrigger asChild>
                           <Button
-                            size="sm"
+                            size="icon-sm"
                             variant="outline"
-                            className="group h-8 gap-0 px-2 transition-[width,padding,gap] duration-150 hover:w-auto hover:gap-1.5 hover:px-3 focus-visible:w-auto focus-visible:gap-1.5 focus-visible:px-3"
                             disabled={activeBatch === null}
                             onClick={() => setOpenAnalytics(u)}
                             aria-label={`Analytics for ${u.code}`}
                           >
-                            <LineChart className="size-4 shrink-0" />
-                            <span className="max-w-0 overflow-hidden whitespace-nowrap transition-[max-width] duration-150 group-hover:max-w-xs group-focus-visible:max-w-xs">
-                              Analytics
-                            </span>
+                            <LineChart className="size-4" />
                           </Button>
                         </TooltipTrigger>
                         <TooltipContent>Analytics for {u.code}</TooltipContent>
@@ -1265,17 +1084,13 @@ export default function FacilitiesPage() {
                       <Tooltip>
                         <TooltipTrigger asChild>
                           <Button
-                            size="sm"
+                            size="icon-sm"
                             variant="outline"
-                            className="group h-8 gap-0 px-2 transition-[width,padding,gap] duration-150 hover:w-auto hover:gap-1.5 hover:px-3 focus-visible:w-auto focus-visible:gap-1.5 focus-visible:px-3"
                             disabled={(u.status !== 'Idle' && u.status !== 'Maintenance') || maintenance.isPending}
                             onClick={() => maintenance.mutate({ unitId: u.id, maintenance: u.status !== 'Maintenance' })}
                             aria-label={`${u.status === 'Maintenance' ? 'End maintenance' : 'Maintenance'} for ${u.code}`}
                           >
-                            <Wrench className="size-4 shrink-0" />
-                            <span className="max-w-0 overflow-hidden whitespace-nowrap transition-[max-width] duration-150 group-hover:max-w-xs group-focus-visible:max-w-xs">
-                              {u.status === 'Maintenance' ? 'End maint.' : 'Maintenance'}
-                            </span>
+                            <Wrench className="size-4" />
                           </Button>
                         </TooltipTrigger>
                         <TooltipContent>
@@ -1286,24 +1101,25 @@ export default function FacilitiesPage() {
                       <Tooltip>
                         <TooltipTrigger asChild>
                           <Button
-                            size="sm"
+                            size="icon-sm"
                             variant="outline"
-                            className="group h-8 gap-0 px-2 transition-[width,padding,gap] duration-150 hover:w-auto hover:gap-1.5 hover:px-3 focus-visible:w-auto focus-visible:gap-1.5 focus-visible:px-3 hover:border-destructive hover:text-destructive focus-visible:border-destructive focus-visible:text-destructive"
+                            className="hover:border-destructive hover:text-destructive focus-visible:border-destructive focus-visible:text-destructive"
                             disabled={
                               (u.status !== 'Processing' && u.status !== 'AwaitingOutput') ||
                               activeBatch === null ||
                               cancel.isPending
                             }
                             onClick={() =>
-                              activeBatch !== null &&
-                              cancel.mutate({ unitId: u.id, batchId: activeBatch, input: { reason_code: 'unspecified' } })
+                              activeBatch !== null && setConfirm({
+                                title: `Cancel batch #${activeBatch} on ${u.code}?`,
+                                description: 'The batch will be cancelled and the drum returned to Idle. This cannot be undone.',
+                                confirmLabel: 'Cancel batch',
+                                run: () => cancel.mutate({ unitId: u.id, batchId: activeBatch, input: { reason_code: 'unspecified' } }),
+                              })
                             }
                             aria-label={`Cancel batch on ${u.code}`}
                           >
-                            <Ban className="size-4 shrink-0" />
-                            <span className="max-w-0 overflow-hidden whitespace-nowrap transition-[max-width] duration-150 group-hover:max-w-xs group-focus-visible:max-w-xs">
-                              Cancel
-                            </span>
+                            <Ban className="size-4" />
                           </Button>
                         </TooltipTrigger>
                         <TooltipContent>Cancel batch on {u.code}</TooltipContent>
@@ -1316,6 +1132,23 @@ export default function FacilitiesPage() {
           </TableBody>
         </Table>
       </section>
+
+      <nav className="flex items-center justify-between" aria-label="pagination">
+        <p className="text-xs text-muted-foreground">Page {history.length}</p>
+        <div className="flex gap-2">
+          <Button variant="outline" size="sm" onClick={prevPage} disabled={history.length < 2}>
+            <ChevronLeft /> Prev
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={nextPage}
+            disabled={units.data?.next === null || units.data?.next === undefined}
+          >
+            Next <ChevronRight />
+          </Button>
+        </div>
+      </nav>
 
       {openOutput !== null && openOutput.active_batch_id !== null && openOutput.active_batch_id !== undefined && (
         <Dialog open onOpenChange={(o) => !o && setOpenOutput(null)}>
@@ -1358,6 +1191,19 @@ export default function FacilitiesPage() {
           <ArchiveUnitDialog unit={openArchive} onClose={() => setOpenArchive(null)} />
         </Dialog>
       )}
+
+      <ConfirmDialog
+        open={confirm !== null}
+        title={confirm?.title ?? ''}
+        description={confirm?.description}
+        confirmLabel={confirm?.confirmLabel}
+        pending={finish.isPending || cancel.isPending}
+        onConfirm={() => {
+          confirm?.run();
+          setConfirm(null);
+        }}
+        onCancel={() => setConfirm(null)}
+      />
     </main>
     </TooltipProvider>
   );

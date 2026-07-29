@@ -31,7 +31,8 @@ final class ReportConfigController extends ApiController
     public function listConfigs(): ResponseInterface
     {
         $this->authorize('reports.read');
-        return $this->ok($this->service->listConfigs());
+        $archived = (string) ($this->request->getGet('include_archived') ?? '');
+        return $this->ok($this->service->listConfigs($archived === '1' || $archived === 'true'));
     }
 
     public function createConfig(): ResponseInterface
@@ -91,6 +92,12 @@ final class ReportConfigController extends ApiController
         $this->authorize('reports.configure');
         $this->service->archiveConfig($id);
         return $this->ok(['archived' => true]);
+    }
+
+    public function unarchiveConfig(int $id): ResponseInterface
+    {
+        $this->authorize('reports.configure');
+        return $this->ok($this->service->unarchiveConfig($id));
     }
 
     public function listGenerated(): ResponseInterface

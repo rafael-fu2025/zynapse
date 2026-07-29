@@ -135,6 +135,8 @@ final class CounsellingService extends BaseService
 
     public function readNotes(int $sessionId): array
     {
+        $userId = \App\Auth\CurrentUser::assert();
+
         $session = $this->db->table('counselling_sessions')
             ->select('id, counsellor_user_id')
             ->where('id', $sessionId)
@@ -167,6 +169,18 @@ final class CounsellingService extends BaseService
                 (string) $r['created_at'],
             ))->toArray();
         }
+
+        // Sensitive-read audit (RBAC_SECURITY_REVIEW R2): decrypting
+        // counselling notes is the most privacy-critical read in the
+        // system, so every authorized read is recorded in the append-only
+        // audit chain. No plaintext or patient identifier is logged.
+        $this->audit->enqueue(
+            'counselling.notes_read',
+            'counselling_notes',
+            $sessionId,
+            $userId,
+            ['resource_code' => 'session#' . $sessionId],
+        );
 
         return $out;
     }

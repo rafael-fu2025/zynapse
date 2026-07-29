@@ -24,6 +24,15 @@ class AuthGroups extends ShieldAuthGroups
         'counsellor'       => 'Counsellor',
         'facilities_op'    => 'Facilities Operator',
         'audit_reader'     => 'Audit Reader',
+        // Phase 19 (ACTOR_ACCESS_ANALYSIS): read-only analytics role.
+        // Browses cross-module reports and exports CSV without holding
+        // any clinical or operational write permission.
+        'report_viewer'    => 'Report Viewer',
+        // RBAC_SECURITY_REVIEW R4: clinical oversight / break-glass role.
+        // Holds counselling.records.* EXPLICITLY so it satisfies the R1
+        // wildcard exclusion (which a bare admin cannot); every note read
+        // it performs is captured by the R2 read-audit.
+        'clinical_supervisor' => 'Clinical Supervisor',
         // Phase 13: student self-service placeholder. The student
         // portal proper (login + book + QR) is still deferred; the
         // group exists today so the canonical demo account can log
@@ -67,6 +76,16 @@ class AuthGroups extends ShieldAuthGroups
             'reports.read',
             'referrals.create',
             'referrals.read',
+            // Phase 19 (ACTOR_ACCESS_ANALYSIS): the Clinic Staff use case
+            // "Receive Counselling Referral" requires acknowledge; the
+            // bridge is bidirectional, so the full lifecycle (review /
+            // close / issue QR) is granted to both bridge-side groups.
+            // Per-direction restriction stays a ReferralPolicy record-level
+            // decision (see policy docblock).
+            'referrals.acknowledge',
+            'referrals.review',
+            'referrals.close',
+            'referrals.issue_qr',
             'notifications.read',
             'employee.portal.read',
         ],
@@ -81,11 +100,21 @@ class AuthGroups extends ShieldAuthGroups
             'referrals.create',
             'referrals.read',
             'referrals.acknowledge',
+            // Phase 19 (ACTOR_ACCESS_ANALYSIS): referral lifecycle beyond
+            // acknowledge was previously admin-only; counsellors run the
+            // target-side review/close and issue verification QRs.
+            'referrals.review',
+            'referrals.close',
+            'referrals.issue_qr',
             'notifications.read',
             'employee.portal.read',
         ],
         'facilities_op' => [
             'facilities.units.read',
+            // Phase 19 (ACTOR_ACCESS_ANALYSIS): the BMG Staff use case
+            // "Manage and create drums" maps to BmgPolicy `manage_units`;
+            // previously admin-only by omission.
+            'facilities.units.manage',
             'facilities.bmg.transition',
             'facilities.bmg.record_output',
             'facilities.inventory.write',
@@ -98,6 +127,31 @@ class AuthGroups extends ShieldAuthGroups
         ],
         'audit_reader' => [
             'audit.read',
+            // Phase 19 (ACTOR_ACCESS_ANALYSIS): the audit specialist can
+            // export the (redacted) CSV, not just browse. Export events
+            // are themselves audited.
+            'audit.export',
+            'notifications.read',
+            'employee.portal.read',
+        ],
+        // Phase 19 (ACTOR_ACCESS_ANALYSIS): Report Viewer actor from the
+        // use-case diagrams. Strictly read-only operational review —
+        // `reports.read` + CSV export; `reports.configure` (saved-report
+        // authoring) intentionally stays admin-only.
+        'report_viewer' => [
+            'reports.read',
+            'reports.export',
+            'notifications.read',
+            'employee.portal.read',
+        ],
+        'clinical_supervisor' => [
+            // Explicit grants (NOT via the wildcard) so R1's exclusion
+            // permits note access; reads are audited by CounsellingService
+            // (RBAC_SECURITY_REVIEW R2/R4).
+            'counselling.records.read',
+            'counselling.records.write',
+            'counselling.records.create',
+            'counselling.schedule.read',
             'notifications.read',
             'employee.portal.read',
         ],

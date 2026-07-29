@@ -95,6 +95,8 @@ final class AuditEventController extends ApiController
      * Streams a CSV of audit events. Optional `cursor` argument lets
      * callers break a large window into chunks. The endpoint enforces
      * a hard cap of 5,000 rows per request to keep the response bounded.
+     * Accepts the same `action` / `entity_type` filters as `index()` so
+     * a filtered on-screen view exports the same slice.
      */
     public function export(): ResponseInterface
     {
@@ -103,12 +105,21 @@ final class AuditEventController extends ApiController
         $cursor = (string) ($this->request->getGet('cursor') ?? '');
         $limit  = (int)    ($this->request->getGet('limit')  ?? 1000);
         $limit  = max(1, min(5_000, $limit));
+        $action = $this->request->getGet('action');
+        $entity = $this->request->getGet('entity_type');
 
         $builder = Services::database()
             ->table('audit_events')
             ->select('id, prev_id, action_code, entity_type, entity_id, actor_user_id, request_id, commited_at, commit_hash, payload_json')
             ->orderBy('commited_at', 'DESC')
             ->orderBy('id', 'DESC');
+
+        if (is_string($action) && $action !== '') {
+            $builder->where('action_code', $action);
+        }
+        if (is_string($entity) && $entity !== '') {
+            $builder->where('entity_type', $entity);
+        }
 
         KeysetPaginator::apply($builder, $cursor !== '' ? $cursor : null, $limit, 'commited_at', 'id', 5_000);
         $rows = $builder->get()->getResultArray();

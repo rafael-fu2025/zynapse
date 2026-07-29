@@ -170,6 +170,11 @@ final class ReferralService extends BaseService
                     ['code' => 'resource.not_found', 'message' => "Referral #{$id} not found."],
                 ]);
             }
+
+            // R6 (RBAC_SECURITY_REVIEW): only the TARGET module's staff may
+            // acknowledge / review / close an incoming referral.
+            $this->policy->checkReceivingSide((string) $row['target_module']);
+
             if (! in_array($row['status'], $from, true)) {
                 throw new ApiException('statemachine.referral.invalid_transition', 409, [
                     ['code' => 'statemachine.invalid_transition', 'message' => "Cannot transition from {$row['status']} to {$nextStatus}."],

@@ -28,10 +28,15 @@ final class PatientController extends ApiController
 
     public function listStudents(): ResponseInterface
     {
-        $cursor = (string) ($this->request->getGet('cursor') ?? '');
-        $limit  = (int)    ($this->request->getGet('limit')  ?? 25);
+        $cursor   = (string) ($this->request->getGet('cursor') ?? '');
+        $limit    = (int)    ($this->request->getGet('limit')  ?? 25);
+        $archived = (string) ($this->request->getGet('include_archived') ?? '');
 
-        $page = $this->service->listStudents($cursor !== '' ? $cursor : null, $limit);
+        $page = $this->service->listStudents(
+            $cursor !== '' ? $cursor : null,
+            $limit,
+            $archived === '1' || $archived === 'true',
+        );
 
         return $this->ok(
             $page['data'],
@@ -127,10 +132,15 @@ final class PatientController extends ApiController
 
     public function listEmployees(): ResponseInterface
     {
-        $cursor = (string) ($this->request->getGet('cursor') ?? '');
-        $limit  = (int)    ($this->request->getGet('limit')  ?? 25);
+        $cursor   = (string) ($this->request->getGet('cursor') ?? '');
+        $limit    = (int)    ($this->request->getGet('limit')  ?? 25);
+        $archived = (string) ($this->request->getGet('include_archived') ?? '');
 
-        $page = $this->service->listEmployees($cursor !== '' ? $cursor : null, $limit);
+        $page = $this->service->listEmployees(
+            $cursor !== '' ? $cursor : null,
+            $limit,
+            $archived === '1' || $archived === 'true',
+        );
 
         return $this->ok(
             $page['data'],

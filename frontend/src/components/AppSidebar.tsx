@@ -16,6 +16,7 @@ import {
   IdCard,
   LayoutDashboard,
   MessagesSquare,
+  Recycle,
   ScanLine,
   ScrollText,
   Share2,
@@ -80,11 +81,20 @@ const NAV_SECTIONS: ReadonlyArray<{ title: string; items: ReadonlyArray<NavItem>
     ],
   },
   {
-    title: 'Care & Facilities',
+    title: 'Care',
     items: [
       { label: 'Counselling', href: '/counselling', icon: MessagesSquare, permission: 'counselling.records.read' },
-      { label: 'Facilities', href: '/facilities', icon: Factory, permission: 'facilities.units.read' },
       { label: 'Referrals', href: '/referrals', icon: Share2, permission: 'referrals.read' },
+    ],
+  },
+  {
+    title: 'Facilities',
+    items: [
+      { label: 'Facilities', href: '/facilities', icon: Factory, permission: 'facilities.units.read' },
+      // Waste categories now live on their own screen (no longer a
+      // dialog inside the Facilities page) — the sidebar entry links
+      // straight to the dedicated route.
+      { label: 'Waste Category', href: '/facilities/waste-categories', icon: Recycle, permission: 'facilities.units.read' },
     ],
   },
   {
@@ -103,7 +113,19 @@ export function AppSidebar() {
   const { setOpenMobile } = useSidebar();
 
   const closeMobile = () => setOpenMobile(false);
-  const isActive = (href: string) => (href === '/' ? pathname === '/' : pathname.startsWith(href));
+  // Longest-prefix match: `/facilities/waste-categories` must light up
+  // ONLY its own entry, not `/facilities` too — so a row is active when
+  // its path prefixes the URL AND no other nav entry matches more
+  // specifically (longer prefix).
+  const allPaths = NAV_SECTIONS.flatMap((s) => s.items.map((i) => i.href.split('?')[0] ?? i.href));
+  const isActive = (href: string) => {
+    const path = href.split('?')[0] ?? href;
+    if (path === '/') return pathname === '/';
+    if (pathname !== path && !pathname.startsWith(`${path}/`)) return false;
+    return !allPaths.some(
+      (p) => p.length > path.length && (pathname === p || pathname.startsWith(`${p}/`)),
+    );
+  };
 
   return (
     <Sidebar collapsible="icon">
