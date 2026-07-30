@@ -31,17 +31,18 @@ final class ReferralService extends BaseService
     {
         $this->policy->check('list');
 
-        $builder = $this->db->table('referral_referrals')
-            ->select('id, patient_school_id, source_module, target_module, artifact_type, status, reason_code, created_at, updated_at, qr_expires_at')
-            ->where('archived_at', null)
-            ->orderBy('created_at', 'DESC')
-            ->orderBy('id', 'DESC');
+        $builder = $this->db->table('referral_referrals AS r')
+            ->select('r.id, r.patient_school_id, r.source_module, r.target_module, r.artifact_type, r.status, r.reason_code, r.provider_user_id, r.created_at, r.updated_at, r.qr_expires_at, u.username AS provider_name')
+            ->join('users AS u', 'u.id = r.provider_user_id', 'left')
+            ->where('r.archived_at', null)
+            ->orderBy('r.created_at', 'DESC')
+            ->orderBy('r.id', 'DESC');
 
         if ($status !== null) {
-            $builder->where('status', $status);
+            $builder->where('r.status', $status);
         }
 
-        KeysetPaginator::apply($builder, $cursor, $limit);
+        KeysetPaginator::apply($builder, $cursor, $limit, 'r.created_at', 'r.id');
 
         $rows = $builder->get()->getResultArray();
         $final = KeysetPaginator::finalize($rows, $limit);
@@ -60,6 +61,7 @@ final class ReferralService extends BaseService
         string $artifactType,
         ?string $reasonCode,
         ?string $notesPlaintext,
+        ?int $providerUserId = null,
     ): ReferralDto {
         $this->policy->check('create');
         $userId = \App\Auth\CurrentUser::assert();
@@ -94,7 +96,7 @@ final class ReferralService extends BaseService
             ]);
         }
 
-        return $this->txn(function () use ($patientSchoolId, $sourceModule, $targetModule, $artifactType, $reasonCode, $notesPlaintext, $userId): ReferralDto {
+        return $this->txn(function () use ($patientSchoolId, $sourceModule, $targetModule, $artifactType, $reasonCode, $notesPlaintext, $providerUserId, $userId): ReferralDto {
             $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
 
             $row = [
@@ -103,6 +105,7 @@ final class ReferralService extends BaseService
                 'target_module'     => $targetModule,
                 'artifact_type'     => $artifactType,
                 'issuer_user_id'    => $userId,
+                'provider_user_id'  => $this->resolveProviderId($providerUserId),
                 'status'            => REFERRAL_STATUS_SUBMITTED,
                 'reason_code'       => $reasonCode,
                 'created_at'        => $now,
@@ -132,11 +135,13 @@ final class ReferralService extends BaseService
         });
     }
 
-    public function acknowledge(int $id): ReferralDto
+    public function acknowledge(int $id, ?int $providerUserId = null): ReferralDto
     {
         $this->policy->check('acknowledge');
         $userId = \App\Auth\CurrentUser::assert();
-        return $this->transition($id, REFERRAL_STATUS_ACKNOWLEDGED, $userId);
+        // Panel revision: acknowledging assigns the handling PROVIDER
+        // (nurse / counsellor). Default: the acknowledging user.
+        return $this->transition($id, REFERRAL_STATUS_ACKNOWLEDGED, $userId, $providerUserId ?? $userId);
     }
 
     public function review(int $id): ReferralDto
@@ -153,7 +158,7 @@ final class ReferralService extends BaseService
         return $this->transition($id, REFERRAL_STATUS_CLOSED, $userId);
     }
 
-    private function transition(int $id, string $nextStatus, int $userId): ReferralDto
+    private function transition(int $id, string $nextStatus, int $userId, ?int $providerUserId = null): ReferralDto
     {
         $allowed = [
             REFERRAL_STATUS_ACKNOWLEDGED => [REFERRAL_STATUS_SUBMITTED],
@@ -162,7 +167,7 @@ final class ReferralService extends BaseService
         ];
         $from = $allowed[$nextStatus] ?? [];
 
-        return $this->txn(function () use ($id, $nextStatus, $userId, $from): ReferralDto {
+        return $this->txn(function () use ($id, $nextStatus, $userId, $providerUserId, $from): ReferralDto {
             $row = $this->selectForUpdate('referral_referrals', ['id' => $id, 'archived_at' => null]);
 
             if ($row === null) {
@@ -170,6 +175,11 @@ final class ReferralService extends BaseService
                     ['code' => 'resource.not_found', 'message' => "Referral #{$id} not found."],
                 ]);
             }
+
+            // R6 (RBAC_SECURITY_REVIEW): only the TARGET module's staff may
+            // acknowledge / review / close an incoming referral.
+            $this->policy->checkReceivingSide((string) $row['target_module']);
+
             if (! in_array($row['status'], $from, true)) {
                 throw new ApiException('statemachine.referral.invalid_transition', 409, [
                     ['code' => 'statemachine.invalid_transition', 'message' => "Cannot transition from {$row['status']} to {$nextStatus}."],
@@ -177,9 +187,13 @@ final class ReferralService extends BaseService
             }
 
             $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
+            $update = ['status' => $nextStatus, 'updated_at' => $now];
+            if ($providerUserId !== null) {
+                $update['provider_user_id'] = $this->resolveProviderId($providerUserId);
+            }
             $this->db->table('referral_referrals')
                 ->where('id', $id)
-                ->update(['status' => $nextStatus, 'updated_at' => $now]);
+                ->update($update);
 
             $this->audit->enqueue(
                 "referral.status_{$nextStatus}",
@@ -261,13 +275,13 @@ final class ReferralService extends BaseService
             ->get()->getRowArray();
 
         if ($row === null) {
-            return ['status' => 'Expired', 'artifact_type' => null, 'issuer' => null];
+            return ['status' => 'expired', 'artifact_type' => null, 'issuer' => null];
         }
         if ($row['qr_revoked_at'] !== null) {
-            return ['status' => 'Revoked', 'artifact_type' => (string) $row['artifact_type'], 'issuer' => null];
+            return ['status' => 'revoked', 'artifact_type' => (string) $row['artifact_type'], 'issuer' => null];
         }
         if ($row['qr_expires_at'] !== null && strtotime((string) $row['qr_expires_at']) < time()) {
-            return ['status' => 'Expired', 'artifact_type' => (string) $row['artifact_type'], 'issuer' => null];
+            return ['status' => 'expired', 'artifact_type' => (string) $row['artifact_type'], 'issuer' => null];
         }
 
         $issuer = $this->db->table('users')
@@ -276,7 +290,7 @@ final class ReferralService extends BaseService
             ->get()->getRowArray();
 
         return [
-            'status'        => 'Valid',
+            'status'        => 'valid',
             'artifact_type' => (string) $row['artifact_type'],
             'issuer'        => $issuer['username'] ?? null,
         ];
@@ -289,6 +303,25 @@ final class ReferralService extends BaseService
             throw new \RuntimeException('REFERRAL_HMAC_KEY is not configured.');
         }
         return hash_hmac('sha256', $plain, $key);
+    }
+
+    /**
+     * Validate a provider user id: NULL passes through; a non-null id
+     * must reference an existing user. Providers are the handling
+     * staff (nurse / counsellor) on the referral's receiving side.
+     */
+    private function resolveProviderId(?int $providerUserId): ?int
+    {
+        if ($providerUserId === null || $providerUserId <= 0) {
+            return null;
+        }
+        $row = $this->db->table('users')->select('id')->where('id', $providerUserId)->get()->getRowArray();
+        if ($row === null) {
+            throw new ApiException('resource.not_found', 404, [
+                ['code' => 'resource.not_found', 'message' => "Provider user #{$providerUserId} not found.", 'field' => 'provider_user_id'],
+            ]);
+        }
+        return $providerUserId;
     }
 
     /**

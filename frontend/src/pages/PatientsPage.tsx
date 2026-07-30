@@ -26,6 +26,11 @@ import { useForm } from 'react-hook-form';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
+import { ConfirmDialog, type ConfirmAction } from '@/components/ConfirmDialog';
+import { QueryErrorRow } from '@/components/QueryErrorState';
+import { MobileCardList, MobileCard, MobileCardField, MobileCardActions } from '@/components/MobileCardList';
+import { useDebouncedValue } from '@/hooks/useDebouncedValue';
+import { useTabParam } from '@/hooks/useTabParam';
 import {
   Dialog,
   DialogContent,
@@ -111,7 +116,7 @@ function CreateStudentDialog({ onClose }: { onClose: () => void }) {
       <DialogHeader>
         <DialogTitle>Register student</DialogTitle>
       </DialogHeader>
-      <form noValidate onSubmit={(e) => void onSubmit(e)} className="grid grid-cols-2 gap-3">
+      <form noValidate onSubmit={(e) => void onSubmit(e)} className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <div className="col-span-2 space-y-1.5">
           <Label htmlFor="student_number">Student number</Label>
           <Input id="student_number" aria-invalid={errors.student_number !== undefined} {...register('student_number')} />
@@ -216,7 +221,7 @@ function EditStudentDialog({ student, onClose }: { student: Student; onClose: ()
       <DialogHeader>
         <DialogTitle>Edit student — {student.student_number}</DialogTitle>
       </DialogHeader>
-      <form noValidate onSubmit={(e) => void onSubmit(e)} className="grid grid-cols-2 gap-3">
+      <form noValidate onSubmit={(e) => void onSubmit(e)} className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <div className="space-y-1.5">
           <Label htmlFor="es-first">First name</Label>
           <Input id="es-first" {...register('first_name')} />
@@ -415,11 +420,13 @@ function StudentDetailDialog({ studentId, onClose }: { studentId: number; onClos
 
 function CreateEmployeeDialog({ onClose }: { onClose: () => void }) {
   const create = useCreateEmployee();
-  const { register, handleSubmit, formState: { errors }, reset } =
+  const departments = useDepartments(true);
+  const { register, handleSubmit, formState: { errors }, reset, setValue, watch } =
     useForm<CreateEmployeeInput>({
       resolver: zodResolver(createEmployeeSchema),
       defaultValues: { employment_status: 'active' },
     });
+  const department = watch('department');
 
   const onSubmit = handleSubmit((values) => {
     create.mutate(values, {
@@ -435,7 +442,7 @@ function CreateEmployeeDialog({ onClose }: { onClose: () => void }) {
       <DialogHeader>
         <DialogTitle>Register employee</DialogTitle>
       </DialogHeader>
-      <form noValidate onSubmit={(e) => void onSubmit(e)} className="grid grid-cols-2 gap-3">
+      <form noValidate onSubmit={(e) => void onSubmit(e)} className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <div className="col-span-2 space-y-1.5">
           <Label htmlFor="employee_number">Employee number</Label>
           <Input id="employee_number" aria-invalid={errors.employee_number !== undefined} {...register('employee_number')} />
@@ -458,8 +465,24 @@ function CreateEmployeeDialog({ onClose }: { onClose: () => void }) {
           )}
         </div>
         <div className="space-y-1.5">
-          <Label htmlFor="department">Department</Label>
-          <Input id="department" {...register('department')} />
+          <Label id="create-emp-dept-label">Department</Label>
+          {/*
+            Departments come from the clinic_departments registry (active
+            rows only) — same source as the edit dialog, so a typo can't
+            mint a phantom department. New entries are added from the
+            Departments panel below the employee table.
+          */}
+          <Select
+            {...(department !== undefined && department !== '' ? { value: department } : {})}
+            onValueChange={(v) => setValue('department', v, { shouldValidate: true })}
+          >
+            <SelectTrigger aria-labelledby="create-emp-dept-label"><SelectValue placeholder="Select…" /></SelectTrigger>
+            <SelectContent>
+              {(departments.data ?? []).map((d) => (
+                <SelectItem key={d.id} value={d.name}>{d.name}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
         <div className="space-y-1.5">
           <Label htmlFor="position">Position</Label>
@@ -505,7 +528,7 @@ function EditEmployeeDialog({ employee, onClose }: { employee: Employee; onClose
         <DialogTitle>Edit employee — {employee.employee_number}</DialogTitle>
       </DialogHeader>
       <form noValidate onSubmit={(e) => void onSubmit(e)} className="space-y-3">
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <div className="space-y-1.5">
             <Label htmlFor="emp-first">First name</Label>
             <Input id="emp-first" {...register('first_name')} />
@@ -515,7 +538,7 @@ function EditEmployeeDialog({ employee, onClose }: { employee: Employee; onClose
             <Input id="emp-last" {...register('last_name')} />
           </div>
         </div>
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <div className="space-y-1.5">
             <Label id="emp-dept-label">Department</Label>
             <Select
@@ -699,6 +722,9 @@ function DepartmentsPanel() {
 export default function PatientsPage() {
   const [cursor, setCursor] = useState<string | null>(null);
   const [history, setHistory] = useState<Array<string | null>>([null]);
+  const [empCursor, setEmpCursor] = useState<string | null>(null);
+  const [empHistory, setEmpHistory] = useState<Array<string | null>>([null]);
+  const [tab, setTab] = useTabParam('students');
   const [query, setQuery] = useState('');
   const [empQuery, setEmpQuery] = useState('');
   const [openCreate, setOpenCreate] = useState(false);
@@ -707,14 +733,21 @@ export default function PatientsPage() {
   const [empDetailId, setEmpDetailId] = useState<number | null>(null);
   const [editStudent, setEditStudent] = useState<Student | null>(null);
   const [editEmp, setEditEmp] = useState<Employee | null>(null);
+  const [confirm, setConfirm] = useState<ConfirmAction | null>(null);
+  const [showArchived, setShowArchived] = useState(false);
+  const [showArchivedEmp, setShowArchivedEmp] = useState(false);
   const archiveEmp = useSetEmployeeArchived();
 
-  const searching = query.trim().length >= 2;
-  const empSearching = empQuery.trim().length >= 2;
-  const list = useStudents(cursor, 25);
-  const search = useStudentSearch(query);
-  const employees = useEmployees(null, 50);
-  const empSearch = useEmployeeSearch(empQuery);
+  // Debounce the search text so a request fires only after the user
+  // pauses — previously every keystroke created a fresh query key.
+  const debouncedQuery = useDebouncedValue(query, 300);
+  const debouncedEmpQuery = useDebouncedValue(empQuery, 300);
+  const searching = debouncedQuery.trim().length >= 2;
+  const empSearching = debouncedEmpQuery.trim().length >= 2;
+  const list = useStudents(cursor, 25, showArchived);
+  const search = useStudentSearch(debouncedQuery);
+  const employees = useEmployees(empCursor, 25, showArchivedEmp);
+  const empSearch = useEmployeeSearch(debouncedEmpQuery);
   const setArchived = useSetStudentArchived();
 
   function nextPage() {
@@ -731,8 +764,25 @@ export default function PatientsPage() {
     setCursor(next[next.length - 1] ?? null);
   }
 
+  function empNextPage() {
+    if (employees.data?.next !== null && employees.data?.next !== undefined) {
+      const n = employees.data.next;
+      setEmpHistory((h) => [...h, n]);
+      setEmpCursor(n);
+    }
+  }
+  function empPrevPage() {
+    if (empHistory.length < 2) return;
+    const next = empHistory.slice(0, -1);
+    setEmpHistory(next);
+    setEmpCursor(next[next.length - 1] ?? null);
+  }
+
   const rows: Student[] = searching ? (search.data ?? []) : (list.data?.data ?? []);
   const loading = searching ? search.isLoading : list.isLoading;
+  const errored = searching ? search.isError : list.isError;
+  const retrying = searching ? search.isFetching : list.isFetching;
+  const retry = () => void (searching ? search.refetch() : list.refetch());
 
   return (
     <main className="mx-auto max-w-7xl space-y-4 p-6">
@@ -745,7 +795,7 @@ export default function PatientsPage() {
         </div>
       </header>
 
-      <Tabs defaultValue="students">
+      <Tabs value={tab} onValueChange={setTab}>
         <TabsList>
           <TabsTrigger value="students">Students</TabsTrigger>
           <TabsTrigger value="employees">Employees</TabsTrigger>
@@ -753,7 +803,7 @@ export default function PatientsPage() {
 
         <TabsContent value="students" className="space-y-4">
           <section className="flex flex-wrap items-end justify-between gap-3 rounded-xl border bg-card p-3">
-            <div className="relative w-72">
+            <div className="relative w-full sm:w-72">
               <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
               <Input
                 aria-label="Search students"
@@ -763,15 +813,24 @@ export default function PatientsPage() {
                 onChange={(e) => setQuery(e.target.value)}
               />
             </div>
-            <Dialog open={openCreate} onOpenChange={setOpenCreate}>
-              <Button onClick={() => setOpenCreate(true)}>
-                <UserPlus /> Register student
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                variant={showArchived ? 'secondary' : 'outline'}
+                aria-pressed={showArchived}
+                onClick={() => { setShowArchived((v) => !v); setCursor(null); setHistory([null]); }}
+              >
+                <Archive /> {showArchived ? 'Hide archived' : 'Show archived'}
               </Button>
-              {openCreate && <CreateStudentDialog onClose={() => setOpenCreate(false)} />}
-            </Dialog>
+              <Dialog open={openCreate} onOpenChange={setOpenCreate}>
+                <Button onClick={() => setOpenCreate(true)}>
+                  <UserPlus /> Register student
+                </Button>
+                {openCreate && <CreateStudentDialog onClose={() => setOpenCreate(false)} />}
+              </Dialog>
+            </div>
           </section>
 
-          <section className="overflow-hidden rounded-xl border bg-card">
+          <section className="hidden overflow-hidden rounded-xl border bg-card md:block">
             <Table>
               <TableHeader className="bg-muted/50">
                 <TableRow>
@@ -798,6 +857,9 @@ export default function PatientsPage() {
                       {searching ? 'No matches.' : 'No students registered.'}
                     </TableCell>
                   </TableRow>
+                )}
+                {errored && !loading && (
+                  <QueryErrorRow colSpan={7} message="Failed to load students." onRetry={retry} pending={retrying} />
                 )}
                 {rows.map((s) => (
                   <TableRow key={s.id}>
@@ -827,7 +889,18 @@ export default function PatientsPage() {
                           size="sm"
                           variant="outline"
                           disabled={setArchived.isPending}
-                          onClick={() => setArchived.mutate({ id: s.id, archived: !s.archived })}
+                          onClick={() => {
+                            if (s.archived) {
+                              setArchived.mutate({ id: s.id, archived: false });
+                            } else {
+                              setConfirm({
+                                title: `Archive ${s.student_number}?`,
+                                description: 'The student is soft-archived (never deleted) and removed from active workflows. You can restore them later.',
+                                confirmLabel: 'Archive',
+                                run: () => setArchived.mutate({ id: s.id, archived: true }),
+                              });
+                            }
+                          }}
                         >
                           {s.archived ? <ArchiveRestore /> : <Archive />}
                           {s.archived ? 'Restore' : 'Archive'}
@@ -839,6 +912,70 @@ export default function PatientsPage() {
               </TableBody>
             </Table>
           </section>
+
+          {/* Mobile: student cards from the same rows. */}
+          {loading && (
+            <p className="py-6 text-center text-sm text-muted-foreground md:hidden" role="status">
+              <Loader2 className="mx-auto size-4 animate-spin" />
+            </p>
+          )}
+          {errored && !loading && (
+            <div className="rounded-xl border border-destructive/30 bg-destructive/5 p-4 text-center text-sm text-destructive md:hidden">
+              <p>Failed to load students.</p>
+              <Button variant="outline" size="sm" className="mt-2" onClick={retry} disabled={retrying}>Retry</Button>
+            </div>
+          )}
+          {!loading && !errored && rows.length === 0 && (
+            <p className="rounded-xl border border-dashed p-6 text-center text-sm text-muted-foreground md:hidden">
+              {searching ? 'No matches.' : 'No students registered.'}
+            </p>
+          )}
+          <MobileCardList>
+            {rows.map((s) => (
+              <MobileCard key={s.id} aria-label={`Student ${s.student_number}`}>
+                <div className="mb-1 flex items-center justify-between gap-2">
+                  <span className="text-sm font-medium text-foreground">{s.last_name}, {s.first_name}</span>
+                  {s.archived ? <Badge variant="secondary">Archived</Badge> : <Badge variant="success">Active</Badge>}
+                </div>
+                <MobileCardField label="Number"><span className="font-mono text-xs">{s.student_number}</span></MobileCardField>
+                <MobileCardField label="Course / Yr"><span className="text-xs">{s.course ?? '—'}{s.year_level !== null ? ` · Y${s.year_level}` : ''}</span></MobileCardField>
+                <MobileCardField label="Blood"><span className="font-mono text-xs">{s.blood_type ?? '—'}</span></MobileCardField>
+                <MobileCardField label="No-shows">
+                  {s.consecutive_no_shows >= 3
+                    ? <Badge variant="destructive">{s.consecutive_no_shows}</Badge>
+                    : <span className="text-xs">{s.consecutive_no_shows}</span>}
+                </MobileCardField>
+                <MobileCardActions>
+                  <Button size="sm" variant="outline" onClick={() => setDetailId(s.id)}>
+                    <Eye /> View
+                  </Button>
+                  <Button size="sm" variant="outline" onClick={() => setEditStudent(s)}>
+                    <Pencil /> Edit
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={setArchived.isPending}
+                    onClick={() => {
+                      if (s.archived) {
+                        setArchived.mutate({ id: s.id, archived: false });
+                      } else {
+                        setConfirm({
+                          title: `Archive ${s.student_number}?`,
+                          description: 'The student is soft-archived (never deleted) and removed from active workflows. You can restore them later.',
+                          confirmLabel: 'Archive',
+                          run: () => setArchived.mutate({ id: s.id, archived: true }),
+                        });
+                      }
+                    }}
+                  >
+                    {s.archived ? <ArchiveRestore /> : <Archive />}
+                    {s.archived ? 'Restore' : 'Archive'}
+                  </Button>
+                </MobileCardActions>
+              </MobileCard>
+            ))}
+          </MobileCardList>
 
           {!searching && (
             <nav className="flex items-center justify-between" aria-label="pagination">
@@ -862,7 +999,7 @@ export default function PatientsPage() {
 
         <TabsContent value="employees" className="space-y-4">
           <section className="flex flex-wrap items-end justify-between gap-3 rounded-xl border bg-card p-3">
-            <div className="relative w-72">
+            <div className="relative w-full sm:w-72">
               <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
               <Input
                 aria-label="Search employees"
@@ -872,15 +1009,24 @@ export default function PatientsPage() {
                 onChange={(e) => setEmpQuery(e.target.value)}
               />
             </div>
-            <Dialog open={openCreateEmp} onOpenChange={setOpenCreateEmp}>
-              <Button onClick={() => setOpenCreateEmp(true)}>
-                <UserPlus /> Register employee
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                variant={showArchivedEmp ? 'secondary' : 'outline'}
+                aria-pressed={showArchivedEmp}
+                onClick={() => { setShowArchivedEmp((v) => !v); setEmpCursor(null); setEmpHistory([null]); }}
+              >
+                <Archive /> {showArchivedEmp ? 'Hide archived' : 'Show archived'}
               </Button>
-              {openCreateEmp && <CreateEmployeeDialog onClose={() => setOpenCreateEmp(false)} />}
-            </Dialog>
+              <Dialog open={openCreateEmp} onOpenChange={setOpenCreateEmp}>
+                <Button onClick={() => setOpenCreateEmp(true)}>
+                  <UserPlus /> Register employee
+                </Button>
+                {openCreateEmp && <CreateEmployeeDialog onClose={() => setOpenCreateEmp(false)} />}
+              </Dialog>
+            </div>
           </section>
 
-          <section className="overflow-hidden rounded-xl border bg-card">
+          <section className="hidden overflow-hidden rounded-xl border bg-card md:block">
             <Table>
               <TableHeader className="bg-muted/50">
                 <TableRow>
@@ -896,19 +1042,30 @@ export default function PatientsPage() {
                 {(() => {
                   const empLoading = empSearching ? empSearch.isLoading : employees.isLoading;
                   const empRows: Employee[] = empSearching ? (empSearch.data ?? []) : (employees.data?.data ?? []);
+                  const empErrored = empSearching ? empSearch.isError : employees.isError;
                   if (empLoading) {
                     return (
                       <TableRow>
-                        <TableCell colSpan={7} className="px-3 py-6 text-center text-muted-foreground">
+                        <TableCell colSpan={6} className="px-3 py-6 text-center text-muted-foreground">
                           <Loader2 className="mx-auto size-4 animate-spin" />
                         </TableCell>
                       </TableRow>
                     );
                   }
+                  if (empErrored) {
+                    return (
+                      <QueryErrorRow
+                        colSpan={6}
+                        message="Failed to load employees."
+                        onRetry={() => void (empSearching ? empSearch.refetch() : employees.refetch())}
+                        pending={empSearching ? empSearch.isFetching : employees.isFetching}
+                      />
+                    );
+                  }
                   if (empRows.length === 0) {
                     return (
                       <TableRow>
-                        <TableCell colSpan={7} className="px-3 py-6 text-center text-muted-foreground">
+                        <TableCell colSpan={6} className="px-3 py-6 text-center text-muted-foreground">
                           {empSearching ? 'No matches.' : 'No employees registered.'}
                         </TableCell>
                       </TableRow>
@@ -942,7 +1099,18 @@ export default function PatientsPage() {
                             variant="outline"
                             aria-label={`${e.archived ? 'Restore' : 'Archive'} ${e.employee_number}`}
                             disabled={archiveEmp.isPending}
-                            onClick={() => archiveEmp.mutate({ id: e.id, archived: !e.archived })}
+                            onClick={() => {
+                              if (e.archived) {
+                                archiveEmp.mutate({ id: e.id, archived: false });
+                              } else {
+                                setConfirm({
+                                  title: `Archive ${e.employee_number}?`,
+                                  description: 'The employee is soft-archived (never deleted) and removed from active workflows. You can restore them later.',
+                                  confirmLabel: 'Archive',
+                                  run: () => archiveEmp.mutate({ id: e.id, archived: true }),
+                                });
+                              }
+                            }}
                           >
                             {e.archived ? <ArchiveRestore /> : <Archive />} {e.archived ? 'Restore' : 'Archive'}
                           </Button>
@@ -954,6 +1122,99 @@ export default function PatientsPage() {
               </TableBody>
             </Table>
           </section>
+
+          {/* Mobile: employee cards from the same rows. */}
+          {(() => {
+            const empLoading = empSearching ? empSearch.isLoading : employees.isLoading;
+            const empRows: Employee[] = empSearching ? (empSearch.data ?? []) : (employees.data?.data ?? []);
+            const empErrored = empSearching ? empSearch.isError : employees.isError;
+            return (
+              <div className="md:hidden">
+                {empLoading && (
+                  <p className="py-6 text-center text-sm text-muted-foreground" role="status">
+                    <Loader2 className="mx-auto size-4 animate-spin" />
+                  </p>
+                )}
+                {empErrored && !empLoading && (
+                  <div className="rounded-xl border border-destructive/30 bg-destructive/5 p-4 text-center text-sm text-destructive">
+                    <p>Failed to load employees.</p>
+                    <Button variant="outline" size="sm" className="mt-2" onClick={() => void (empSearching ? empSearch.refetch() : employees.refetch())} disabled={empSearching ? empSearch.isFetching : employees.isFetching}>Retry</Button>
+                  </div>
+                )}
+                {!empLoading && !empErrored && empRows.length === 0 && (
+                  <p className="rounded-xl border border-dashed p-6 text-center text-sm text-muted-foreground">
+                    {empSearching ? 'No matches.' : 'No employees registered.'}
+                  </p>
+                )}
+                <MobileCardList>
+                  {empRows.map((e) => (
+                    <MobileCard key={e.id} aria-label={`Employee ${e.employee_number}`}>
+                      <div className="mb-1 flex items-center justify-between gap-2">
+                        <span className="text-sm font-medium text-foreground">{e.last_name}, {e.first_name}</span>
+                        <Badge variant={e.employment_status === 'active' ? 'success' : e.employment_status === 'on_leave' ? 'warning' : 'secondary'}>
+                          {e.employment_status}
+                        </Badge>
+                      </div>
+                      <div className="mb-1 flex flex-wrap gap-1.5">
+                        {e.is_teaching && <Badge variant="warning">teaching</Badge>}
+                        {e.archived && <Badge variant="secondary">archived</Badge>}
+                      </div>
+                      <MobileCardField label="Number"><span className="font-mono text-xs">{e.employee_number}</span></MobileCardField>
+                      <MobileCardField label="Department"><span className="text-xs">{e.department ?? '—'}</span></MobileCardField>
+                      <MobileCardField label="Position"><span className="text-xs">{e.position ?? '—'}</span></MobileCardField>
+                      <MobileCardActions>
+                        <Button size="sm" variant="outline" aria-label={`View ${e.employee_number}`} onClick={() => setEmpDetailId(e.id)}>
+                          <Eye /> View
+                        </Button>
+                        <Button size="sm" variant="outline" aria-label={`Edit ${e.employee_number}`} onClick={() => setEditEmp(e)}>
+                          <Pencil /> Edit
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          aria-label={`${e.archived ? 'Restore' : 'Archive'} ${e.employee_number}`}
+                          disabled={archiveEmp.isPending}
+                          onClick={() => {
+                            if (e.archived) {
+                              archiveEmp.mutate({ id: e.id, archived: false });
+                            } else {
+                              setConfirm({
+                                title: `Archive ${e.employee_number}?`,
+                                description: 'The employee is soft-archived (never deleted) and removed from active workflows. You can restore them later.',
+                                confirmLabel: 'Archive',
+                                run: () => archiveEmp.mutate({ id: e.id, archived: true }),
+                              });
+                            }
+                          }}
+                        >
+                          {e.archived ? <ArchiveRestore /> : <Archive />} {e.archived ? 'Restore' : 'Archive'}
+                        </Button>
+                      </MobileCardActions>
+                    </MobileCard>
+                  ))}
+                </MobileCardList>
+              </div>
+            );
+          })()}
+
+          {!empSearching && (
+            <nav className="flex items-center justify-between" aria-label="pagination">
+              <p className="text-xs text-muted-foreground">Page {empHistory.length}</p>
+              <div className="flex gap-2">
+                <Button variant="outline" size="sm" onClick={empPrevPage} disabled={empHistory.length < 2}>
+                  <ChevronLeft /> Prev
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={empNextPage}
+                  disabled={employees.data?.next === null || employees.data?.next === undefined}
+                >
+                  Next <ChevronRight />
+                </Button>
+              </div>
+            </nav>
+          )}
 
           <DepartmentsPanel />
         </TabsContent>
@@ -982,6 +1243,19 @@ export default function PatientsPage() {
           <EmployeeDetailDialog employeeId={empDetailId} onClose={() => setEmpDetailId(null)} />
         </Dialog>
       )}
+
+      <ConfirmDialog
+        open={confirm !== null}
+        title={confirm?.title ?? ''}
+        description={confirm?.description}
+        confirmLabel={confirm?.confirmLabel}
+        pending={setArchived.isPending || archiveEmp.isPending}
+        onConfirm={() => {
+          confirm?.run();
+          setConfirm(null);
+        }}
+        onCancel={() => setConfirm(null)}
+      />
     </main>
   );
 }

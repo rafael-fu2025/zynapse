@@ -26,17 +26,27 @@ final class ReorderController extends ApiController
 
     public function list(): ResponseInterface
     {
-        $cursor = (string) ($this->request->getGet('cursor') ?? '');
-        $limit  = (int)    ($this->request->getGet('limit')  ?? 25);
-        $status = (string) ($this->request->getGet('status') ?? '');
+        $cursor   = (string) ($this->request->getGet('cursor') ?? '');
+        $limit    = (int)    ($this->request->getGet('limit')  ?? 25);
+        $status   = (string) ($this->request->getGet('status') ?? '');
+        $q        = (string) ($this->request->getGet('q')      ?? '');
+        $medicine = (string) ($this->request->getGet('medicine_id') ?? '');
+        $supply   = (string) ($this->request->getGet('supply_item_id') ?? '');
 
-        if ($status !== '' && ! in_array($status, ['pending', 'approved', 'ordered', 'received', 'cancelled'], true)) {
+        if ($status !== '' && ! in_array($status, ['pending', 'approved', 'ordered', 'received', 'completed', 'cancelled'], true)) {
             throw ApiException::validationFailure([
                 ['code' => 'validation.field', 'message' => 'Unknown status filter.', 'field' => 'status'],
             ]);
         }
 
-        $page = $this->service->list($cursor !== '' ? $cursor : null, $limit, $status !== '' ? $status : null);
+        $page = $this->service->list(
+            $cursor !== '' ? $cursor : null,
+            $limit,
+            $status !== '' ? $status : null,
+            $q !== '' ? $q : null,
+            $medicine !== '' ? (int) $medicine : null,
+            $supply !== '' ? (int) $supply : null,
+        );
 
         return $this->ok(
             $page['data'],
@@ -49,17 +59,31 @@ final class ReorderController extends ApiController
         $payload = $this->request->getJSON(true) ?? [];
 
         $rules = [
-            'medicine_id' => 'required|is_natural_no_zero',
-            'quantity'    => 'required|is_natural_no_zero',
-            'urgency'     => 'permit_empty|in_list[low,medium,high,critical]',
-            'note'        => 'permit_empty|max_length[255]',
+            'item_type'      => 'permit_empty|in_list[medicine,supply]',
+            'medicine_id'    => 'permit_empty|is_natural_no_zero',
+            'supply_item_id' => 'permit_empty|is_natural_no_zero',
+            'quantity'       => 'required|is_natural_no_zero',
+            'urgency'        => 'permit_empty|in_list[low,medium,high,critical]',
+            'note'           => 'permit_empty|max_length[255]',
         ];
         if (! $this->makeValidation($rules)->run($payload)) {
             throw ApiException::validationFailure($this->collectErrors());
         }
 
+        // item_type defaults to medicine for the legacy payload shape.
+        $itemType = (string) ($payload['item_type'] ?? 'medicine');
+        $itemId   = $itemType === 'supply'
+            ? (int) ($payload['supply_item_id'] ?? 0)
+            : (int) ($payload['medicine_id'] ?? 0);
+        if ($itemId <= 0) {
+            throw ApiException::validationFailure([
+                ['code' => 'validation.field', 'message' => 'Select an item to reorder.', 'field' => $itemType === 'supply' ? 'supply_item_id' : 'medicine_id'],
+            ]);
+        }
+
         $dto = $this->service->create(
-            (int) $payload['medicine_id'],
+            $itemType,
+            $itemId,
             (int) $payload['quantity'],
             (string) ($payload['urgency'] ?? 'medium'),
             isset($payload['note']) ? (string) $payload['note'] : null,

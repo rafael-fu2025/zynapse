@@ -37,13 +37,20 @@ interface EncounterPage {
   next: string | null;
 }
 
-export function useEncounters(cursor: string | null, limit = 25) {
+export function useEncounters(
+  cursor: string | null,
+  limit = 25,
+  status: 'open' | 'closed' | null = null,
+) {
   return useQuery<EncounterPage, ApiEnvelopeError>({
-    queryKey: ['clinic', 'encounters', { cursor, limit }],
+    // Status is part of the cache key so switching tabs refetches the
+    // correct server-side slice instead of re-filtering one page.
+    queryKey: ['clinic', 'encounters', { cursor, limit, status }],
     queryFn: async () => {
       const params = new URLSearchParams();
       if (cursor !== null) params.set('cursor', cursor);
       params.set('limit', String(limit));
+      if (status !== null) params.set('status', status);
       const res = await apiClient.get<{ data: unknown[]; next: string | null }>(
         `/clinic/encounters?${params.toString()}`,
       );

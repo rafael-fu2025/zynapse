@@ -27,8 +27,12 @@ final class StaffScheduleController extends ApiController
 
     public function list(): ResponseInterface
     {
-        $user = (string) ($this->request->getGet('user_id') ?? '');
-        return $this->ok($this->service->list($user !== '' ? (int) $user : null));
+        $user     = (string) ($this->request->getGet('user_id') ?? '');
+        $archived = (string) ($this->request->getGet('include_archived') ?? '');
+        return $this->ok($this->service->list(
+            $user !== '' ? (int) $user : null,
+            $archived === '1' || $archived === 'true',
+        ));
     }
 
     public function create(): ResponseInterface
@@ -74,6 +78,11 @@ final class StaffScheduleController extends ApiController
     {
         $this->service->archive($id);
         return $this->ok(['archived' => true]);
+    }
+
+    public function unarchive(int $id): ResponseInterface
+    {
+        return $this->ok($this->service->unarchive($id));
     }
 
     private function collectErrors(): array

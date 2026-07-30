@@ -6,14 +6,27 @@ import { z } from 'zod';
 export const TRIAGE_PRIORITIES = ['low', 'medium', 'high', 'urgent'] as const;
 export type TriagePriority = (typeof TRIAGE_PRIORITIES)[number];
 
+export const ENCOUNTER_STATUSES = ['open', 'closed', 'referred'] as const;
+export type EncounterStatus = (typeof ENCOUNTER_STATUSES)[number];
+
+/**
+ * Encounter status contract (panel revision):
+ *   - `open`     : visit in progress — vitals, treatments and medicine
+ *                  dispensing are only allowed in this state.
+ *   - `closed`   : visit finished; terminal for clinic actions.
+ *   - `referred` : handed off to another module; terminal.
+ */
 export const encounterSchema = z.object({
   id: z.number().int().positive(),
   patient_school_id: z.string(),
+  // Scheduling-layer link — set when the visit was auto-opened by an
+  // appointment check-in; null for walk-ins.
+  appointment_id: z.number().int().positive().nullable().optional(),
   chief_complaint: z.string(),
   triage_priority: z.enum(TRIAGE_PRIORITIES).nullable().optional(),
   triage_override: z.boolean().optional(),
   diagnosis: z.string().nullable().optional(),
-  status: z.enum(['Open', 'Closed', 'Referred']),
+  status: z.enum(ENCOUNTER_STATUSES),
   attending_user_id: z.number().int().positive(),
   started_at: z.string(),
   closed_at: z.string().nullable(),

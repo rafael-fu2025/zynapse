@@ -43,15 +43,18 @@ final class PatientService extends BaseService
     /**
      * @return array{data: array<int, array<string, mixed>>, next: ?string, count: int}
      */
-    public function listStudents(?string $cursor, int $limit): array
+    public function listStudents(?string $cursor, int $limit, bool $includeArchived = false): array
     {
         $this->policy->check('patientsRead');
 
         $builder = $this->db->table('patients_students')
             ->select(self::STUDENT_COLS)
-            ->where('archived_at', null)
             ->orderBy('created_at', 'DESC')
             ->orderBy('id', 'DESC');
+
+        if (! $includeArchived) {
+            $builder->where('archived_at', null);
+        }
 
         KeysetPaginator::apply($builder, $cursor, $limit);
 
@@ -343,15 +346,18 @@ final class PatientService extends BaseService
     /**
      * @return array{data: array<int, array<string, mixed>>, next: ?string, count: int}
      */
-    public function listEmployees(?string $cursor, int $limit): array
+    public function listEmployees(?string $cursor, int $limit, bool $includeArchived = false): array
     {
         $this->policy->check('patientsRead');
 
         $builder = $this->db->table('patients_employees')
             ->select(self::EMPLOYEE_COLS)
-            ->where('archived_at', null)
             ->orderBy('created_at', 'DESC')
             ->orderBy('id', 'DESC');
+
+        if (! $includeArchived) {
+            $builder->where('archived_at', null);
+        }
 
         KeysetPaginator::apply($builder, $cursor, $limit);
 

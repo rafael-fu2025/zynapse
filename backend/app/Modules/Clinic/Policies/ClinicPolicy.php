@@ -35,6 +35,7 @@ final class ClinicPolicy extends BasePolicy
             'inventoryForecast' => 'clinic.inventory.forecast',
             'inventoryRead'     => 'clinic.inventory.read',
             'inventoryWrite'    => 'clinic.inventory.write',
+            'inventoryDelete'   => 'clinic.inventory.delete',
             'appointmentsRead'  => 'clinic.appointments.read',
             'appointmentsWrite' => 'clinic.appointments.write',
             'patientsRead'      => 'clinic.patients.read',

@@ -59,9 +59,16 @@ export function useCreateReferral() {
 
 function useTransition(action: 'acknowledge' | 'review' | 'close') {
   const qc = useQueryClient();
-  return useMutation<Referral, ApiEnvelopeError, number>({
-    mutationFn: async (id) => {
-      const res = await apiClient.post<Referral>(`/referrals/${id}/${action}`);
+  return useMutation<Referral, ApiEnvelopeError, number | { id: number; providerUserId?: number }>({
+    mutationFn: async (arg) => {
+      const id = typeof arg === 'number' ? arg : arg.id;
+      // Panel revision: acknowledging may assign the handling provider
+      // (nurse / counsellor). Defaults server-side to the current user.
+      const body =
+        action === 'acknowledge' && typeof arg === 'object' && arg.providerUserId !== undefined
+          ? { provider_user_id: arg.providerUserId }
+          : undefined;
+      const res = await apiClient.post<Referral>(`/referrals/${id}/${action}`, body);
       return referralSchema.parse(res.data);
     },
     onSuccess: () => {

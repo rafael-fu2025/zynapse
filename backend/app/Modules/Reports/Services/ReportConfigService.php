@@ -35,13 +35,15 @@ final class ReportConfigService extends BaseService
     /**
      * @return array<int, array<string, mixed>>
      */
-    public function listConfigs(): array
+    public function listConfigs(bool $includeArchived = false): array
     {
-        $rows = $this->db->table('report_configurations')
+        $builder = $this->db->table('report_configurations')
             ->select('id, name, module, report_type, parameters, schedule_cron, is_active, created_at')
-            ->where('is_active', 1)
-            ->orderBy('created_at', 'DESC')->orderBy('id', 'DESC')
-            ->get()->getResultArray();
+            ->orderBy('created_at', 'DESC')->orderBy('id', 'DESC');
+        if (! $includeArchived) {
+            $builder->where('is_active', 1);
+        }
+        $rows = $builder->get()->getResultArray();
 
         return array_map(fn (array $r): array => $this->configRow($r), $rows);
     }
@@ -135,6 +137,38 @@ final class ReportConfigService extends BaseService
                 'updated_at' => $this->utcNow(),
             ]);
             $this->audit->enqueue('reports.config_archived', 'report_configurations', $id, $userId, []);
+        });
+    }
+
+    /**
+     * Restore an archived configuration (`is_active = 1`) so it
+     * reappears in the saved-reports list and can be run again.
+     * Idempotent — restoring an active config just returns it.
+     *
+     * @return array<string, mixed>
+     */
+    public function unarchiveConfig(int $id): array
+    {
+        $userId = \App\Auth\CurrentUser::assert();
+
+        return $this->txn(function () use ($id, $userId): array {
+            $cfg = $this->selectForUpdate('report_configurations', ['id' => $id]);
+            if ($cfg === null) {
+                throw new ApiException('resource.not_found', 404, [
+                    ['code' => 'resource.not_found', 'message' => "Report configuration #{$id} not found."],
+                ]);
+            }
+            if ((int) $cfg['is_active'] === 1) {
+                // Idempotent: already active.
+                return $this->getConfig($id);
+            }
+            $this->db->table('report_configurations')->where('id', $id)->update([
+                'is_active'  => 1,
+                'updated_at' => $this->utcNow(),
+            ]);
+            $this->audit->enqueue('reports.config_restored', 'report_configurations', $id, $userId, []);
+
+            return $this->getConfig($id);
         });
     }
 

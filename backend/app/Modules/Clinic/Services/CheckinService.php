@@ -121,7 +121,7 @@ final class CheckinService extends BaseService
             $this->db->table('clinic_encounters')->insert([
                 'patient_school_id' => $schoolId,
                 'chief_complaint'   => "Kiosk check-in (pending triage) — station {$stationId}",
-                'status'            => 'Open',
+                'status'            => 'open',
                 'attending_user_id' => $userId,
                 'started_at'        => $now,
                 'created_at'        => $now,

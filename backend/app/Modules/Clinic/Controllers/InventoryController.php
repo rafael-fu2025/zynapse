@@ -25,10 +25,17 @@ final class InventoryController extends ApiController
 
     public function listItems(): ResponseInterface
     {
-        $cursor = (string) ($this->request->getGet('cursor') ?? '');
-        $limit  = (int)    ($this->request->getGet('limit')  ?? 25);
+        $cursor   = (string) ($this->request->getGet('cursor') ?? '');
+        $limit    = (int)    ($this->request->getGet('limit')  ?? 25);
+        $q        = (string) ($this->request->getGet('q')      ?? '');
+        $archived = (string) ($this->request->getGet('include_archived') ?? '');
 
-        $page = $this->service->listItems($cursor !== '' ? $cursor : null, $limit);
+        $page = $this->service->listItems(
+            $cursor !== '' ? $cursor : null,
+            $limit,
+            $q !== '' ? $q : null,
+            $archived === '1' || $archived === 'true',
+        );
 
         return $this->ok(
             $page['data'],
@@ -59,13 +66,57 @@ final class InventoryController extends ApiController
         return $this->ok($dto->toArray(), null, 201);
     }
 
+    /**
+     * Update a supply item. SKU is immutable (it's the FK for the
+     * movement ledger); name, unit, reorder_level are mutable.
+     * Stock is untouched — use /move for that.
+     */
+    public function updateItem(int $itemId): ResponseInterface
+    {
+        $payload = $this->request->getJSON(true) ?? [];
+
+        $rules = [
+            'name'          => 'required|max_length[128]',
+            'unit'          => 'permit_empty|max_length[32]',
+            'reorder_level' => 'permit_empty|is_natural',
+        ];
+        if (! $this->makeValidation($rules)->run($payload)) {
+            throw ApiException::validationFailure($this->collectErrors());
+        }
+
+        $dto = $this->service->updateItem(
+            $itemId,
+            (string) $payload['name'],
+            (string) ($payload['unit'] ?? 'pc'),
+            (int)    ($payload['reorder_level'] ?? 0),
+        );
+        return $this->ok($dto->toArray());
+    }
+
+    /**
+     * Soft-archive a supply item. The movement ledger is preserved
+     * — only the catalog row drops off the default list.
+     */
+    public function archiveItem(int $itemId): ResponseInterface
+    {
+        return $this->ok($this->service->archiveItem($itemId)->toArray());
+    }
+
+    /**
+     * Restore a soft-archived supply item back onto the default list.
+     */
+    public function unarchiveItem(int $itemId): ResponseInterface
+    {
+        return $this->ok($this->service->unarchiveItem($itemId)->toArray());
+    }
+
     public function moveStock(int $itemId): ResponseInterface
     {
         $payload = $this->request->getJSON(true) ?? [];
 
         $rules = [
             'qty_delta'   => 'required|integer',
-            'reason_code' => 'required|in_list[receive,dispense,adjustment]',
+            'reason_code' => 'required|in_list[dispense,adjustment]',
             'note'        => 'permit_empty|max_length[255]',
         ];
         if (! $this->makeValidation($rules)->run($payload)) {
@@ -75,11 +126,9 @@ final class InventoryController extends ApiController
         $delta  = (int) $payload['qty_delta'];
         $reason = (string) $payload['reason_code'];
 
-        // Sign coherence: receipts add stock, dispenses remove it.
-        if ($delta === 0
-            || ($reason === 'receive' && $delta < 0)
-            || ($reason === 'dispense' && $delta > 0)
-        ) {
+        // Sign coherence: dispenses remove stock. Receipts are NOT a
+        // free-form movement any more — see receiveOrdered().
+        if ($delta === 0 || ($reason === 'dispense' && $delta > 0)) {
             throw ApiException::validationFailure([
                 ['code' => 'validation.field', 'message' => 'qty_delta sign does not match reason_code.', 'field' => 'qty_delta'],
             ]);
@@ -93,6 +142,35 @@ final class InventoryController extends ApiController
         );
 
         return $this->ok($dto->toArray());
+    }
+
+    /**
+     * Receive the delivered quantity of a `received` reorder request.
+     * Quantity comes from the request server-side; the payload only
+     * carries an optional note.
+     */
+    public function receiveOrdered(int $itemId): ResponseInterface
+    {
+        $payload = $this->request->getJSON(true) ?? [];
+
+        $rules = ['note' => 'permit_empty|max_length[255]'];
+        if (! $this->makeValidation($rules)->run($payload)) {
+            throw ApiException::validationFailure($this->collectErrors());
+        }
+
+        return $this->ok($this->service->receiveOrdered(
+            $itemId,
+            isset($payload['note']) ? (string) $payload['note'] : null,
+        )->toArray());
+    }
+
+    /**
+     * Ledger view — signed movements with the stored running balance
+     * (panel revision: in/out debit-credit tracking).
+     */
+    public function listMovements(int $itemId): ResponseInterface
+    {
+        return $this->ok($this->service->listMovements($itemId));
     }
 
     private function collectErrors(): array

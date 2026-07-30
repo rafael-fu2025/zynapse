@@ -20,15 +20,18 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
+import { CopyButton } from '@/components/CopyButton';
+import { QueryErrorState } from '@/components/QueryErrorState';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { useNotifications } from '@/hooks/useNotifications';
 import { useMyStudentClinicVisits, useMyStudentProfile } from '@/hooks/useStudentPortal';
 import { fmtUtcToApp } from '@/utils/date';
+import { statusLabel } from '@/utils/status';
 
 const STATUS_VARIANT = {
-  Open: 'default',
-  Closed: 'secondary',
-  Referred: 'outline',
+  open: 'default',
+  closed: 'secondary',
+  referred: 'outline',
 } as const;
 
 function NotOnRegistry() {
@@ -72,6 +75,10 @@ export default function StudentPortalPage() {
       </header>
 
       {profile.isLoading && <ProfileSkeleton />}
+
+      {profile.isError && profile.error?.httpStatus !== 404 && (
+        <QueryErrorState message="Failed to load your profile." onRetry={() => void profile.refetch()} pending={profile.isFetching} />
+      )}
 
       {profile.data !== undefined && (
         <>
@@ -128,9 +135,12 @@ export default function StudentPortalPage() {
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-3">
-                <p className="rounded-md border bg-muted/50 px-3 py-2 font-mono text-sm">
-                  {profile.data.kiosk_identifier}
-                </p>
+                <div className="flex items-center gap-2">
+                  <p className="flex-1 rounded-md border bg-muted/50 px-3 py-2 font-mono text-sm">
+                    {profile.data.kiosk_identifier}
+                  </p>
+                  <CopyButton value={profile.data.kiosk_identifier} label="Copy kiosk identifier" successMessage="Kiosk identifier copied." />
+                </div>
                 <p className="text-xs text-muted-foreground">
                   The kiosk accepts {profile.data.has_qr ? 'QR' : profile.data.has_rfid ? 'RFID' : 'manual entry'}; we send the{' '}
                   <span className="font-mono">{profile.data.kiosk_identifier.split(':')[0]}</span> variant first.
@@ -186,7 +196,7 @@ export default function StudentPortalPage() {
                           )}
                         </TableCell>
                         <TableCell className="px-3">
-                          <Badge variant={STATUS_VARIANT[v.status]}>{v.status}</Badge>
+                          <Badge variant={STATUS_VARIANT[v.status]}>{statusLabel(v.status)}</Badge>
                         </TableCell>
                         <TableCell className="px-3 text-xs">
                           {v.attending_username ?? <span className="text-muted-foreground">—</span>}

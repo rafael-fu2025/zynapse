@@ -54,7 +54,12 @@ final class Routes implements BaseRoutes
             // Inventory (Phase 8)
             $r->get('inventory',                             'InventoryController::listItems');
             $r->post('inventory',                            'InventoryController::createItem');
+            $r->post('inventory/(:num)',                     'InventoryController::updateItem/$1');
+            $r->post('inventory/(:num)/archive',             'InventoryController::archiveItem/$1');
+            $r->post('inventory/(:num)/unarchive',           'InventoryController::unarchiveItem/$1');
             $r->post('inventory/(:num)/move',                'InventoryController::moveStock/$1');
+            $r->post('inventory/(:num)/receive',             'InventoryController::receiveOrdered/$1');
+            $r->get('inventory/(:num)/movements',            'InventoryController::listMovements/$1');
 
             // Appointments (Phase 9)
             $r->get('appointments',                          'AppointmentController::list');
@@ -87,6 +92,7 @@ final class Routes implements BaseRoutes
             $r->post('staff-schedules',                      'StaffScheduleController::create');
             $r->post('staff-schedules/(:num)',               'StaffScheduleController::update/$1');
             $r->post('staff-schedules/(:num)/archive',       'StaffScheduleController::archive/$1');
+            $r->post('staff-schedules/(:num)/unarchive',     'StaffScheduleController::unarchive/$1');
 
             // Medicines (Phase 12 — recycled from synapse_ag). Static
             // segments MUST precede the (:num) catch-alls.
@@ -95,8 +101,12 @@ final class Routes implements BaseRoutes
             $r->get('medicines',                             'MedicineController::list');
             $r->post('medicines',                            'MedicineController::create');
             $r->get('medicines/(:num)',                      'MedicineController::show/$1');
+            $r->post('medicines/(:num)',                     'MedicineController::update/$1');
+            $r->post('medicines/(:num)/archive',             'MedicineController::archive/$1');
+            $r->post('medicines/(:num)/unarchive',           'MedicineController::unarchive/$1');
             $r->post('medicines/(:num)/batches',             'MedicineController::addBatch/$1');
             $r->post('medicines/(:num)/dispense',            'MedicineController::dispense/$1');
+            $r->get('medicines/(:num)/transactions',         'MedicineController::transactions/$1');
             $r->post('medicines/(:num)/forecast',            'MedicineController::computeForecast/$1');
             $r->get('medicines/(:num)/forecast',             'MedicineController::getForecast/$1');
 

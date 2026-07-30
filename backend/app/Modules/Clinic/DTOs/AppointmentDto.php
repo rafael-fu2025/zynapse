@@ -27,7 +27,7 @@ final class AppointmentDto extends BaseDTO
     public function withNames(array $names): self
     {
         $clone = clone $this;
-        foreach (['patient_name', 'patient_kind', 'provider_name'] as $k) {
+        foreach (['patient_name', 'patient_kind', 'provider_name', 'encounter_id'] as $k) {
             if (array_key_exists($k, $names)) {
                 $clone->row[$k] = $names[$k];
             }
@@ -47,6 +47,9 @@ final class AppointmentDto extends BaseDTO
             'scheduled_at'      => (string) $this->row['scheduled_at'],
             'status'            => (string) $this->row['status'],
             'reason'            => $this->row['reason'] !== null ? (string) $this->row['reason'] : null,
+            // Encounter auto-opened at check-in (panel revision); NULL
+            // while the appointment is still in the scheduling phase.
+            'encounter_id'      => isset($this->row['encounter_id']) && $this->row['encounter_id'] !== null ? (int) $this->row['encounter_id'] : null,
             'created_at'        => (string) $this->row['created_at'],
         ];
     }

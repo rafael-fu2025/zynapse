@@ -46,20 +46,58 @@ export const createMedicineSchema = z.object({
 });
 export type CreateMedicineInput = z.infer<typeof createMedicineSchema>;
 
+/**
+ * Update a medicine's catalog row. Locked to the reorder threshold —
+ * every other catalog field is read-only after creation so the batch
+ * ledger keeps describing the same product.
+ */
+export const updateMedicineSchema = z.object({
+  reorder_threshold: z.number().int().min(0),
+});
+export type UpdateMedicineInput = z.infer<typeof updateMedicineSchema>;
+
+/**
+ * Receive a lot. Quantity is NOT part of the payload — the backend
+ * takes it from the medicine's `received` reorder request.
+ */
 export const addBatchSchema = z.object({
   batch_number: z.string().min(1, 'Required').max(100),
-  quantity_received: z.number().int().min(1, 'Must be at least 1'),
   expiration_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'YYYY-MM-DD'),
   supplier: z.string().max(200).optional(),
   note: z.string().max(255).optional(),
 });
 export type AddBatchInput = z.infer<typeof addBatchSchema>;
 
+/**
+ * Dispense against an OPEN encounter (panel revision): every dispense
+ * is anchored to the actual clinic visit, so the ledger records who
+ * the stock went to. `encounter_id` is required by the backend.
+ */
 export const dispenseSchema = z.object({
   quantity: z.number().int().min(1, 'Must be at least 1'),
+  encounter_id: z.number().int().positive({ message: 'Select the open encounter' }),
   note: z.string().max(255).optional(),
 });
 export type DispenseInput = z.infer<typeof dispenseSchema>;
+
+/**
+ * One row of the medicine ledger (in/out with running balance). `qty_in`
+ * / `qty_out` are mutually exclusive; `balance_after` is the on-hand
+ * total right after the transaction.
+ */
+export const medicineTxnSchema = z.object({
+  id: z.number().int().positive(),
+  batch_id: z.number().int(),
+  type: z.string(),
+  qty_in: z.number().int().nullable(),
+  qty_out: z.number().int().nullable(),
+  balance_after: z.number().int().nullable(),
+  reference_type: z.string().nullable(),
+  reference_id: z.number().int().nullable(),
+  note: z.string().nullable(),
+  created_at: z.string(),
+});
+export type MedicineTxn = z.infer<typeof medicineTxnSchema>;
 
 export const medicineForecastSchema = z.object({
   medicine_id: z.number().int().positive(),

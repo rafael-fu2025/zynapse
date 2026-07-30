@@ -4,11 +4,14 @@
  */
 import { z } from 'zod';
 
+export const BMG_UNIT_STATUSES = ['idle', 'processing', 'awaiting_output', 'cancelled', 'maintenance'] as const;
+export type BmgUnitStatus = (typeof BMG_UNIT_STATUSES)[number];
+
 export const bmgUnitSchema = z.object({
   id: z.number().int().positive(),
   code: z.string(),
   display_name: z.string(),
-  status: z.enum(['Idle', 'Processing', 'AwaitingOutput', 'Cancelled', 'Maintenance']),
+  status: z.enum(BMG_UNIT_STATUSES),
   location_code: z.string().nullable(),
   spec_capacity_kg: z.number().nullable(),
   default_category_id: z.number().int().positive().nullable().optional(),
@@ -25,11 +28,17 @@ export type BmgUnit = z.infer<typeof bmgUnitSchema>;
 
 /**
  * Required + optional fields for registering a new BMG unit.
- * `code` is uppercased server-side; `display_name` is the human label.
- * `default_category_id` pre-fills the waste category on a future batch.
+ * `code` is a SLUG (lowercase, hyphen-separated — e.g. `drum-01`);
+ * the create dialog auto-generates it from the name and the backend
+ * normalizes + validates the same contract. `default_category_id`
+ * pre-fills the waste category on a future batch.
  */
 export const createUnitSchema = z.object({
-  code: z.string().min(1, 'Required').max(32),
+  code: z
+    .string()
+    .min(1, 'Required')
+    .max(32)
+    .regex(/^[a-z0-9]+(-[a-z0-9]+)*$/, 'Lowercase letters/digits separated by hyphens (e.g. drum-01)'),
   display_name: z.string().min(1, 'Required').max(128),
   location_code: z.string().max(64).optional().or(z.literal('')),
   spec_capacity_kg: z.coerce.number().positive().optional().or(z.literal('')),
@@ -57,7 +66,7 @@ export const bmgBatchSchema = z.object({
   id: z.number().int().positive(),
   unit_id: z.number().int().positive(),
   reference_code: z.string(),
-  status: z.enum(['Idle', 'Processing', 'AwaitingOutput', 'Cancelled']),
+  status: z.enum(['idle', 'processing', 'awaiting_output', 'cancelled']),
   total_input_weight_kg: z.number(),
   output_weight_kg: z.number().nullable(),
   input_items: z.array(z.object({ sku: z.string(), qty_kg: z.number() }).passthrough()),
@@ -69,17 +78,28 @@ export const bmgBatchSchema = z.object({
 });
 export type BmgBatch = z.infer<typeof bmgBatchSchema>;
 
-export const startBatchSchema = z.object({
-  total_input_weight_kg: z.number().positive(),
-  input_items: z
-    .array(
-      z.object({
-        sku: z.string().min(1).max(64),
-        qty_kg: z.number().positive(),
-      }),
-    )
-    .min(1),
-});
+/**
+ * Start a batch with its segregated waste composition (panel
+ * revision): one row per waste category with the loaded weight.
+ * Component weights must add up to `total_input_weight_kg` — the
+ * backend re-checks with a ±0.01 kg tolerance.
+ */
+export const startBatchSchema = z
+  .object({
+    total_input_weight_kg: z.number().positive(),
+    composition: z
+      .array(
+        z.object({
+          category_id: z.number().int().positive(),
+          weight_kg: z.number().positive(),
+        }),
+      )
+      .min(1, 'Add at least one waste component'),
+  })
+  .refine(
+    (v) => Math.abs(v.composition.reduce((s, c) => s + c.weight_kg, 0) - v.total_input_weight_kg) <= 0.01,
+    { message: 'Component weights must add up to the total input weight.', path: ['composition'] },
+  );
 export type StartBatchInput = z.infer<typeof startBatchSchema>;
 
 export const recordOutputSchema = z.object({
@@ -138,12 +158,21 @@ export const wasteCategorySchema = z.object({
   description: z.string().nullable(),
   expected_yield_pct: z.number().nullable(),
   reference_duration_days: z.number().int().nullable(),
+  // Panel revision: expected days derived from validated multi-trial
+  // history; `reference_duration_days` is only the manual fallback.
+  historical_avg_days: z.number().nullable(),
+  sample_count: z.number().int().nonnegative(),
+  expected_days: z.number().int().nullable(),
   is_active: z.boolean(),
 });
 export type WasteCategory = z.infer<typeof wasteCategorySchema>;
 
 export const createWasteCategorySchema = z.object({
-  code: z.string().min(1, 'Required').max(50),
+  code: z
+    .string()
+    .min(1, 'Required')
+    .max(50)
+    .regex(/^[a-z0-9]+(-[a-z0-9]+)*$/, 'Lowercase letters/digits separated by hyphens (e.g. food-waste-meat)'),
   name: z.string().min(1, 'Required').max(100),
   expected_yield_pct: z.coerce.number().min(0).max(100).optional(),
   reference_duration_days: z.coerce.number().int().positive().optional(),
@@ -166,6 +195,16 @@ export type UpdateWasteCategoryInput = z.infer<typeof updateWasteCategorySchema>
 
 export const OUTPUT_GRADES = ['excellent', 'good', 'fair'] as const;
 
+export const batchCompositionRowSchema = z.object({
+  category_id: z.number().int().positive(),
+  category_name: z.string(),
+  weight_kg: z.number(),
+  ratio_pct: z.number().nullable(),
+  expected_days: z.number().int().nullable(),
+  sample_count: z.number().int().nonnegative(),
+});
+export type BatchCompositionRow = z.infer<typeof batchCompositionRowSchema>;
+
 export const batchAnalyticsSchema = z.object({
   batch_id: z.number().int().positive(),
   input_kg: z.number(),
@@ -176,6 +215,10 @@ export const batchAnalyticsSchema = z.object({
   expected_yield_pct: z.number().nullable(),
   category_name: z.string().nullable(),
   reference_duration_days: z.number().int().nullable(),
+  // Mix-weighted expected duration (historical avg per category,
+  // weighted by each component's share of the drum's load).
+  expected_days: z.number().int().nullable(),
+  composition: z.array(batchCompositionRowSchema),
   expected_completion_date: z.string().nullable(),
   days_until_expected: z.number().int().nullable(),
   progress_pct: z.number().int().nullable(),
@@ -193,7 +236,7 @@ export type BatchAnalytics = z.infer<typeof batchAnalyticsSchema>;
 export const activeBatchSchema = z.object({
   batch_id: z.number().int().positive(),
   batch_code: z.string(),
-  batch_status: z.enum(['Processing', 'AwaitingOutput']),
+  batch_status: z.enum(['processing', 'awaiting_output']),
   unit_id: z.number().int().positive(),
   unit_code: z.string(),
   unit_name: z.string(),
@@ -204,6 +247,8 @@ export const activeBatchSchema = z.object({
   started_at: z.string(),
   days_active: z.number().int().nonnegative(),
   reference_duration_days: z.number().int().nullable(),
+  // Effective duration for THIS drum's mix (weighted by composition).
+  expected_days: z.number().int().nullable(),
   expected_completion_date: z.string().nullable(),
   days_until_expected: z.number().int().nullable(),
   progress_pct: z.number().int().min(0).max(100),

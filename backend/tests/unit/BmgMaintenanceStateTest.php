@@ -18,7 +18,8 @@ final class BmgMaintenanceStateTest extends TestCase
     public function testMaintenanceConstantIsDefined(): void
     {
         $this->assertTrue(defined('BMG_STATE_MAINTENANCE'));
-        $this->assertSame('Maintenance', BMG_STATE_MAINTENANCE);
+        // Panel revision (July 2026): status wire format is lowercase.
+        $this->assertSame('maintenance', BMG_STATE_MAINTENANCE);
     }
 
     public function testMaintenanceIsDistinctFromOtherStates(): void

@@ -8,8 +8,10 @@ use CodeIgniter\Database\Seeder;
 
 /**
  * DevUserSeeder — DEV/STAGING ONLY. Creates `admin@synapse.dev` with
- * password `DevPassw0rd!`, admin group membership, and explicit
- * per-user grants for every seeded permission code.
+ * password `DevPassw0rd!` and `admin` group membership. The admin
+ * derives every permission from the group wildcard (`*`); it holds NO
+ * explicit per-user grants (RBAC_SECURITY_REVIEW R5), and any pre-existing
+ * ones are removed on run.
  *
  * Refuses to run in production.
  */
@@ -66,18 +68,15 @@ final class DevUserSeeder extends Seeder
             }
         }
 
-        // Explicit per-user grants for every permission code.
-        foreach ($this->db->table('permissions')->get()->getResultArray() as $perm) {
-            $exists = $this->db->table('user_permissions')
-                ->where(['user_id' => $userId, 'permission_code' => $perm['code']])
-                ->get()->getRowArray();
-            if ($exists === null) {
-                $this->db->table('user_permissions')->insert([
-                    'user_id'         => $userId,
-                    'permission_code' => $perm['code'],
-                    'created_at'      => $now,
-                ]);
-            }
-        }
+        // RBAC_SECURITY_REVIEW R5: the admin derives EVERY permission from
+        // the `admin` group wildcard (`*`) resolved in PermissionService.
+        // Explicit per-user grants are redundant and harmful — they are
+        // "sticky" (they survive a group demotion) and, before the R1
+        // wildcard-exclusion fix, an explicit `counselling.records.*` row
+        // would have defeated that exclusion. Reconcile to the single
+        // source of truth: the admin holds NO per-user grants. Deleting
+        // rows from this RBAC junction is consistent with the codebase
+        // convention (see UserAdminService::replaceGroupsInTxn).
+        $this->db->table('user_permissions')->where('user_id', $userId)->delete();
     }
 }

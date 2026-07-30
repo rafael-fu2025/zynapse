@@ -25,6 +25,7 @@ final class InventoryItemDto extends BaseDTO
             'quantity_on_hand' => (int)    $this->row['quantity_on_hand'],
             'reorder_level'    => (int)    $this->row['reorder_level'],
             'low_stock'        => (int) $this->row['quantity_on_hand'] <= (int) $this->row['reorder_level'],
+            'archived'         => ($this->row['archived_at'] ?? null) !== null,
             'created_at'       => (string) $this->row['created_at'],
         ];
     }

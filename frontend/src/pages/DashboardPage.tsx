@@ -129,7 +129,7 @@ export default function DashboardPage() {
   const visible = MODULES.filter((m) => hasPermission({ permissions: perms } as never, m.code));
 
   return (
-    <main className="mx-auto max-w-6xl space-y-6 p-6">
+    <main className="mx-auto max-w-6xl space-y-6 p-4 md:p-6">
       <header>
         <h1 className="text-2xl font-semibold text-foreground">Dashboard</h1>
         <p className="text-sm text-muted-foreground">
@@ -146,8 +146,8 @@ export default function DashboardPage() {
             <li key={m.code}>
               {/* Client-side navigation — an <a href> full reload would
                   drop the in-memory access token (never in localStorage). */}
-              <Link to={m.href} className="group block rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-                <Card className="relative overflow-hidden transition-colors hover:border-primary/50">
+              <Link to={m.href} className="group block touch-manipulation rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                <Card className="relative overflow-hidden transition-colors hover:border-primary/50 group-active:border-primary/50">
                   {/* Upper-right sheen — theme-aware (black/white), hover-only. */}
                   <span
                     aria-hidden

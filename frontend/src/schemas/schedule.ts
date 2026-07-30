@@ -47,6 +47,10 @@ export type AddSlotInput = z.infer<typeof addSlotSchema>;
 
 export const bookAppointmentSchema = z.object({
   patient_school_id: z.string().min(1, 'Required.').max(32),
+  counsellor_user_id: z.coerce
+    .number({ invalid_type_error: 'Pick a counsellor.' })
+    .int()
+    .positive('Pick a counsellor.'),
   appointment_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD.'),
   start_time: z.string().regex(TIME_RE, 'Use HH:MM.'),
   end_time: z.string().regex(TIME_RE, 'Use HH:MM.'),

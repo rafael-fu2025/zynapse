@@ -34,16 +34,18 @@ final class StaffScheduleService extends BaseService
     /**
      * @return array<int, array<string, mixed>>
      */
-    public function list(?int $userId): array
+    public function list(?int $userId, bool $includeArchived = false): array
     {
         $this->policy->check('schedulesManage');
 
         $builder = $this->db->table('clinic_staff_schedules')
             ->select('id, user_id, day_of_week, shift_start, shift_end, schedule_type, effective_from, effective_to, is_active')
-            ->where('is_active', 1)
             ->orderBy('user_id', 'ASC')
             ->orderBy('day_of_week', 'ASC')
             ->orderBy('shift_start', 'ASC');
+        if (! $includeArchived) {
+            $builder->where('is_active', 1);
+        }
         if ($userId !== null) {
             $builder->where('user_id', $userId);
         }
@@ -142,6 +144,39 @@ final class StaffScheduleService extends BaseService
                 'updated_at' => $this->utcNow(),
             ]);
             $this->audit->enqueue('clinic.staff_schedule_archived', 'clinic_staff_schedules', $id, $actor, []);
+        });
+    }
+
+    /**
+     * Restore an archived shift template (`is_active = 1`). Idempotent
+     * — restoring an active row is a no-op. Returns the fresh row so
+     * the SPA can splice it back into the roster.
+     *
+     * @return array<string, mixed>
+     */
+    public function unarchive(int $id): array
+    {
+        $this->policy->check('schedulesManage');
+        $actor = \App\Auth\CurrentUser::assert();
+
+        return $this->txn(function () use ($id, $actor): array {
+            $row = $this->selectForUpdate('clinic_staff_schedules', ['id' => $id]);
+            if ($row === null) {
+                throw new ApiException('resource.not_found', 404, [
+                    ['code' => 'resource.not_found', 'message' => "Staff schedule #{$id} not found."],
+                ]);
+            }
+            if ((int) $row['is_active'] === 1) {
+                // Idempotent: already active.
+                return $this->getRow($id);
+            }
+            $this->db->table('clinic_staff_schedules')->where('id', $id)->update([
+                'is_active'  => 1,
+                'updated_at' => $this->utcNow(),
+            ]);
+            $this->audit->enqueue('clinic.staff_schedule_restored', 'clinic_staff_schedules', $id, $actor, []);
+
+            return $this->getRow($id);
         });
     }
 

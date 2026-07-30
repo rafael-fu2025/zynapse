@@ -6,7 +6,6 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { Eye, EyeOff, Loader2 } from 'lucide-react';
 import { useState } from 'react';
 import { useForm } from 'react-hook-form';
-import { Link } from 'react-router-dom';
 import { toast } from 'sonner';
 import { ApiEnvelopeError } from '@/api/envelope';
 import { Button } from '@/components/ui/button';
@@ -157,11 +156,7 @@ export default function LoginPage() {
 
         <CardFooter>
           <p className="text-xs text-muted-foreground">
-            Trouble signing in?{' '}
-            <Link to="/support" className="text-primary underline underline-offset-4">
-              Contact support
-            </Link>
-            .
+            Trouble signing in? Contact your system administrator.
           </p>
         </CardFooter>
       </Card>

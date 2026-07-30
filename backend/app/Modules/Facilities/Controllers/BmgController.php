@@ -25,10 +25,15 @@ final class BmgController extends ApiController
 
     public function listUnits(): ResponseInterface
     {
-        $cursor = (string) ($this->request->getGet('cursor') ?? '');
-        $limit  = (int)    ($this->request->getGet('limit')  ?? 25);
+        $cursor   = (string) ($this->request->getGet('cursor') ?? '');
+        $limit    = (int)    ($this->request->getGet('limit')  ?? 25);
+        $archived = (string) ($this->request->getGet('include_archived') ?? '');
 
-        $page = $this->service->listUnits($cursor !== '' ? $cursor : null, $limit);
+        $page = $this->service->listUnits(
+            $cursor !== '' ? $cursor : null,
+            $limit,
+            $archived === '1' || $archived === 'true',
+        );
 
         return $this->ok(
             $page['data'],
@@ -78,22 +83,42 @@ final class BmgController extends ApiController
         return $this->ok($this->service->archiveUnit($unitId));
     }
 
+    public function unarchiveUnit(int $unitId): ResponseInterface
+    {
+        return $this->ok($this->service->unarchiveUnit($unitId));
+    }
+
     public function startBatch(int $unitId): ResponseInterface
     {
         $payload = $this->request->getJSON(true) ?? [];
 
         $rules = [
             'total_input_weight_kg' => 'required|decimal|greater_than[0]',
-            'input_items'           => 'required',
         ];
         if (! $this->makeValidation($rules)->run($payload)) {
             throw ApiException::validationFailure($this->collectErrors());
         }
 
-        $items = $payload['input_items'];
-        if (! is_array($items) || $items === []) {
+        // Panel revision: the structured per-category `composition` is
+        // the preferred contract; the legacy free-form `input_items`
+        // array is still accepted for backward compatibility. At least
+        // one of the two must be present.
+        $composition = $payload['composition'] ?? [];
+        if (! is_array($composition)) {
             throw new ApiException('validation.invalid', 422, [
-                ['code' => 'validation.invalid', 'message' => 'input_items must be a non-empty array.', 'field' => 'input_items'],
+                ['code' => 'validation.invalid', 'message' => 'composition must be an array of {category_id, weight_kg}.', 'field' => 'composition'],
+            ]);
+        }
+
+        $items = $payload['input_items'] ?? [];
+        if (! is_array($items)) {
+            throw new ApiException('validation.invalid', 422, [
+                ['code' => 'validation.invalid', 'message' => 'input_items must be an array.', 'field' => 'input_items'],
+            ]);
+        }
+        if ($composition === [] && $items === []) {
+            throw new ApiException('validation.invalid', 422, [
+                ['code' => 'validation.invalid', 'message' => 'Provide the waste composition (category + weight per component).', 'field' => 'composition'],
             ]);
         }
 
@@ -101,6 +126,7 @@ final class BmgController extends ApiController
             $unitId,
             $items,
             (float) $payload['total_input_weight_kg'],
+            $composition,
         );
 
         return $this->ok($dto->toArray(), null, 201);
@@ -223,6 +249,11 @@ final class BmgController extends ApiController
     public function archiveWasteCategory(int $categoryId): ResponseInterface
     {
         return $this->ok($this->service->archiveWasteCategory($categoryId));
+    }
+
+    public function unarchiveWasteCategory(int $categoryId): ResponseInterface
+    {
+        return $this->ok($this->service->unarchiveWasteCategory($categoryId));
     }
 
     public function deleteWasteCategory(int $categoryId): ResponseInterface

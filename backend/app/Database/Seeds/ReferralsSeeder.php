@@ -112,7 +112,7 @@ final class ReferralsSeeder extends Seeder
             issuerId:   $clinicIssuerId,
             created:    $now->modify('-7 days'),
         );
-        $closed['status'] = 'Closed';
+        $closed['status'] = 'closed';
         $rows[] = $closed;
 
         // 2. UnderReview — counselling -> clinic, 3d ago.
@@ -126,7 +126,7 @@ final class ReferralsSeeder extends Seeder
             issuerId:   $counsellingIssuerId,
             created:    $now->modify('-3 days'),
         );
-        $under['status'] = 'UnderReview';
+        $under['status'] = 'under_review';
         $rows[] = $under;
 
         // 3. Acknowledged — clinic -> counselling, 1d ago.
@@ -140,7 +140,7 @@ final class ReferralsSeeder extends Seeder
             issuerId:   $clinicIssuerId,
             created:    $now->modify('-1 day'),
         );
-        $ack['status'] = 'Acknowledged';
+        $ack['status'] = 'acknowledged';
         $rows[] = $ack;
 
         // 4. Submitted — counselling -> clinic, just now.
@@ -215,7 +215,7 @@ final class ReferralsSeeder extends Seeder
             'target_module'     => $target,
             'artifact_type'     => $artifact,
             'issuer_user_id'    => $issuerId,
-            'status'            => 'Submitted',
+            'status'            => 'submitted',
             'reason_code'       => $reason,
             // Will be encrypted after the row is built; we keep the
             // plaintext in this field as a staging slot.

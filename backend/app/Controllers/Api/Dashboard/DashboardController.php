@@ -25,8 +25,8 @@ final class DashboardController extends ApiController
 
         if ($this->permissions->userHas(\App\Auth\CurrentUser::assert(), 'clinic.encounters.read')) {
             $out['clinic'] = [
-                'open_encounters'   => (int) $db->table('clinic_encounters')->where('status', 'Open')->where('archived_at', null)->countAllResults(),
-                'closed_encounters' => (int) $db->table('clinic_encounters')->where('status', 'Closed')->where('archived_at', null)->countAllResults(),
+                'open_encounters'   => (int) $db->table('clinic_encounters')->where('status', 'open')->where('archived_at', null)->countAllResults(),
+                'closed_encounters' => (int) $db->table('clinic_encounters')->where('status', 'closed')->where('archived_at', null)->countAllResults(),
             ];
         }
 
@@ -39,18 +39,18 @@ final class DashboardController extends ApiController
 
         if ($this->permissions->userHas(\App\Auth\CurrentUser::assert(), 'facilities.units.read')) {
             $out['facilities'] = [
-                'units_idle'      => (int) $db->table('facilities_bmg_units')->where('status', 'Idle')->where('archived_at', null)->countAllResults(),
-                'units_processing'=> (int) $db->table('facilities_bmg_units')->where('status', 'Processing')->where('archived_at', null)->countAllResults(),
-                'units_awaiting'  => (int) $db->table('facilities_bmg_units')->where('status', 'AwaitingOutput')->where('archived_at', null)->countAllResults(),
+                'units_idle'      => (int) $db->table('facilities_bmg_units')->where('status', 'idle')->where('archived_at', null)->countAllResults(),
+                'units_processing'=> (int) $db->table('facilities_bmg_units')->where('status', 'processing')->where('archived_at', null)->countAllResults(),
+                'units_awaiting'  => (int) $db->table('facilities_bmg_units')->where('status', 'awaiting_output')->where('archived_at', null)->countAllResults(),
             ];
         }
 
         if ($this->permissions->userHas(\App\Auth\CurrentUser::assert(), 'referrals.read')) {
             $out['referrals'] = [
-                'submitted'   => (int) $db->table('referral_referrals')->where('status', 'Submitted')->where('archived_at', null)->countAllResults(),
-                'acknowledged'=> (int) $db->table('referral_referrals')->where('status', 'Acknowledged')->where('archived_at', null)->countAllResults(),
-                'under_review'=> (int) $db->table('referral_referrals')->where('status', 'UnderReview')->where('archived_at', null)->countAllResults(),
-                'closed'      => (int) $db->table('referral_referrals')->where('status', 'Closed')->where('archived_at', null)->countAllResults(),
+                'submitted'   => (int) $db->table('referral_referrals')->where('status', 'submitted')->where('archived_at', null)->countAllResults(),
+                'acknowledged'=> (int) $db->table('referral_referrals')->where('status', 'acknowledged')->where('archived_at', null)->countAllResults(),
+                'under_review'=> (int) $db->table('referral_referrals')->where('status', 'under_review')->where('archived_at', null)->countAllResults(),
+                'closed'      => (int) $db->table('referral_referrals')->where('status', 'closed')->where('archived_at', null)->countAllResults(),
             ];
         }
 

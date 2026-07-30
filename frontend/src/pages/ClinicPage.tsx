@@ -8,10 +8,14 @@
  */
 import { zodResolver } from '@hookform/resolvers/zod';
 import {
+  Archive,
+  ArchiveRestore,
+  CalendarClock,
   CheckCheck,
   ChevronLeft,
   ChevronRight,
   ClipboardPlus,
+  Info,
   ListPlus,
   Loader2,
   Megaphone,
@@ -25,10 +29,16 @@ import {
   X,
 } from 'lucide-react';
 import { useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { ConfirmDialog, type ConfirmAction } from '@/components/ConfirmDialog';
+import { QueryErrorRow } from '@/components/QueryErrorState';
+import { MobileCardList, MobileCard, MobileCardField, MobileCardActions } from '@/components/MobileCardList';
+import { useTabParam } from '@/hooks/useTabParam';
+import { TimePicker } from '@/components/ui/time-picker';
 import {
   Dialog,
   DialogContent,
@@ -73,6 +83,7 @@ import {
   useArchiveStaffSchedule,
   useCreateStaffSchedule,
   useStaffSchedules,
+  useUnarchiveStaffSchedule,
 } from '@/hooks/useStaffSchedules';
 import {
   createEncounterSchema,
@@ -92,6 +103,7 @@ import {
   type ScheduleType,
 } from '@/schemas/staffSchedule';
 import { fmtUtcToApp } from '@/utils/date';
+import { statusLabel } from '@/utils/status';
 
 const TRIAGE_VARIANT: Record<TriagePriority, 'secondary' | 'info' | 'warning' | 'destructive'> = {
   low: 'secondary',
@@ -298,7 +310,7 @@ function VitalsDialog({ encounter, onClose }: { encounter: Encounter; onClose: (
       <DialogHeader>
         <DialogTitle>Vitals — encounter #{encounter.id}</DialogTitle>
       </DialogHeader>
-      <form onSubmit={(e) => void onSubmit(e)} className="grid grid-cols-2 gap-3" noValidate>
+      <form onSubmit={(e) => void onSubmit(e)} className="grid grid-cols-1 gap-3 sm:grid-cols-2" noValidate>
         <div className="space-y-1.5">
           <Label htmlFor="bp_systolic" className="text-xs">Systolic (mmHg)</Label>
           <Input id="bp_systolic" type="number" {...register('bp_systolic', { valueAsNumber: true })} />
@@ -323,7 +335,7 @@ function VitalsDialog({ encounter, onClose }: { encounter: Encounter; onClose: (
           <Label htmlFor="weight_kg" className="text-xs">Weight (kg)</Label>
           <Input id="weight_kg" type="number" step={0.1} {...register('weight_kg', { valueAsNumber: true })} />
         </div>
-        <div className="col-span-2 space-y-1.5">
+        <div className="space-y-1.5 sm:col-span-2">
           <Label htmlFor="height_cm" className="text-xs">Height (cm)</Label>
           <Input id="height_cm" type="number" step={0.1} {...register('height_cm', { valueAsNumber: true })} />
           {Object.keys(errors).length > 0 && (
@@ -454,7 +466,7 @@ function CareDialog({ encounter, onClose }: { encounter: Encounter; onClose: () 
             </span>
           </div>
         )}
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <div className="space-y-1.5">
             <Label id="care-triage-label" className="text-xs">Triage priority</Label>
             <Select {...(priority !== '' ? { value: priority } : {})} onValueChange={(v) => setPriority(v as TriagePriority)}>
@@ -499,7 +511,7 @@ function CareDialog({ encounter, onClose }: { encounter: Encounter; onClose: () 
             </div>
           ))}
         </div>
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <div className="space-y-1.5">
             <Label id="care-ttype-label" className="text-xs">Type</Label>
             <Select value={tType} onValueChange={(v) => setTType(v as TreatmentType)}>
@@ -563,6 +575,7 @@ function QueueTab() {
   const queue = useQueueToday();
   const callNext = useCallNext();
   const transition = useQueueTransition();
+  const [confirm, setConfirm] = useState<ConfirmAction | null>(null);
 
   const rows = queue.data ?? [];
   const hasWaiting = rows.some((q) => q.status === 'waiting');
@@ -579,7 +592,7 @@ function QueueTab() {
         </Button>
       </section>
 
-      <section className="overflow-hidden rounded-xl border bg-card">
+      <section className="hidden overflow-hidden rounded-xl border bg-card md:block">
         <Table>
           <TableHeader className="bg-muted/50">
             <TableRow>
@@ -605,6 +618,9 @@ function QueueTab() {
                 </TableCell>
               </TableRow>
             )}
+            {queue.isError && !queue.isLoading && (
+              <QueryErrorRow colSpan={5} message="Failed to load the queue." onRetry={() => void queue.refetch()} pending={queue.isFetching} />
+            )}
             {rows.map((q) => (
               <TableRow key={q.id}>
                 <TableCell className="px-3 font-mono text-sm font-semibold">{q.position}</TableCell>
@@ -625,7 +641,12 @@ function QueueTab() {
                           <Play /> Start
                         </Button>
                         <Button size="sm" variant="outline" disabled={transition.isPending}
-                          onClick={() => transition.mutate({ id: q.id, action: 'skip' })}>
+                          onClick={() => setConfirm({
+                            title: `Skip #${q.position} in the queue?`,
+                            description: 'Skipped entries are removed from the active queue and cannot be recovered from here.',
+                            confirmLabel: 'Skip',
+                            run: () => transition.mutate({ id: q.id, action: 'skip' }),
+                          })}>
                           <SkipForward /> Skip
                         </Button>
                       </>
@@ -643,19 +664,91 @@ function QueueTab() {
           </TableBody>
         </Table>
       </section>
+
+      {/* Mobile: queue cards from the same rows. */}
+      {queue.isLoading && (
+        <p className="py-6 text-center text-sm text-muted-foreground md:hidden" role="status">
+          <Loader2 className="mx-auto size-4 animate-spin" />
+        </p>
+      )}
+      {queue.isError && !queue.isLoading && (
+        <div className="rounded-xl border border-destructive/30 bg-destructive/5 p-4 text-center text-sm text-destructive md:hidden">
+          <p>Failed to load the queue.</p>
+          <Button variant="outline" size="sm" className="mt-2" onClick={() => void queue.refetch()} disabled={queue.isFetching}>Retry</Button>
+        </div>
+      )}
+      {!queue.isLoading && !queue.isError && rows.length === 0 && (
+        <p className="rounded-xl border border-dashed p-6 text-center text-sm text-muted-foreground md:hidden">Queue is empty — use “Queue” on an open encounter.</p>
+      )}
+      <MobileCardList>
+        {rows.map((q) => (
+          <MobileCard key={q.id} aria-label={`Queue position ${q.position}`}>
+            <div className="mb-1 flex items-center justify-between gap-2">
+              <span className="font-mono text-sm font-semibold text-foreground">#{q.position}</span>
+              <Badge variant={QUEUE_STATUS_VARIANT[q.status]}>{q.status.replace('_', ' ')}</Badge>
+            </div>
+            <p className="text-sm font-medium text-foreground">{q.display_name}</p>
+            <p className="font-mono text-[10px] text-muted-foreground">{q.patient_school_id}</p>
+            <MobileCardField label="Complaint"><span className="text-xs">{q.chief_complaint}</span></MobileCardField>
+            {(q.status === 'called' || q.status === 'in_session') && (
+              <MobileCardActions>
+                {q.status === 'called' && (
+                  <>
+                    <Button size="sm" variant="secondary" disabled={transition.isPending}
+                      onClick={() => transition.mutate({ id: q.id, action: 'start' })}>
+                      <Play /> Start
+                    </Button>
+                    <Button size="sm" variant="outline" disabled={transition.isPending}
+                      onClick={() => setConfirm({
+                        title: `Skip #${q.position} in the queue?`,
+                        description: 'Skipped entries are removed from the active queue and cannot be recovered from here.',
+                        confirmLabel: 'Skip',
+                        run: () => transition.mutate({ id: q.id, action: 'skip' }),
+                      })}>
+                      <SkipForward /> Skip
+                    </Button>
+                  </>
+                )}
+                {q.status === 'in_session' && (
+                  <Button size="sm" variant="secondary" disabled={transition.isPending}
+                    onClick={() => transition.mutate({ id: q.id, action: 'complete' })}>
+                    <CheckCheck /> Complete
+                  </Button>
+                )}
+              </MobileCardActions>
+            )}
+          </MobileCard>
+        ))}
+      </MobileCardList>
+
+      <ConfirmDialog
+        open={confirm !== null}
+        title={confirm?.title ?? ''}
+        description={confirm?.description}
+        confirmLabel={confirm?.confirmLabel}
+        pending={transition.isPending}
+        onConfirm={() => {
+          confirm?.run();
+          setConfirm(null);
+        }}
+        onCancel={() => setConfirm(null)}
+      />
     </div>
   );
 }
 
 function StaffSchedulesTab() {
-  const schedules = useStaffSchedules();
+  const [showArchived, setShowArchived] = useState(false);
+  const schedules = useStaffSchedules(showArchived);
   const create = useCreateStaffSchedule();
   const archive = useArchiveStaffSchedule();
+  const unarchive = useUnarchiveStaffSchedule();
   const [userId, setUserId] = useState('');
   const [dow, setDow] = useState('1');
   const [start, setStart] = useState('09:00');
   const [end, setEnd] = useState('17:00');
   const [type, setType] = useState<ScheduleType>('regular');
+  const [confirm, setConfirm] = useState<ConfirmAction | null>(null);
 
   function submit() {
     const parsed = createStaffScheduleSchema.safeParse({
@@ -688,11 +781,11 @@ function StaffSchedulesTab() {
         </div>
         <div className="space-y-1">
           <Label htmlFor="ss-start" className="text-xs">Start</Label>
-          <Input id="ss-start" type="time" className="h-8 w-28" value={start} onChange={(e) => setStart(e.target.value)} />
+          <TimePicker id="ss-start" value={start} onChange={setStart} />
         </div>
         <div className="space-y-1">
           <Label htmlFor="ss-end" className="text-xs">End</Label>
-          <Input id="ss-end" type="time" className="h-8 w-28" value={end} onChange={(e) => setEnd(e.target.value)} />
+          <TimePicker id="ss-end" value={end} onChange={setEnd} />
         </div>
         <div className="space-y-1">
           <Label id="ss-type-label" className="text-xs">Type</Label>
@@ -704,9 +797,17 @@ function StaffSchedulesTab() {
         <Button size="sm" onClick={submit} disabled={create.isPending}>
           {create.isPending ? <Loader2 className="animate-spin" /> : <Plus />} Add shift
         </Button>
+        <Button
+          size="sm"
+          variant={showArchived ? 'secondary' : 'outline'}
+          aria-pressed={showArchived}
+          onClick={() => setShowArchived((v) => !v)}
+        >
+          <Archive /> {showArchived ? 'Hide archived' : 'Show archived'}
+        </Button>
       </section>
 
-      <section className="overflow-hidden rounded-xl border bg-card">
+      <section className="hidden overflow-hidden rounded-xl border bg-card md:block">
         <Table>
           <TableHeader className="bg-muted/50">
             <TableRow>
@@ -732,6 +833,9 @@ function StaffSchedulesTab() {
                 </TableCell>
               </TableRow>
             )}
+            {schedules.isError && !schedules.isLoading && (
+              <QueryErrorRow colSpan={5} message="Failed to load staff schedules." onRetry={() => void schedules.refetch()} pending={schedules.isFetching} />
+            )}
             {schedules.data?.map((s) => (
               <TableRow key={s.id}>
                 <TableCell className="px-3 font-mono text-xs">#{s.user_id}</TableCell>
@@ -741,23 +845,103 @@ function StaffSchedulesTab() {
                   <Badge variant={s.schedule_type === 'leave' ? 'warning' : s.schedule_type === 'on_call' ? 'info' : 'secondary'}>
                     {s.schedule_type}
                   </Badge>
+                  {!s.is_active && <Badge variant="secondary" className="ml-1.5">Archived</Badge>}
                 </TableCell>
                 <TableCell className="px-3 text-right">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    aria-label={`Archive shift #${s.id}`}
-                    disabled={archive.isPending}
-                    onClick={() => archive.mutate(s.id)}
-                  >
-                    <Trash2 /> Archive
-                  </Button>
+                  {s.is_active ? (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      aria-label={`Archive shift #${s.id}`}
+                      disabled={archive.isPending}
+                      onClick={() => setConfirm({
+                        title: `Archive shift #${s.id}?`,
+                        description: 'The staff shift will be archived and removed from the schedule.',
+                        confirmLabel: 'Archive',
+                        run: () => archive.mutate(s.id),
+                      })}
+                    >
+                      <Trash2 /> Archive
+                    </Button>
+                  ) : (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      aria-label={`Restore shift #${s.id}`}
+                      disabled={unarchive.isPending}
+                      onClick={() => unarchive.mutate(s.id)}
+                    >
+                      <ArchiveRestore /> Restore
+                    </Button>
+                  )}
                 </TableCell>
               </TableRow>
             ))}
           </TableBody>
         </Table>
       </section>
+
+      {/* Mobile: staff-shift cards from the same rows. */}
+      {schedules.isLoading && (
+        <p className="py-6 text-center text-sm text-muted-foreground md:hidden" role="status">
+          <Loader2 className="mx-auto size-4 animate-spin" />
+        </p>
+      )}
+      {schedules.isError && !schedules.isLoading && (
+        <div className="rounded-xl border border-destructive/30 bg-destructive/5 p-4 text-center text-sm text-destructive md:hidden">
+          <p>Failed to load staff schedules.</p>
+          <Button variant="outline" size="sm" className="mt-2" onClick={() => void schedules.refetch()} disabled={schedules.isFetching}>Retry</Button>
+        </div>
+      )}
+      {!schedules.isLoading && !schedules.isError && (schedules.data?.length ?? 0) === 0 && (
+        <p className="rounded-xl border border-dashed p-6 text-center text-sm text-muted-foreground md:hidden">No staff shifts yet.</p>
+      )}
+      <MobileCardList>
+        {schedules.data?.map((s) => (
+          <MobileCard key={s.id} aria-label={`Shift ${s.id}`}>
+            <div className="mb-1 flex items-center justify-between gap-2">
+              <span className="font-mono text-sm font-medium text-foreground">#{s.user_id}</span>
+              <div className="flex flex-wrap justify-end gap-1.5">
+                <Badge variant={s.schedule_type === 'leave' ? 'warning' : s.schedule_type === 'on_call' ? 'info' : 'secondary'}>{s.schedule_type}</Badge>
+                {!s.is_active && <Badge variant="secondary">Archived</Badge>}
+              </div>
+            </div>
+            <MobileCardField label="Day"><span className="text-xs">{DAY_NAMES[s.day_of_week]}</span></MobileCardField>
+            <MobileCardField label="Shift"><span className="font-mono text-xs">{s.shift_start.slice(0, 5)}–{s.shift_end.slice(0, 5)}</span></MobileCardField>
+            <MobileCardActions>
+              {s.is_active ? (
+                <Button size="sm" variant="outline" aria-label={`Archive shift #${s.id}`} disabled={archive.isPending}
+                  onClick={() => setConfirm({
+                    title: `Archive shift #${s.id}?`,
+                    description: 'The staff shift will be archived and removed from the schedule.',
+                    confirmLabel: 'Archive',
+                    run: () => archive.mutate(s.id),
+                  })}>
+                  <Trash2 /> Archive
+                </Button>
+              ) : (
+                <Button size="sm" variant="outline" aria-label={`Restore shift #${s.id}`} disabled={unarchive.isPending}
+                  onClick={() => unarchive.mutate(s.id)}>
+                  <ArchiveRestore /> Restore
+                </Button>
+              )}
+            </MobileCardActions>
+          </MobileCard>
+        ))}
+      </MobileCardList>
+
+      <ConfirmDialog
+        open={confirm !== null}
+        title={confirm?.title ?? ''}
+        description={confirm?.description}
+        confirmLabel={confirm?.confirmLabel}
+        pending={archive.isPending}
+        onConfirm={() => {
+          confirm?.run();
+          setConfirm(null);
+        }}
+        onCancel={() => setConfirm(null)}
+      />
     </div>
   );
 }
@@ -765,13 +949,32 @@ function StaffSchedulesTab() {
 export default function ClinicPage() {
   const [cursor, setCursor] = useState<string | null>(null);
   const [history, setHistory] = useState<Array<string | null>>([null]);
+  const [tabParam, setTab] = useTabParam('open');
+  const tab = tabParam as 'open' | 'closed' | 'queue' | 'staff';
   const [openCreate, setOpenCreate] = useState(false);
   const [openImport, setOpenImport] = useState(false);
   const [openVitals, setOpenVitals] = useState<Encounter | null>(null);
   const [openCare, setOpenCare] = useState<Encounter | null>(null);
-  const list = useEncounters(cursor, 25);
+  // Server-side status filter: the Open/Closed tabs each fetch their
+  // own slice instead of client-filtering one shared page (which made
+  // tab counts misleading and could hide rows on later pages).
+  const status = tab === 'open' ? 'open' : tab === 'closed' ? 'closed' : null;
+  const list = useEncounters(cursor, 25, status);
   const close = useCloseEncounter();
   const enqueue = useEnqueue();
+  const [confirm, setConfirm] = useState<ConfirmAction | null>(null);
+
+  // Deep-link from the Appointments page: `/clinic?encounter=<id>`
+  // highlights the auto-opened visit so staff can pick up where the
+  // check-in left off.
+  const [searchParams] = useSearchParams();
+  const focusId = searchParams.get('encounter') !== null ? Number(searchParams.get('encounter')) : null;
+
+  function switchTab(next: string) {
+    setTab(next);
+    setCursor(null);
+    setHistory([null]);
+  }
 
   function nextPage() {
     if (list.data?.next !== null && list.data?.next !== undefined) {
@@ -787,15 +990,14 @@ export default function ClinicPage() {
     setCursor(next[next.length - 1] ?? null);
   }
 
-  const open: Encounter[] = (list.data?.data ?? []).filter((e) => e.status === 'Open');
-  const closed: Encounter[] = (list.data?.data ?? []).filter((e) => e.status === 'Closed');
+  const rows: Encounter[] = list.data?.data ?? [];
 
   return (
     <main className="mx-auto max-w-7xl space-y-4 p-6">
       <header className="flex items-center justify-between">
         <div>
           <h1 className="text-xl font-semibold text-foreground">Clinic</h1>
-          <p className="text-sm text-muted-foreground">Encounters are isolated from counselling.</p>
+          <p className="text-sm text-muted-foreground">Encounters are the anchor for clinic actions — isolated from counselling.</p>
         </div>
         <div className="flex items-center gap-2">
           <Dialog open={openImport} onOpenChange={setOpenImport}>
@@ -813,18 +1015,26 @@ export default function ClinicPage() {
         </div>
       </header>
 
-      <Tabs defaultValue="open">
+      <Tabs value={tab} onValueChange={switchTab}>
         <TabsList>
-          <TabsTrigger value="open">Open ({open.length})</TabsTrigger>
-          <TabsTrigger value="closed">Closed ({closed.length})</TabsTrigger>
+          <TabsTrigger value="open">Open</TabsTrigger>
+          <TabsTrigger value="closed">Closed</TabsTrigger>
           <TabsTrigger value="queue">Queue (today)</TabsTrigger>
           <TabsTrigger value="staff">Staff schedules</TabsTrigger>
         </TabsList>
 
         <TabsContent value="open">
+          <p className="mb-2 flex items-center gap-1.5 text-xs text-muted-foreground">
+            <Info className="size-3.5" />
+            <span><strong className="font-medium text-foreground">Open</strong> = visit in progress; vitals, treatments and dispensing are allowed. Closing completes any linked appointment.</span>
+          </p>
           <EncounterTable
-            rows={open}
+            rows={rows}
+            focusId={focusId}
             isLoading={list.isLoading}
+            isError={list.isError}
+            onRetry={() => void list.refetch()}
+            retrying={list.isFetching}
             page={history.length}
             onPrev={prevPage}
             onNext={nextPage}
@@ -850,7 +1060,12 @@ export default function ClinicPage() {
                   size="sm"
                   variant="outline"
                   disabled={close.isPending}
-                  onClick={() => close.mutate(e.id)}
+                  onClick={() => setConfirm({
+                    title: `Close encounter #${e.id}?`,
+                    description: 'Closing an encounter is final — it can no longer be edited or have vitals/treatments added.',
+                    confirmLabel: 'Close encounter',
+                    run: () => close.mutate(e.id),
+                  })}
                 >
                   <X /> Close
                 </Button>
@@ -861,8 +1076,12 @@ export default function ClinicPage() {
 
         <TabsContent value="closed">
           <EncounterTable
-            rows={closed}
+            rows={rows}
+            focusId={focusId}
             isLoading={list.isLoading}
+            isError={list.isError}
+            onRetry={() => void list.refetch()}
+            retrying={list.isFetching}
             page={history.length}
             onPrev={prevPage}
             onNext={nextPage}
@@ -892,13 +1111,30 @@ export default function ClinicPage() {
           <CareDialog encounter={openCare} onClose={() => setOpenCare(null)} />
         </Dialog>
       )}
+
+      <ConfirmDialog
+        open={confirm !== null}
+        title={confirm?.title ?? ''}
+        description={confirm?.description}
+        confirmLabel={confirm?.confirmLabel}
+        pending={close.isPending}
+        onConfirm={() => {
+          confirm?.run();
+          setConfirm(null);
+        }}
+        onCancel={() => setConfirm(null)}
+      />
     </main>
   );
 }
 
 interface EncounterTableProps {
   rows: Encounter[];
+  focusId?: number | null;
   isLoading: boolean;
+  isError?: boolean;
+  onRetry?: () => void;
+  retrying?: boolean;
   page: number;
   canPrev: boolean;
   canNext: boolean;
@@ -908,9 +1144,10 @@ interface EncounterTableProps {
 }
 
 function EncounterTable(props: EncounterTableProps) {
+  const showEmpty = !props.isLoading && props.isError !== true && props.rows.length === 0;
   return (
     <>
-      <section className="overflow-hidden rounded-xl border bg-card">
+      <section className="hidden overflow-hidden rounded-xl border bg-card md:block">
         <Table>
           <TableHeader className="bg-muted/50">
             <TableRow>
@@ -930,7 +1167,10 @@ function EncounterTable(props: EncounterTableProps) {
                 </TableCell>
               </TableRow>
             )}
-            {!props.isLoading && props.rows.length === 0 && (
+            {props.isError === true && !props.isLoading && props.onRetry !== undefined && (
+              <QueryErrorRow colSpan={6} message="Failed to load encounters." onRetry={props.onRetry} pending={props.retrying === true} />
+            )}
+            {showEmpty && (
               <TableRow>
                 <TableCell colSpan={6} className="px-3 py-6 text-center text-muted-foreground">
                   No encounters.
@@ -938,7 +1178,7 @@ function EncounterTable(props: EncounterTableProps) {
               </TableRow>
             )}
             {props.rows.map((e) => (
-              <TableRow key={e.id}>
+              <TableRow key={e.id} className={props.focusId === e.id ? 'bg-primary/5 outline outline-1 outline-primary/40' : undefined}>
                 <TableCell className="px-3 font-mono text-xs">{e.id}</TableCell>
                 <TableCell className="px-3 font-mono text-xs">{e.patient_school_id}</TableCell>
                 <TableCell className="px-3">
@@ -948,10 +1188,15 @@ function EncounterTable(props: EncounterTableProps) {
                       {e.triage_priority}
                     </Badge>
                   )}
+                  {(e.appointment_id ?? null) !== null && (
+                    <Badge variant="secondary" className="ml-2 gap-1">
+                      <CalendarClock className="size-3" /> From appointment #{e.appointment_id}
+                    </Badge>
+                  )}
                 </TableCell>
                 <TableCell className="px-3 font-mono text-xs text-muted-foreground">{fmtUtcToApp(e.started_at)}</TableCell>
                 <TableCell className="px-3 font-mono text-xs text-muted-foreground">
-                  {e.closed_at === null ? <Badge variant="info">Open</Badge> : fmtUtcToApp(e.closed_at)}
+                  {e.closed_at === null ? <Badge variant="info">{statusLabel(e.status)}</Badge> : fmtUtcToApp(e.closed_at)}
                 </TableCell>
                 <TableCell className="px-3 text-right">{props.actions(e)}</TableCell>
               </TableRow>
@@ -959,6 +1204,51 @@ function EncounterTable(props: EncounterTableProps) {
           </TableBody>
         </Table>
       </section>
+
+      {/* Mobile: stacked cards from the same rows. */}
+      {props.isLoading && (
+        <p className="py-6 text-center text-sm text-muted-foreground md:hidden" role="status">
+          <Loader2 className="mx-auto size-4 animate-spin" />
+        </p>
+      )}
+      {props.isError === true && !props.isLoading && props.onRetry !== undefined && (
+        <div className="rounded-xl border border-destructive/30 bg-destructive/5 p-4 text-center text-sm text-destructive md:hidden">
+          <p>Failed to load encounters.</p>
+          <Button variant="outline" size="sm" className="mt-2" onClick={props.onRetry} disabled={props.retrying === true}>Retry</Button>
+        </div>
+      )}
+      {showEmpty && (
+        <p className="rounded-xl border border-dashed p-6 text-center text-sm text-muted-foreground md:hidden">No encounters.</p>
+      )}
+      <MobileCardList>
+        {props.rows.map((e) => (
+          <MobileCard
+            key={e.id}
+            aria-label={`Encounter ${e.id}`}
+            className={props.focusId === e.id ? 'outline outline-1 outline-primary/40' : undefined}
+          >
+            <div className="mb-1 flex items-center justify-between gap-2">
+              <span className="font-mono text-xs text-muted-foreground">#{e.id}</span>
+              {e.closed_at === null
+                ? <Badge variant="info">{statusLabel(e.status)}</Badge>
+                : <span className="font-mono text-xs text-muted-foreground">Closed {fmtUtcToApp(e.closed_at)}</span>}
+            </div>
+            <p className="text-sm font-medium text-foreground">{e.chief_complaint}</p>
+            <div className="mt-1 flex flex-wrap gap-1.5">
+              {(e.triage_priority ?? null) !== null && (
+                <Badge variant={TRIAGE_VARIANT[e.triage_priority as TriagePriority]}>{e.triage_priority}</Badge>
+              )}
+              {(e.appointment_id ?? null) !== null && (
+                <Badge variant="secondary" className="gap-1"><CalendarClock className="size-3" /> Appt #{e.appointment_id}</Badge>
+              )}
+            </div>
+            <MobileCardField label="Patient"><span className="font-mono text-xs">{e.patient_school_id}</span></MobileCardField>
+            <MobileCardField label="Started"><span className="font-mono text-xs text-muted-foreground">{fmtUtcToApp(e.started_at)}</span></MobileCardField>
+            <MobileCardActions>{props.actions(e)}</MobileCardActions>
+          </MobileCard>
+        ))}
+      </MobileCardList>
+
       <nav className="mt-4 flex items-center justify-between" aria-label="pagination">
         <p className="text-xs text-muted-foreground">Page {props.page}</p>
         <div className="flex gap-2">

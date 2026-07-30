@@ -30,12 +30,20 @@ import {
   LogIn,
   Pencil,
   Search,
+  Stethoscope,
   X,
 } from 'lucide-react';
 import { useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { ConfirmDialog, type ConfirmAction } from '@/components/ConfirmDialog';
+import { QueryErrorRow } from '@/components/QueryErrorState';
+import { MobileCardList, MobileCard, MobileCardField, MobileCardActions } from '@/components/MobileCardList';
+import { useDebouncedValue } from '@/hooks/useDebouncedValue';
+import { DatePicker } from '@/components/ui/date-picker';
+import { TimePicker } from '@/components/ui/time-picker';
 import {
   Dialog,
   DialogContent,
@@ -76,24 +84,25 @@ import {
   type AppointmentTransition,
   type ScheduleAppointmentInput,
 } from '@/schemas/appointments';
-import { fmtUtcToApp } from '@/utils/date';
+import { appDateTimeToUtcSql, fmtUtcToApp, utcSqlToAppParts } from '@/utils/date';
+import { statusLabel } from '@/utils/status';
 
 const STATUS_VARIANT: Record<Appointment['status'], 'info' | 'success' | 'warning' | 'destructive'> = {
-  Scheduled: 'info',
-  CheckedIn: 'warning',
-  Completed: 'success',
-  Cancelled: 'destructive',
-  NoShow: 'destructive',
+  scheduled: 'info',
+  checked_in: 'warning',
+  completed: 'success',
+  cancelled: 'destructive',
+  no_show: 'destructive',
 };
 
 type FilterTab = 'all' | 'upcoming' | 'past';
 const STATUS_OPTIONS: ReadonlyArray<{ value: Appointment['status'] | 'all'; label: string }> = [
-  { value: 'all',       label: 'All statuses' },
-  { value: 'Scheduled', label: 'Scheduled' },
-  { value: 'CheckedIn', label: 'Checked in' },
-  { value: 'Completed', label: 'Completed' },
-  { value: 'Cancelled', label: 'Cancelled' },
-  { value: 'NoShow',    label: 'No-show' },
+  { value: 'all',        label: 'All statuses' },
+  { value: 'scheduled',  label: 'Scheduled' },
+  { value: 'checked_in', label: 'Checked in' },
+  { value: 'completed',  label: 'Completed' },
+  { value: 'cancelled',  label: 'Cancelled' },
+  { value: 'no_show',    label: 'No-show' },
 ];
 
 /**
@@ -110,8 +119,15 @@ function PatientPicker({
   onChange: (next: string) => void;
 }) {
   const [q, setQ] = useState(value);
-  const search = useStudentSearch(q);
-  const showList = q.trim().length >= 2 && q.trim() !== value;
+  const debouncedQ = useDebouncedValue(q, 300);
+  const search = useStudentSearch(debouncedQ);
+  // Show the results list while the user is typing a query (>= 2 chars)
+  // and hide it once they pick a concrete student. Tracking a `picked`
+  // flag (rather than comparing q to the committed value, which the
+  // keystroke handler keeps in sync) is what makes the list actually
+  // appear during typing.
+  const [picked, setPicked] = useState(false);
+  const showList = q.trim().length >= 2 && !picked;
 
   return (
     <div className="space-y-1.5">
@@ -122,7 +138,7 @@ function PatientPicker({
           id="patient_school_id"
           className="pl-9"
           value={q}
-          onChange={(e) => { setQ(e.target.value); onChange(e.target.value); }}
+          onChange={(e) => { setPicked(false); setQ(e.target.value); onChange(e.target.value); }}
           placeholder="Type school id or name (min 2 chars)…"
         />
       </div>
@@ -137,7 +153,7 @@ function PatientPicker({
               type="button"
               key={s.id}
               className="flex w-full items-center justify-between rounded px-2 py-1 text-left hover:bg-muted/50"
-              onClick={() => { onChange(s.student_number); setQ(s.student_number); }}
+              onClick={() => { setPicked(true); onChange(s.student_number); setQ(s.student_number); }}
             >
               <span className="font-mono">{s.student_number}</span>
               <span className="text-muted-foreground">{s.last_name}, {s.first_name}</span>
@@ -161,7 +177,7 @@ function ProviderPicker({
   value: number | null;
   onChange: (next: number) => void;
 }) {
-  const employees = useEmployees(null, 200);
+  const employees = useEmployees(null, 100);
   return (
     <div className="space-y-1.5">
       <Label id="appt-provider-label">Provider</Label>
@@ -229,7 +245,25 @@ function ScheduleDialog({
 
   const patientId = watch('patient_school_id') ?? '';
   const providerId = watch('provider_user_id');
-  const scheduledAt = watch('scheduled_at') ?? '';
+
+  // The API contract for scheduled_at is a UTC `YYYY-MM-DD HH:mm:ss`
+  // string, but the user thinks in Asia/Manila. Keep the form field as
+  // the composed UTC string; drive it from local date + time pickers.
+  const initialParts = initial !== undefined
+    ? utcSqlToAppParts(initial.scheduled_at)
+    : { date: '', time: '' };
+  const [schedDate, setSchedDate] = useState(initialParts.date);
+  const [schedTime, setSchedTime] = useState(initialParts.time);
+
+  function updateSchedule(nextDate: string, nextTime: string) {
+    setSchedDate(nextDate);
+    setSchedTime(nextTime);
+    setValue(
+      'scheduled_at',
+      nextDate !== '' && nextTime !== '' ? appDateTimeToUtcSql(nextDate, nextTime) : '',
+      { shouldValidate: true },
+    );
+  }
 
   const onSubmit = handleSubmit((values) => {
     // Trim empty optional fields so the backend does not see explicit
@@ -277,16 +311,29 @@ function ScheduleDialog({
         )}
 
         <div className="space-y-1.5">
-          <Label htmlFor="scheduled_at">Scheduled at (UTC, YYYY-MM-DD HH:mm:ss)</Label>
-          <Input
-            id="scheduled_at"
-            placeholder="2026-08-01 02:00:00"
-            value={scheduledAt}
-            onChange={(e) => setValue('scheduled_at', e.target.value, { shouldValidate: true })}
-          />
+          <Label htmlFor="scheduled_at">Scheduled at (Asia/Manila)</Label>
+          <div className="flex flex-wrap items-center gap-2">
+            <DatePicker
+              id="scheduled_at"
+              value={schedDate}
+              onChange={(v) => updateSchedule(v, schedTime)}
+              className="w-44"
+              aria-invalid={errors.scheduled_at !== undefined}
+            />
+            <TimePicker
+              value={schedTime}
+              onChange={(v) => updateSchedule(schedDate, v)}
+              aria-invalid={errors.scheduled_at !== undefined}
+            />
+          </div>
+          {schedDate !== '' && schedTime !== '' && (
+            <p className="text-[11px] text-muted-foreground">
+              Stored as {appDateTimeToUtcSql(schedDate, schedTime)} UTC.
+            </p>
+          )}
           {errors.scheduled_at !== undefined && (
             <p role="alert" className="text-xs text-destructive">
-              {(errors.scheduled_at as { message?: string }).message ?? 'Use YYYY-MM-DD HH:mm:ss (UTC).'}
+              {(errors.scheduled_at as { message?: string }).message ?? 'Pick a date and time.'}
             </p>
           )}
         </div>
@@ -314,7 +361,7 @@ function ScheduleDialog({
  */
 function AppointmentDetailDialog({ appointmentId, onClose }: { appointmentId: number; onClose: () => void }) {
   const detail = useAppointment(appointmentId);
-  const employees = useEmployees(null, 200);
+  const employees = useEmployees(null, 100);
   const a = detail.data;
   const provider = useMemo(
     () => (employees.data?.data ?? []).find((e) => e.id === a?.provider_user_id) ?? null,
@@ -390,11 +437,106 @@ function AppointmentDetailDialog({ appointmentId, onClose }: { appointmentId: nu
  * fire one query per appointment) and just match against the list.
  */
 function useProviderNameLookup(): (id: number) => string {
-  const employees = useEmployees(null, 200);
+  const employees = useEmployees(null, 100);
   return (id) => {
     const e = (employees.data?.data ?? []).find((x) => x.id === id);
     return e !== undefined ? `${e.last_name}, ${e.first_name}` : `#${id}`;
   };
+}
+
+interface AppointmentActionProps {
+  a: Appointment;
+  onView: (a: Appointment) => void;
+  onEdit: (a: Appointment) => void;
+  transition: (vars: { id: number; status: AppointmentTransition }) => void;
+  onConfirm: (action: ConfirmAction) => void;
+  transitionPending: boolean;
+  canEdit: boolean;
+}
+
+/**
+ * AppointmentActions — the lifecycle button cluster, shared by the
+ * desktop table row and the mobile card so both surfaces stay in sync.
+ */
+function AppointmentActions({ a, onView, onEdit, transition, onConfirm, transitionPending, canEdit }: AppointmentActionProps) {
+  return (
+    <>
+      <Button size="sm" variant="outline" onClick={() => onView(a)} aria-label={`View appointment #${a.id}`}>
+        <Eye /> View
+      </Button>
+      {canEdit && (
+        <Button size="sm" variant="outline" onClick={() => onEdit(a)} aria-label={`Edit appointment #${a.id}`}>
+          <Pencil /> Edit
+        </Button>
+      )}
+      {a.status === 'scheduled' && (
+        <>
+          <Button size="sm" variant="secondary" disabled={transitionPending} onClick={() => transition({ id: a.id, status: 'checked_in' })}>
+            <LogIn /> Check in
+          </Button>
+          <Button size="sm" variant="outline" disabled={transitionPending} onClick={() => onConfirm({
+            title: `Mark appointment #${a.id} as no-show?`,
+            description: 'This records a no-show, which counts toward the patient’s three-strike counter.',
+            confirmLabel: 'Mark no-show',
+            run: () => transition({ id: a.id, status: 'no_show' }),
+          })}>
+            No-show
+          </Button>
+        </>
+      )}
+      {a.status === 'checked_in' && (
+        <Button size="sm" variant="secondary" disabled={transitionPending} onClick={() => transition({ id: a.id, status: 'completed' })}>
+          <Check /> Complete
+        </Button>
+      )}
+      {(a.status === 'scheduled' || a.status === 'checked_in') && (
+        <Button size="sm" variant="outline" disabled={transitionPending} onClick={() => onConfirm({
+          title: `Cancel appointment #${a.id}?`,
+          description: 'The appointment will be cancelled. This cannot be undone.',
+          confirmLabel: 'Cancel appointment',
+          run: () => transition({ id: a.id, status: 'cancelled' }),
+        })}>
+          <X /> Cancel
+        </Button>
+      )}
+    </>
+  );
+}
+
+/** Mobile card for one appointment — same data + actions as the row. */
+function AppointmentCard(props: AppointmentActionProps & { providerName: string }) {
+  const { a, providerName } = props;
+  return (
+    <MobileCard aria-label={`Appointment ${a.id}`}>
+      <div className="mb-1 flex items-center justify-between gap-2">
+        <span className="font-mono text-xs text-muted-foreground">#{a.id}</span>
+        <Badge variant={STATUS_VARIANT[a.status]}>{statusLabel(a.status)}</Badge>
+      </div>
+      <p className="text-sm font-medium text-foreground">
+        {a.patient_name !== undefined && a.patient_name !== null ? a.patient_name : a.patient_school_id}
+      </p>
+      {a.patient_name !== undefined && a.patient_name !== null && (
+        <p className="font-mono text-[10px] text-muted-foreground">
+          {a.patient_school_id}{a.patient_kind !== undefined && a.patient_kind !== null ? ` · ${a.patient_kind}` : ''}
+        </p>
+      )}
+      <MobileCardField label="Provider">{providerName}</MobileCardField>
+      <MobileCardField label="When"><span className="font-mono text-xs text-muted-foreground">{fmtUtcToApp(a.scheduled_at)}</span></MobileCardField>
+      <MobileCardField label="Reason">
+        <span>
+          {a.reason ?? '—'}
+          {a.encounter_id !== undefined && a.encounter_id !== null && (
+            <Link to={`/clinic?encounter=${a.encounter_id}`} className="ml-2 inline-flex items-center gap-0.5 text-primary underline-offset-2 hover:underline">
+              <Stethoscope className="size-3" /> Visit #{a.encounter_id}
+            </Link>
+          )}
+        </span>
+      </MobileCardField>
+      <MobileCardActions>
+        <AppointmentActions {...props} />
+      </MobileCardActions>
+    </MobileCard>
+  );
 }
 
 function AppointmentRow({
@@ -403,6 +545,7 @@ function AppointmentRow({
   onView,
   onEdit,
   transition,
+  onConfirm,
   transitionPending,
   canEdit,
 }: {
@@ -411,6 +554,7 @@ function AppointmentRow({
   onView: (a: Appointment) => void;
   onEdit: (a: Appointment) => void;
   transition: (vars: { id: number; status: AppointmentTransition }) => void;
+  onConfirm: (action: ConfirmAction) => void;
   transitionPending: boolean;
   canEdit: boolean;
 }) {
@@ -432,38 +576,26 @@ function AppointmentRow({
       </TableCell>
       <TableCell className="px-3 text-xs">{providerName}</TableCell>
       <TableCell className="px-3 font-mono text-xs text-muted-foreground">{fmtUtcToApp(a.scheduled_at)}</TableCell>
-      <TableCell className="px-3"><Badge variant={STATUS_VARIANT[a.status]}>{a.status}</Badge></TableCell>
-      <TableCell className="px-3 text-xs">{a.reason ?? '—'}</TableCell>
+      <TableCell className="px-3"><Badge variant={STATUS_VARIANT[a.status]}>{statusLabel(a.status)}</Badge></TableCell>
+      <TableCell className="px-3 text-xs">
+        {a.reason ?? '—'}
+        {a.encounter_id !== undefined && a.encounter_id !== null && (
+          <Link to={`/clinic?encounter=${a.encounter_id}`} className="ml-2 inline-flex items-center gap-0.5 text-primary underline-offset-2 hover:underline">
+            <Stethoscope className="size-3" /> Visit #{a.encounter_id}
+          </Link>
+        )}
+      </TableCell>
       <TableCell className="px-3 text-right">
         <div className="flex justify-end gap-1">
-          <Button size="sm" variant="outline" onClick={() => onView(a)} aria-label={`View appointment #${a.id}`}>
-            <Eye /> View
-          </Button>
-          {canEdit && (
-            <Button size="sm" variant="outline" onClick={() => onEdit(a)} aria-label={`Edit appointment #${a.id}`}>
-              <Pencil /> Edit
-            </Button>
-          )}
-          {a.status === 'Scheduled' && (
-            <>
-              <Button size="sm" variant="secondary" disabled={transitionPending} onClick={() => transition({ id: a.id, status: 'CheckedIn' })}>
-                <LogIn /> Check in
-              </Button>
-              <Button size="sm" variant="outline" disabled={transitionPending} onClick={() => transition({ id: a.id, status: 'NoShow' })}>
-                No-show
-              </Button>
-            </>
-          )}
-          {a.status === 'CheckedIn' && (
-            <Button size="sm" variant="secondary" disabled={transitionPending} onClick={() => transition({ id: a.id, status: 'Completed' })}>
-              <Check /> Complete
-            </Button>
-          )}
-          {(a.status === 'Scheduled' || a.status === 'CheckedIn') && (
-            <Button size="sm" variant="outline" disabled={transitionPending} onClick={() => transition({ id: a.id, status: 'Cancelled' })}>
-              <X /> Cancel
-            </Button>
-          )}
+          <AppointmentActions
+            a={a}
+            onView={onView}
+            onEdit={onEdit}
+            transition={transition}
+            onConfirm={onConfirm}
+            transitionPending={transitionPending}
+            canEdit={canEdit}
+          />
         </div>
       </TableCell>
     </TableRow>
@@ -478,6 +610,7 @@ export default function AppointmentsPage() {
   const [openSchedule, setOpenSchedule] = useState(false);
   const [editing, setEditing] = useState<Appointment | null>(null);
   const [viewing, setViewing] = useState<Appointment | null>(null);
+  const [confirm, setConfirm] = useState<ConfirmAction | null>(null);
 
   // Status filter pushes a `?status=` query param to the backend;
   // the tabs are client-side over the loaded rows. This keeps the
@@ -512,7 +645,7 @@ export default function AppointmentsPage() {
     let past = 0;
     for (const a of rows) {
       const t = Date.parse(a.scheduled_at);
-      const isOpen = a.status === 'Scheduled' || a.status === 'CheckedIn';
+      const isOpen = a.status === 'scheduled' || a.status === 'checked_in';
       if (isOpen && t >= now) upcoming += 1;
       else past += 1;
     }
@@ -521,9 +654,9 @@ export default function AppointmentsPage() {
   const visibleRows = useMemo(() => {
     if (tab === 'all') return rows;
     if (tab === 'upcoming') {
-      return rows.filter((a) => (a.status === 'Scheduled' || a.status === 'CheckedIn') && Date.parse(a.scheduled_at) >= now);
+      return rows.filter((a) => (a.status === 'scheduled' || a.status === 'checked_in') && Date.parse(a.scheduled_at) >= now);
     }
-    return rows.filter((a) => !((a.status === 'Scheduled' || a.status === 'CheckedIn') && Date.parse(a.scheduled_at) >= now));
+    return rows.filter((a) => !((a.status === 'scheduled' || a.status === 'checked_in') && Date.parse(a.scheduled_at) >= now));
   }, [rows, tab, now]);
 
   return (
@@ -567,7 +700,7 @@ export default function AppointmentsPage() {
         </TabsList>
 
         <TabsContent value={tab} className="space-y-3">
-          <section className="overflow-hidden rounded-xl border bg-card">
+          <section className="hidden overflow-hidden rounded-xl border bg-card md:block">
             <Table>
               <TableHeader className="bg-muted/50">
                 <TableRow>
@@ -588,12 +721,15 @@ export default function AppointmentsPage() {
                     </TableCell>
                   </TableRow>
                 )}
-                {!list.isLoading && visibleRows.length === 0 && (
+                {!list.isLoading && !list.isError && visibleRows.length === 0 && (
                   <TableRow>
                     <TableCell colSpan={7} className="px-3 py-6 text-center text-muted-foreground">
                       No appointments in this view.
                     </TableCell>
                   </TableRow>
+                )}
+                {list.isError && !list.isLoading && (
+                  <QueryErrorRow colSpan={7} message="Failed to load appointments." onRetry={() => void list.refetch()} pending={list.isFetching} />
                 )}
                 {visibleRows.map((a) => (
                   <AppointmentRow
@@ -603,13 +739,45 @@ export default function AppointmentsPage() {
                     onView={setViewing}
                     onEdit={setEditing}
                     transition={(vars) => transition.mutate(vars)}
+                    onConfirm={setConfirm}
                     transitionPending={transition.isPending}
-                    canEdit={a.status === 'Scheduled'}
+                    canEdit={a.status === 'scheduled'}
                   />
                 ))}
               </TableBody>
             </Table>
           </section>
+
+          {/* Mobile: stacked cards from the same visible rows. */}
+          {list.isLoading && (
+            <p className="py-6 text-center text-sm text-muted-foreground md:hidden" role="status">
+              <Loader2 className="mx-auto size-4 animate-spin" />
+            </p>
+          )}
+          {list.isError && !list.isLoading && (
+            <div className="rounded-xl border border-destructive/30 bg-destructive/5 p-4 text-center text-sm text-destructive md:hidden">
+              <p>Failed to load appointments.</p>
+              <Button variant="outline" size="sm" className="mt-2" onClick={() => void list.refetch()} disabled={list.isFetching}>Retry</Button>
+            </div>
+          )}
+          {!list.isLoading && !list.isError && visibleRows.length === 0 && (
+            <p className="rounded-xl border border-dashed p-6 text-center text-sm text-muted-foreground md:hidden">No appointments in this view.</p>
+          )}
+          <MobileCardList>
+            {visibleRows.map((a) => (
+              <AppointmentCard
+                key={a.id}
+                a={a}
+                providerName={providerName(a.provider_user_id)}
+                onView={setViewing}
+                onEdit={setEditing}
+                transition={(vars) => transition.mutate(vars)}
+                onConfirm={setConfirm}
+                transitionPending={transition.isPending}
+                canEdit={a.status === 'scheduled'}
+              />
+            ))}
+          </MobileCardList>
 
           <nav className="flex items-center justify-between" aria-label="pagination">
             <p className="text-xs text-muted-foreground">Page {history.length}</p>
@@ -641,6 +809,19 @@ export default function AppointmentsPage() {
           <AppointmentDetailDialog appointmentId={viewing.id} onClose={() => setViewing(null)} />
         </Dialog>
       )}
+
+      <ConfirmDialog
+        open={confirm !== null}
+        title={confirm?.title ?? ''}
+        description={confirm?.description}
+        confirmLabel={confirm?.confirmLabel}
+        pending={transition.isPending}
+        onConfirm={() => {
+          confirm?.run();
+          setConfirm(null);
+        }}
+        onCancel={() => setConfirm(null)}
+      />
     </main>
   );
 }

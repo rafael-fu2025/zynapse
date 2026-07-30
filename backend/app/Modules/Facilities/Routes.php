@@ -16,6 +16,7 @@ final class Routes implements BaseRoutes
             $r->post('units',                         'BmgController::createUnit');
             $r->post('units/(:num)',                  'BmgController::updateUnit/$1');
             $r->delete('units/(:num)',                'BmgController::archiveUnit/$1');
+            $r->post('units/(:num)/unarchive',        'BmgController::unarchiveUnit/$1');
             $r->post('units/(:num)/start',            'BmgController::startBatch/$1');
             $r->post('units/(:num)/maintenance',      'BmgController::setUnitMaintenance/$1');
             $r->get('batches/active',                 'BmgController::listActiveBatches');
@@ -23,6 +24,7 @@ final class Routes implements BaseRoutes
             $r->post('waste-categories',              'BmgController::createWasteCategory');
             $r->post('waste-categories/(:num)',       'BmgController::updateWasteCategory/$1');
             $r->post('waste-categories/(:num)/archive','BmgController::archiveWasteCategory/$1');
+            $r->post('waste-categories/(:num)/unarchive','BmgController::unarchiveWasteCategory/$1');
             $r->delete('waste-categories/(:num)',     'BmgController::deleteWasteCategory/$1');
             $r->post('batches/(:num)/output',         'BmgController::recordOutput/$1');
             $r->post('batches/(:num)/finish',         'BmgController::finishBatch/$1');

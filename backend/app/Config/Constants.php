@@ -83,17 +83,17 @@ defined('SYNAPSE_AUDIT_EVENTS')    || define('SYNAPSE_AUDIT_EVENTS', 'audit_even
 defined('SYNAPSE_TIMEZONE_DEFAULT') || define('SYNAPSE_TIMEZONE_DEFAULT', 'Asia/Manila');
 
 /** BMG lifecycle states — must stay in sync with `facilities_bmg_units`. */
-defined('BMG_STATE_IDLE')            || define('BMG_STATE_IDLE',            'Idle');
-defined('BMG_STATE_PROCESSING')      || define('BMG_STATE_PROCESSING',      'Processing');
-defined('BMG_STATE_AWAITING_OUTPUT') || define('BMG_STATE_AWAITING_OUTPUT', 'AwaitingOutput');
-defined('BMG_STATE_CANCELLED')       || define('BMG_STATE_CANCELLED',       'Cancelled');
-defined('BMG_STATE_MAINTENANCE')     || define('BMG_STATE_MAINTENANCE',     'Maintenance');
+defined('BMG_STATE_IDLE')            || define('BMG_STATE_IDLE',            'idle');
+defined('BMG_STATE_PROCESSING')      || define('BMG_STATE_PROCESSING',      'processing');
+defined('BMG_STATE_AWAITING_OUTPUT') || define('BMG_STATE_AWAITING_OUTPUT', 'awaiting_output');
+defined('BMG_STATE_CANCELLED')       || define('BMG_STATE_CANCELLED',       'cancelled');
+defined('BMG_STATE_MAINTENANCE')     || define('BMG_STATE_MAINTENANCE',     'maintenance');
 
 /** Referral lifecycle states. */
-defined('REFERRAL_STATUS_SUBMITTED')   || define('REFERRAL_STATUS_SUBMITTED',   'Submitted');
-defined('REFERRAL_STATUS_ACKNOWLEDGED')|| define('REFERRAL_STATUS_ACKNOWLEDGED','Acknowledged');
-defined('REFERRAL_STATUS_UNDER_REVIEW')|| define('REFERRAL_STATUS_UNDER_REVIEW','UnderReview');
-defined('REFERRAL_STATUS_CLOSED')      || define('REFERRAL_STATUS_CLOSED',      'Closed');
+defined('REFERRAL_STATUS_SUBMITTED')   || define('REFERRAL_STATUS_SUBMITTED',   'submitted');
+defined('REFERRAL_STATUS_ACKNOWLEDGED')|| define('REFERRAL_STATUS_ACKNOWLEDGED','acknowledged');
+defined('REFERRAL_STATUS_UNDER_REVIEW')|| define('REFERRAL_STATUS_UNDER_REVIEW','under_review');
+defined('REFERRAL_STATUS_CLOSED')      || define('REFERRAL_STATUS_CLOSED',      'closed');
 
 /*
 |--------------------------------------------------------------------------

@@ -73,7 +73,7 @@ final class AppointmentController extends ApiController
         $payload = $this->request->getJSON(true) ?? [];
 
         $rules = [
-            'status' => 'required|in_list[CheckedIn,Completed,Cancelled,NoShow]',
+            'status' => 'required|in_list[checked_in,completed,cancelled,no_show]',
         ];
         if (! $this->makeValidation($rules)->run($payload)) {
             throw ApiException::validationFailure($this->collectErrors());

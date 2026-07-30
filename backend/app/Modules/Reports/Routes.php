@@ -21,6 +21,7 @@ final class Routes implements BaseRoutes
             $r->post('configs',                  'ReportConfigController::createConfig');
             $r->post('configs/(:num)/run',       'ReportConfigController::run/$1');
             $r->post('configs/(:num)/archive',   'ReportConfigController::archiveConfig/$1');
+            $r->post('configs/(:num)/unarchive', 'ReportConfigController::unarchiveConfig/$1');
             $r->post('configs/(:num)',           'ReportConfigController::updateConfig/$1');
             $r->get('generated',                 'ReportConfigController::listGenerated');
             $r->get('generated/(:num)/download', 'ReportConfigController::download/$1');

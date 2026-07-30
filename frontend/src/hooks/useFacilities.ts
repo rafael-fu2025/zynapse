@@ -52,8 +52,8 @@ import {
 const UNITS_KEY = ['facilities', 'units'] as const;
 const ACTIVE_BATCHES_KEY = ['facilities', 'batches', 'active'] as const;
 
-function unitsQueryKey(cursor: string | null, limit: number) {
-  return [...UNITS_KEY, { cursor, limit }] as const;
+function unitsQueryKey(cursor: string | null, limit: number, includeArchived = false) {
+  return [...UNITS_KEY, { cursor, limit, includeArchived }] as const;
 }
 
 /**
@@ -106,13 +106,14 @@ function snapshotUnits(
   });
 }
 
-export function useBmgUnits(cursor: string | null, limit = 25) {
+export function useBmgUnits(cursor: string | null, limit = 25, includeArchived = false) {
   return useQuery<{ data: BmgUnit[]; next: string | null }, ApiEnvelopeError>({
-    queryKey: unitsQueryKey(cursor, limit),
+    queryKey: unitsQueryKey(cursor, limit, includeArchived),
     queryFn: async () => {
       const params = new URLSearchParams();
       if (cursor !== null) params.set('cursor', cursor);
       params.set('limit', String(limit));
+      if (includeArchived) params.set('include_archived', '1');
       const res = await apiClient.get<{ data: BmgUnit[]; next: string | null }>(
         `/facilities/units?${params.toString()}`,
       );
@@ -147,7 +148,7 @@ export function useStartBatch() {
       // Optimistic flip. We don't know the new `active_batch_id` until
       // the server responds, so we drop the field — the `onSettled`
       // refetch below will repopulate it.
-      patchUnitInCache(qc, unitId, { status: 'Processing', active_batch_id: null });
+      patchUnitInCache(qc, unitId, { status: 'processing', active_batch_id: null });
       return { snapshots };
     },
     onError: (err, _input, ctx) => {
@@ -184,7 +185,7 @@ export function useRecordOutput() {
     onMutate: async ({ unitId }) => {
       await qc.cancelQueries({ queryKey: UNITS_KEY });
       const snapshots = snapshotUnits(qc);
-      patchUnitInCache(qc, unitId, { status: 'AwaitingOutput' });
+      patchUnitInCache(qc, unitId, { status: 'awaiting_output' });
       return { snapshots };
     },
     onError: (err, _input, ctx) => {
@@ -220,7 +221,7 @@ export function useFinishBatch() {
     onMutate: async ({ unitId }) => {
       await qc.cancelQueries({ queryKey: UNITS_KEY });
       const snapshots = snapshotUnits(qc);
-      patchUnitInCache(qc, unitId, { status: 'Idle', active_batch_id: null });
+      patchUnitInCache(qc, unitId, { status: 'idle', active_batch_id: null });
       return { snapshots };
     },
     onError: (err, _input, ctx) => {
@@ -259,7 +260,7 @@ export function useCancelBatch() {
       // is marked Cancelled. The "Processing Drums" widget (which reads
       // active batches, not unit.status) will drop the row once the
       // invalidate completes.
-      patchUnitInCache(qc, unitId, { status: 'Idle', active_batch_id: null });
+      patchUnitInCache(qc, unitId, { status: 'idle', active_batch_id: null });
       return { snapshots };
     },
     onError: (err, _input, ctx) => {
@@ -381,6 +382,25 @@ export function useArchiveWasteCategory() {
     },
     onError: (err) => {
       toast.error(err.errors[0]?.message ?? 'Failed to archive category.');
+    },
+  });
+}
+
+/** Restore an archived waste category so it reappears in pickers. */
+export function useUnarchiveWasteCategory() {
+  const qc = useQueryClient();
+  return useMutation<WasteCategory, ApiEnvelopeError, { categoryId: number }>({
+    mutationFn: async ({ categoryId }) => {
+      const res = await apiClient.post<WasteCategory>(`/facilities/waste-categories/${categoryId}/unarchive`);
+      return wasteCategorySchema.parse(res.data);
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['facilities', 'waste-categories'] });
+      void qc.invalidateQueries({ queryKey: ['facilities', 'units'] });
+      toast.success('Waste category restored.');
+    },
+    onError: (err) => {
+      toast.error(err.errors[0]?.message ?? 'Failed to restore category.');
     },
   });
 }
@@ -566,7 +586,7 @@ export function useArchiveUnit() {
           // Return a minimal placeholder; the snapshot + invalidate will
           // ensure the row is gone from the cache. Caller does not
           // parse the return on 404.
-          return { id: unitId, code: '', display_name: '', status: 'Idle', created_at: '' } as unknown as BmgUnit;
+          return { id: unitId, code: '', display_name: '', status: 'idle', created_at: '' } as unknown as BmgUnit;
         }
         throw err;
       }
@@ -598,6 +618,28 @@ export function useArchiveUnit() {
     },
     onSuccess: () => {
       toast.success('Drum archived.');
+    },
+  });
+}
+
+/**
+ * Restore a soft-archived drum. No optimistic patch — the archived row
+ * is only visible when the list was fetched with `includeArchived`, so
+ * a plain invalidate keeps every variant of the units query honest.
+ */
+export function useUnarchiveUnit() {
+  const qc = useQueryClient();
+  return useMutation<BmgUnit, ApiEnvelopeError, { unitId: number }>({
+    mutationFn: async ({ unitId }) => {
+      const res = await apiClient.post<BmgUnit>(`/facilities/units/${unitId}/unarchive`);
+      return bmgUnitSchema.parse(res.data);
+    },
+    onSuccess: (u) => {
+      invalidateFacilities(qc);
+      toast.success(`Drum ${u.code} restored.`);
+    },
+    onError: (err) => {
+      toast.error(err.errors[0]?.message ?? 'Failed to restore drum.');
     },
   });
 }
@@ -635,7 +677,7 @@ export function useSetUnitMaintenance() {
       await qc.cancelQueries({ queryKey: UNITS_KEY });
       const snapshots = snapshotUnits(qc);
       patchUnitInCache(qc, unitId, {
-        status: maintenance ? 'Maintenance' : 'Idle',
+        status: maintenance ? 'maintenance' : 'idle',
         active_batch_id: maintenance ? null : undefined,
       });
       return { snapshots };

@@ -133,11 +133,13 @@ export function useReportExport() {
 
 // Saved & generated reports (Phase P6).
 
-export function useReportConfigs() {
+export function useReportConfigs(includeArchived = false) {
   return useQuery<ReportConfig[], ApiEnvelopeError>({
-    queryKey: ['reports', 'configs'],
+    queryKey: ['reports', 'configs', { includeArchived }],
     queryFn: async () => {
-      const res = await apiClient.get<unknown[]>('/reports/configs');
+      const res = await apiClient.get<unknown[]>(
+        `/reports/configs${includeArchived ? '?include_archived=1' : ''}`,
+      );
       return z.array(reportConfigSchema).parse(res.data);
     },
   });
@@ -199,6 +201,24 @@ export function useArchiveReportConfig() {
     },
     onError: (err) => {
       toast.error(err.errors[0]?.message ?? 'Failed to archive configuration.');
+    },
+  });
+}
+
+/** Restore an archived report configuration back into the saved list. */
+export function useUnarchiveReportConfig() {
+  const qc = useQueryClient();
+  return useMutation<ReportConfig, ApiEnvelopeError, number>({
+    mutationFn: async (id) => {
+      const res = await apiClient.post<unknown>(`/reports/configs/${id}/unarchive`, {});
+      return reportConfigSchema.parse(res.data);
+    },
+    onSuccess: (c) => {
+      void qc.invalidateQueries({ queryKey: ['reports', 'configs'] });
+      toast.success(`“${c.name}” restored.`);
+    },
+    onError: (err) => {
+      toast.error(err.errors[0]?.message ?? 'Failed to restore configuration.');
     },
   });
 }

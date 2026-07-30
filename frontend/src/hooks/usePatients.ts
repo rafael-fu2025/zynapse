@@ -39,13 +39,14 @@ interface EmployeePage {
   next: string | null;
 }
 
-export function useStudents(cursor: string | null, limit = 25) {
+export function useStudents(cursor: string | null, limit = 25, includeArchived = false) {
   return useQuery<StudentPage, ApiEnvelopeError>({
-    queryKey: ['patients', 'students', { cursor, limit }],
+    queryKey: ['patients', 'students', { cursor, limit, includeArchived }],
     queryFn: async () => {
       const params = new URLSearchParams();
       if (cursor !== null) params.set('cursor', cursor);
       params.set('limit', String(limit));
+      if (includeArchived) params.set('include_archived', '1');
       const res = await apiClient.get<{ data: unknown[]; next: string | null }>(
         `/clinic/students?${params.toString()}`,
       );
@@ -182,13 +183,14 @@ export function useAddContact() {
   });
 }
 
-export function useEmployees(cursor: string | null, limit = 25) {
+export function useEmployees(cursor: string | null, limit = 25, includeArchived = false) {
   return useQuery<EmployeePage, ApiEnvelopeError>({
-    queryKey: ['patients', 'employees', { cursor, limit }],
+    queryKey: ['patients', 'employees', { cursor, limit, includeArchived }],
     queryFn: async () => {
       const params = new URLSearchParams();
       if (cursor !== null) params.set('cursor', cursor);
       params.set('limit', String(limit));
+      if (includeArchived) params.set('include_archived', '1');
       const res = await apiClient.get<{ data: unknown[]; next: string | null }>(
         `/clinic/employees?${params.toString()}`,
       );
