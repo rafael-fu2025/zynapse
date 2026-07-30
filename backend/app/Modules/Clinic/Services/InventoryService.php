@@ -274,6 +274,7 @@ final class InventoryService extends BaseService
                 'item_id'          => $itemId,
                 'qty_delta'        => $qtyDelta,
                 'reason_code'      => $reasonCode,
+                'balance_after'    => $newQty,
                 'moved_by_user_id' => $userId,
                 'note'             => $note,
                 'created_at'       => $now,
@@ -337,6 +338,7 @@ final class InventoryService extends BaseService
                 'item_id'          => $itemId,
                 'qty_delta'        => $qty,
                 'reason_code'      => 'receive',
+                'balance_after'    => $newQty,
                 'moved_by_user_id' => $userId,
                 'note'             => $note,
                 'created_at'       => $now,
@@ -365,5 +367,42 @@ final class InventoryService extends BaseService
             $row = $this->db->table('clinic_inventory_items')->where('id', $itemId)->get()->getRowArray();
             return InventoryItemDto::fromRow($row);
         });
+    }
+
+    /**
+     * Ledger view: the item's signed movements in chronological order
+     * with the stored running balance (panel revision — in/out
+     * debit-credit tracking). Capped at the most recent 200 rows.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public function listMovements(int $itemId, int $limit = 200): array
+    {
+        $this->policy->check('inventoryRead');
+
+        $item = $this->db->table('clinic_inventory_items')->select('id')->where('id', $itemId)->get()->getRowArray();
+        if ($item === null) {
+            throw new ApiException('resource.not_found', 404, [
+                ['code' => 'resource.not_found', 'message' => "Inventory item #{$itemId} not found."],
+            ]);
+        }
+
+        // Newest N rows, then flip so the ledger reads oldest → newest.
+        $rows = $this->db->table('clinic_inventory_movements')
+            ->select('id, qty_delta, reason_code, balance_after, moved_by_user_id, note, created_at')
+            ->where('item_id', $itemId)
+            ->orderBy('id', 'DESC')
+            ->limit(max(1, min($limit, 500)))
+            ->get()->getResultArray();
+
+        return array_map(static fn (array $r): array => [
+            'id'            => (int) $r['id'],
+            'reason_code'   => (string) $r['reason_code'],
+            'qty_in'        => (int) $r['qty_delta'] > 0 ? (int) $r['qty_delta'] : null,
+            'qty_out'       => (int) $r['qty_delta'] < 0 ? abs((int) $r['qty_delta']) : null,
+            'balance_after' => $r['balance_after'] !== null ? (int) $r['balance_after'] : null,
+            'note'          => $r['note'] !== null ? (string) $r['note'] : null,
+            'created_at'    => (string) $r['created_at'],
+        ], array_reverse($rows));
     }
 }

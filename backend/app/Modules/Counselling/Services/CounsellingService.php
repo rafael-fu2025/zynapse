@@ -73,7 +73,7 @@ final class CounsellingService extends BaseService
                 'counselling_sessions',
                 $id,
                 $userId,
-                ['next_status' => 'Open'],
+                ['next_status' => 'open'],
             );
 
             $row = $this->db->table('counselling_sessions')->where('id', $id)->get()->getRowArray();

@@ -23,7 +23,14 @@ export function nowInAppTz(): string {
   return formatInTimeZone(new Date(), useAuthStore.getState().timezone, 'yyyy-MM-dd HH:mm:ss zzz');
 }
 
-export function fmtUtcToApp(isoUtc: string, pattern = 'yyyy-MM-dd HH:mm zzz'): string {
+/**
+ * Single display contract (panel revision): dates render as
+ * `yyyy-MM-dd`, date-times as `yyyy-MM-dd HH:mm` (24-hour clock,
+ * app timezone). The zone suffix was dropped from the default — the
+ * panel flagged it as unreadable; pass an explicit pattern for the
+ * rare surface that needs the zone.
+ */
+export function fmtUtcToApp(isoUtc: string, pattern = 'yyyy-MM-dd HH:mm'): string {
   return formatInTimeZone(parseUtc(isoUtc), useAuthStore.getState().timezone ?? DEFAULT_TZ, pattern);
 }
 

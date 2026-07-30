@@ -40,7 +40,7 @@ interface EncounterPage {
 export function useEncounters(
   cursor: string | null,
   limit = 25,
-  status: 'Open' | 'Closed' | null = null,
+  status: 'open' | 'closed' | null = null,
 ) {
   return useQuery<EncounterPage, ApiEnvelopeError>({
     // Status is part of the cache key so switching tabs refetches the

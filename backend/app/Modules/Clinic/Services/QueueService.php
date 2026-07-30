@@ -75,9 +75,9 @@ final class QueueService extends BaseService
                     ['code' => 'resource.not_found', 'message' => "Encounter #{$encounterId} not found."],
                 ]);
             }
-            if ((string) $encounter['status'] !== 'Open') {
+            if ((string) $encounter['status'] !== 'open') {
                 throw new ApiException('statemachine.queue.encounter_not_open', 409, [
-                    ['code' => 'statemachine.queue.encounter_not_open', 'message' => 'Only Open encounters can be queued.'],
+                    ['code' => 'statemachine.queue.encounter_not_open', 'message' => 'Only open encounters can be queued.'],
                 ]);
             }
 

@@ -25,7 +25,7 @@ final class ClinicController extends ApiController
         $cursor = (string) ($this->request->getGet('cursor') ?? '');
         $limit  = (int)    ($this->request->getGet('limit')  ?? 25);
         $status = $this->request->getGet('status');
-        $status = is_string($status) && in_array($status, ['Open', 'Closed'], true) ? $status : null;
+        $status = is_string($status) && in_array($status, ['open', 'closed', 'referred'], true) ? $status : null;
         $page = $this->service->listEncounters($cursor !== '' ? $cursor : null, $limit, $status);
 
         return $this->ok(

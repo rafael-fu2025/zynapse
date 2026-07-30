@@ -32,12 +32,12 @@ final class ClinicService extends BaseService
         $this->policy->check('list');
 
         $builder = $this->db->table('clinic_encounters')
-            ->select('id, patient_school_id, chief_complaint, triage_priority, triage_override, diagnosis, status, attending_user_id, started_at, closed_at, created_at')
+            ->select('id, patient_school_id, appointment_id, chief_complaint, triage_priority, triage_override, diagnosis, status, attending_user_id, started_at, closed_at, created_at')
             ->where('archived_at', null)
             ->orderBy('created_at', 'DESC')
             ->orderBy('id', 'DESC');
 
-        if ($status !== null && in_array($status, ['Open', 'Closed'], true)) {
+        if ($status !== null && in_array($status, ['open', 'closed', 'referred'], true)) {
             $builder->where('status', $status);
         }
 
@@ -64,7 +64,7 @@ final class ClinicService extends BaseService
             $this->db->table('clinic_encounters')->insert([
                 'patient_school_id' => $patientSchoolId,
                 'chief_complaint'   => $chiefComplaint,
-                'status'            => 'Open',
+                'status'            => 'open',
                 'attending_user_id' => $userId,
                 'started_at'        => $now,
                 'created_at'        => $now,
@@ -78,7 +78,7 @@ final class ClinicService extends BaseService
                 'clinic_encounters',
                 $id,
                 $userId,
-                ['next_status' => 'Open'],
+                ['next_status' => 'open'],
             );
 
             $row = $this->db->table('clinic_encounters')->where('id', $id)->get()->getRowArray();
@@ -111,7 +111,7 @@ final class ClinicService extends BaseService
                 $this->db->table('clinic_encounters')->insert([
                     'patient_school_id' => $row['patient_school_id'],
                     'chief_complaint'   => $row['chief_complaint'],
-                    'status'            => 'Open',
+                    'status'            => 'open',
                     'attending_user_id' => $userId,
                     'started_at'        => $now,
                     'created_at'        => $now,
@@ -205,17 +205,38 @@ final class ClinicService extends BaseService
             $this->db->table('clinic_encounters')
                 ->where('id', $encounterId)
                 ->update([
-                    'status'     => 'Closed',
+                    'status'     => 'closed',
                     'closed_at'  => $now,
                     'updated_at' => $now,
                 ]);
+
+            // Panel revision: closing the visit completes its linked
+            // appointment (scheduling layer follows the encounter).
+            if (isset($enc['appointment_id']) && $enc['appointment_id'] !== null) {
+                $appt = $this->selectForUpdate('clinic_appointments', [
+                    'id'          => (int) $enc['appointment_id'],
+                    'archived_at' => null,
+                ]);
+                if ($appt !== null && (string) $appt['status'] === 'checked_in') {
+                    $this->db->table('clinic_appointments')
+                        ->where('id', (int) $appt['id'])
+                        ->update(['status' => 'completed', 'updated_at' => $now]);
+                    $this->audit->enqueue(
+                        'clinic.appointment_completed',
+                        'clinic_appointments',
+                        (int) $appt['id'],
+                        $userId,
+                        ['previous_status' => 'checked_in', 'next_status' => 'completed', 'reason_code' => 'encounter_closed'],
+                    );
+                }
+            }
 
             $this->audit->enqueue(
                 'clinic.encounter_closed',
                 'clinic_encounters',
                 $encounterId,
                 $userId,
-                ['previous_status' => 'Open', 'next_status' => 'Closed'],
+                ['previous_status' => 'open', 'next_status' => 'closed'],
             );
 
             $row = $this->db->table('clinic_encounters')->where('id', $encounterId)->get()->getRowArray();
@@ -314,7 +335,7 @@ final class ClinicService extends BaseService
             }
             $this->policy->check('addTreatment', $enc);
 
-            if ((string) $enc['status'] !== 'Open') {
+            if ((string) $enc['status'] !== 'open') {
                 throw new ApiException('statemachine.clinic.encounter_closed', 409, [
                     ['code' => 'statemachine.clinic.encounter_closed', 'message' => 'Treatments can only be added to an open encounter.'],
                 ]);
@@ -397,6 +418,7 @@ final class ClinicService extends BaseService
 
         $remaining    = $quantity;
         $firstBatchId = 0;
+        $balance      = $this->lastMedicineBalance($medicineId);
         foreach ($batches as $batch) {
             if ($remaining <= 0) {
                 break;
@@ -412,12 +434,14 @@ final class ClinicService extends BaseService
                 'quantity_remaining' => $newQty,
                 'status'             => $newQty === 0 ? 'depleted' : 'active',
             ]);
+            $balance -= $take;
             $this->db->table('clinic_medicine_transactions')->insert([
                 'medicine_id'          => $medicineId,
                 'batch_id'             => $bid,
                 'type'                 => 'dispensed',
                 'quantity'             => $take,
-                'reference_type'       => 'treatment',
+                'balance_after'        => $balance,
+                'reference_type'       => 'encounter',
                 'reference_id'         => $encounterId,
                 'performed_by_user_id' => $userId,
                 'note'                 => 'treatment dispense',
@@ -427,6 +451,22 @@ final class ClinicService extends BaseService
         }
 
         return $firstBatchId;
+    }
+
+    /**
+     * Last running-balance value on the medicine's ledger (row-locked;
+     * runs inside the caller's transaction). Seeds the `balance_after`
+     * chain for the rows about to be appended.
+     */
+    private function lastMedicineBalance(int $medicineId): int
+    {
+        $row = $this->db->query(
+            'SELECT `balance_after` FROM `clinic_medicine_transactions`'
+            . ' WHERE `medicine_id` = ? ORDER BY `id` DESC LIMIT 1 FOR UPDATE',
+            [$medicineId],
+        )->getRowArray();
+
+        return $row !== null && $row['balance_after'] !== null ? (int) $row['balance_after'] : 0;
     }
 
     private function utcNow(): string

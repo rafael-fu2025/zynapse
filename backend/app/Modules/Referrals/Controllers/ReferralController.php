@@ -49,6 +49,7 @@ final class ReferralController extends ApiController
             'artifact_type'     => 'required|max_length[64]',
             'reason_code'       => 'permit_empty|max_length[64]',
             'notes_plaintext'   => 'permit_empty|max_length[8192]',
+            'provider_user_id'  => 'permit_empty|is_natural_no_zero',
         ];
         if (! $this->makeValidation($rules)->run($payload)) {
             throw ApiException::validationFailure($this->collectErrors());
@@ -61,6 +62,7 @@ final class ReferralController extends ApiController
             (string) $payload['artifact_type'],
             isset($payload['reason_code']) ? (string) $payload['reason_code'] : null,
             isset($payload['notes_plaintext']) ? (string) $payload['notes_plaintext'] : null,
+            isset($payload['provider_user_id']) && $payload['provider_user_id'] !== '' ? (int) $payload['provider_user_id'] : null,
         );
 
         return $this->ok($dto->toArray(), null, 201);
@@ -68,7 +70,16 @@ final class ReferralController extends ApiController
 
     public function acknowledge(int $id): ResponseInterface
     {
-        $dto = $this->service->acknowledge($id);
+        $payload = $this->request->getJSON(true) ?? [];
+        $providerUserId = isset($payload['provider_user_id']) && $payload['provider_user_id'] !== ''
+            ? (int) $payload['provider_user_id']
+            : null;
+        if ($providerUserId !== null && $providerUserId <= 0) {
+            throw new ApiException('validation.invalid', 422, [
+                ['code' => 'validation.invalid', 'message' => 'provider_user_id must be a positive integer.', 'field' => 'provider_user_id'],
+            ]);
+        }
+        $dto = $this->service->acknowledge($id, $providerUserId);
         return $this->ok($dto->toArray());
     }
 

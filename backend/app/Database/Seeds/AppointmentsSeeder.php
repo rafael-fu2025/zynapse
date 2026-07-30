@@ -56,28 +56,28 @@ final class AppointmentsSeeder extends Seeder
                 'patient_school_id' => $this->studentNumber($patientBase + 0),
                 'provider_user_id'  => $userBase + 1, // nurse-jane
                 'scheduled_at'      => $at(1, '08:00:00'),
-                'status'            => 'Scheduled',
+                'status'            => 'scheduled',
                 'reason'            => 'Routine check-up',
             ],
             [
                 'patient_school_id' => $this->studentNumber($patientBase + 1),
                 'provider_user_id'  => $userBase + 0, // admin
                 'scheduled_at'      => $at(1, '09:30:00'),
-                'status'            => 'Scheduled',
+                'status'            => 'scheduled',
                 'reason'            => 'Follow-up consultation',
             ],
             [
                 'patient_school_id' => $this->studentNumber($patientBase + 2),
                 'provider_user_id'  => $userBase + 1,
                 'scheduled_at'      => $at(2, '10:00:00'),
-                'status'            => 'Scheduled',
+                'status'            => 'scheduled',
                 'reason'            => 'Sports physical',
             ],
             [
                 'patient_school_id' => $this->studentNumber($patientBase + 3),
                 'provider_user_id'  => $userBase + 0,
                 'scheduled_at'      => $at(5, '14:00:00'),
-                'status'            => 'Scheduled',
+                'status'            => 'scheduled',
                 'reason'            => 'Allergy consult',
             ],
 
@@ -86,14 +86,14 @@ final class AppointmentsSeeder extends Seeder
                 'patient_school_id' => $this->studentNumber($patientBase + 4),
                 'provider_user_id'  => $userBase + 1,
                 'scheduled_at'      => $at(0, '09:00:00'),
-                'status'            => 'CheckedIn',
+                'status'            => 'checked_in',
                 'reason'            => 'Walk-in',
             ],
             [
                 'patient_school_id' => $this->studentNumber($patientBase + 5),
                 'provider_user_id'  => $userBase + 0,
                 'scheduled_at'      => $at(1, '11:00:00'),
-                'status'            => 'CheckedIn',
+                'status'            => 'checked_in',
                 'reason'            => 'Lab result follow-up',
             ],
 
@@ -102,21 +102,21 @@ final class AppointmentsSeeder extends Seeder
                 'patient_school_id' => $this->studentNumber($patientBase + 6),
                 'provider_user_id'  => $userBase + 1,
                 'scheduled_at'      => $at(-7, '08:30:00'),
-                'status'            => 'Completed',
+                'status'            => 'completed',
                 'reason'            => 'First-aid: minor cut',
             ],
             [
                 'patient_school_id' => $this->studentNumber($patientBase + 7),
                 'provider_user_id'  => $userBase + 0,
                 'scheduled_at'      => $at(-3, '10:30:00'),
-                'status'            => 'Completed',
+                'status'            => 'completed',
                 'reason'            => 'Vaccination booster',
             ],
             [
                 'patient_school_id' => $this->studentNumber($patientBase + 8),
                 'provider_user_id'  => $userBase + 1,
                 'scheduled_at'      => $at(-1, '13:00:00'),
-                'status'            => 'Completed',
+                'status'            => 'completed',
                 'reason'            => 'Medication refill',
             ],
 
@@ -125,7 +125,7 @@ final class AppointmentsSeeder extends Seeder
                 'patient_school_id' => $this->studentNumber($patientBase + 9),
                 'provider_user_id'  => $userBase + 1,
                 'scheduled_at'      => $at(0, '14:30:00'),
-                'status'            => 'Cancelled',
+                'status'            => 'cancelled',
                 'reason'            => 'Patient travelling',
             ],
 
@@ -134,7 +134,7 @@ final class AppointmentsSeeder extends Seeder
                 'patient_school_id' => $this->studentNumber($patientBase + 10),
                 'provider_user_id'  => $userBase + 1,
                 'scheduled_at'      => $at(0, '15:30:00'),
-                'status'            => 'NoShow',
+                'status'            => 'no_show',
                 'reason'            => 'Health screening',
             ],
 
@@ -143,7 +143,7 @@ final class AppointmentsSeeder extends Seeder
                 'patient_school_id' => $this->studentNumber($patientBase + 11),
                 'provider_user_id'  => $userBase + 0,
                 'scheduled_at'      => $at(-1, '08:00:00'),
-                'status'            => 'Completed',
+                'status'            => 'completed',
                 'reason'            => 'BP monitoring',
             ],
         ];

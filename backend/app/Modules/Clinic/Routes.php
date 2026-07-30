@@ -59,6 +59,7 @@ final class Routes implements BaseRoutes
             $r->post('inventory/(:num)/unarchive',           'InventoryController::unarchiveItem/$1');
             $r->post('inventory/(:num)/move',                'InventoryController::moveStock/$1');
             $r->post('inventory/(:num)/receive',             'InventoryController::receiveOrdered/$1');
+            $r->get('inventory/(:num)/movements',            'InventoryController::listMovements/$1');
 
             // Appointments (Phase 9)
             $r->get('appointments',                          'AppointmentController::list');
@@ -105,6 +106,7 @@ final class Routes implements BaseRoutes
             $r->post('medicines/(:num)/unarchive',           'MedicineController::unarchive/$1');
             $r->post('medicines/(:num)/batches',             'MedicineController::addBatch/$1');
             $r->post('medicines/(:num)/dispense',            'MedicineController::dispense/$1');
+            $r->get('medicines/(:num)/transactions',         'MedicineController::transactions/$1');
             $r->post('medicines/(:num)/forecast',            'MedicineController::computeForecast/$1');
             $r->get('medicines/(:num)/forecast',             'MedicineController::getForecast/$1');
 

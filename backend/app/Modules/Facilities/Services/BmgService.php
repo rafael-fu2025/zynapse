@@ -71,8 +71,9 @@ final class BmgService extends BaseService
 
     /**
      * @param array<int, array{sku:string, qty_kg:float}> $inputItems
+     * @param array<int, array{category_id:int, weight_kg:float}> $composition
      */
-    public function startBatch(int $unitId, array $inputItems, float $totalInputKg): BmgBatchDto
+    public function startBatch(int $unitId, array $inputItems, float $totalInputKg, array $composition = []): BmgBatchDto
     {
         $this->policy->check('start');
         $userId = \App\Auth\CurrentUser::assert();
@@ -83,7 +84,13 @@ final class BmgService extends BaseService
             ]);
         }
 
-        return $this->txn(function () use ($unitId, $inputItems, $totalInputKg, $userId): BmgBatchDto {
+        // Panel revision: segregated waste tracking. When a composition
+        // is supplied (one row per waste category with its weight), the
+        // component weights must add up to the declared total — the
+        // ratios drive the mix-weighted expected duration.
+        $composition = $this->normalizeComposition($composition, $totalInputKg);
+
+        return $this->txn(function () use ($unitId, $inputItems, $totalInputKg, $composition, $userId): BmgBatchDto {
             // Lock the unit row.
             $unit = $this->selectForUpdate('facilities_bmg_units', ['id' => $unitId, 'archived_at' => null]);
 
@@ -101,16 +108,51 @@ final class BmgService extends BaseService
                 throw StateMachineException::invalidTransition($unit['status'], BMG_STATE_PROCESSING, 'bmg');
             }
 
+            // Validate composition categories and resolve their codes so
+            // the legacy `input_items` JSON stays populated even when the
+            // caller only sends the structured composition.
+            $catCodes = [];
+            if ($composition !== []) {
+                $catIds = array_map(static fn (array $c): int => $c['category_id'], $composition);
+                $catRows = $this->db->table('facilities_waste_categories')
+                    ->select('id, code')
+                    ->whereIn('id', $catIds)
+                    ->get()->getResultArray();
+                foreach ($catRows as $cr) {
+                    $catCodes[(int) $cr['id']] = (string) $cr['code'];
+                }
+                foreach ($catIds as $cid) {
+                    if (! isset($catCodes[$cid])) {
+                        throw new ApiException('resource.not_found', 404, [
+                            ['code' => 'resource.not_found', 'message' => "Waste category #{$cid} not found.", 'field' => 'composition'],
+                        ]);
+                    }
+                }
+                if ($inputItems === []) {
+                    $inputItems = array_map(static fn (array $c): array => [
+                        'sku'    => $catCodes[$c['category_id']],
+                        'qty_kg' => $c['weight_kg'],
+                    ], $composition);
+                }
+            }
+
             // Insert the batch. The generated `active_unit_id` column + UNIQUE
             // index will reject a duplicate if the unit slipped past us.
-            // `category_id` falls back to the unit's default category if the
-            // operator didn't override it.
+            // `category_id` prefers the single-component mix, then falls
+            // back to the unit's default category.
             $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
             $ref = 'BMG-' . date('Ymd') . '-' . bin2hex(random_bytes(4));
 
+            $categoryId = null;
+            if (count($composition) === 1) {
+                $categoryId = $composition[0]['category_id'];
+            } elseif ($unit['default_category_id'] !== null) {
+                $categoryId = (int) $unit['default_category_id'];
+            }
+
             $this->db->table('facilities_bmg_batches')->insert([
                 'unit_id'               => $unitId,
-                'category_id'           => $unit['default_category_id'] !== null ? (int) $unit['default_category_id'] : null,
+                'category_id'           => $categoryId,
                 'reference_code'        => $ref,
                 'status'                => BMG_STATE_PROCESSING,
                 'total_input_weight_kg' => $totalInputKg,
@@ -122,6 +164,16 @@ final class BmgService extends BaseService
             ]);
 
             $batchId = (int) $this->db->insertID();
+
+            // Structured per-category mix rows (weights + ratios).
+            foreach ($composition as $c) {
+                $this->db->table('facilities_bmg_composition')->insert([
+                    'batch_id'    => $batchId,
+                    'category_id' => $c['category_id'],
+                    'weight_kg'   => $c['weight_kg'],
+                    'created_at'  => $now,
+                ]);
+            }
 
             // Update the unit.
             $this->db->table('facilities_bmg_units')
@@ -322,10 +374,11 @@ final class BmgService extends BaseService
     // ------------------------------------------------- drum CRUD
 
     /**
-     * Register a new BMG unit. The `code` is unique and uppercased
-     * server-side so the legacy convention (`DRUM-01`, `DRUM-02`, …) is
-     * preserved regardless of how the client types it. Same-transaction
-     * audit row.
+     * Register a new BMG unit. The `code` is a unique SLUG — lowercase
+     * `a-z0-9` groups separated by single hyphens (`drum-01`) — a
+     * human-readable, URL-safe identifier distinct from the numeric id
+     * (panel revision). Input is normalized before validation so users
+     * may type `DRUM 01` and get `drum-01`. Same-transaction audit row.
      *
      * @param array{code:string, display_name:string, location_code?:?string, spec_capacity_kg?:?float, default_category_id?:?int, notes?:?string} $input
      */
@@ -334,12 +387,7 @@ final class BmgService extends BaseService
         $this->policy->check('manage_units');
         $userId = \App\Auth\CurrentUser::assert();
 
-        $code = strtoupper(trim($input['code']));
-        if ($code === '') {
-            throw new ApiException('validation.invalid', 422, [
-                ['code' => 'validation.invalid', 'message' => 'code is required.', 'field' => 'code'],
-            ]);
-        }
+        $code = $this->assertSlug((string) $input['code'], 'code');
 
         $defaultCategoryId = $this->resolveCategoryId($input['default_category_id'] ?? null);
 
@@ -617,12 +665,38 @@ final class BmgService extends BaseService
         $today = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d');
         $a     = new \App\Services\Analytics\BmgAnalytics();
 
-        return array_map(static function (array $r) use ($a, $today): array {
+        // Panel revision: the ETA is weighted by each drum's specific
+        // waste mix — per-category expected days (historical average,
+        // falling back to the manual reference) × weight ratio.
+        $batchIds     = array_map(static fn (array $r): int => (int) $r['batch_id'], $rows);
+        $compositions = $this->batchCompositions($batchIds);
+        $catIds       = [];
+        foreach ($compositions as $comps) {
+            foreach ($comps as $c) {
+                $catIds[] = $c['category_id'];
+            }
+        }
+        foreach ($rows as $r) {
+            if ($r['category_id'] !== null) {
+                $catIds[] = (int) $r['category_id'];
+            }
+        }
+        $expectedByCat = $this->expectedDaysByCategory($catIds);
+
+        return array_map(function (array $r) use ($a, $today, $compositions, $expectedByCat): array {
             $startDate = substr((string) $r['started_at'], 0, 10);
             $refDays   = $r['reference_duration_days'] !== null ? (int) $r['reference_duration_days'] : 0;
-            // expectedCompletionDate() falls back to 45 days when the batch has
-            // no category reference, so the widget's progress bar always moves.
-            $expected  = $a->expectedCompletionDate($startDate, $refDays);
+
+            $comps    = $compositions[(int) $r['batch_id']] ?? [];
+            $expDays  = $this->weightedExpectedDays($comps, $expectedByCat);
+            if ($expDays === null && $r['category_id'] !== null) {
+                $expDays = $expectedByCat[(int) $r['category_id']]['expected_days'] ?? null;
+            }
+            $effDays = $expDays ?? ($refDays > 0 ? $refDays : 0);
+
+            // expectedCompletionDate() falls back to 45 days when neither
+            // history nor a reference exists, so the progress bar always moves.
+            $expected = $a->expectedCompletionDate($startDate, $effDays);
 
             $daysActive = max(0, (int) ((new DateTimeImmutable($today))->diff(new DateTimeImmutable($startDate)))->days);
 
@@ -640,6 +714,7 @@ final class BmgService extends BaseService
                 'started_at'               => (string) $r['started_at'],
                 'days_active'              => $daysActive,
                 'reference_duration_days'  => $refDays > 0 ? $refDays : null,
+                'expected_days'            => $expDays ?? ($refDays > 0 ? $refDays : null),
                 'expected_completion_date' => $expected,
                 'days_until_expected'      => $a->daysUntilExpected($expected, $today),
                 'progress_pct'             => $a->progressPercent($startDate, $expected, $today),
@@ -754,15 +829,29 @@ final class BmgService extends BaseService
         if ($activeOnly) {
             $builder->where('is_active', 1);
         }
-        return array_map(static fn (array $r): array => [
-            'id'                      => (int) $r['id'],
-            'code'                    => (string) $r['code'],
-            'name'                    => (string) $r['name'],
-            'description'             => $r['description'] !== null ? (string) $r['description'] : null,
-            'expected_yield_pct'      => $r['expected_yield_pct'] !== null ? (float) $r['expected_yield_pct'] : null,
-            'reference_duration_days' => $r['reference_duration_days'] !== null ? (int) $r['reference_duration_days'] : null,
-            'is_active'               => (bool) $r['is_active'],
-        ], $builder->get()->getResultArray());
+        $rows  = $builder->get()->getResultArray();
+        // Panel revision: expected days per category come from validated
+        // historical trials (finished batches), with the manual reference
+        // duration only as the fallback while no history exists.
+        $stats = $this->categoryDurationStats(array_map(static fn (array $r): int => (int) $r['id'], $rows));
+
+        return array_map(static function (array $r) use ($stats): array {
+            $id   = (int) $r['id'];
+            $hist = $stats[$id] ?? null;
+            $ref  = $r['reference_duration_days'] !== null ? (int) $r['reference_duration_days'] : null;
+            return [
+                'id'                      => $id,
+                'code'                    => (string) $r['code'],
+                'name'                    => (string) $r['name'],
+                'description'             => $r['description'] !== null ? (string) $r['description'] : null,
+                'expected_yield_pct'      => $r['expected_yield_pct'] !== null ? (float) $r['expected_yield_pct'] : null,
+                'reference_duration_days' => $ref,
+                'historical_avg_days'     => $hist !== null ? round($hist['avg_days'], 1) : null,
+                'sample_count'            => $hist !== null ? $hist['samples'] : 0,
+                'expected_days'           => $hist !== null ? (int) round($hist['avg_days']) : $ref,
+                'is_active'               => (bool) $r['is_active'],
+            ];
+        }, $rows);
     }
 
     /**
@@ -773,6 +862,10 @@ final class BmgService extends BaseService
     {
         $this->policy->check('categories_manage');
         $userId = \App\Auth\CurrentUser::assert();
+
+        // Waste category codes follow the same slug contract as drum
+        // codes (panel revision): lowercase, hyphen-separated.
+        $input['code'] = $this->assertSlug((string) $input['code'], 'code');
 
         return $this->txn(function () use ($input, $userId): array {
             $dup = $this->db->table('facilities_waste_categories')->where('code', (string) $input['code'])->get()->getRowArray();
@@ -1113,12 +1206,44 @@ final class BmgService extends BaseService
                 ->where('id', (int) $batch['category_id'])->get()->getRowArray();
         }
 
+        // Panel revision: mix-weighted expected duration + per-component
+        // breakdown (weight ratios) for the drum detail screen.
+        $comps         = $this->batchCompositions([$batchId])[$batchId] ?? [];
+        $catIds        = array_map(static fn (array $c): int => $c['category_id'], $comps);
+        if ($batch['category_id'] !== null) {
+            $catIds[] = (int) $batch['category_id'];
+        }
+        $expectedByCat = $this->expectedDaysByCategory($catIds);
+        $mixDays       = $this->weightedExpectedDays($comps, $expectedByCat);
+
+        $totalCompKg = 0.0;
+        foreach ($comps as $c) {
+            $totalCompKg += $c['weight_kg'];
+        }
+        $composition = array_map(static function (array $c) use ($expectedByCat, $totalCompKg): array {
+            $meta = $expectedByCat[$c['category_id']] ?? null;
+            return [
+                'category_id'   => $c['category_id'],
+                'category_name' => $c['category_name'],
+                'weight_kg'     => round($c['weight_kg'], 2),
+                'ratio_pct'     => $totalCompKg > 0 ? round(($c['weight_kg'] / $totalCompKg) * 100, 1) : null,
+                'expected_days' => $meta['expected_days'] ?? null,
+                'sample_count'  => $meta['sample_count'] ?? 0,
+            ];
+        }, $comps);
+
         $a         = new \App\Services\Analytics\BmgAnalytics();
         $yield     = $a->computeYield($inputKg, $outputKg);
         $startDate = substr((string) $batch['started_at'], 0, 10);
         $refDays   = $category !== null && $category['reference_duration_days'] !== null ? (int) $category['reference_duration_days'] : 0;
-        $expected  = $a->expectedCompletionDate($startDate, $refDays);
-        $today     = $this->utcNow();
+
+        $expDays = $mixDays;
+        if ($expDays === null && $batch['category_id'] !== null) {
+            $expDays = $expectedByCat[(int) $batch['category_id']]['expected_days'] ?? null;
+        }
+        $effDays  = $expDays ?? $refDays;
+        $expected = $a->expectedCompletionDate($startDate, $effDays);
+        $today    = $this->utcNow();
 
         return [
             'batch_id'                => $batchId,
@@ -1130,9 +1255,11 @@ final class BmgService extends BaseService
             'expected_yield_pct'      => $category !== null && $category['expected_yield_pct'] !== null ? (float) $category['expected_yield_pct'] : null,
             'category_name'           => $category['name'] ?? null,
             'reference_duration_days' => $refDays > 0 ? $refDays : null,
-            'expected_completion_date'=> $refDays > 0 ? $expected : null,
-            'days_until_expected'     => $refDays > 0 ? $a->daysUntilExpected($expected, $today) : null,
-            'progress_pct'            => $refDays > 0 ? $a->progressPercent($startDate, $expected, $today) : null,
+            'expected_days'           => $expDays ?? ($refDays > 0 ? $refDays : null),
+            'composition'             => $composition,
+            'expected_completion_date'=> $effDays > 0 ? $expected : null,
+            'days_until_expected'     => $effDays > 0 ? $a->daysUntilExpected($expected, $today) : null,
+            'progress_pct'            => $effDays > 0 ? $a->progressPercent($startDate, $expected, $today) : null,
         ];
     }
 
@@ -1170,5 +1297,196 @@ final class BmgService extends BaseService
     private function utcNow(): string
     {
         return (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
+    }
+
+    // -------------------------------------------- panel-revision helpers
+
+    /**
+     * Validate + normalize a batch composition payload: positive weights,
+     * no duplicate categories, and the component sum must equal the
+     * declared total (±0.01 kg tolerance).
+     *
+     * @param array<int, mixed> $composition
+     * @return array<int, array{category_id:int, weight_kg:float}>
+     */
+    private function normalizeComposition(array $composition, float $totalInputKg): array
+    {
+        if ($composition === []) {
+            return [];
+        }
+
+        $out  = [];
+        $sum  = 0.0;
+        $seen = [];
+        foreach ($composition as $c) {
+            $cid = isset($c['category_id']) ? (int) $c['category_id'] : 0;
+            $w   = isset($c['weight_kg']) ? (float) $c['weight_kg'] : 0.0;
+            if ($cid <= 0) {
+                throw new ApiException('validation.invalid', 422, [
+                    ['code' => 'validation.invalid', 'message' => 'Each composition row needs a category_id.', 'field' => 'composition'],
+                ]);
+            }
+            if ($w <= 0) {
+                throw new ApiException('validation.invalid', 422, [
+                    ['code' => 'validation.invalid', 'message' => 'Each composition row needs a weight_kg > 0.', 'field' => 'composition'],
+                ]);
+            }
+            if (isset($seen[$cid])) {
+                throw new ApiException('validation.invalid', 422, [
+                    ['code' => 'validation.invalid', 'message' => 'Duplicate waste category in composition.', 'field' => 'composition'],
+                ]);
+            }
+            $seen[$cid] = true;
+            $sum += $w;
+            $out[] = ['category_id' => $cid, 'weight_kg' => round($w, 2)];
+        }
+
+        if (abs($sum - $totalInputKg) > 0.01) {
+            throw new ApiException('validation.invalid', 422, [
+                ['code' => 'validation.invalid', 'message' => sprintf('Composition weights (%.2f kg) must add up to total_input_weight_kg (%.2f kg).', $sum, $totalInputKg), 'field' => 'composition'],
+            ]);
+        }
+
+        return $out;
+    }
+
+    /**
+     * Normalize + assert the slug contract for `code` fields: lowercase
+     * `a-z0-9` groups separated by single hyphens. Whitespace and
+     * uppercase input are normalized rather than rejected. Delegates the
+     * pure normalization/validation to {@see BmgAnalytics} so the rule
+     * is unit-tested without booting the DB.
+     */
+    private function assertSlug(string $raw, string $field): string
+    {
+        $a    = new \App\Services\Analytics\BmgAnalytics();
+        $slug = $a->normalizeSlug($raw);
+        if (! $a->isValidSlug($slug)) {
+            throw new ApiException('validation.invalid', 422, [
+                ['code' => 'validation.invalid', 'message' => 'Must be a slug: lowercase letters/digits separated by single hyphens (e.g. drum-01).', 'field' => $field],
+            ]);
+        }
+        return $slug;
+    }
+
+    /**
+     * Historical duration per category, averaged over FINISHED batches
+     * (multi-trial validated data — panel revision). A batch counts for
+     * a category when the category is in its structured composition;
+     * legacy batches without composition rows count via their single
+     * `category_id` tag.
+     *
+     * @param array<int, int> $categoryIds
+     * @return array<int, array{avg_days: float, samples: int}>
+     */
+    private function categoryDurationStats(array $categoryIds): array
+    {
+        $ids = array_values(array_unique(array_map('intval', $categoryIds)));
+        if ($ids === []) {
+            return [];
+        }
+        $in = implode(',', $ids);
+
+        $rows = $this->db->query(
+            'SELECT t.cat_id, AVG(t.days) AS avg_days, COUNT(*) AS samples FROM ('
+            . ' SELECT c.category_id AS cat_id, DATEDIFF(b.finished_at, b.started_at) AS days'
+            . ' FROM facilities_bmg_composition c'
+            . ' JOIN facilities_bmg_batches b ON b.id = c.batch_id'
+            . " WHERE b.finished_at IS NOT NULL AND b.archived_at IS NULL AND c.category_id IN ({$in})"
+            . ' UNION ALL'
+            . ' SELECT b.category_id, DATEDIFF(b.finished_at, b.started_at)'
+            . ' FROM facilities_bmg_batches b'
+            . ' LEFT JOIN facilities_bmg_composition c2 ON c2.batch_id = b.id'
+            . ' WHERE c2.id IS NULL AND b.category_id IS NOT NULL AND b.finished_at IS NOT NULL'
+            . " AND b.archived_at IS NULL AND b.category_id IN ({$in})"
+            . ') t GROUP BY t.cat_id',
+        )->getResultArray();
+
+        $out = [];
+        foreach ($rows as $r) {
+            $out[(int) $r['cat_id']] = [
+                'avg_days' => (float) $r['avg_days'],
+                'samples'  => (int) $r['samples'],
+            ];
+        }
+        return $out;
+    }
+
+    /**
+     * Per-category expected days: historical average (rounded) when at
+     * least one finished trial exists, else the manual reference days.
+     *
+     * @param array<int, int> $categoryIds
+     * @return array<int, array{expected_days: ?int, sample_count: int}>
+     */
+    private function expectedDaysByCategory(array $categoryIds): array
+    {
+        $ids = array_values(array_unique(array_map('intval', $categoryIds)));
+        if ($ids === []) {
+            return [];
+        }
+
+        $stats = $this->categoryDurationStats($ids);
+        $refs  = $this->db->table('facilities_waste_categories')
+            ->select('id, reference_duration_days')
+            ->whereIn('id', $ids)
+            ->get()->getResultArray();
+
+        $out = [];
+        foreach ($refs as $r) {
+            $id   = (int) $r['id'];
+            $hist = $stats[$id] ?? null;
+            $ref  = $r['reference_duration_days'] !== null ? (int) $r['reference_duration_days'] : null;
+            $out[$id] = [
+                'expected_days' => $hist !== null ? (int) round($hist['avg_days']) : $ref,
+                'sample_count'  => $hist !== null ? $hist['samples'] : 0,
+            ];
+        }
+        return $out;
+    }
+
+    /**
+     * Structured composition rows (with category names) for a set of
+     * batches, keyed by batch id.
+     *
+     * @param array<int, int> $batchIds
+     * @return array<int, array<int, array{category_id:int, category_name:string, weight_kg:float}>>
+     */
+    private function batchCompositions(array $batchIds): array
+    {
+        $ids = array_values(array_unique(array_map('intval', $batchIds)));
+        if ($ids === []) {
+            return [];
+        }
+
+        $rows = $this->db->table('facilities_bmg_composition AS bc')
+            ->select('bc.batch_id, bc.category_id, bc.weight_kg, c.name AS category_name')
+            ->join('facilities_waste_categories AS c', 'c.id = bc.category_id')
+            ->whereIn('bc.batch_id', $ids)
+            ->orderBy('bc.weight_kg', 'DESC')
+            ->get()->getResultArray();
+
+        $out = [];
+        foreach ($rows as $r) {
+            $out[(int) $r['batch_id']][] = [
+                'category_id'   => (int) $r['category_id'],
+                'category_name' => (string) $r['category_name'],
+                'weight_kg'     => (float) $r['weight_kg'],
+            ];
+        }
+        return $out;
+    }
+
+    /**
+     * Weight-ratio-weighted expected duration for a drum's specific mix.
+     * Delegates the pure math to {@see BmgAnalytics::weightedExpectedDays}
+     * (unit-tested); returns null when no component carries data.
+     *
+     * @param array<int, array{category_id:int, weight_kg:float}> $components
+     * @param array<int, array{expected_days: ?int, sample_count: int}> $expectedByCat
+     */
+    private function weightedExpectedDays(array $components, array $expectedByCat): ?int
+    {
+        return (new \App\Services\Analytics\BmgAnalytics())->weightedExpectedDays($components, $expectedByCat);
     }
 }

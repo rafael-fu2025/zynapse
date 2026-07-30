@@ -3,6 +3,9 @@
  */
 import { z } from 'zod';
 
+export const APPOINTMENT_STATUSES = ['scheduled', 'checked_in', 'completed', 'cancelled', 'no_show'] as const;
+export type AppointmentStatus = (typeof APPOINTMENT_STATUSES)[number];
+
 export const appointmentSchema = z.object({
   id: z.number().int().positive(),
   patient_school_id: z.string(),
@@ -14,8 +17,11 @@ export const appointmentSchema = z.object({
   provider_user_id: z.number().int().positive(),
   provider_name: z.string().nullable().optional(),
   scheduled_at: z.string(),
-  status: z.enum(['Scheduled', 'CheckedIn', 'Completed', 'Cancelled', 'NoShow']),
+  status: z.enum(APPOINTMENT_STATUSES),
   reason: z.string().nullable(),
+  // Encounter auto-opened at check-in (panel revision); null while
+  // the appointment is still in the scheduling phase.
+  encounter_id: z.number().int().positive().nullable().optional(),
   created_at: z.string(),
 });
 export type Appointment = z.infer<typeof appointmentSchema>;
@@ -43,5 +49,5 @@ export const updateAppointmentSchema = z.object({
 });
 export type UpdateAppointmentInput = z.infer<typeof updateAppointmentSchema>;
 
-export const appointmentTransitions = ['CheckedIn', 'Completed', 'Cancelled', 'NoShow'] as const;
+export const appointmentTransitions = ['checked_in', 'completed', 'cancelled', 'no_show'] as const;
 export type AppointmentTransition = (typeof appointmentTransitions)[number];

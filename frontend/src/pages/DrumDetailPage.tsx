@@ -183,13 +183,36 @@ function AnalyticsSection({ batchId }: { batchId: number }) {
                 <dd className="font-mono font-semibold">{a.expected_yield_pct}%</dd>
               </div>
             )}
+            {a.expected_days !== null && (
+              <div className="rounded-md border p-2">
+                <dt className="text-xs text-muted-foreground">Expected days</dt>
+                <dd className="font-mono font-semibold">{a.expected_days} days <span className="text-[10px] font-normal text-muted-foreground">(mix-weighted)</span></dd>
+              </div>
+            )}
             {a.reference_duration_days !== null && (
               <div className="rounded-md border p-2">
-                <dt className="text-xs text-muted-foreground">Reference duration</dt>
+                <dt className="text-xs text-muted-foreground">Reference (manual)</dt>
                 <dd className="font-mono font-semibold">{a.reference_duration_days} days</dd>
               </div>
             )}
           </dl>
+        )}
+        {a !== undefined && a.composition.length > 0 && (
+          <div className="mt-3 rounded-md border p-3">
+            <p className="mb-2 text-xs font-medium text-muted-foreground">Waste composition (weight ratio → expected days)</p>
+            <div className="space-y-1">
+              {a.composition.map((c) => (
+                <div key={c.category_id} className="flex items-center justify-between text-sm">
+                  <span>{c.category_name}</span>
+                  <span className="font-mono text-xs text-muted-foreground">
+                    {c.weight_kg} kg{c.ratio_pct !== null ? ` · ${c.ratio_pct}%` : ''}
+                    {c.expected_days !== null ? ` · ~${c.expected_days}d` : ''}
+                    {c.sample_count > 0 ? ` (${c.sample_count} trials)` : ' (no history)'}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
         )}
       </CardContent>
     </Card>

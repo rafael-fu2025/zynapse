@@ -164,6 +164,15 @@ final class InventoryController extends ApiController
         )->toArray());
     }
 
+    /**
+     * Ledger view — signed movements with the stored running balance
+     * (panel revision: in/out debit-credit tracking).
+     */
+    public function listMovements(int $itemId): ResponseInterface
+    {
+        return $this->ok($this->service->listMovements($itemId));
+    }
+
     private function collectErrors(): array
     {
         $errs = [];

@@ -37,7 +37,7 @@ export const studentPortalClinicVisitSchema = z.object({
   id: z.number().int().positive(),
   chief_complaint: z.string(),
   triage_priority: z.enum(['low', 'medium', 'high', 'urgent']).nullable(),
-  status: z.enum(['Open', 'Closed', 'Referred']),
+  status: z.enum(['open', 'closed', 'referred']),
   attending_username: z.string().nullable(),
   started_at: z.string(),
   closed_at: z.string().nullable(),

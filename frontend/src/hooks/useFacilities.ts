@@ -148,7 +148,7 @@ export function useStartBatch() {
       // Optimistic flip. We don't know the new `active_batch_id` until
       // the server responds, so we drop the field — the `onSettled`
       // refetch below will repopulate it.
-      patchUnitInCache(qc, unitId, { status: 'Processing', active_batch_id: null });
+      patchUnitInCache(qc, unitId, { status: 'processing', active_batch_id: null });
       return { snapshots };
     },
     onError: (err, _input, ctx) => {
@@ -185,7 +185,7 @@ export function useRecordOutput() {
     onMutate: async ({ unitId }) => {
       await qc.cancelQueries({ queryKey: UNITS_KEY });
       const snapshots = snapshotUnits(qc);
-      patchUnitInCache(qc, unitId, { status: 'AwaitingOutput' });
+      patchUnitInCache(qc, unitId, { status: 'awaiting_output' });
       return { snapshots };
     },
     onError: (err, _input, ctx) => {
@@ -221,7 +221,7 @@ export function useFinishBatch() {
     onMutate: async ({ unitId }) => {
       await qc.cancelQueries({ queryKey: UNITS_KEY });
       const snapshots = snapshotUnits(qc);
-      patchUnitInCache(qc, unitId, { status: 'Idle', active_batch_id: null });
+      patchUnitInCache(qc, unitId, { status: 'idle', active_batch_id: null });
       return { snapshots };
     },
     onError: (err, _input, ctx) => {
@@ -260,7 +260,7 @@ export function useCancelBatch() {
       // is marked Cancelled. The "Processing Drums" widget (which reads
       // active batches, not unit.status) will drop the row once the
       // invalidate completes.
-      patchUnitInCache(qc, unitId, { status: 'Idle', active_batch_id: null });
+      patchUnitInCache(qc, unitId, { status: 'idle', active_batch_id: null });
       return { snapshots };
     },
     onError: (err, _input, ctx) => {
@@ -586,7 +586,7 @@ export function useArchiveUnit() {
           // Return a minimal placeholder; the snapshot + invalidate will
           // ensure the row is gone from the cache. Caller does not
           // parse the return on 404.
-          return { id: unitId, code: '', display_name: '', status: 'Idle', created_at: '' } as unknown as BmgUnit;
+          return { id: unitId, code: '', display_name: '', status: 'idle', created_at: '' } as unknown as BmgUnit;
         }
         throw err;
       }
@@ -677,7 +677,7 @@ export function useSetUnitMaintenance() {
       await qc.cancelQueries({ queryKey: UNITS_KEY });
       const snapshots = snapshotUnits(qc);
       patchUnitInCache(qc, unitId, {
-        status: maintenance ? 'Maintenance' : 'Idle',
+        status: maintenance ? 'maintenance' : 'idle',
         active_batch_id: maintenance ? null : undefined,
       });
       return { snapshots };

@@ -52,3 +52,19 @@ export const moveStockSchema = z
     { message: 'Delta sign does not match reason', path: ['qty_delta'] },
   );
 export type MoveStockInput = z.infer<typeof moveStockSchema>;
+
+/**
+ * One row of the supply ledger (in/out with running balance). `qty_in`
+ * / `qty_out` are mutually exclusive; `balance_after` is on-hand right
+ * after the movement (panel revision — ledger-style tracking).
+ */
+export const inventoryMovementSchema = z.object({
+  id: z.number().int().positive(),
+  reason_code: z.string(),
+  qty_in: z.number().int().nullable(),
+  qty_out: z.number().int().nullable(),
+  balance_after: z.number().int().nullable(),
+  note: z.string().nullable(),
+  created_at: z.string(),
+});
+export type InventoryMovement = z.infer<typeof inventoryMovementSchema>;

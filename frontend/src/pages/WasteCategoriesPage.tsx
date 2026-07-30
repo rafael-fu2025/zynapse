@@ -135,7 +135,11 @@ function WasteCategoryRow({ cat }: { cat: WasteCategory }) {
         <span className="shrink-0 font-mono text-xs text-muted-foreground">({cat.code})</span>
         {!cat.is_active && <Badge variant="secondary" className="shrink-0">archived</Badge>}
         <span className="ml-auto shrink-0 text-xs text-muted-foreground">
-          {cat.expected_yield_pct !== null ? `${cat.expected_yield_pct}% yield` : '—'} · {cat.reference_duration_days !== null ? `${cat.reference_duration_days}d` : '—'}
+          {cat.expected_yield_pct !== null ? `${cat.expected_yield_pct}% yield` : '—'}
+          {' · '}
+          {cat.expected_days !== null
+            ? `${cat.expected_days} expected days ${cat.sample_count > 0 ? `(from ${cat.sample_count} trial${cat.sample_count === 1 ? '' : 's'})` : '(reference)'}`
+            : 'no expected days'}
         </span>
       </div>
       <div className="flex shrink-0 items-center gap-1">

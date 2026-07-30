@@ -55,6 +55,7 @@ import {
   type VerifyResult,
 } from '@/schemas/referrals';
 import { fmtUtcToApp } from '@/utils/date';
+import { statusLabel } from '@/utils/status';
 
 function CreateReferralDialog({ onClose }: { onClose: () => void }) {
   const create = useCreateReferral();
@@ -255,13 +256,13 @@ function ScanDialog({ onClose, onResult }: { onClose: () => void; onResult: (r: 
 
 function VerifyResultBadge({ result }: { result: VerifyResult }) {
   const variant =
-    result.status === 'Valid' ? 'success'
-      : result.status === 'Expired' ? 'warning'
+    result.status === 'valid' ? 'success'
+      : result.status === 'expired' ? 'warning'
       : 'destructive';
   return (
     <Badge variant={variant}>
       <ShieldCheck className="mr-1 size-3" />
-      {result.status} · {result.artifact_type ?? '—'}
+      {statusLabel(result.status)} · {result.artifact_type ?? '—'}
       {result.issuer !== null ? ` · issuer=${result.issuer}` : ''}
     </Badge>
   );
@@ -323,10 +324,10 @@ export default function ReferralsPage() {
           <SelectTrigger id="status" className="w-48" aria-label="Filter by status"><SelectValue /></SelectTrigger>
           <SelectContent>
             <SelectItem value="all">All</SelectItem>
-            <SelectItem value="Submitted">Submitted</SelectItem>
-            <SelectItem value="Acknowledged">Acknowledged</SelectItem>
-            <SelectItem value="UnderReview">UnderReview</SelectItem>
-            <SelectItem value="Closed">Closed</SelectItem>
+            <SelectItem value="submitted">Submitted</SelectItem>
+            <SelectItem value="acknowledged">Acknowledged</SelectItem>
+            <SelectItem value="under_review">Under review</SelectItem>
+            <SelectItem value="closed">Closed</SelectItem>
           </SelectContent>
         </Select>
         {verifyResult !== null && <VerifyResultBadge result={verifyResult} />}
@@ -342,6 +343,7 @@ export default function ReferralsPage() {
               <TableHead className="px-3">Target</TableHead>
               <TableHead className="px-3">Artifact</TableHead>
               <TableHead className="px-3">Status</TableHead>
+              <TableHead className="px-3">Provider</TableHead>
               <TableHead className="px-3">Updated</TableHead>
               <TableHead className="px-3 text-right">Actions</TableHead>
             </TableRow>
@@ -349,20 +351,20 @@ export default function ReferralsPage() {
           <TableBody>
             {list.isLoading && (
               <TableRow>
-                <TableCell colSpan={8} className="px-3 py-6 text-center text-muted-foreground">
+                <TableCell colSpan={9} className="px-3 py-6 text-center text-muted-foreground">
                   <Loader2 className="mx-auto size-4 animate-spin" />
                 </TableCell>
               </TableRow>
             )}
             {!list.isLoading && rows.length === 0 && (
               <TableRow>
-                <TableCell colSpan={8} className="px-3 py-6 text-center text-muted-foreground">
+                <TableCell colSpan={9} className="px-3 py-6 text-center text-muted-foreground">
                   No referrals.
                 </TableCell>
               </TableRow>
             )}
             {list.isError && !list.isLoading && (
-              <QueryErrorRow colSpan={8} message="Failed to load referrals." onRetry={() => void list.refetch()} pending={list.isFetching} />
+              <QueryErrorRow colSpan={9} message="Failed to load referrals." onRetry={() => void list.refetch()} pending={list.isFetching} />
             )}
             {rows.map((r) => (
               <TableRow key={r.id}>
@@ -372,23 +374,26 @@ export default function ReferralsPage() {
                 <TableCell className="px-3">{r.target_module}</TableCell>
                 <TableCell className="px-3 text-xs">{r.artifact_type}</TableCell>
                 <TableCell className="px-3">
-                  <Badge variant={r.status === 'Closed' ? 'success' : r.status === 'UnderReview' ? 'warning' : 'info'}>{r.status}</Badge>
+                  <Badge variant={r.status === 'closed' ? 'success' : r.status === 'under_review' ? 'warning' : 'info'}>{statusLabel(r.status)}</Badge>
+                </TableCell>
+                <TableCell className="px-3 text-xs">
+                  {r.provider_name !== undefined && r.provider_name !== null ? r.provider_name : <span className="text-muted-foreground">—</span>}
                 </TableCell>
                 <TableCell className="px-3 font-mono text-xs text-muted-foreground">{fmtUtcToApp(r.updated_at)}</TableCell>
                 <TableCell className="px-3 text-right">
                   <div className="flex justify-end gap-2">
-                    {r.status === 'Submitted' && (
+                    {r.status === 'submitted' && (
                       <Button size="sm" variant="secondary" disabled={ack.isPending} onClick={() => ack.mutate(r.id)}>Acknowledge</Button>
                     )}
-                    {r.status === 'Acknowledged' && (
+                    {r.status === 'acknowledged' && (
                       <Button size="sm" variant="secondary" disabled={rev.isPending} onClick={() => rev.mutate(r.id)}>Review</Button>
                     )}
-                    {(r.status === 'UnderReview' || r.status === 'Acknowledged') && (
+                    {(r.status === 'under_review' || r.status === 'acknowledged') && (
                       <Button size="sm" variant="outline" onClick={() => setOpenQr(r)}>
                         <QrCode /> QR
                       </Button>
                     )}
-                    {r.status !== 'Closed' && (
+                    {r.status !== 'closed' && (
                       <Button size="sm" variant="outline" disabled={close.isPending} onClick={() => setClosing(r)}>
                         <X /> Close
                       </Button>

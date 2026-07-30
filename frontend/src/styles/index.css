@@ -152,6 +152,31 @@
 }
 
 /*
+ * no-scrollbar — hides the scrollbar on horizontally scrollable strips
+ * (mobile TabsList) without disabling scrolling itself.
+ */
+@utility no-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+/*
+ * Touch devices — hover styles are sticky on touch (they linger after
+ * a tap), so drop the table-row hover tint where the primary pointer
+ * cannot hover. The attribute selector gives the rule higher
+ * specificity than Tailwind's `.hover\:bg-muted\/50:hover` so it wins
+ * without `!important`. Keyboard/selected states are unaffected.
+ */
+@media (pointer: coarse) {
+  tr[class*='hover:bg-muted']:hover {
+    background-color: transparent;
+  }
+}
+
+/*
  * Mobile topbar page title — the page H1 ("Clinic", "Appointments", …)
  * AND its supporting description live in the topbar on mobile so the
  * user always knows which screen they're on without scrolling up.

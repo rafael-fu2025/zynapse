@@ -157,8 +157,9 @@ final class MedicineController extends ApiController
         $payload = $this->request->getJSON(true) ?? [];
 
         $rules = [
-            'quantity' => 'required|is_natural_no_zero',
-            'note'     => 'permit_empty|max_length[255]',
+            'quantity'     => 'required|is_natural_no_zero',
+            'encounter_id' => 'required|is_natural_no_zero',
+            'note'         => 'permit_empty|max_length[255]',
         ];
         if (! $this->makeValidation($rules)->run($payload)) {
             throw ApiException::validationFailure($this->collectErrors());
@@ -169,8 +170,19 @@ final class MedicineController extends ApiController
                 $id,
                 (int) $payload['quantity'],
                 isset($payload['note']) ? (string) $payload['note'] : null,
+                (int) $payload['encounter_id'],
             )->toArray(),
         );
+    }
+
+    /**
+     * Ledger view — typed transactions with the stored running balance
+     * (panel revision: in/out debit-credit tracking).
+     */
+    public function transactions(int $id): ResponseInterface
+    {
+        $this->authorize('clinic.inventory.read');
+        return $this->ok($this->service->listTransactions($id));
     }
 
     public function lowStock(): ResponseInterface

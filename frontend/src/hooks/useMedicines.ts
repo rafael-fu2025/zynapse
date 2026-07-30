@@ -12,12 +12,14 @@ import {
   dispenseSchema,
   medicineForecastSchema,
   medicineSchema,
+  medicineTxnSchema,
   updateMedicineSchema,
   type AddBatchInput,
   type CreateMedicineInput,
   type DispenseInput,
   type Medicine,
   type MedicineForecast,
+  type MedicineTxn,
   type UpdateMedicineInput,
 } from '@/schemas/medicines';
 
@@ -103,10 +105,27 @@ export function useDispense() {
     },
     onSuccess: (m) => {
       void qc.invalidateQueries({ queryKey: ['medicines'] });
+      void qc.invalidateQueries({ queryKey: ['medicines', 'transactions', m.id] });
       toast.success(`Dispensed (FEFO) — ${m.quantity_on_hand} ${m.unit} remaining.`);
     },
     onError: (err) => {
       toast.error(err.errors[0]?.message ?? 'Dispense failed.');
+    },
+  });
+}
+
+/**
+ * Medicine ledger (panel revision): typed in/out transactions with the
+ * stored running balance, oldest → newest. Powers the per-medicine
+ * ledger drawer on the Inventory page.
+ */
+export function useMedicineTransactions(medicineId: number | null) {
+  return useQuery<MedicineTxn[], ApiEnvelopeError>({
+    queryKey: ['medicines', 'transactions', medicineId],
+    enabled: medicineId !== null && medicineId > 0,
+    queryFn: async () => {
+      const res = await apiClient.get<unknown[]>(`/clinic/medicines/${medicineId}/transactions`);
+      return z.array(medicineTxnSchema).parse(res.data);
     },
   });
 }

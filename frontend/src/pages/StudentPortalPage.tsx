@@ -26,11 +26,12 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { useNotifications } from '@/hooks/useNotifications';
 import { useMyStudentClinicVisits, useMyStudentProfile } from '@/hooks/useStudentPortal';
 import { fmtUtcToApp } from '@/utils/date';
+import { statusLabel } from '@/utils/status';
 
 const STATUS_VARIANT = {
-  Open: 'default',
-  Closed: 'secondary',
-  Referred: 'outline',
+  open: 'default',
+  closed: 'secondary',
+  referred: 'outline',
 } as const;
 
 function NotOnRegistry() {
@@ -195,7 +196,7 @@ export default function StudentPortalPage() {
                           )}
                         </TableCell>
                         <TableCell className="px-3">
-                          <Badge variant={STATUS_VARIANT[v.status]}>{v.status}</Badge>
+                          <Badge variant={STATUS_VARIANT[v.status]}>{statusLabel(v.status)}</Badge>
                         </TableCell>
                         <TableCell className="px-3 text-xs">
                           {v.attending_username ?? <span className="text-muted-foreground">—</span>}

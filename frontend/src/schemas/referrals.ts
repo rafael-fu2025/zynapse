@@ -3,14 +3,21 @@
  */
 import { z } from 'zod';
 
+export const REFERRAL_STATUSES = ['submitted', 'acknowledged', 'under_review', 'closed'] as const;
+export type ReferralStatus = (typeof REFERRAL_STATUSES)[number];
+
 export const referralSchema = z.object({
   id: z.number().int().positive(),
   patient_school_id: z.string(),
   source_module: z.enum(['clinic', 'counselling']),
   target_module: z.enum(['clinic', 'counselling']),
   artifact_type: z.string(),
-  status: z.enum(['Submitted', 'Acknowledged', 'UnderReview', 'Closed']),
+  status: z.enum(REFERRAL_STATUSES),
   reason_code: z.string().nullable(),
+  // Handling provider (nurse / counsellor) — assigned when the
+  // receiving side acknowledges the referral (panel revision).
+  provider_user_id: z.number().int().positive().nullable().optional(),
+  provider_name: z.string().nullable().optional(),
   created_at: z.string(),
   updated_at: z.string(),
   qr_expires_at: z.string().nullable(),
@@ -39,7 +46,7 @@ export const verifyTokenSchema = z.object({
 });
 
 export const verifyResultSchema = z.object({
-  status: z.enum(['Valid', 'Expired', 'Revoked']),
+  status: z.enum(['valid', 'expired', 'revoked']),
   artifact_type: z.string().nullable(),
   issuer: z.string().nullable(),
 });

@@ -228,6 +228,7 @@ final class MedicineService extends BaseService
                 'batch_id'             => $batchId,
                 'type'                 => 'received',
                 'quantity'             => $qty,
+                'balance_after'        => $this->lastBalance($medicineId) + $qty,
                 'performed_by_user_id' => $userId,
                 'note'                 => $this->strOrNull($input, 'note'),
                 'created_at'           => $now,
@@ -260,17 +261,34 @@ final class MedicineService extends BaseService
     /**
      * FEFO dispense: consume `quantity` units from the earliest-expiring
      * active, unexpired batches, all rows locked for the transaction.
+     *
+     * Panel revision (July 2026): every dispense is anchored to an OPEN
+     * encounter — the actual clinic visit — so the ledger row records
+     * WHO the stock went to (`reference_type = 'encounter'`).
      */
-    public function dispense(int $medicineId, int $quantity, ?string $note): MedicineDto
+    public function dispense(int $medicineId, int $quantity, ?string $note, int $encounterId): MedicineDto
     {
         $this->policy->check('inventoryWrite');
         $userId = \App\Auth\CurrentUser::assert();
 
-        return $this->txn(function () use ($medicineId, $quantity, $note, $userId): MedicineDto {
+        return $this->txn(function () use ($medicineId, $quantity, $note, $encounterId, $userId): MedicineDto {
             $med = $this->selectForUpdate('clinic_medicines', ['id' => $medicineId, 'archived_at' => null]);
             if ($med === null) {
                 throw new ApiException('resource.not_found', 404, [
                     ['code' => 'resource.not_found', 'message' => "Medicine #{$medicineId} not found."],
+                ]);
+            }
+
+            // The anchoring encounter must exist and still be open.
+            $enc = $this->selectForUpdate('clinic_encounters', ['id' => $encounterId, 'archived_at' => null]);
+            if ($enc === null) {
+                throw new ApiException('resource.not_found', 404, [
+                    ['code' => 'resource.not_found', 'message' => "Encounter #{$encounterId} not found.", 'field' => 'encounter_id'],
+                ]);
+            }
+            if ((string) $enc['status'] !== 'open') {
+                throw new ApiException('statemachine.clinic.encounter_closed', 409, [
+                    ['code' => 'statemachine.clinic.encounter_closed', 'message' => 'Medicines can only be dispensed against an open encounter.', 'field' => 'encounter_id'],
                 ]);
             }
 
@@ -294,6 +312,7 @@ final class MedicineService extends BaseService
 
             $now       = $this->utcNow();
             $remaining = $quantity;
+            $balance   = $this->lastBalance($medicineId);
 
             foreach ($batches as $batch) {
                 if ($remaining <= 0) {
@@ -309,11 +328,15 @@ final class MedicineService extends BaseService
                         'status'             => $newQty === 0 ? 'depleted' : 'active',
                     ]);
 
+                $balance -= $take;
                 $this->db->table('clinic_medicine_transactions')->insert([
                     'medicine_id'          => $medicineId,
                     'batch_id'             => (int) $batch['id'],
                     'type'                 => 'dispensed',
                     'quantity'             => $take,
+                    'balance_after'        => $balance,
+                    'reference_type'       => 'encounter',
+                    'reference_id'         => $encounterId,
                     'performed_by_user_id' => $userId,
                     'note'                 => $note,
                     'created_at'           => $now,
@@ -327,7 +350,7 @@ final class MedicineService extends BaseService
                 'clinic_medicines',
                 $medicineId,
                 $userId,
-                ['resource_code' => 'qty#' . (string) $quantity],
+                ['resource_code' => 'qty#' . (string) $quantity, 'outcome' => 'encounter#' . $encounterId],
             );
 
             return $this->getMedicine($medicineId);
@@ -392,6 +415,62 @@ final class MedicineService extends BaseService
     }
 
     // ------------------------------------------------------------ helpers
+
+    /**
+     * Ledger view: the medicine's typed transactions in chronological
+     * order with the stored running balance (panel revision — in/out
+     * debit-credit tracking). Capped at the most recent 200 rows.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public function listTransactions(int $medicineId, int $limit = 200): array
+    {
+        $this->policy->check('inventoryRead');
+
+        $med = $this->db->table('clinic_medicines')->select('id')->where('id', $medicineId)->get()->getRowArray();
+        if ($med === null) {
+            throw new ApiException('resource.not_found', 404, [
+                ['code' => 'resource.not_found', 'message' => "Medicine #{$medicineId} not found."],
+            ]);
+        }
+
+        // Newest N rows, then flip so the ledger reads oldest → newest.
+        $rows = $this->db->table('clinic_medicine_transactions')
+            ->select('id, batch_id, type, quantity, balance_after, reference_type, reference_id, performed_by_user_id, note, created_at')
+            ->where('medicine_id', $medicineId)
+            ->orderBy('id', 'DESC')
+            ->limit(max(1, min($limit, 500)))
+            ->get()->getResultArray();
+
+        return array_map(static fn (array $r): array => [
+            'id'             => (int) $r['id'],
+            'batch_id'       => (int) $r['batch_id'],
+            'type'           => (string) $r['type'],
+            'qty_in'         => in_array((string) $r['type'], ['received', 'returned'], true) ? (int) $r['quantity'] : null,
+            'qty_out'        => in_array((string) $r['type'], ['received', 'returned'], true) ? null : (int) $r['quantity'],
+            'balance_after'  => $r['balance_after'] !== null ? (int) $r['balance_after'] : null,
+            'reference_type' => $r['reference_type'] !== null ? (string) $r['reference_type'] : null,
+            'reference_id'   => $r['reference_id'] !== null ? (int) $r['reference_id'] : null,
+            'note'           => $r['note'] !== null ? (string) $r['note'] : null,
+            'created_at'     => (string) $r['created_at'],
+        ], array_reverse($rows));
+    }
+
+    /**
+     * Last running-balance value on the medicine's ledger (row-locked;
+     * call inside a transaction). Seeds the `balance_after` chain for
+     * the rows about to be appended.
+     */
+    private function lastBalance(int $medicineId): int
+    {
+        $row = $this->db->query(
+            'SELECT `balance_after` FROM `clinic_medicine_transactions`'
+            . ' WHERE `medicine_id` = ? ORDER BY `id` DESC LIMIT 1 FOR UPDATE',
+            [$medicineId],
+        )->getRowArray();
+
+        return $row !== null && $row['balance_after'] !== null ? (int) $row['balance_after'] : 0;
+    }
 
     /**
      * Compute + persist a deterministic stock forecast for a medicine

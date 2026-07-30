@@ -25,6 +25,7 @@ import {
   Pill,
   Plus,
   RefreshCw,
+  ScrollText,
   Search,
   Syringe,
   TrendingUp,
@@ -37,6 +38,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { ConfirmDialog, type ConfirmAction } from '@/components/ConfirmDialog';
 import { QueryErrorRow } from '@/components/QueryErrorState';
+import { MobileCardList, MobileCard, MobileCardField, MobileCardActions } from '@/components/MobileCardList';
 import { DatePicker } from '@/components/ui/date-picker';
 import {
   Dialog,
@@ -65,7 +67,8 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useTabParam } from '@/hooks/useTabParam';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
-import { useArchiveItem, useCreateItem, useInventoryItems, useMoveStock, useReceiveSupply, useUnarchiveItem, useUpdateItem } from '@/hooks/useInventory';
+import { useEncounters } from '@/hooks/useClinic';
+import { useArchiveItem, useCreateItem, useInventoryItems, useInventoryMovements, useMoveStock, useReceiveSupply, useUnarchiveItem, useUpdateItem } from '@/hooks/useInventory';
 import {
   useAddBatch,
   useArchiveMedicine,
@@ -73,6 +76,7 @@ import {
   useCreateMedicine,
   useDispense,
   useMedicine,
+  useMedicineTransactions,
   useMedicines,
   useUnarchiveMedicine,
   useUpdateMedicine,
@@ -108,6 +112,7 @@ import {
   createReorderSchema,
   type CreateReorderInput,
 } from '@/schemas/reorders';
+import { fmtUtcToApp } from '@/utils/date';
 
 const BATCH_STATUS_VARIANT = {
   active: 'success',
@@ -204,7 +209,7 @@ function CreateMedicineDialog({ onClose }: { onClose: () => void }) {
       <DialogHeader>
         <DialogTitle>New medicine</DialogTitle>
       </DialogHeader>
-      <form noValidate onSubmit={(e) => void onSubmit(e)} className="grid grid-cols-2 gap-3">
+      <form noValidate onSubmit={(e) => void onSubmit(e)} className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <div className="col-span-2 space-y-1.5">
           <Label htmlFor="generic_name">Generic name</Label>
           <Input id="generic_name" aria-invalid={errors.generic_name !== undefined} {...register('generic_name')} />
@@ -294,7 +299,7 @@ function AddBatchDialog({ medicine, onClose }: { medicine: Medicine; onClose: ()
       )}
 
       {order !== null && (
-        <form noValidate onSubmit={(e) => void onSubmit(e)} className="grid grid-cols-2 gap-3">
+        <form noValidate onSubmit={(e) => void onSubmit(e)} className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <p className="col-span-2 rounded-md bg-muted/50 p-2 text-xs text-muted-foreground">
             Receiving reorder <span className="font-mono">#{order.id}</span> —{' '}
             <span className="font-medium text-foreground">{order.requested_quantity} {medicine.unit}</span>{' '}
@@ -342,8 +347,12 @@ function AddBatchDialog({ medicine, onClose }: { medicine: Medicine; onClose: ()
 
 function DispenseDialog({ medicine, onClose }: { medicine: Medicine; onClose: () => void }) {
   const dispense = useDispense();
-  const { register, handleSubmit, formState: { errors }, reset } =
+  // Panel revision: dispensing is anchored to an OPEN encounter (the
+  // actual clinic visit), so the ledger records who received the stock.
+  const encounters = useEncounters(null, 50, 'open');
+  const { register, handleSubmit, formState: { errors }, reset, setValue, watch } =
     useForm<DispenseInput>({ resolver: zodResolver(dispenseSchema) });
+  const encounterId = watch('encounter_id');
 
   const onSubmit = handleSubmit((values) => {
     dispense.mutate({ medicineId: medicine.id, input: values }, {
@@ -353,6 +362,8 @@ function DispenseDialog({ medicine, onClose }: { medicine: Medicine; onClose: ()
       },
     });
   });
+
+  const openEncounters = encounters.data?.data ?? [];
 
   return (
     <DialogContent>
@@ -364,6 +375,27 @@ function DispenseDialog({ medicine, onClose }: { medicine: Medicine; onClose: ()
           On hand: <span className="font-mono">{medicine.quantity_on_hand} {medicine.unit}</span>.
           Stock is drawn from the earliest-expiring lot first (FEFO).
         </p>
+        <div className="space-y-1.5">
+          <Label id="dispense-encounter-label">Open encounter</Label>
+          <Select value={encounterId !== undefined ? String(encounterId) : ''} onValueChange={(v) => setValue('encounter_id', Number(v), { shouldValidate: true })}>
+            <SelectTrigger aria-labelledby="dispense-encounter-label" aria-invalid={errors.encounter_id !== undefined}>
+              <SelectValue placeholder={openEncounters.length === 0 ? 'No open encounters' : 'Select the visit…'} />
+            </SelectTrigger>
+            <SelectContent>
+              {openEncounters.map((e) => (
+                <SelectItem key={e.id} value={String(e.id)}>
+                  #{e.id} · {e.patient_school_id} · {e.chief_complaint.slice(0, 40)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          {errors.encounter_id !== undefined && (
+            <p role="alert" className="text-xs text-destructive">{errors.encounter_id.message}</p>
+          )}
+          {openEncounters.length === 0 && !encounters.isLoading && (
+            <p className="text-[10px] text-muted-foreground">Open an encounter in Clinic first — dispensing must be tied to a visit.</p>
+          )}
+        </div>
         <div className="space-y-1.5">
           <Label htmlFor="quantity">Quantity</Label>
           <Input
@@ -383,12 +415,114 @@ function DispenseDialog({ medicine, onClose }: { medicine: Medicine; onClose: ()
         </div>
         <DialogFooter>
           <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
-          <Button type="submit" disabled={dispense.isPending}>
+          <Button type="submit" disabled={dispense.isPending || openEncounters.length === 0}>
             {dispense.isPending && <Loader2 className="animate-spin" />}
             <Syringe /> Dispense
           </Button>
         </DialogFooter>
       </form>
+    </DialogContent>
+  );
+}
+
+/**
+ * LedgerRow — one debit/credit line rendered by both the medicine and
+ * supply ledgers (panel revision: in/out tracking with a running
+ * balance). `qty_in` and `qty_out` are mutually exclusive.
+ */
+function LedgerBody({
+  rows,
+  isLoading,
+  isError,
+  emptyLabel,
+}: {
+  rows: Array<{ id: number; label: string; qty_in: number | null; qty_out: number | null; balance_after: number | null; note: string | null; created_at: string }>;
+  isLoading: boolean;
+  isError: boolean;
+  emptyLabel: string;
+}) {
+  return (
+    <div className="max-h-96 overflow-auto rounded-md border">
+      <Table>
+        <TableHeader className="sticky top-0 bg-muted/70">
+          <TableRow>
+            <TableHead className="px-3">Date</TableHead>
+            <TableHead className="px-3">Reference</TableHead>
+            <TableHead className="px-3 text-right">In</TableHead>
+            <TableHead className="px-3 text-right">Out</TableHead>
+            <TableHead className="px-3 text-right">Balance</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {isLoading && (
+            <TableRow><TableCell colSpan={5} className="px-3 py-6 text-center text-muted-foreground"><Loader2 className="mx-auto size-4 animate-spin" /></TableCell></TableRow>
+          )}
+          {isError && !isLoading && (
+            <TableRow><TableCell colSpan={5} className="px-3 py-6 text-center text-destructive">Failed to load the ledger.</TableCell></TableRow>
+          )}
+          {!isLoading && !isError && rows.length === 0 && (
+            <TableRow><TableCell colSpan={5} className="px-3 py-6 text-center text-muted-foreground">{emptyLabel}</TableCell></TableRow>
+          )}
+          {rows.map((r) => (
+            <TableRow key={r.id}>
+              <TableCell className="px-3 font-mono text-xs text-muted-foreground">{fmtUtcToApp(r.created_at)}</TableCell>
+              <TableCell className="px-3 text-xs">
+                {r.label}
+                {r.note !== null && r.note !== '' ? <span className="ml-1 text-muted-foreground">· {r.note}</span> : ''}
+              </TableCell>
+              <TableCell className="px-3 text-right font-mono text-xs text-emerald-600">{r.qty_in !== null ? `+${r.qty_in}` : ''}</TableCell>
+              <TableCell className="px-3 text-right font-mono text-xs text-destructive">{r.qty_out !== null ? `-${r.qty_out}` : ''}</TableCell>
+              <TableCell className="px-3 text-right font-mono text-xs font-semibold">{r.balance_after ?? '—'}</TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+    </div>
+  );
+}
+
+function MedicineLedgerDialog({ medicine, onClose }: { medicine: Medicine; onClose: () => void }) {
+  const txns = useMedicineTransactions(medicine.id);
+  const rows = (txns.data ?? []).map((t) => ({
+    id: t.id,
+    label: t.reference_type !== null ? `${t.type} · ${t.reference_type}#${t.reference_id ?? '?'}` : t.type,
+    qty_in: t.qty_in,
+    qty_out: t.qty_out,
+    balance_after: t.balance_after,
+    note: t.note,
+    created_at: t.created_at,
+  }));
+  return (
+    <DialogContent className="max-w-2xl">
+      <DialogHeader>
+        <DialogTitle className="flex items-center gap-2"><ScrollText className="size-4" /> Ledger — {medicine.generic_name}</DialogTitle>
+      </DialogHeader>
+      <p className="text-xs text-muted-foreground">Every stock movement, oldest first. Balance is the on-hand total after each entry.</p>
+      <LedgerBody rows={rows} isLoading={txns.isLoading} isError={txns.isError} emptyLabel="No transactions yet." />
+      <DialogFooter><Button variant="outline" onClick={onClose}>Close</Button></DialogFooter>
+    </DialogContent>
+  );
+}
+
+function SupplyLedgerDialog({ item, onClose }: { item: InventoryItem; onClose: () => void }) {
+  const moves = useInventoryMovements(item.id);
+  const rows = (moves.data ?? []).map((m) => ({
+    id: m.id,
+    label: m.reason_code,
+    qty_in: m.qty_in,
+    qty_out: m.qty_out,
+    balance_after: m.balance_after,
+    note: m.note,
+    created_at: m.created_at,
+  }));
+  return (
+    <DialogContent className="max-w-2xl">
+      <DialogHeader>
+        <DialogTitle className="flex items-center gap-2"><ScrollText className="size-4" /> Ledger — {item.name}</DialogTitle>
+      </DialogHeader>
+      <p className="text-xs text-muted-foreground">Every stock movement, oldest first. Balance is the on-hand total after each entry.</p>
+      <LedgerBody rows={rows} isLoading={moves.isLoading} isError={moves.isError} emptyLabel="No movements yet." />
+      <DialogFooter><Button variant="outline" onClick={onClose}>Close</Button></DialogFooter>
     </DialogContent>
   );
 }
@@ -486,7 +620,7 @@ function EditMedicineDialog({ medicine, onClose }: { medicine: Medicine; onClose
       <DialogHeader>
         <DialogTitle>Edit — {medicine.generic_name}</DialogTitle>
       </DialogHeader>
-      <form noValidate onSubmit={(e) => void onSubmit(e)} className="grid grid-cols-2 gap-3">
+      <form noValidate onSubmit={(e) => void onSubmit(e)} className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <p className="col-span-2 text-xs text-muted-foreground">
           Catalog details are locked after creation — only the reorder threshold can change.
         </p>
@@ -573,7 +707,7 @@ function EditItemDialog({ item, onClose }: { item: InventoryItem; onClose: () =>
             <p role="alert" className="text-xs text-destructive">{errors.name.message}</p>
           )}
         </div>
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <div className="space-y-1.5">
             <Label htmlFor="edit_item_unit">Unit</Label>
             <Input id="edit_item_unit" {...register('unit')} />
@@ -605,6 +739,7 @@ function MedicinesTab() {
   const [openCreate, setOpenCreate] = useState(false);
   const [receiveFor, setReceiveFor] = useState<Medicine | null>(null);
   const [dispenseFor, setDispenseFor] = useState<Medicine | null>(null);
+  const [ledgerFor, setLedgerFor] = useState<Medicine | null>(null);
   const [batchesFor, setBatchesFor] = useState<number | null>(null);
   const [editFor, setEditFor] = useState<Medicine | null>(null);
   const [archiveFor, setArchiveFor] = useState<Medicine | null>(null);
@@ -642,6 +777,45 @@ function MedicinesTab() {
 
   const rows = list.data?.data ?? [];
 
+  // Action rail shared by the desktop row and the mobile card so the
+  // two surfaces never drift. `size="sm"` buttons are 40px tall on
+  // mobile (touch) and wrap inside the card footer.
+  const medicineActions = (m: Medicine) =>
+    m.archived ? (
+      <>
+        <Button size="sm" variant="outline" onClick={() => setBatchesFor(m.id)}>
+          <Layers /> Batches
+        </Button>
+        <Button size="sm" variant="outline" disabled={unarchive.isPending} onClick={() => unarchive.mutate(m.id)}>
+          <ArchiveRestore /> Restore
+        </Button>
+      </>
+    ) : (
+      <>
+        <Button size="sm" variant="secondary" onClick={() => setReceiveFor(m)}>
+          <PackagePlus /> Receive
+        </Button>
+        <Button size="sm" variant="outline" disabled={m.quantity_on_hand === 0} onClick={() => setDispenseFor(m)}>
+          <Syringe /> Dispense
+        </Button>
+        <Button size="sm" variant="outline" onClick={() => setBatchesFor(m.id)}>
+          <Layers /> Batches
+        </Button>
+        <Button size="sm" variant="outline" onClick={() => setLedgerFor(m)}>
+          <ScrollText /> Ledger
+        </Button>
+        <Button size="sm" variant="outline" aria-label={`Forecast ${m.generic_name}`} disabled={forecast.isPending} onClick={() => forecast.mutate(m.id)}>
+          <TrendingUp /> Forecast
+        </Button>
+        <Button size="sm" variant="outline" onClick={() => setEditFor(m)}>
+          <Pencil /> Edit
+        </Button>
+        <Button size="sm" variant="outline" className="text-muted-foreground" onClick={() => setArchiveFor(m)}>
+          <Archive /> Archive
+        </Button>
+      </>
+    );
+
   return (
     <div className="space-y-4">
       <section className="flex flex-wrap items-center justify-between gap-3 rounded-xl border bg-card p-3">
@@ -668,7 +842,7 @@ function MedicinesTab() {
         </div>
       </section>
 
-      <section className="overflow-hidden rounded-xl border bg-card">
+      <section className="hidden overflow-hidden rounded-xl border bg-card md:block">
         <Table>
           <TableHeader className="bg-muted/50">
             <TableRow>
@@ -727,58 +901,7 @@ function MedicinesTab() {
                   </TableCell>
                   <TableCell className="px-3 text-right">
                     <div className="flex flex-wrap justify-end gap-1">
-                      {m.archived ? (
-                        <>
-                          <Button size="sm" variant="outline" onClick={() => setBatchesFor(m.id)}>
-                            <Layers /> Batches
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            disabled={unarchive.isPending}
-                            onClick={() => unarchive.mutate(m.id)}
-                          >
-                            <ArchiveRestore /> Restore
-                          </Button>
-                        </>
-                      ) : (
-                        <>
-                          <Button size="sm" variant="secondary" onClick={() => setReceiveFor(m)}>
-                            <PackagePlus /> Receive
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            disabled={m.quantity_on_hand === 0}
-                            onClick={() => setDispenseFor(m)}
-                          >
-                            <Syringe /> Dispense
-                          </Button>
-                          <Button size="sm" variant="outline" onClick={() => setBatchesFor(m.id)}>
-                            <Layers /> Batches
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            aria-label={`Forecast ${m.generic_name}`}
-                            disabled={forecast.isPending}
-                            onClick={() => forecast.mutate(m.id)}
-                          >
-                            <TrendingUp /> Forecast
-                          </Button>
-                          <Button size="sm" variant="outline" onClick={() => setEditFor(m)}>
-                            <Pencil /> Edit
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="text-muted-foreground"
-                            onClick={() => setArchiveFor(m)}
-                          >
-                            <Archive /> Archive
-                          </Button>
-                        </>
-                      )}
+                      {medicineActions(m)}
                     </div>
                   </TableCell>
                 </TableRow>
@@ -787,6 +910,53 @@ function MedicinesTab() {
           </TableBody>
         </Table>
       </section>
+
+      {/* Mobile: medicine cards from the same rows. */}
+      {list.isLoading && (
+        <p className="py-6 text-center text-sm text-muted-foreground md:hidden" role="status">
+          <Loader2 className="mx-auto size-4 animate-spin" />
+        </p>
+      )}
+      {list.isError && !list.isLoading && (
+        <div className="rounded-xl border border-destructive/30 bg-destructive/5 p-4 text-center text-sm text-destructive md:hidden">
+          <p>Failed to load medicines.</p>
+          <Button variant="outline" size="sm" className="mt-2" onClick={() => void list.refetch()} disabled={list.isFetching}>Retry</Button>
+        </div>
+      )}
+      {!list.isLoading && !list.isError && rows.length === 0 && (
+        <p className="rounded-xl border border-dashed p-6 text-center text-sm text-muted-foreground md:hidden">
+          {debouncedQ !== '' ? `No medicines match "${debouncedQ}".` : 'No medicines in the catalog.'}
+        </p>
+      )}
+      <MobileCardList>
+        {rows.map((m) => {
+          const days = m.earliest_expiry !== null ? daysUntil(m.earliest_expiry) : null;
+          return (
+            <MobileCard key={m.id} aria-label={`Medicine ${m.generic_name}`}>
+              <div className="mb-1 flex items-center justify-between gap-2">
+                <span className="text-sm font-medium text-foreground">{m.generic_name}</span>
+                {m.archived
+                  ? <Badge variant="secondary">Archived</Badge>
+                  : m.low_stock ? <Badge variant="warning">Low</Badge> : <Badge variant="success">OK</Badge>}
+              </div>
+              {[m.brand_name, m.dosage_strength].filter(Boolean).length > 0 && (
+                <p className="text-xs text-muted-foreground">{[m.brand_name, m.dosage_strength].filter(Boolean).join(' · ')}</p>
+              )}
+              <MobileCardField label="Category">{m.category ?? '—'}</MobileCardField>
+              <MobileCardField label="On hand"><span className="font-mono text-xs">{m.quantity_on_hand} {m.unit}</span></MobileCardField>
+              <MobileCardField label="Earliest expiry">
+                <span className="text-xs">
+                  {m.earliest_expiry ?? '—'}
+                  {days !== null && days <= 30 && (
+                    <Badge variant={days <= 7 ? 'destructive' : 'warning'} className="ml-1.5">{days}d</Badge>
+                  )}
+                </span>
+              </MobileCardField>
+              <MobileCardActions>{medicineActions(m)}</MobileCardActions>
+            </MobileCard>
+          );
+        })}
+      </MobileCardList>
 
       <nav className="flex items-center justify-between" aria-label="pagination">
         <p className="text-xs text-muted-foreground">Page {history.length}</p>
@@ -818,6 +988,11 @@ function MedicinesTab() {
       {batchesFor !== null && (
         <Dialog open onOpenChange={(o) => !o && setBatchesFor(null)}>
           <BatchesDialog medicineId={batchesFor} onClose={() => setBatchesFor(null)} />
+        </Dialog>
+      )}
+      {ledgerFor !== null && (
+        <Dialog open onOpenChange={(o) => !o && setLedgerFor(null)}>
+          <MedicineLedgerDialog medicine={ledgerFor} onClose={() => setLedgerFor(null)} />
         </Dialog>
       )}
       {editFor !== null && (
@@ -931,7 +1106,7 @@ function CreateReorderDialog({ onClose }: { onClose: () => void }) {
             <p role="alert" className="text-xs text-destructive">{errors.medicine_id.message}</p>
           )}
         </div>
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <div className="space-y-1.5">
             <Label htmlFor="reorder_quantity">Quantity</Label>
             <Input
@@ -1058,6 +1233,46 @@ function ReordersTab() {
 
   const rows = list.data?.data ?? [];
 
+  // Lifecycle actions shared by the desktop row and the mobile card.
+  const reorderActions = (r: (typeof rows)[number]) => (
+    <>
+      {r.status === 'pending' && (
+        <Button size="sm" variant="secondary" disabled={transition.isPending}
+          onClick={() => transition.mutate({ id: r.id, action: 'approve' })}>
+          <Check /> Approve
+        </Button>
+      )}
+      {r.status === 'approved' && (
+        <Button size="sm" variant="secondary" disabled={transition.isPending}
+          onClick={() => setOrderingId(r.id)}>
+          <Truck /> Order
+        </Button>
+      )}
+      {r.status === 'ordered' && (
+        <Button size="sm" variant="secondary" disabled={transition.isPending}
+          onClick={() => transition.mutate({ id: r.id, action: 'receive' })}>
+          <PackageCheck /> Mark delivered
+        </Button>
+      )}
+      {r.status === 'received' && (
+        <span className="text-xs text-muted-foreground">
+          awaiting stock entry on the {r.item_type === 'supply' ? 'Supplies' : 'Medicines'} tab
+        </span>
+      )}
+      {(r.status === 'pending' || r.status === 'approved' || r.status === 'ordered') && (
+        <Button size="sm" variant="outline" disabled={transition.isPending}
+          onClick={() => setConfirm({
+            title: `Cancel reorder #${r.id}?`,
+            description: 'The purchase request will be cancelled. This cannot be undone.',
+            confirmLabel: 'Cancel request',
+            run: () => transition.mutate({ id: r.id, action: 'cancel' }),
+          })}>
+          <X /> Cancel
+        </Button>
+      )}
+    </>
+  );
+
   return (
     <div className="space-y-4">
       <section className="flex flex-wrap items-center justify-between gap-3 rounded-xl border bg-card p-3">
@@ -1077,7 +1292,7 @@ function ReordersTab() {
             value={statusFilter}
             onValueChange={(v) => { setStatusFilter(v); setCursor(null); setHistory([null]); }}
           >
-            <SelectTrigger aria-label="Filter by status" className="h-9 w-36">
+            <SelectTrigger aria-label="Filter by status" className="h-10 w-36 md:h-9">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -1106,7 +1321,7 @@ function ReordersTab() {
         </div>
       </section>
 
-      <section className="overflow-hidden rounded-xl border bg-card">
+      <section className="hidden overflow-hidden rounded-xl border bg-card md:block">
         <Table>
           <TableHeader className="bg-muted/50">
             <TableRow>
@@ -1170,40 +1385,7 @@ function ReordersTab() {
                 </TableCell>
                 <TableCell className="px-3 text-right">
                   <div className="flex justify-end gap-1">
-                    {r.status === 'pending' && (
-                      <Button size="sm" variant="secondary" disabled={transition.isPending}
-                        onClick={() => transition.mutate({ id: r.id, action: 'approve' })}>
-                        <Check /> Approve
-                      </Button>
-                    )}
-                    {r.status === 'approved' && (
-                      <Button size="sm" variant="secondary" disabled={transition.isPending}
-                        onClick={() => setOrderingId(r.id)}>
-                        <Truck /> Order
-                      </Button>
-                    )}
-                    {r.status === 'ordered' && (
-                      <Button size="sm" variant="secondary" disabled={transition.isPending}
-                        onClick={() => transition.mutate({ id: r.id, action: 'receive' })}>
-                        <PackageCheck /> Mark delivered
-                      </Button>
-                    )}
-                    {r.status === 'received' && (
-                      <span className="text-xs text-muted-foreground">
-                        awaiting stock entry on the {r.item_type === 'supply' ? 'Supplies' : 'Medicines'} tab
-                      </span>
-                    )}
-                    {(r.status === 'pending' || r.status === 'approved' || r.status === 'ordered') && (
-                      <Button size="sm" variant="outline" disabled={transition.isPending}
-                        onClick={() => setConfirm({
-                          title: `Cancel reorder #${r.id}?`,
-                          description: 'The purchase request will be cancelled. This cannot be undone.',
-                          confirmLabel: 'Cancel request',
-                          run: () => transition.mutate({ id: r.id, action: 'cancel' }),
-                        })}>
-                        <X /> Cancel
-                      </Button>
-                    )}
+                    {reorderActions(r)}
                   </div>
                 </TableCell>
               </TableRow>
@@ -1211,6 +1393,52 @@ function ReordersTab() {
           </TableBody>
         </Table>
       </section>
+
+      {/* Mobile: reorder cards from the same rows. */}
+      {list.isLoading && (
+        <p className="py-6 text-center text-sm text-muted-foreground md:hidden" role="status">
+          <Loader2 className="mx-auto size-4 animate-spin" />
+        </p>
+      )}
+      {list.isError && !list.isLoading && (
+        <div className="rounded-xl border border-destructive/30 bg-destructive/5 p-4 text-center text-sm text-destructive md:hidden">
+          <p>Failed to load reorder requests.</p>
+          <Button variant="outline" size="sm" className="mt-2" onClick={() => void list.refetch()} disabled={list.isFetching}>Retry</Button>
+        </div>
+      )}
+      {!list.isLoading && !list.isError && rows.length === 0 && (
+        <p className="rounded-xl border border-dashed p-6 text-center text-sm text-muted-foreground md:hidden">
+          {debouncedQ !== '' ? `No reorder requests match "${debouncedQ}".` : statusFilter === 'all' ? 'No reorder requests.' : `No ${statusFilter} requests.`}
+        </p>
+      )}
+      <MobileCardList>
+        {rows.map((r) => (
+          <MobileCard key={r.id} aria-label={`Reorder ${r.id}`}>
+            <div className="mb-1 flex items-center justify-between gap-2">
+              <span className="text-sm font-medium text-foreground">
+                {r.item_name ?? `#${r.medicine_id ?? r.supply_item_id ?? '?'}`}
+              </span>
+              <Badge variant={REORDER_STATUS_VARIANT[r.status]}>{r.status}</Badge>
+            </div>
+            <div className="mb-1 flex flex-wrap gap-1.5">
+              {r.auto_triggered && <Badge variant="outline">auto</Badge>}
+              {r.item_type === 'supply' && <Badge variant="outline">supply</Badge>}
+              <Badge variant={URGENCY_VARIANT[r.urgency]}>{r.urgency}</Badge>
+            </div>
+            <MobileCardField label="Qty to order"><span className="font-mono text-xs">{r.requested_quantity} {r.unit ?? ''}</span></MobileCardField>
+            <MobileCardField label="Threshold"><span className="font-mono text-xs text-muted-foreground">{r.reorder_level}</span></MobileCardField>
+            <MobileCardField label="Dates">
+              <span className="text-xs text-muted-foreground">
+                {r.order_date !== null && <>ordered {r.order_date}<br /></>}
+                {r.expected_delivery_date !== null && <>eta {r.expected_delivery_date}<br /></>}
+                {r.actual_delivery_date !== null && <>delivered {r.actual_delivery_date}</>}
+                {r.order_date === null && r.actual_delivery_date === null && '—'}
+              </span>
+            </MobileCardField>
+            <MobileCardActions>{reorderActions(r)}</MobileCardActions>
+          </MobileCard>
+        ))}
+      </MobileCardList>
 
       <nav className="flex items-center justify-between" aria-label="pagination">
         <p className="text-xs text-muted-foreground">Page {history.length}</p>
@@ -1294,7 +1522,7 @@ function CreateItemDialog({ onClose }: { onClose: () => void }) {
             <p role="alert" className="text-xs text-destructive">{errors.name.message}</p>
           )}
         </div>
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <div className="space-y-1.5">
             <Label htmlFor="unit">Unit</Label>
             <Input id="unit" {...register('unit')} />
@@ -1359,7 +1587,7 @@ function MoveStockDialog({ item, onClose }: { item: InventoryItem; onClose: () =
           Dispenses are negative; adjustments may go either way. Deliveries are
           entered with the Receive button (procurement workflow).
         </p>
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <div className="space-y-1.5">
             <Label htmlFor="qty_delta">Quantity delta</Label>
             <Input id="qty_delta" type="number" aria-invalid={errors.qty_delta !== undefined} {...register('qty_delta', { valueAsNumber: true })} />
@@ -1520,6 +1748,7 @@ function SuppliesTab() {
   const [openCreate, setOpenCreate] = useState(false);
   const [moveItem, setMoveItem] = useState<InventoryItem | null>(null);
   const [receiveItem, setReceiveItem] = useState<InventoryItem | null>(null);
+  const [ledgerItem, setLedgerItem] = useState<InventoryItem | null>(null);
   const [dispenseItem, setDispenseItem] = useState<InventoryItem | null>(null);
   const [editItem, setEditItem] = useState<InventoryItem | null>(null);
   const [archiveItem, setArchiveItem] = useState<InventoryItem | null>(null);
@@ -1556,6 +1785,35 @@ function SuppliesTab() {
 
   const rows = list.data?.data ?? [];
 
+  // Actions shared by the desktop row and the mobile card.
+  const supplyActions = (it: (typeof rows)[number]) =>
+    it.archived ? (
+      <Button size="sm" variant="outline" disabled={unarchive.isPending} onClick={() => unarchive.mutate(it.id)}>
+        <ArchiveRestore /> Restore
+      </Button>
+    ) : (
+      <>
+        <Button size="sm" variant="secondary" onClick={() => setReceiveItem(it)}>
+          <PackagePlus /> Receive
+        </Button>
+        <Button size="sm" variant="outline" disabled={it.quantity_on_hand === 0} onClick={() => setDispenseItem(it)}>
+          <Syringe /> Dispense
+        </Button>
+        <Button size="sm" variant="outline" onClick={() => setMoveItem(it)}>
+          <ArrowDownUp /> Adjust
+        </Button>
+        <Button size="sm" variant="outline" onClick={() => setLedgerItem(it)}>
+          <ScrollText /> Ledger
+        </Button>
+        <Button size="sm" variant="outline" onClick={() => setEditItem(it)}>
+          <Pencil /> Edit
+        </Button>
+        <Button size="sm" variant="outline" className="text-muted-foreground" onClick={() => setArchiveItem(it)}>
+          <Archive /> Archive
+        </Button>
+      </>
+    );
+
   return (
     <div className="space-y-4">
       <section className="flex flex-wrap items-center justify-between gap-3 rounded-xl border bg-card p-3">
@@ -1582,7 +1840,7 @@ function SuppliesTab() {
         </div>
       </section>
 
-      <section className="overflow-hidden rounded-xl border bg-card">
+      <section className="hidden overflow-hidden rounded-xl border bg-card md:block">
         <Table>
           <TableHeader className="bg-muted/50">
             <TableRow>
@@ -1625,44 +1883,7 @@ function SuppliesTab() {
                 </TableCell>
                 <TableCell className="px-3 text-right">
                   <div className="flex flex-wrap justify-end gap-1">
-                    {it.archived ? (
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        disabled={unarchive.isPending}
-                        onClick={() => unarchive.mutate(it.id)}
-                      >
-                        <ArchiveRestore /> Restore
-                      </Button>
-                    ) : (
-                      <>
-                        <Button size="sm" variant="secondary" onClick={() => setReceiveItem(it)}>
-                          <PackagePlus /> Receive
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          disabled={it.quantity_on_hand === 0}
-                          onClick={() => setDispenseItem(it)}
-                        >
-                          <Syringe /> Dispense
-                        </Button>
-                        <Button size="sm" variant="outline" onClick={() => setMoveItem(it)}>
-                          <ArrowDownUp /> Adjust
-                        </Button>
-                        <Button size="sm" variant="outline" onClick={() => setEditItem(it)}>
-                          <Pencil /> Edit
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="text-muted-foreground"
-                          onClick={() => setArchiveItem(it)}
-                        >
-                          <Archive /> Archive
-                        </Button>
-                      </>
-                    )}
+                    {supplyActions(it)}
                   </div>
                 </TableCell>
               </TableRow>
@@ -1670,6 +1891,40 @@ function SuppliesTab() {
           </TableBody>
         </Table>
       </section>
+
+      {/* Mobile: supply cards from the same rows. */}
+      {list.isLoading && (
+        <p className="py-6 text-center text-sm text-muted-foreground md:hidden" role="status">
+          <Loader2 className="mx-auto size-4 animate-spin" />
+        </p>
+      )}
+      {list.isError && !list.isLoading && (
+        <div className="rounded-xl border border-destructive/30 bg-destructive/5 p-4 text-center text-sm text-destructive md:hidden">
+          <p>Failed to load supplies.</p>
+          <Button variant="outline" size="sm" className="mt-2" onClick={() => void list.refetch()} disabled={list.isFetching}>Retry</Button>
+        </div>
+      )}
+      {!list.isLoading && !list.isError && rows.length === 0 && (
+        <p className="rounded-xl border border-dashed p-6 text-center text-sm text-muted-foreground md:hidden">
+          {debouncedQ !== '' ? `No items match "${debouncedQ}".` : 'No items.'}
+        </p>
+      )}
+      <MobileCardList>
+        {rows.map((it) => (
+          <MobileCard key={it.id} aria-label={`Supply ${it.name}`}>
+            <div className="mb-1 flex items-center justify-between gap-2">
+              <span className="text-sm font-medium text-foreground">{it.name}</span>
+              {it.archived
+                ? <Badge variant="secondary">Archived</Badge>
+                : it.low_stock ? <Badge variant="warning">Low</Badge> : <Badge variant="success">OK</Badge>}
+            </div>
+            <MobileCardField label="SKU"><span className="font-mono text-xs">{it.sku}</span></MobileCardField>
+            <MobileCardField label="On hand"><span className="font-mono text-xs">{it.quantity_on_hand} {it.unit}</span></MobileCardField>
+            <MobileCardField label="Reorder level"><span className="font-mono text-xs text-muted-foreground">{it.reorder_level}</span></MobileCardField>
+            <MobileCardActions>{supplyActions(it)}</MobileCardActions>
+          </MobileCard>
+        ))}
+      </MobileCardList>
 
       <nav className="flex items-center justify-between" aria-label="pagination">
         <p className="text-xs text-muted-foreground">Page {history.length}</p>
@@ -1696,6 +1951,11 @@ function SuppliesTab() {
       {receiveItem !== null && (
         <Dialog open onOpenChange={(o) => !o && setReceiveItem(null)}>
           <ReceiveSupplyDialog item={receiveItem} onClose={() => setReceiveItem(null)} />
+        </Dialog>
+      )}
+      {ledgerItem !== null && (
+        <Dialog open onOpenChange={(o) => !o && setLedgerItem(null)}>
+          <SupplyLedgerDialog item={ledgerItem} onClose={() => setLedgerItem(null)} />
         </Dialog>
       )}
       {dispenseItem !== null && (

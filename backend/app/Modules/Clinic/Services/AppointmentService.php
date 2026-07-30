@@ -18,8 +18,13 @@ use Modules\Clinic\Policies\ClinicPolicy;
 /**
  * AppointmentService — clinic scheduling (Phase 9).
  *
- * Lifecycle: Scheduled → CheckedIn → Completed
- *            Scheduled → Cancelled | NoShow
+ * Lifecycle: scheduled → checked_in → completed
+ *            scheduled → cancelled | no_show
+ *
+ * Panel revision (July 2026): appointments are ONLY the scheduling
+ * layer — checking in auto-opens the linked clinic ENCOUNTER (the
+ * anchor for vitals, treatments and dispensing) and enqueues it into
+ * today's walk-in queue, mirroring the kiosk flow in CheckinService.
  *
  * Every state change runs under `selectForUpdate`; the audit AND
  * notification outbox rows are written in the SAME transaction.
@@ -27,10 +32,10 @@ use Modules\Clinic\Policies\ClinicPolicy;
 final class AppointmentService extends BaseService
 {
     private const TRANSITIONS = [
-        'CheckedIn' => ['Scheduled'],
-        'Completed' => ['CheckedIn'],
-        'Cancelled' => ['Scheduled', 'CheckedIn'],
-        'NoShow'    => ['Scheduled'],
+        'checked_in' => ['scheduled'],
+        'completed'  => ['checked_in'],
+        'cancelled'  => ['scheduled', 'checked_in'],
+        'no_show'    => ['scheduled'],
     ];
 
     public function __construct(
@@ -144,6 +149,21 @@ final class AppointmentService extends BaseService
             }
         }
 
+        // Linked encounters — a checked-in appointment auto-opens one
+        // (panel revision). Lets the SPA jump straight to the visit.
+        $encounterIds = [];
+        $apptIds = array_map(static fn (array $r) => (int) $r['id'], $rows);
+        if ($apptIds !== []) {
+            $encRows = $this->db->table('clinic_encounters')
+                ->select('id, appointment_id')
+                ->whereIn('appointment_id', $apptIds)
+                ->where('archived_at', null)
+                ->get()->getResultArray();
+            foreach ($encRows as $e) {
+                $encounterIds[(int) $e['appointment_id']] = (int) $e['id'];
+            }
+        }
+
         $out = [];
         foreach ($rows as $r) {
             $sid = (string) $r['patient_school_id'];
@@ -152,6 +172,7 @@ final class AppointmentService extends BaseService
             $r['patient_kind']  = isset($studentNames[$sid]) ? 'student'
                                  : (isset($employeeNames[$sid]) ? 'employee' : null);
             $r['provider_name'] = $providerNames[$pid] ?? null;
+            $r['encounter_id']  = $encounterIds[(int) $r['id']] ?? null;
             $out[] = $r;
         }
         return $out;
@@ -188,7 +209,7 @@ final class AppointmentService extends BaseService
                 'patient_school_id' => $patientSchoolId,
                 'provider_user_id'  => $providerUserId,
                 'scheduled_at'      => $scheduledAtUtc,
-                'status'            => 'Scheduled',
+                'status'            => 'scheduled',
                 'reason'            => $reason,
                 'created_at'        => $now,
                 'updated_at'        => $now,
@@ -201,7 +222,7 @@ final class AppointmentService extends BaseService
                 'clinic_appointments',
                 $id,
                 $userId,
-                ['next_status' => 'Scheduled'],
+                ['next_status' => 'scheduled'],
             );
 
             // Same-transaction notification to the provider (no PII —
@@ -247,6 +268,13 @@ final class AppointmentService extends BaseService
                 ->where('id', $appointmentId)
                 ->update(['status' => $nextStatus, 'updated_at' => $now]);
 
+            // Panel revision: checking in creates the day's ENCOUNTER
+            // (the anchor for all clinic actions) and queues it — same
+            // transaction, same discipline as the kiosk walk-in flow.
+            if ($nextStatus === 'checked_in') {
+                $this->openEncounterForAppointment($row, $userId, $now);
+            }
+
             $this->audit->enqueue(
                 'clinic.appointment_' . strtolower($nextStatus),
                 'clinic_appointments',
@@ -258,6 +286,71 @@ final class AppointmentService extends BaseService
             $fresh = $this->db->table('clinic_appointments')->where('id', $appointmentId)->get()->getRowArray();
             return AppointmentDto::fromRow($this->decorate([$fresh])[0]);
         });
+    }
+
+    /**
+     * Auto-open the encounter for a checked-in appointment and enqueue
+     * it into today's queue. Runs inside the caller's transaction.
+     *
+     * The UNIQUE index on `clinic_encounters.appointment_id` is the
+     * hard guard against double check-ins; the pre-check just keeps
+     * the path idempotent without surfacing a duplicate-key error.
+     *
+     * @param array<string, mixed> $appt locked appointment row
+     */
+    private function openEncounterForAppointment(array $appt, int $userId, string $now): int
+    {
+        $appointmentId = (int) $appt['id'];
+
+        $existing = $this->db->table('clinic_encounters')
+            ->select('id')
+            ->where('appointment_id', $appointmentId)
+            ->get()->getRowArray();
+        if ($existing !== null) {
+            return (int) $existing['id'];
+        }
+
+        $reason = isset($appt['reason']) && $appt['reason'] !== null && $appt['reason'] !== ''
+            ? (string) $appt['reason']
+            : "Scheduled visit — appointment #{$appointmentId}";
+
+        $this->db->table('clinic_encounters')->insert([
+            'patient_school_id' => (string) $appt['patient_school_id'],
+            'appointment_id'    => $appointmentId,
+            'chief_complaint'   => $reason,
+            'status'            => 'open',
+            'attending_user_id' => (int) $appt['provider_user_id'],
+            'started_at'        => $now,
+            'created_at'        => $now,
+            'updated_at'        => $now,
+        ]);
+        $encounterId = (int) $this->db->insertID();
+
+        // Row-locked MAX(position) — same discipline as QueueService /
+        // CheckinService so kiosk and desk check-ins never collide.
+        $last = $this->db->query(
+            'SELECT `position` FROM `clinic_queue_entries` WHERE `queue_date` = ? ORDER BY `position` DESC LIMIT 1 FOR UPDATE',
+            [substr($now, 0, 10)],
+        )->getRowArray();
+        $position = ($last !== null ? (int) $last['position'] : 0) + 1;
+        $this->db->table('clinic_queue_entries')->insert([
+            'encounter_id' => $encounterId,
+            'queue_date'   => substr($now, 0, 10),
+            'position'     => $position,
+            'status'       => 'waiting',
+            'created_at'   => $now,
+            'updated_at'   => $now,
+        ]);
+
+        $this->audit->enqueue(
+            'clinic.encounter_opened',
+            'clinic_encounters',
+            $encounterId,
+            $userId,
+            ['next_status' => 'open', 'resource_code' => 'appointment#' . $appointmentId],
+        );
+
+        return $encounterId;
     }
 
     /**
@@ -285,8 +378,8 @@ final class AppointmentService extends BaseService
 
     /**
      * Partial update of an appointment. Only the Scheduling phase
-     * allows edits — once a row has been CheckedIn, Completed,
-     * Cancelled, or marked NoShow, its slot is locked and the user
+     * allows edits — once a row has been checked_in, completed,
+     * cancelled, or marked no_show, its slot is locked and the user
      * must book a new appointment to change anything.
      *
      * Updatable fields: `patient_school_id`, `provider_user_id`,
@@ -309,7 +402,7 @@ final class AppointmentService extends BaseService
             }
 
             $currentStatus = (string) $row['status'];
-            if ($currentStatus !== 'Scheduled') {
+            if ($currentStatus !== 'scheduled') {
                 throw new ApiException('request.validation_failed', 422, [
                     ['code' => 'appointment.locked', 'message' => "Cannot edit a {$currentStatus} appointment. Schedule a new one instead.", 'field' => 'status'],
                 ]);

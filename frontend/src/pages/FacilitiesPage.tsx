@@ -7,14 +7,15 @@
  * status badge and roll back on error. shadcn Table / Dialog /
  * Textarea primitives.
  */
-import { Play, Square, StopCircle, Loader2, Ban, ChevronLeft, ChevronRight, ClipboardList, Boxes, LineChart, Plus, Wrench, Eye, Cylinder, Pencil, Archive, ArchiveRestore } from 'lucide-react';
-import { useId, useState } from 'react';
+import { Play, Square, StopCircle, Loader2, Ban, ChevronLeft, ChevronRight, ClipboardList, Boxes, LineChart, Plus, Wrench, Eye, Cylinder, Pencil, Archive, ArchiveRestore, X } from 'lucide-react';
+import { useId, useMemo, useState } from 'react';
 import { Link, Navigate, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { ConfirmDialog, type ConfirmAction } from '@/components/ConfirmDialog';
+import { MobileCardList, MobileCard, MobileCardField, MobileCardActions } from '@/components/MobileCardList';
 import {
   Dialog,
   DialogContent,
@@ -77,40 +78,51 @@ import {
   type MoistureLevel,
 } from '@/schemas/facilities';
 import { fmtUtcToApp, fmtShort } from '@/utils/date';
+import { statusLabel } from '@/utils/status';
 
 function unitStatusVariant(status: BmgUnit['status']): 'default' | 'info' | 'warning' | 'success' | 'destructive' | 'secondary' {
   switch (status) {
-    case 'Idle': return 'success';
-    case 'Processing': return 'info';
-    case 'AwaitingOutput': return 'warning';
-    case 'Cancelled': return 'destructive';
-    case 'Maintenance': return 'secondary';
+    case 'idle': return 'success';
+    case 'processing': return 'info';
+    case 'awaiting_output': return 'warning';
+    case 'cancelled': return 'destructive';
+    case 'maintenance': return 'secondary';
+    default: return 'default';
   }
 }
 
 function StartBatchDialog({ unit, onClose }: { unit: BmgUnit; onClose: () => void }) {
   const start = useStartBatch();
-  const [total, setTotal] = useState<string>('');
-  const [items, setItems] = useState<string>('sku=org-1; qty_kg=2.5\nsku=org-2; qty_kg=1.0');
+  const cats = useWasteCategories(true);
+  // Panel revision: segregated waste composition — one row per waste
+  // category with its loaded weight. The ratios drive the batch ETA.
+  const [rows, setRows] = useState<Array<{ category_id: string; weight_kg: string }>>([
+    { category_id: '', weight_kg: '' },
+  ]);
   const totalId = useId();
-  const itemsId = useId();
+
+  const total = useMemo(
+    () => rows.reduce((s, r) => s + (Number(r.weight_kg) || 0), 0),
+    [rows],
+  );
+
+  function setRow(i: number, patch: Partial<{ category_id: string; weight_kg: string }>) {
+    setRows((rs) => rs.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
+  }
+  function addRow() {
+    setRows((rs) => [...rs, { category_id: '', weight_kg: '' }]);
+  }
+  function removeRow(i: number) {
+    setRows((rs) => (rs.length > 1 ? rs.filter((_, idx) => idx !== i) : rs));
+  }
 
   function submit() {
+    const composition = rows
+      .filter((r) => r.category_id !== '' && r.weight_kg !== '')
+      .map((r) => ({ category_id: Number(r.category_id), weight_kg: Number(r.weight_kg) }));
     const parsed = startBatchSchema.safeParse({
-      total_input_weight_kg: Number(total),
-      input_items: items
-        .split('\n')
-        .map((l) => l.trim())
-        .filter(Boolean)
-        .map((line) => {
-          const parts = Object.fromEntries(
-            line.split(';').map((kv): [string, string] => {
-              const [k = '', v = ''] = kv.split('=').map((s) => s.trim());
-              return [k, v];
-            }),
-          );
-          return { sku: String(parts['sku'] ?? ''), qty_kg: Number(parts['qty_kg'] ?? 0) };
-        }),
+      total_input_weight_kg: Number(total.toFixed(2)),
+      composition,
     });
     if (!parsed.success) {
       toast.error(parsed.error.issues[0]?.message ?? 'Invalid input.');
@@ -128,18 +140,44 @@ function StartBatchDialog({ unit, onClose }: { unit: BmgUnit; onClose: () => voi
         <DialogTitle>Start batch on {unit.code}</DialogTitle>
       </DialogHeader>
       <div className="space-y-3">
-        <div className="space-y-1.5">
-          <Label htmlFor={totalId}>Total input weight (kg)</Label>
-          <Input id={totalId} type="number" min={0} step={0.01} value={total} onChange={(e) => setTotal(e.target.value)} />
+        <p className="text-xs text-muted-foreground">
+          Record the waste mix by specific category (meat, rice, bones, yard…). The
+          weight ratios drive this drum’s expected composting duration.
+        </p>
+        <div className="space-y-2">
+          {rows.map((r, i) => {
+            const ratio = total > 0 && r.weight_kg !== '' ? ((Number(r.weight_kg) / total) * 100) : null;
+            return (
+              <div key={i} className="flex items-end gap-2">
+                <div className="flex-1 space-y-1">
+                  {i === 0 && <Label className="text-xs">Waste category</Label>}
+                  <Select value={r.category_id} onValueChange={(v) => setRow(i, { category_id: v })}>
+                    <SelectTrigger aria-label="Waste category"><SelectValue placeholder="Select category…" /></SelectTrigger>
+                    <SelectContent>
+                      {(cats.data ?? []).map((c) => (
+                        <SelectItem key={c.id} value={String(c.id)}>{c.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="w-28 space-y-1">
+                  {i === 0 && <Label className="text-xs">Weight (kg)</Label>}
+                  <Input type="number" min={0} step={0.01} value={r.weight_kg} onChange={(e) => setRow(i, { weight_kg: e.target.value })} />
+                </div>
+                <div className="w-14 pb-2 text-right font-mono text-xs text-muted-foreground">
+                  {ratio !== null ? `${ratio.toFixed(0)}%` : '—'}
+                </div>
+                <Button size="icon" variant="ghost" className="mb-0.5" disabled={rows.length < 2} onClick={() => removeRow(i)} aria-label="Remove component">
+                  <X className="size-4" />
+                </Button>
+              </div>
+            );
+          })}
+          <Button size="sm" variant="outline" onClick={addRow}><Plus className="size-3" /> Add component</Button>
         </div>
-        <div className="space-y-1.5">
-          <Label htmlFor={itemsId}>Input items (sku=N; qty_kg=N per line)</Label>
-          <Textarea
-            id={itemsId}
-            value={items}
-            onChange={(e) => setItems(e.target.value)}
-            className="min-h-32 font-mono text-xs"
-          />
+        <div className="flex items-center justify-between rounded-md border bg-muted/40 px-3 py-2">
+          <Label htmlFor={totalId} className="text-xs">Total input weight</Label>
+          <span id={totalId} className="font-mono text-sm font-semibold">{total.toFixed(2)} kg</span>
         </div>
       </div>
       <DialogFooter>
@@ -342,9 +380,28 @@ function AnalyticsDialog({ unit, batchId, onClose }: { unit: BmgUnit; batchId: n
           <div>Yield: <Badge variant="info">{a.yield_pct}%</Badge> <span className="text-xs text-muted-foreground">({a.yield_class})</span></div>
           <div>Mass reduction: <span className="font-mono">{a.mass_reduction_pct}%</span></div>
           {a.expected_yield_pct !== null && <div>Expected: <span className="font-mono">{a.expected_yield_pct}%</span></div>}
+          {a.expected_days !== null && <div>Expected days: <span className="font-mono">{a.expected_days}</span> <span className="text-xs text-muted-foreground">(mix-weighted)</span></div>}
           {a.expected_completion_date !== null && <div>ETA: <span className="font-mono">{a.expected_completion_date}</span></div>}
           {a.days_until_expected !== null && <div>Days left: <span className="font-mono">{a.days_until_expected}</span></div>}
           {a.progress_pct !== null && <div>Progress: <span className="font-mono">{a.progress_pct}%</span></div>}
+        </div>
+      )}
+
+      {a !== undefined && a.composition.length > 0 && (
+        <div className="rounded-md border p-3">
+          <p className="mb-2 text-xs font-medium text-muted-foreground">Waste composition (weight ratio → expected days)</p>
+          <div className="space-y-1">
+            {a.composition.map((c) => (
+              <div key={c.category_id} className="flex items-center justify-between text-sm">
+                <span>{c.category_name}</span>
+                <span className="font-mono text-xs text-muted-foreground">
+                  {c.weight_kg} kg{c.ratio_pct !== null ? ` · ${c.ratio_pct}%` : ''}
+                  {c.expected_days !== null ? ` · ~${c.expected_days}d` : ''}
+                  {c.sample_count > 0 ? ` (${c.sample_count} trials)` : ' (no history)'}
+                </span>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
@@ -534,6 +591,7 @@ function CreateUnitDialog({ onClose }: { onClose: () => void }) {
   const create = useCreateUnit();
   const cats = useWasteCategories(true);
   const [code, setCode] = useState('');
+  const [codeEdited, setCodeEdited] = useState(false);
   const [name, setName] = useState('');
   const [location, setLocation] = useState('');
   const [capacity, setCapacity] = useState('');
@@ -546,6 +604,16 @@ function CreateUnitDialog({ onClose }: { onClose: () => void }) {
   const capId = useId();
   const catId = useId();
   const notesId = useId();
+
+  // Panel revision: `code` is a SLUG (lowercase, hyphen-separated).
+  // Auto-generate it from the name until the operator edits it by hand.
+  function slugify(v: string): string {
+    return v.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  }
+  function onNameChange(v: string) {
+    setName(v);
+    if (!codeEdited) setCode(slugify(v).slice(0, 32));
+  }
 
   function submit() {
     const payload = {
@@ -587,12 +655,12 @@ function CreateUnitDialog({ onClose }: { onClose: () => void }) {
       <div className="space-y-3">
         <div className="grid grid-cols-2 gap-3">
           <div className="space-y-1.5">
-            <Label htmlFor={codeId}>Drum code *</Label>
+            <Label htmlFor={codeId}>Drum code (slug) *</Label>
             <Input
               id={codeId}
               value={code}
-              onChange={(e) => setCode(e.target.value)}
-              placeholder="DRUM-01"
+              onChange={(e) => { setCode(e.target.value); setCodeEdited(true); }}
+              placeholder="drum-01"
               maxLength={32}
               aria-invalid={errors['code'] !== undefined}
               autoFocus
@@ -600,12 +668,12 @@ function CreateUnitDialog({ onClose }: { onClose: () => void }) {
             {errors['code'] !== undefined ? (
               <p role="alert" className="text-xs text-destructive">{errors['code']}</p>
             ) : (
-              <p className="text-[10px] text-muted-foreground">Unique. Server uppercases it (e.g. DRUM-01).</p>
+              <p className="text-[10px] text-muted-foreground">URL-safe slug — lowercase, hyphen-separated (e.g. drum-01). Auto-filled from the name.</p>
             )}
           </div>
           <div className="space-y-1.5">
             <Label htmlFor={nameId}>Name *</Label>
-            <Input id={nameId} value={name} onChange={(e) => setName(e.target.value)} placeholder="Drum 01 - North Canopy" maxLength={128} aria-invalid={errors['display_name'] !== undefined} />
+            <Input id={nameId} value={name} onChange={(e) => onNameChange(e.target.value)} placeholder="Drum 01 - North Canopy" maxLength={128} aria-invalid={errors['display_name'] !== undefined} />
             {errors['display_name'] !== undefined && (
               <p role="alert" className="text-xs text-destructive">{errors['display_name']}</p>
             )}
@@ -850,6 +918,79 @@ export default function FacilitiesPage() {
     setCursor(next[next.length - 1] ?? null);
   }
 
+  // Labelled action cluster for the mobile card. The desktop table
+  // keeps its icon-only rail (tooltips work with a mouse); on touch,
+  // visible labels are clearer and hover tooltips are unreliable. Same
+  // disabled logic as the rail; Start reuses the per-row dialog via
+  // `setOpenStart` (rendered once in the desktop rail, portaled on open).
+  const unitActions = (u: BmgUnit) => {
+    const activeBatch = u.active_batch_id ?? null;
+    const archived = u.archived_at !== null && u.archived_at !== undefined;
+    return (
+      <>
+        <Button size="sm" variant="outline" onClick={() => setOpenEdit(u)}>
+          <Pencil /> Edit
+        </Button>
+        {archived ? (
+          <Button size="sm" variant="outline" disabled={unarchiveUnit.isPending} onClick={() => unarchiveUnit.mutate({ unitId: u.id })}>
+            <ArchiveRestore /> Restore
+          </Button>
+        ) : (
+          <Button size="sm" variant="outline" className="hover:border-destructive hover:text-destructive" onClick={() => setOpenArchive(u)}>
+            <Archive /> Archive
+          </Button>
+        )}
+        <Button size="sm" variant="secondary" disabled={u.status !== 'idle'} onClick={() => setOpenStart(u)}>
+          <Play /> Start
+        </Button>
+        <Button size="sm" variant="outline" disabled={u.status !== 'processing' || activeBatch === null} onClick={() => setOpenOutput(u)}>
+          <Square /> Output
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={u.status !== 'awaiting_output' || activeBatch === null || finish.isPending}
+          onClick={() => activeBatch !== null && setConfirm({
+            title: `Finish batch #${activeBatch} on ${u.code}?`,
+            description: 'This finalizes the batch and returns the drum to Idle. This cannot be undone.',
+            confirmLabel: 'Finish batch',
+            run: () => finish.mutate({ unitId: u.id, batchId: activeBatch }),
+          })}
+        >
+          <StopCircle /> Finish
+        </Button>
+        <Button size="sm" variant="outline" disabled={activeBatch === null} onClick={() => setOpenLogs(u)}>
+          <ClipboardList /> Logs
+        </Button>
+        <Button size="sm" variant="outline" disabled={activeBatch === null} onClick={() => setOpenAnalytics(u)}>
+          <LineChart /> Analytics
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={(u.status !== 'idle' && u.status !== 'maintenance') || maintenance.isPending}
+          onClick={() => maintenance.mutate({ unitId: u.id, maintenance: u.status !== 'maintenance' })}
+        >
+          <Wrench /> {u.status === 'maintenance' ? 'End maint.' : 'Maintenance'}
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          className="hover:border-destructive hover:text-destructive"
+          disabled={(u.status !== 'processing' && u.status !== 'awaiting_output') || activeBatch === null || cancel.isPending}
+          onClick={() => activeBatch !== null && setConfirm({
+            title: `Cancel batch #${activeBatch} on ${u.code}?`,
+            description: 'The batch will be cancelled and the drum returned to Idle. This cannot be undone.',
+            confirmLabel: 'Cancel batch',
+            run: () => cancel.mutate({ unitId: u.id, batchId: activeBatch, input: { reason_code: 'unspecified' } }),
+          })}
+        >
+          <Ban /> Cancel
+        </Button>
+      </>
+    );
+  };
+
   return (
     <TooltipProvider delayDuration={150} skipDelayDuration={300}>
     <main className="mx-auto max-w-7xl space-y-4 p-6">
@@ -857,7 +998,7 @@ export default function FacilitiesPage() {
         <div>
           <h1 className="text-xl font-semibold text-foreground">Facilities — BMG</h1>
           <p className="text-sm text-muted-foreground">
-            State machine: Idle → Processing → AwaitingOutput → Idle (or Cancelled). Units can be set to Maintenance.
+            State machine: Idle → Processing → Awaiting output → Idle (or Cancelled). Units can be set to Maintenance.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -882,7 +1023,7 @@ export default function FacilitiesPage() {
 
       <ProcessingDrumsCard />
 
-      <section className="overflow-hidden rounded-xl border bg-card">
+      <section className="hidden overflow-hidden rounded-xl border bg-card md:block">
         <Table>
           <TableHeader className="bg-muted/50">
             <TableRow>
@@ -917,7 +1058,7 @@ export default function FacilitiesPage() {
                   <TableCell className="px-3 font-mono text-xs">{u.code}</TableCell>
                   <TableCell className="px-3">{u.display_name}</TableCell>
                   <TableCell className="px-3">
-                    <Badge variant={unitStatusVariant(u.status)}>{u.status}</Badge>
+                    <Badge variant={unitStatusVariant(u.status)}>{statusLabel(u.status)}</Badge>
                     {u.archived_at !== null && u.archived_at !== undefined && (
                       <Badge variant="secondary" className="ml-1.5">Archived</Badge>
                     )}
@@ -996,7 +1137,7 @@ export default function FacilitiesPage() {
                               <Button
                                 size="icon-sm"
                                 variant="secondary"
-                                disabled={u.status !== 'Idle'}
+                                disabled={u.status !== 'idle'}
                                 aria-label={`Start batch on ${u.code}`}
                               >
                                 <Play className="size-4" />
@@ -1015,7 +1156,7 @@ export default function FacilitiesPage() {
                           <Button
                             size="icon-sm"
                             variant="outline"
-                            disabled={u.status !== 'Processing' || activeBatch === null}
+                            disabled={u.status !== 'processing' || activeBatch === null}
                             onClick={() => setOpenOutput(u)}
                             aria-label={`Record output for ${u.code}`}
                           >
@@ -1031,7 +1172,7 @@ export default function FacilitiesPage() {
                             size="icon-sm"
                             variant="outline"
                             disabled={
-                              u.status !== 'AwaitingOutput' ||
+                              u.status !== 'awaiting_output' ||
                               activeBatch === null ||
                               finish.isPending
                             }
@@ -1086,15 +1227,15 @@ export default function FacilitiesPage() {
                           <Button
                             size="icon-sm"
                             variant="outline"
-                            disabled={(u.status !== 'Idle' && u.status !== 'Maintenance') || maintenance.isPending}
-                            onClick={() => maintenance.mutate({ unitId: u.id, maintenance: u.status !== 'Maintenance' })}
-                            aria-label={`${u.status === 'Maintenance' ? 'End maintenance' : 'Maintenance'} for ${u.code}`}
+                            disabled={(u.status !== 'idle' && u.status !== 'maintenance') || maintenance.isPending}
+                            onClick={() => maintenance.mutate({ unitId: u.id, maintenance: u.status !== 'maintenance' })}
+                            aria-label={`${u.status === 'maintenance' ? 'End maintenance' : 'Maintenance'} for ${u.code}`}
                           >
                             <Wrench className="size-4" />
                           </Button>
                         </TooltipTrigger>
                         <TooltipContent>
-                          {u.status === 'Maintenance' ? 'End maintenance' : 'Maintenance'} for {u.code}
+                          {u.status === 'maintenance' ? 'End maintenance' : 'Maintenance'} for {u.code}
                         </TooltipContent>
                       </Tooltip>
 
@@ -1105,7 +1246,7 @@ export default function FacilitiesPage() {
                             variant="outline"
                             className="hover:border-destructive hover:text-destructive focus-visible:border-destructive focus-visible:text-destructive"
                             disabled={
-                              (u.status !== 'Processing' && u.status !== 'AwaitingOutput') ||
+                              (u.status !== 'processing' && u.status !== 'awaiting_output') ||
                               activeBatch === null ||
                               cancel.isPending
                             }
@@ -1132,6 +1273,49 @@ export default function FacilitiesPage() {
           </TableBody>
         </Table>
       </section>
+
+      {/* Mobile: drum cards from the same rows. Actions carry visible
+          labels (touch-friendly) instead of the desktop icon rail. */}
+      {units.isLoading && (
+        <p className="py-6 text-center text-sm text-muted-foreground md:hidden" role="status">
+          <Loader2 className="mx-auto size-4 animate-spin" />
+        </p>
+      )}
+      {!units.isLoading && (units.data?.data.length ?? 0) === 0 && (
+        <p className="rounded-xl border border-dashed p-6 text-center text-sm text-muted-foreground md:hidden">
+          No drums yet. Create one to start composting.
+        </p>
+      )}
+      <MobileCardList>
+        {units.data?.data.map((u) => {
+          const activeBatch = u.active_batch_id ?? null;
+          const archived = u.archived_at !== null && u.archived_at !== undefined;
+          return (
+            <MobileCard key={u.id} aria-label={`Drum ${u.code}`}>
+              <div className="mb-1 flex items-center justify-between gap-2">
+                <span className="font-mono text-sm font-medium text-foreground">{u.code}</span>
+                <div className="flex flex-wrap justify-end gap-1.5">
+                  <Badge variant={unitStatusVariant(u.status)}>{statusLabel(u.status)}</Badge>
+                  {archived && <Badge variant="secondary">Archived</Badge>}
+                </div>
+              </div>
+              <p className="text-sm text-foreground">{u.display_name}</p>
+              <MobileCardField label="Active batch">
+                <span className="font-mono text-xs text-muted-foreground">{activeBatch === null ? '—' : `#${activeBatch}`}</span>
+              </MobileCardField>
+              <MobileCardField label="Location">
+                <span className="text-xs text-muted-foreground">{u.location_code ?? '—'}</span>
+              </MobileCardField>
+              {u.default_category_name !== null && u.default_category_name !== undefined && (
+                <MobileCardField label="Default category">
+                  <span className="inline-flex items-center gap-1 text-xs"><Boxes className="size-3" /> {u.default_category_name}</span>
+                </MobileCardField>
+              )}
+              <MobileCardActions>{unitActions(u)}</MobileCardActions>
+            </MobileCard>
+          );
+        })}
+      </MobileCardList>
 
       <nav className="flex items-center justify-between" aria-label="pagination">
         <p className="text-xs text-muted-foreground">Page {history.length}</p>

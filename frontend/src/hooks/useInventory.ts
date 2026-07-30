@@ -9,10 +9,12 @@ import type { ApiEnvelopeError } from '@/api/envelope';
 import {
   createItemSchema,
   inventoryItemSchema,
+  inventoryMovementSchema,
   moveStockSchema,
   updateItemSchema,
   type CreateItemInput,
   type InventoryItem,
+  type InventoryMovement,
   type MoveStockInput,
   type UpdateItemInput,
 } from '@/schemas/inventory';
@@ -68,10 +70,26 @@ export function useMoveStock() {
     },
     onSuccess: (item) => {
       void qc.invalidateQueries({ queryKey: ['inventory'] });
+      void qc.invalidateQueries({ queryKey: ['inventory', 'movements', item.id] });
       toast.success(`${item.sku}: ${item.quantity_on_hand} ${item.unit} on hand.`);
     },
     onError: (err) => {
       toast.error(err.errors[0]?.message ?? 'Stock movement failed.');
+    },
+  });
+}
+
+/**
+ * Supply ledger (panel revision): signed movements with the stored
+ * running balance, oldest → newest. Powers the per-item ledger drawer.
+ */
+export function useInventoryMovements(itemId: number | null) {
+  return useQuery<InventoryMovement[], ApiEnvelopeError>({
+    queryKey: ['inventory', 'movements', itemId],
+    enabled: itemId !== null && itemId > 0,
+    queryFn: async () => {
+      const res = await apiClient.get<unknown[]>(`/clinic/inventory/${itemId}/movements`);
+      return z.array(inventoryMovementSchema).parse(res.data);
     },
   });
 }
@@ -93,6 +111,7 @@ export function useReceiveSupply() {
     },
     onSuccess: (item) => {
       void qc.invalidateQueries({ queryKey: ['inventory'] });
+      void qc.invalidateQueries({ queryKey: ['inventory', 'movements', item.id] });
       void qc.invalidateQueries({ queryKey: ['reorders'] });
       toast.success(`${item.sku} received — ${item.quantity_on_hand} ${item.unit} on hand.`);
     },
