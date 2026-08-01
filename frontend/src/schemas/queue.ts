@@ -21,7 +21,13 @@ export const publicQueueStateSchema = z.object({
   now_serving: z
     .object({ position: z.number().int(), display_name: z.string() })
     .nullable(),
-  waiting: z.array(z.object({ position: z.number().int(), display_name: z.string() })),
+  waiting: z.array(
+    z.object({
+      position: z.number().int(),
+      display_name: z.string(),
+      est_wait_minutes: z.number().int().min(0).optional(),
+    }),
+  ),
   updated_at: z.string(),
 });
 export type PublicQueueState = z.infer<typeof publicQueueStateSchema>;

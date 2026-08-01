@@ -37,6 +37,7 @@ const DrumDetailPage = lazyWithRetry(() => import('@/pages/DrumDetailPage'));
 const ForbiddenPage = lazyWithRetry(() => import('@/pages/ForbiddenPage'));
 const InventoryPage = lazyWithRetry(() => import('@/pages/InventoryPage'));
 const KioskPage = lazyWithRetry(() => import('@/pages/KioskPage'));
+const KioskStationPage = lazyWithRetry(() => import('@/pages/KioskStationPage'));
 const LoginPage = lazyWithRetry(() => import('@/pages/LoginPage'));
 const PatientsPage = lazyWithRetry(() => import('@/pages/PatientsPage'));
 const QueueDisplayPage = lazyWithRetry(() => import('@/pages/QueueDisplayPage'));
@@ -146,6 +147,19 @@ const router = createBrowserRouter([
   { path: '/403', element: <ForbiddenPage /> },
   // PUBLIC lobby-TV board — intentionally outside the protected shell.
   { path: '/queue-display', element: <QueueDisplayPage /> },
+  // Fullscreen kiosk station — authenticated but OUTSIDE the shell
+  // chrome (no sidebar/topbar on lobby hardware). Kiosk gap #6.
+  {
+    path: '/kiosk-station',
+    errorElement: <RouteError />,
+    element: (
+      <ProtectedShell>
+        <ProtectedRoute anyOf={['clinic.checkin.record']}>
+          <KioskStationPage />
+        </ProtectedRoute>
+      </ProtectedShell>
+    ),
+  },
   {
     errorElement: <RouteError />,
     element: (

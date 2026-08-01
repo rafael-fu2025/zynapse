@@ -217,7 +217,10 @@ final class QueueService extends BaseService
      * name only (legacy TV/kiosk contract). No policy check by design;
      * the route is unauthenticated.
      *
-     * @return array{now_serving: ?array{position: int, display_name: string}, waiting: array<int, array{position: int, display_name: string}>, updated_at: string}
+     * Each waiting entry carries an indicative wait (people ahead ×
+     * today's rolling average service time) — kiosk gap #3.
+     *
+     * @return array{now_serving: ?array{position: int, display_name: string}, waiting: array<int, array{position: int, display_name: string, est_wait_minutes: int}>, updated_at: string}
      */
     public function publicState(): array
     {
@@ -236,6 +239,12 @@ final class QueueService extends BaseService
             } elseif ($status === 'waiting') {
                 $waiting[] = $item;
             }
+        }
+
+        $avg = $this->avgServiceMinutes();
+        foreach ($waiting as $i => $item) {
+            $ahead = $i + ($nowServing !== null ? 1 : 0);
+            $waiting[$i]['est_wait_minutes'] = (int) round($ahead * $avg);
         }
 
         return [
@@ -307,6 +316,23 @@ final class QueueService extends BaseService
         }
         $sid = (string) $r['patient_school_id'];
         return mb_substr($sid, 0, 3) . '…';
+    }
+
+    /**
+     * Today's rolling average service time in minutes (started_at →
+     * finished_at over completed sessions); 10-minute default while
+     * the day has no history. Mirrors CheckinService::estimatedWaitMinutes.
+     */
+    private function avgServiceMinutes(): float
+    {
+        $row = $this->db->query(
+            'SELECT AVG(TIMESTAMPDIFF(MINUTE, `started_at`, `finished_at`)) AS avg_min'
+            . ' FROM `clinic_queue_entries`'
+            . ' WHERE `queue_date` = ? AND `started_at` IS NOT NULL AND `finished_at` IS NOT NULL',
+            [$this->utcToday()],
+        )->getRowArray();
+
+        return $row !== null && $row['avg_min'] !== null ? max(1.0, (float) $row['avg_min']) : 10.0;
     }
 
     private function utcToday(): string
