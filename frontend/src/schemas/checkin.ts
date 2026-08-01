@@ -10,6 +10,7 @@ export type ScanMethod = (typeof SCAN_METHODS)[number];
 export const CHECKIN_OUTCOMES = [
   'counselling_confirmed',
   'counselling_already',
+  'clinic_appointment_confirmed',
   'clinic_queued',
   'duplicate',
 ] as const;
@@ -32,10 +33,17 @@ export const scanResultSchema = z.object({
     name: z.string(),
     course: z.string().nullable(),
     year_level: z.number().int().nullable(),
+    kind: z.enum(['student', 'employee']).default('student'),
   }),
   allergy_alert: z.string().nullable(),
   counselling_appointment_id: z.number().int().nullable(),
-  queue: z.object({ encounter_id: z.number().int(), position: z.number().int() }).nullable(),
+  queue: z
+    .object({
+      encounter_id: z.number().int(),
+      position: z.number().int(),
+      estimated_wait_minutes: z.number().int().min(0).optional(),
+    })
+    .nullable(),
 });
 export type ScanResult = z.infer<typeof scanResultSchema>;
 
