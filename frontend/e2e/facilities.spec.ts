@@ -20,7 +20,7 @@ test.skip(!RUN, 'SYNAPSE_E2E=1 not set — skipping live smoke.');
 test('facilities page renders the BMG units table', async ({ page }) => {
   await page.goto('/login');
   await page.getByLabel(/email/i).fill(process.env['SYNAPSE_E2E_EMAIL'] ?? 'admin@synapse.dev');
-  await page.getByLabel(/password/i).fill(process.env['SYNAPSE_E2E_PASSWORD'] ?? 'DevPassw0rd!');
+  await page.locator('input[name="password"]').fill(process.env['SYNAPSE_E2E_PASSWORD'] ?? 'DevPassw0rd!');
   await page.getByRole('button', { name: /sign in/i }).click();
   await page.waitForURL(/\/$/);
 
@@ -28,4 +28,10 @@ test('facilities page renders the BMG units table', async ({ page }) => {
   await page.getByRole('link', { name: /facilities/i }).first().click();
   await page.waitForURL(/\/facilities$/);
   await expect(page.getByRole('heading', { name: /facilities/i }).first()).toBeVisible();
+
+  const actions = page.getByRole('button', { name: /actions for/i }).first();
+  await expect(actions).toBeVisible();
+  await actions.click();
+  await expect(page.getByRole('menuitem', { name: 'Edit drum' })).toBeVisible();
+  await expect(page.getByRole('menuitem', { name: 'Start batch' })).toBeVisible();
 });

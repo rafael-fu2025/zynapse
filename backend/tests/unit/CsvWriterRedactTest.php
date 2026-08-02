@@ -29,12 +29,17 @@ final class CsvWriterRedactTest extends TestCase
         $out = CsvWriter::redact([
             'context' => [
                 'qr_secret' => 'raw-secret',
-                'deep'      => ['patient_school_id' => '2020-12345', 'reason_code' => 'ok'],
+                'deep'      => [
+                    'patient_school_id' => '2020-12345',
+                    'family_id'         => 'family-17',
+                    'reason_code'       => 'ok',
+                ],
             ],
         ]);
 
         $this->assertSame('<redacted>', $out['context']['qr_secret']);
         $this->assertSame('<redacted>', $out['context']['deep']['patient_school_id']);
+        $this->assertSame('<redacted>', $out['context']['deep']['family_id']);
         $this->assertSame('ok', $out['context']['deep']['reason_code']);
     }
 

@@ -57,6 +57,7 @@ final class AuditOutboxService
             'entity_id'     => $entityId,
             'actor_user_id' => $actorUserId,
             'context_json'  => json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES),
+            'request_id'    => Services::requestId()->current(),
             'created_at'    => (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s'),
             'processed_at'  => null,
         ]);

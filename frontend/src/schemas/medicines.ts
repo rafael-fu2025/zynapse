@@ -17,6 +17,19 @@ export const medicineBatchSchema = z.object({
 });
 export type MedicineBatch = z.infer<typeof medicineBatchSchema>;
 
+/**
+ * Gap 13 — last-movement mini-strip payload. Joined to `users.email`
+ * server-side; `null` when the medicine has no transactions yet
+ * (just-created).
+ */
+export const medicineLastMovementSchema = z.object({
+  type: z.enum(['received', 'dispensed', 'expired', 'adjusted', 'returned']),
+  quantity: z.number().int(),
+  created_at: z.string(),
+  user_email: z.string().nullable(),
+});
+export type MedicineLastMovement = z.infer<typeof medicineLastMovementSchema>;
+
 export const medicineSchema = z.object({
   id: z.number().int().positive(),
   generic_name: z.string(),
@@ -26,11 +39,13 @@ export const medicineSchema = z.object({
   dosage_strength: z.string().nullable(),
   unit: z.string(),
   reorder_threshold: z.number().int().min(0),
+  description: z.string().nullable(),
   quantity_on_hand: z.number().int().min(0),
   low_stock: z.boolean(),
   earliest_expiry: z.string().nullable(),
   archived: z.boolean(),
   created_at: z.string(),
+  last_movement: medicineLastMovementSchema.nullable(),
   batches: z.array(medicineBatchSchema).optional(),
 });
 export type Medicine = z.infer<typeof medicineSchema>;
@@ -43,6 +58,10 @@ export const createMedicineSchema = z.object({
   dosage_strength: z.string().max(100).optional(),
   unit: z.string().min(1).max(50).default('pc'),
   reorder_threshold: z.number().int().min(0).default(10),
+  // Free-text notes (indications, storage, supplier quirks, etc.). Optional
+  // so existing forms that omit it keep working — backend accepts null.
+  // 2000 chars mirrors `MedicineController::create()` validation.
+  description: z.string().max(2000).optional(),
 });
 export type CreateMedicineInput = z.infer<typeof createMedicineSchema>;
 
@@ -57,14 +76,19 @@ export const updateMedicineSchema = z.object({
 export type UpdateMedicineInput = z.infer<typeof updateMedicineSchema>;
 
 /**
- * Receive a lot. Quantity is NOT part of the payload — the backend
- * takes it from the medicine's `received` reorder request.
+ * Receive a lot. Quantity is OPTIONAL — the backend defaults it to the
+ * reorder's `requested_quantity`, but the operator can lower it when
+ * only a partial delivery arrived. `shortage_note` is the reason for
+ * the shortfall, surfaced in the ledger so the next reorder can be
+ * informed.
  */
 export const addBatchSchema = z.object({
   batch_number: z.string().min(1, 'Required').max(100),
   expiration_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'YYYY-MM-DD'),
   supplier: z.string().max(200).optional(),
   note: z.string().max(255).optional(),
+  quantity: z.number().int().min(1).optional(),
+  shortage_note: z.string().max(255).optional(),
 });
 export type AddBatchInput = z.infer<typeof addBatchSchema>;
 
@@ -98,6 +122,28 @@ export const medicineTxnSchema = z.object({
   created_at: z.string(),
 });
 export type MedicineTxn = z.infer<typeof medicineTxnSchema>;
+
+/**
+ * Expiring-batch insight shape — a batch row joined with the parent
+ * medicine's `generic_name` + `unit`. Returned by
+ * `GET /clinic/medicines/expiring?days=N`.
+ */
+export const expiringBatchSchema = z.object({
+  id: z.number().int().positive(),
+  medicine_id: z.number().int().positive(),
+  batch_number: z.string(),
+  quantity_received: z.number().int().min(0),
+  quantity_remaining: z.number().int().min(0),
+  expiration_date: z.string(),
+  received_date: z.string(),
+  supplier: z.string().nullable(),
+  status: z.enum(['active', 'depleted', 'expired', 'recalled']),
+  created_at: z.string(),
+  // Joined from clinic_medicines:
+  generic_name: z.string(),
+  unit: z.string(),
+});
+export type ExpiringBatch = z.infer<typeof expiringBatchSchema>;
 
 export const medicineForecastSchema = z.object({
   medicine_id: z.number().int().positive(),

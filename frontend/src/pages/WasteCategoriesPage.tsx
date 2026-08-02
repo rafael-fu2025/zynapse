@@ -6,13 +6,20 @@
  * `WasteCategoriesDialog`: an add form on top and a list of rows with
  * inline edit / archive / restore / delete actions.
  */
-import { Archive, ArchiveRestore, ArrowLeft, Boxes, Check, Loader2, Pencil, Plus, Save, Trash2 as TrashIcon, X } from 'lucide-react';
+import { Archive, ArchiveRestore, ArrowLeft, Boxes, Check, ChevronDown, Loader2, Pencil, Plus, Save, Trash2 as TrashIcon, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
@@ -144,42 +151,35 @@ function WasteCategoryRow({ cat }: { cat: WasteCategory }) {
       </div>
       <div className="flex shrink-0 items-center gap-1">
         {confirming === null && (
-          <>
-            <Button size="sm" variant="outline" onClick={() => setEditing(true)} aria-label={`Edit ${cat.code}`}>
-              <Pencil className="size-3.5" />
-            </Button>
-            {cat.is_active ? (
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => setConfirming('archive')}
-                aria-label={`Archive ${cat.code}`}
-                disabled={archive.isPending}
-              >
-                <Archive className="size-3.5" />
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button className="min-h-11" size="sm" variant="outline" aria-label={`Actions for ${cat.code}`}>
+                Actions <ChevronDown className="size-3.5" aria-hidden />
               </Button>
-            ) : (
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => unarchive.mutate({ categoryId: cat.id })}
-                aria-label={`Restore ${cat.code}`}
-                disabled={unarchive.isPending}
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-48">
+              <DropdownMenuItem className="min-h-11" onSelect={() => setEditing(true)}>
+                <Pencil /> Edit category
+              </DropdownMenuItem>
+              {cat.is_active ? (
+                <DropdownMenuItem className="min-h-11" disabled={archive.isPending} onSelect={() => setConfirming('archive')}>
+                  <Archive /> Archive category
+                </DropdownMenuItem>
+              ) : (
+                <DropdownMenuItem className="min-h-11" disabled={unarchive.isPending} onSelect={() => unarchive.mutate({ categoryId: cat.id })}>
+                  <ArchiveRestore /> Restore category
+                </DropdownMenuItem>
+              )}
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                className="min-h-11 text-destructive focus:text-destructive"
+                disabled={del.isPending}
+                onSelect={() => setConfirming('delete')}
               >
-                <ArchiveRestore className="size-3.5" />
-              </Button>
-            )}
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => setConfirming('delete')}
-              aria-label={`Delete ${cat.code}`}
-              className="hover:border-destructive hover:text-destructive focus-visible:border-destructive focus-visible:text-destructive"
-              disabled={del.isPending}
-            >
-              <TrashIcon className="size-3.5" />
-            </Button>
-          </>
+                <TrashIcon /> Delete permanently
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         )}
         {confirming === 'archive' && (
           <>

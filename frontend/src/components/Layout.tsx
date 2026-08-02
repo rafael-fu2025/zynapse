@@ -9,7 +9,9 @@
  */
 import { Suspense } from 'react';
 import { Navigate, Outlet, useLocation } from 'react-router-dom';
+import { Search } from 'lucide-react';
 import { AppSidebar } from '@/components/AppSidebar';
+import { CommandPalette } from '@/components/CommandPalette';
 import { NotificationBell } from '@/components/NotificationBell';
 import { UserMenu } from '@/components/UserMenu';
 import { SidebarInset, SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar';
@@ -72,6 +74,27 @@ export default function Layout() {
               </p>
             </div>
           )}
+          {/* Centered palette launcher — absolutely positioned so the
+              trigger (left) and the action group (right) keep their
+              natural flex flow while the search lands in the middle.
+              The wrapper is `pointer-events-none` so it never blocks
+              clicks on the header chrome behind it; only the button
+              itself receives pointer events via `pointer-events-auto`.
+              Hidden on mobile so the page title gets the full row. */}
+          <div className="pointer-events-none absolute inset-y-0 left-1/2 hidden -translate-x-1/2 items-center sm:flex">
+            <button
+              type="button"
+              onClick={() => window.dispatchEvent(new Event('synapse:command-palette:open'))}
+              aria-label="Open command palette"
+              className="pointer-events-auto inline-flex h-9 w-72 items-center gap-2 rounded-md border bg-background/60 px-3 py-0 text-xs text-muted-foreground transition-colors hover:bg-accent/40 hover:text-foreground sm:w-80"
+            >
+              <span className="flex items-center gap-2">
+                <Search className="size-3.5" />
+                <span>Search…</span>
+              </span>
+              <kbd className="ml-auto rounded border bg-muted px-1 font-mono text-[10px]">⌘K</kbd>
+            </button>
+          </div>
           <div className="ml-auto flex items-center gap-2 sm:gap-3">
             <NotificationBell />
             <UserMenu />
@@ -95,6 +118,10 @@ export default function Layout() {
       </SidebarInset>
 
       <Toaster theme={theme} position="top-right" richColors closeButton />
+      {/* Global ⌘K / Ctrl-K launcher. Lives outside the page tree so it
+          overlays every route; the keyboard listener is mounted inside
+          the component (one place to maintain). */}
+      <CommandPalette />
     </SidebarProvider>
   );
 }

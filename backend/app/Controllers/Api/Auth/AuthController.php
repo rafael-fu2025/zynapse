@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Controllers\Api\Auth;
 
+use App\Auth\AccountStateService;
 use App\Auth\CurrentUser;
 use App\Auth\JwtService;
 use App\Auth\LoginThrottleService;
@@ -35,6 +36,7 @@ final class AuthController extends ApiController
     private readonly RefreshTokenService $refreshTokens;
     private readonly AuditOutboxService $audit;
     private readonly LoginThrottleService $throttle;
+    private readonly AccountStateService $accountState;
 
     /**
      * CI4 instantiates controllers with no arguments — dependencies
@@ -45,11 +47,13 @@ final class AuthController extends ApiController
         ?RefreshTokenService $refreshTokens = null,
         ?AuditOutboxService $audit = null,
         ?LoginThrottleService $throttle = null,
+        ?AccountStateService $accountState = null,
     ) {
         $this->jwt           = $jwt ?? Services::jwt();
         $this->refreshTokens = $refreshTokens ?? Services::refreshTokenService();
         $this->audit         = $audit ?? Services::auditOutbox();
         $this->throttle      = $throttle ?? new LoginThrottleService();
+        $this->accountState  = $accountState ?? new AccountStateService();
     }
 
     public function login(): ResponseInterface
@@ -95,7 +99,16 @@ final class AuthController extends ApiController
             throw ApiException::unauthorized('auth.credentials_invalid');
         }
 
+        $state = $this->accountState->forUser((int) $user->id);
+        if ($state === null || ! $state['active']) {
+            throw ApiException::unauthorized('auth.account_disabled');
+        }
+
         $this->throttle->clear($payload['email']);
+
+        Services::database()->table('users')->where('id', (int) $user->id)->update([
+            'last_active' => date('Y-m-d H:i:s'),
+        ]);
 
         $this->audit->enqueue(
             'auth.login_succeeded',
@@ -159,6 +172,12 @@ final class AuthController extends ApiController
         if ($userId <= 0) {
             // The token rotated but the row vanished — bail.
             throw ApiException::unauthorized('auth.refresh_invalid_or_replayed');
+        }
+
+        $state = $this->accountState->forUser($userId);
+        if ($state === null || ! $state['active']) {
+            $this->refreshTokens->revokeAllFor($userId);
+            throw ApiException::unauthorized('auth.account_disabled');
         }
 
         $this->audit->enqueue(

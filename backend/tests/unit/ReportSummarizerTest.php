@@ -18,9 +18,8 @@ final class ReportSummarizerTest extends TestCase
 
     public function testClinicWithData(): void
     {
-        $n = $this->rs->generate('clinic', '2026-07-01', '2026-07-31', ['total' => 10, 'referrals' => 2, 'top_complaint' => 'Fever']);
+        $n = $this->rs->generate('clinic', '2026-07-01', '2026-07-31', ['total' => 10, 'referrals' => 2]);
         $this->assertStringContainsString('10 encounters', $n);
-        $this->assertStringContainsString('Fever', $n);
         $this->assertStringContainsString('2 case(s) were referred', $n);
     }
 
@@ -69,5 +68,24 @@ final class ReportSummarizerTest extends TestCase
     {
         $n = $this->rs->generate('finance', '2026-07-01', '2026-07-31', []);
         $this->assertStringContainsString('module finance', $n);
+    }
+
+    public function testClinicNarrativeNeverEchoesFreeTextComplaint(): void
+    {
+        $n = $this->rs->generate('clinic', '2026-07-01', '2026-07-31', [
+            'total' => 10,
+            'referrals' => 0,
+            'top_complaint' => '=HYPERLINK("https://example.test","Patient Name")',
+        ]);
+        $this->assertStringNotContainsString('Patient Name', $n);
+        $this->assertStringNotContainsString('HYPERLINK', $n);
+    }
+
+    public function testReferralAndFacilitiesNarratives(): void
+    {
+        $referrals = $this->rs->generate('referrals', '2026-07-01', '2026-07-31', ['total' => 8, 'closed' => 6]);
+        $facilities = $this->rs->generate('facilities', '2026-07-01', '2026-07-31', ['total' => 5, 'completed' => 4, 'input_kg' => '100', 'output_kg' => '40']);
+        $this->assertStringContainsString('75%', $referrals);
+        $this->assertStringContainsString('100 kg of input', $facilities);
     }
 }

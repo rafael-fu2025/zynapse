@@ -58,6 +58,7 @@ php spark db:seed App\\Database\\Seeds\\DevUserSeeder   # dev only
 php spark synapse:smoke
 php spark synapse:audit-drain
 php spark synapse:audit-verify
+php spark synapse:reports-drain --limit=10
 composer test
 php spark serve --port 8080
 
@@ -70,6 +71,23 @@ npm run dev
 # Optional E2E (requires both stacks running)
 SYNAPSE_E2E=1 npx playwright test
 ```
+
+## Background jobs
+
+Production must run the durable outbox and generated-report workers outside
+HTTP request processes:
+
+```cron
+* * * * * cd /path/to/zynapse/backend && php spark synapse:audit-drain --batch=500 --max-batches=10
+* * * * * cd /path/to/zynapse/backend && php spark synapse:reports-drain --limit=10
+15 2 * * * cd /path/to/zynapse/backend && php spark synapse:audit-verify
+```
+
+The reports worker claims queued jobs, streams aggregate CSV rows to disk,
+records provenance and row counts, and expires retained files after 30 days.
+Route non-zero command exits and the nightly verification result to the
+deployment platform's alerting channel. Use a single reports worker unless
+the queue claim is upgraded to `SKIP LOCKED` for multi-worker processing.
 
 ## Performance Notes (dev)
 

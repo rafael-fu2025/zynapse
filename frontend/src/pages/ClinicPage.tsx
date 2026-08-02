@@ -12,6 +12,7 @@ import {
   ArchiveRestore,
   CalendarClock,
   CheckCheck,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   ClipboardPlus,
@@ -46,6 +47,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
@@ -1041,34 +1049,38 @@ export default function ClinicPage() {
             canPrev={history.length > 1}
             canNext={list.data?.next !== null && list.data?.next !== undefined}
             actions={(e) => (
-              <div className="flex justify-end gap-2">
-                <Button
-                  size="sm"
-                  variant="outline"
-                  disabled={enqueue.isPending}
-                  onClick={() => enqueue.mutate(e.id)}
-                >
-                  <ListPlus /> Queue
-                </Button>
-                <Button size="sm" variant="secondary" onClick={() => setOpenVitals(e)}>
-                  <Stethoscope /> Vitals
-                </Button>
-                <Button size="sm" variant="secondary" onClick={() => setOpenCare(e)}>
+              <div className="flex justify-end gap-1">
+                <Button className="min-h-11" size="sm" variant="secondary" onClick={() => setOpenCare(e)}>
                   <ClipboardPlus /> Care
                 </Button>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  disabled={close.isPending}
-                  onClick={() => setConfirm({
-                    title: `Close encounter #${e.id}?`,
-                    description: 'Closing an encounter is final — it can no longer be edited or have vitals/treatments added.',
-                    confirmLabel: 'Close encounter',
-                    run: () => close.mutate(e.id),
-                  })}
-                >
-                  <X /> Close
-                </Button>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button className="min-h-11" size="sm" variant="outline" aria-label={`Actions for encounter #${e.id}`}>
+                      Actions <ChevronDown className="size-3.5" aria-hidden />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-52">
+                    <DropdownMenuItem className="min-h-11" disabled={enqueue.isPending} onSelect={() => enqueue.mutate(e.id)}>
+                      <ListPlus /> Add to queue
+                    </DropdownMenuItem>
+                    <DropdownMenuItem className="min-h-11" onSelect={() => setOpenVitals(e)}>
+                      <Stethoscope /> Record vitals
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem
+                      className="min-h-11 text-destructive focus:text-destructive"
+                      disabled={close.isPending}
+                      onSelect={() => setConfirm({
+                        title: `Close encounter #${e.id}?`,
+                        description: 'Closing an encounter is final; it can no longer be edited or have vitals or treatments added.',
+                        confirmLabel: 'Close encounter',
+                        run: () => close.mutate(e.id),
+                      })}
+                    >
+                      <X /> Close encounter
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
               </div>
             )}
           />

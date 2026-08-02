@@ -54,7 +54,7 @@ class Filters extends BaseFilters
      */
     public array $filters = [
         'api_exc'       => ['after'  => ['api/*']],
-        'api_log'       => ['after'  => ['api/*']],
+        'api_log'       => ['before' => ['api/*'], 'after' => ['api/*']],
         'api_ratelimit' => ['before' => ['api/*']],
     ];
 

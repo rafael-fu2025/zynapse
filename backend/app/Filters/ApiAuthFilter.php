@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace App\Filters;
 
+use App\Auth\AccountStateService;
 use App\Auth\CurrentUser;
+use App\Exceptions\ApiException;
 use CodeIgniter\Filters\FilterInterface;
 use CodeIgniter\HTTP\RequestInterface;
 use CodeIgniter\HTTP\ResponseInterface;
@@ -40,6 +42,20 @@ final class ApiAuthFilter implements FilterInterface
             return $this->reject();
         }
 
+        $state = (new AccountStateService())->forUser($userId);
+        $decision = AccountStateService::accessDecision($state, $request->getUri()->getPath());
+        if ($decision === AccountStateService::ACCESS_UNAUTHORIZED) {
+            return $this->reject(ApiException::unauthorized('auth.account_disabled'));
+        }
+        if ($decision === AccountStateService::ACCESS_PASSWORD_CHANGE_REQUIRED) {
+            return $this->reject(new ApiException('auth.password_change_required', 403, [
+                [
+                    'code'    => 'auth.password_change_required',
+                    'message' => 'Change the temporary password before continuing.',
+                ],
+            ]));
+        }
+
         // Hydrate the request-scoped CurrentUser.
         CurrentUser::bind($userId);
 
@@ -51,15 +67,17 @@ final class ApiAuthFilter implements FilterInterface
         return $response;
     }
 
-    private function reject(): ResponseInterface
+    private function reject(?ApiException $exception = null): ResponseInterface
     {
-        $response = Services::response()->setStatusCode(401);
+        $exception ??= ApiException::unauthorized();
+        $response = Services::response()->setStatusCode($exception->httpStatus);
         $response = ApiExceptionFilter::fromThrowable(
-            \App\Exceptions\ApiException::unauthorized(),
+            $exception,
             $response,
         );
-        // Tag the response with a specific challenge hint.
-        $response->setHeader('WWW-Authenticate', 'Bearer realm="synapse"');
+        if ($exception->httpStatus === 401) {
+            $response->setHeader('WWW-Authenticate', 'Bearer realm="synapse"');
+        }
         return $response;
     }
 }

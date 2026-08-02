@@ -8,6 +8,7 @@ use App\Exceptions\ApiException;
 use App\Modules\Shared\BaseService;
 use App\Services\Audit\AuditOutboxService;
 use App\Pagination\KeysetPaginator;
+use CodeIgniter\Database\Exceptions\DatabaseException;
 use Config\Services;
 use DateTimeImmutable;
 use DateTimeZone;
@@ -32,16 +33,51 @@ final class UserAdminService extends BaseService
     /**
      * @return array{data: array<int, array<string, mixed>>, next: ?string, count: int}
      */
-    public function list(?string $cursor, int $limit): array
+    public function list(
+        ?string $cursor,
+        int $limit,
+        string $search = '',
+        string $status = 'all',
+        string $group = 'all',
+        string $sort = 'newest',
+    ): array
     {
         $builder = $this->db->table('users u')
-            ->select("u.id, u.username, u.status, u.active, u.created_at, i.secret AS email")
+            ->select("u.id, u.username, u.status, u.active, u.created_at, u.updated_at, u.last_active, i.secret AS email, COALESCE(i.force_reset, 0) AS force_reset", false)
             ->join("auth_identities i", "i.user_id = u.id AND i.type = 'email_password'", 'left')
-            ->where('u.deleted_at', null)
-            ->orderBy('u.created_at', 'DESC')
-            ->orderBy('u.id', 'DESC');
+            ->where('u.deleted_at', null);
 
-        KeysetPaginator::apply($builder, $cursor, $limit, 'u.created_at', 'u.id');
+        if ($search !== '') {
+            $builder->groupStart()
+                ->like('u.username', $search)
+                ->orLike('i.secret', $search)
+                ->groupEnd();
+        }
+        if ($status !== 'all') {
+            $builder->where('u.active', $status === 'active' ? 1 : 0);
+        }
+        if ($group !== 'all') {
+            $builder
+                ->join('auth_groups_users filter_gu', 'filter_gu.user_id = u.id')
+                ->join('auth_groups filter_g', 'filter_g.id = filter_gu.group_id')
+                ->where('filter_g.name', $group);
+        }
+
+        $direction = $sort === 'oldest' ? 'ASC' : 'DESC';
+        $builder->orderBy('u.created_at', $direction)->orderBy('u.id', $direction);
+
+        $builder->limit($limit + 1);
+        if (($decoded = KeysetPaginator::decode($cursor)) !== null) {
+            $operator = $direction === 'ASC' ? '>' : '<';
+            $builder
+                ->groupStart()
+                    ->where('u.created_at ' . $operator, $decoded['created_at'])
+                    ->orGroupStart()
+                        ->where('u.created_at', $decoded['created_at'])
+                        ->where('u.id ' . $operator, $decoded['id'])
+                    ->groupEnd()
+                ->groupEnd();
+        }
         $rows = $builder->get()->getResultArray();
         $final = KeysetPaginator::finalize($rows, $limit, 'u.created_at');
 
@@ -56,26 +92,33 @@ final class UserAdminService extends BaseService
                 'status'     => (string) $r['status'],
                 'groups'     => $groupsByUser[(int) $r['id']] ?? [],
                 'created_at' => (string) $r['created_at'],
+                'updated_at' => (string) $r['updated_at'],
+                'last_active'=> $r['last_active'] !== null ? (string) $r['last_active'] : null,
+                'force_reset'=> (bool) $r['force_reset'],
             ], $final['rows']),
             'next'  => $final['nextCursor'],
-            'count' => $limit,
+            'count' => count($final['rows']),
         ];
     }
 
     /**
      * @param list<string> $groups
-     * @return array{id:int, email:string, username:?string, groups:list<string>}
+     * @return array{id:int, email:string, username:?string, groups:list<string>, temporary_password:string, force_reset:true}
      */
-    public function create(string $email, string $password, ?string $username, array $groups): array
+    public function create(string $email, ?string $password, ?string $username, array $groups): array
     {
         $actorId = \App\Auth\CurrentUser::assert();
+        $this->assertAtLeastOneGroup($groups);
         $this->assertMayAssignGroups($actorId, $groups);
         $email = strtolower(trim($email));
+        $temporaryPassword = $password !== null && $password !== ''
+            ? $password
+            : rtrim(strtr(base64_encode(random_bytes(12)), '+/', '-_'), '=');
 
-        return $this->txn(function () use ($email, $password, $username, $groups, $actorId): array {
+        return $this->txn(function () use ($email, $temporaryPassword, $username, $groups, $actorId): array {
             $exists = $this->db->table('auth_identities')
                 ->where('type', 'email_password')
-                ->where('LOWER(secret)', $email)
+                ->where('secret', $email)
                 ->get()->getRowArray();
             if ($exists !== null) {
                 throw new ApiException('resource.conflict', 409, [
@@ -94,14 +137,24 @@ final class UserAdminService extends BaseService
             ]);
             $userId = (int) $this->db->insertID();
 
-            $this->db->table('auth_identities')->insert([
-                'user_id'    => $userId,
-                'type'       => 'email_password',
-                'secret'     => $email,
-                'secret2'    => password_hash($password, PASSWORD_DEFAULT),
-                'created_at' => $now,
-                'updated_at' => $now,
-            ]);
+            try {
+                $this->db->table('auth_identities')->insert([
+                    'user_id'     => $userId,
+                    'type'        => 'email_password',
+                    'secret'      => $email,
+                    'secret2'     => password_hash($temporaryPassword, PASSWORD_DEFAULT),
+                    'force_reset' => 1,
+                    'created_at'  => $now,
+                    'updated_at'  => $now,
+                ]);
+            } catch (DatabaseException $e) {
+                if ((int) $e->getCode() === 1062 || str_contains(strtolower($e->getMessage()), 'duplicate')) {
+                    throw new ApiException('resource.conflict', 409, [
+                        ['code' => 'resource.conflict', 'message' => 'Email already registered.', 'field' => 'email'],
+                    ], previous: $e);
+                }
+                throw $e;
+            }
 
             $this->replaceGroupsInTxn($userId, $groups, $now);
 
@@ -110,7 +163,14 @@ final class UserAdminService extends BaseService
                 'next_status'   => 'active',
             ]);
 
-            return ['id' => $userId, 'email' => $email, 'username' => $username, 'groups' => array_values($groups)];
+            return [
+                'id'                 => $userId,
+                'email'              => $email,
+                'username'           => $username,
+                'groups'             => array_values($groups),
+                'temporary_password' => $temporaryPassword,
+                'force_reset'        => true,
+            ];
         });
     }
 
@@ -164,6 +224,7 @@ final class UserAdminService extends BaseService
             }
 
             // Escalation + availability guards (RBAC_SECURITY_REVIEW R3).
+            $this->assertAtLeastOneGroup($groups);
             $this->assertMayAssignGroups($actorId, $groups);
             $this->assertNotRemovingLastOrOwnAdmin($actorId, $userId, $groups);
 
@@ -256,6 +317,16 @@ final class UserAdminService extends BaseService
     {
         if (in_array('admin', $groups, true) && ! $this->userIsAdmin($actorId)) {
             throw ApiException::forbidden('rbac.escalation_forbidden');
+        }
+    }
+
+    /** @param list<string> $groups */
+    private function assertAtLeastOneGroup(array $groups): void
+    {
+        if ($groups === []) {
+            throw ApiException::validationFailure([
+                ['code' => 'validation.field', 'message' => 'Select at least one group.', 'field' => 'groups'],
+            ]);
         }
     }
 

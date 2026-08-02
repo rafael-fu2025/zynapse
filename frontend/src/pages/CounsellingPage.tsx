@@ -17,6 +17,7 @@ import {
   CalendarPlus,
   Check,
   CheckCheck,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   LineChart,
@@ -45,6 +46,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
@@ -961,8 +969,9 @@ function SchedulingTab() {
                         <div className="flex justify-end gap-1">
                           {a.status === 'scheduled' && (
                             <Button
+                              className="min-h-11"
                               size="sm"
-                              variant="outline"
+                              variant="secondary"
                               aria-label={`Confirm appointment #${a.id}`}
                               disabled={transition.isPending}
                               onClick={() => transition.mutate({ id: a.id, action: 'confirm' })}
@@ -971,37 +980,44 @@ function SchedulingTab() {
                             </Button>
                           )}
                           <Button
+                            className="min-h-11"
                             size="sm"
-                            variant="outline"
+                            variant="secondary"
                             aria-label={`Complete appointment #${a.id}`}
                             disabled={transition.isPending}
                             onClick={() => transition.mutate({ id: a.id, action: 'complete' })}
                           >
                             <CheckCheck /> Complete
                           </Button>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            aria-label={`Mark appointment #${a.id} as no-show`}
-                            disabled={transition.isPending}
-                            onClick={() => setConfirm({
-                              title: `Mark appointment #${a.id} as no-show?`,
-                              description: 'This records a no-show, which counts toward the patient\u2019s three-strike counter.',
-                              confirmLabel: 'Mark no-show',
-                              run: () => transition.mutate({ id: a.id, action: 'no_show' }),
-                            })}
-                          >
-                            <UserX /> No-show
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            aria-label={`Cancel appointment #${a.id}`}
-                            disabled={transition.isPending}
-                            onClick={() => setCancelling(a)}
-                          >
-                            <X /> Cancel
-                          </Button>
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <Button className="min-h-11" size="sm" variant="outline" aria-label={`Actions for appointment #${a.id}`}>
+                                Actions <ChevronDown className="size-3.5" aria-hidden />
+                              </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end" className="w-52">
+                              <DropdownMenuItem
+                                className="min-h-11"
+                                disabled={transition.isPending}
+                                onSelect={() => setConfirm({
+                                  title: `Mark appointment #${a.id} as no-show?`,
+                                  description: 'This records a no-show, which counts toward the patient\u2019s three-strike counter.',
+                                  confirmLabel: 'Mark no-show',
+                                  run: () => transition.mutate({ id: a.id, action: 'no_show' }),
+                                })}
+                              >
+                                <UserX /> Mark no-show
+                              </DropdownMenuItem>
+                              <DropdownMenuSeparator />
+                              <DropdownMenuItem
+                                className="min-h-11 text-destructive focus:text-destructive"
+                                disabled={transition.isPending}
+                                onSelect={() => setCancelling(a)}
+                              >
+                                <X /> Cancel appointment
+                              </DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
                         </div>
                       )}
                     </TableCell>

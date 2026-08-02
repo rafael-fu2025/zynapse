@@ -7,7 +7,7 @@
  * status badge and roll back on error. shadcn Table / Dialog /
  * Textarea primitives.
  */
-import { Play, Square, StopCircle, Loader2, Ban, ChevronLeft, ChevronRight, ClipboardList, Boxes, LineChart, Plus, Wrench, Eye, Cylinder, Pencil, Archive, ArchiveRestore, X } from 'lucide-react';
+import { Play, Square, StopCircle, Loader2, Ban, ChevronDown, ChevronLeft, ChevronRight, ClipboardList, Boxes, LineChart, Plus, Wrench, Eye, Cylinder, Pencil, Archive, ArchiveRestore, X } from 'lucide-react';
 import { useId, useMemo, useState } from 'react';
 import { Link, Navigate, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
@@ -22,8 +22,14 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from '@/components/ui/dialog';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
@@ -42,12 +48,6 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { Textarea } from '@/components/ui/textarea';
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from '@/components/ui/tooltip';
 import {
   useActiveBatches,
   useAddBatchIo,
@@ -918,81 +918,82 @@ export default function FacilitiesPage() {
     setCursor(next[next.length - 1] ?? null);
   }
 
-  // Labelled action cluster for the mobile card. The desktop table
-  // keeps its icon-only rail (tooltips work with a mouse); on touch,
-  // visible labels are clearer and hover tooltips are unreliable. Same
-  // disabled logic as the rail; Start reuses the per-row dialog via
-  // `setOpenStart` (rendered once in the desktop rail, portaled on open).
+  // Shared compact menu for desktop rows and mobile cards.
   const unitActions = (u: BmgUnit) => {
     const activeBatch = u.active_batch_id ?? null;
     const archived = u.archived_at !== null && u.archived_at !== undefined;
     return (
-      <>
-        <Button size="sm" variant="outline" onClick={() => setOpenEdit(u)}>
-          <Pencil /> Edit
-        </Button>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button className="min-h-11" size="sm" variant="outline" aria-label={`Actions for ${u.code}`}>
+            Actions <ChevronDown className="size-3.5" aria-hidden />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="w-52">
+          <DropdownMenuItem className="min-h-11" onSelect={() => setOpenEdit(u)}>
+            <Pencil /> Edit drum
+          </DropdownMenuItem>
         {archived ? (
-          <Button size="sm" variant="outline" disabled={unarchiveUnit.isPending} onClick={() => unarchiveUnit.mutate({ unitId: u.id })}>
+          <DropdownMenuItem className="min-h-11" disabled={unarchiveUnit.isPending} onSelect={() => unarchiveUnit.mutate({ unitId: u.id })}>
             <ArchiveRestore /> Restore
-          </Button>
+          </DropdownMenuItem>
         ) : (
-          <Button size="sm" variant="outline" className="hover:border-destructive hover:text-destructive" onClick={() => setOpenArchive(u)}>
+          <DropdownMenuItem className="min-h-11" onSelect={() => setOpenArchive(u)}>
             <Archive /> Archive
-          </Button>
+          </DropdownMenuItem>
         )}
-        <Button size="sm" variant="secondary" disabled={u.status !== 'idle'} onClick={() => setOpenStart(u)}>
-          <Play /> Start
-        </Button>
-        <Button size="sm" variant="outline" disabled={u.status !== 'processing' || activeBatch === null} onClick={() => setOpenOutput(u)}>
-          <Square /> Output
-        </Button>
-        <Button
-          size="sm"
-          variant="outline"
+          <DropdownMenuSeparator />
+          <DropdownMenuItem className="min-h-11" disabled={u.status !== 'idle'} onSelect={() => setOpenStart(u)}>
+            <Play /> Start batch
+          </DropdownMenuItem>
+          <DropdownMenuItem className="min-h-11" disabled={u.status !== 'processing' || activeBatch === null} onSelect={() => setOpenOutput(u)}>
+            <Square /> Record output
+          </DropdownMenuItem>
+          <DropdownMenuItem
+          className="min-h-11"
           disabled={u.status !== 'awaiting_output' || activeBatch === null || finish.isPending}
-          onClick={() => activeBatch !== null && setConfirm({
+          onSelect={() => activeBatch !== null && setConfirm({
             title: `Finish batch #${activeBatch} on ${u.code}?`,
             description: 'This finalizes the batch and returns the drum to Idle. This cannot be undone.',
             confirmLabel: 'Finish batch',
             run: () => finish.mutate({ unitId: u.id, batchId: activeBatch }),
           })}
         >
-          <StopCircle /> Finish
-        </Button>
-        <Button size="sm" variant="outline" disabled={activeBatch === null} onClick={() => setOpenLogs(u)}>
-          <ClipboardList /> Logs
-        </Button>
-        <Button size="sm" variant="outline" disabled={activeBatch === null} onClick={() => setOpenAnalytics(u)}>
-          <LineChart /> Analytics
-        </Button>
-        <Button
-          size="sm"
-          variant="outline"
+            <StopCircle /> Finish batch
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem className="min-h-11" disabled={activeBatch === null} onSelect={() => setOpenLogs(u)}>
+            <ClipboardList /> Process logs
+          </DropdownMenuItem>
+          <DropdownMenuItem className="min-h-11" disabled={activeBatch === null} onSelect={() => setOpenAnalytics(u)}>
+            <LineChart /> Analytics
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem
+          className="min-h-11"
           disabled={(u.status !== 'idle' && u.status !== 'maintenance') || maintenance.isPending}
-          onClick={() => maintenance.mutate({ unitId: u.id, maintenance: u.status !== 'maintenance' })}
+          onSelect={() => maintenance.mutate({ unitId: u.id, maintenance: u.status !== 'maintenance' })}
         >
-          <Wrench /> {u.status === 'maintenance' ? 'End maint.' : 'Maintenance'}
-        </Button>
-        <Button
-          size="sm"
-          variant="outline"
-          className="hover:border-destructive hover:text-destructive"
+            <Wrench /> {u.status === 'maintenance' ? 'End maintenance' : 'Maintenance'}
+          </DropdownMenuItem>
+          <DropdownMenuItem
+          className="min-h-11 text-destructive focus:text-destructive"
           disabled={(u.status !== 'processing' && u.status !== 'awaiting_output') || activeBatch === null || cancel.isPending}
-          onClick={() => activeBatch !== null && setConfirm({
+          onSelect={() => activeBatch !== null && setConfirm({
             title: `Cancel batch #${activeBatch} on ${u.code}?`,
             description: 'The batch will be cancelled and the drum returned to Idle. This cannot be undone.',
             confirmLabel: 'Cancel batch',
             run: () => cancel.mutate({ unitId: u.id, batchId: activeBatch, input: { reason_code: 'unspecified' } }),
           })}
         >
-          <Ban /> Cancel
-        </Button>
-      </>
+            <Ban /> Cancel batch
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
     );
   };
 
   return (
-    <TooltipProvider delayDuration={150} skipDelayDuration={300}>
     <main className="mx-auto max-w-7xl space-y-4 p-6">
       <header className="flex flex-wrap items-center justify-between gap-2">
         <div>
@@ -1078,194 +1079,7 @@ export default function FacilitiesPage() {
                   </TableCell>
                   <TableCell className="px-3 font-mono text-xs text-muted-foreground">{fmtUtcToApp(u.created_at)}</TableCell>
                   <TableCell className="px-3 text-right">
-                    {/*
-                     * Icon-only action rail. The shadcn Tooltip provides
-                     * the action label on hover and on keyboard focus
-                     * (announcing the action to screen-reader users via
-                     * the button's aria-label). No text label is shown
-                     * inline — the rail is sized to its icons only so
-                     * long unit codes still fit on one line.
-                     */}
-                    <div className="flex justify-end gap-1">
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Button
-                            size="icon-sm"
-                            variant="outline"
-                            onClick={() => setOpenEdit(u)}
-                            aria-label={`Edit ${u.code}`}
-                          >
-                            <Pencil className="size-4" />
-                          </Button>
-                        </TooltipTrigger>
-                        <TooltipContent>Edit {u.code}</TooltipContent>
-                      </Tooltip>
-
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          {u.archived_at !== null && u.archived_at !== undefined ? (
-                            <Button
-                              size="icon-sm"
-                              variant="outline"
-                              onClick={() => unarchiveUnit.mutate({ unitId: u.id })}
-                              disabled={unarchiveUnit.isPending}
-                              aria-label={`Restore ${u.code}`}
-                            >
-                              <ArchiveRestore className="size-4" />
-                            </Button>
-                          ) : (
-                            <Button
-                              size="icon-sm"
-                              variant="outline"
-                              className="hover:border-destructive hover:text-destructive focus-visible:border-destructive focus-visible:text-destructive"
-                              onClick={() => setOpenArchive(u)}
-                              aria-label={`Archive ${u.code}`}
-                            >
-                              <Archive className="size-4" />
-                            </Button>
-                          )}
-                        </TooltipTrigger>
-                        <TooltipContent>
-                          {u.archived_at !== null && u.archived_at !== undefined ? `Restore ${u.code}` : `Archive ${u.code}`}
-                        </TooltipContent>
-                      </Tooltip>
-
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Dialog open={openStart?.id === u.id} onOpenChange={(o) => setOpenStart(o ? u : null)}>
-                            <DialogTrigger asChild>
-                              <Button
-                                size="icon-sm"
-                                variant="secondary"
-                                disabled={u.status !== 'idle'}
-                                aria-label={`Start batch on ${u.code}`}
-                              >
-                                <Play className="size-4" />
-                              </Button>
-                            </DialogTrigger>
-                            {openStart?.id === u.id && (
-                              <StartBatchDialog unit={openStart} onClose={() => setOpenStart(null)} />
-                            )}
-                          </Dialog>
-                        </TooltipTrigger>
-                        <TooltipContent>Start batch on {u.code}</TooltipContent>
-                      </Tooltip>
-
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Button
-                            size="icon-sm"
-                            variant="outline"
-                            disabled={u.status !== 'processing' || activeBatch === null}
-                            onClick={() => setOpenOutput(u)}
-                            aria-label={`Record output for ${u.code}`}
-                          >
-                            <Square className="size-4" />
-                          </Button>
-                        </TooltipTrigger>
-                        <TooltipContent>Record output for {u.code}</TooltipContent>
-                      </Tooltip>
-
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Button
-                            size="icon-sm"
-                            variant="outline"
-                            disabled={
-                              u.status !== 'awaiting_output' ||
-                              activeBatch === null ||
-                              finish.isPending
-                            }
-                            onClick={() =>
-                              activeBatch !== null && setConfirm({
-                                title: `Finish batch #${activeBatch} on ${u.code}?`,
-                                description: 'This finalizes the batch and returns the drum to Idle. This cannot be undone.',
-                                confirmLabel: 'Finish batch',
-                                run: () => finish.mutate({ unitId: u.id, batchId: activeBatch }),
-                              })
-                            }
-                            aria-label={`Finish batch on ${u.code}`}
-                          >
-                            <StopCircle className="size-4" />
-                          </Button>
-                        </TooltipTrigger>
-                        <TooltipContent>Finish batch on {u.code}</TooltipContent>
-                      </Tooltip>
-
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Button
-                            size="icon-sm"
-                            variant="outline"
-                            disabled={activeBatch === null}
-                            onClick={() => setOpenLogs(u)}
-                            aria-label={`Process logs for ${u.code}`}
-                          >
-                            <ClipboardList className="size-4" />
-                          </Button>
-                        </TooltipTrigger>
-                        <TooltipContent>Process logs for {u.code}</TooltipContent>
-                      </Tooltip>
-
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Button
-                            size="icon-sm"
-                            variant="outline"
-                            disabled={activeBatch === null}
-                            onClick={() => setOpenAnalytics(u)}
-                            aria-label={`Analytics for ${u.code}`}
-                          >
-                            <LineChart className="size-4" />
-                          </Button>
-                        </TooltipTrigger>
-                        <TooltipContent>Analytics for {u.code}</TooltipContent>
-                      </Tooltip>
-
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Button
-                            size="icon-sm"
-                            variant="outline"
-                            disabled={(u.status !== 'idle' && u.status !== 'maintenance') || maintenance.isPending}
-                            onClick={() => maintenance.mutate({ unitId: u.id, maintenance: u.status !== 'maintenance' })}
-                            aria-label={`${u.status === 'maintenance' ? 'End maintenance' : 'Maintenance'} for ${u.code}`}
-                          >
-                            <Wrench className="size-4" />
-                          </Button>
-                        </TooltipTrigger>
-                        <TooltipContent>
-                          {u.status === 'maintenance' ? 'End maintenance' : 'Maintenance'} for {u.code}
-                        </TooltipContent>
-                      </Tooltip>
-
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Button
-                            size="icon-sm"
-                            variant="outline"
-                            className="hover:border-destructive hover:text-destructive focus-visible:border-destructive focus-visible:text-destructive"
-                            disabled={
-                              (u.status !== 'processing' && u.status !== 'awaiting_output') ||
-                              activeBatch === null ||
-                              cancel.isPending
-                            }
-                            onClick={() =>
-                              activeBatch !== null && setConfirm({
-                                title: `Cancel batch #${activeBatch} on ${u.code}?`,
-                                description: 'The batch will be cancelled and the drum returned to Idle. This cannot be undone.',
-                                confirmLabel: 'Cancel batch',
-                                run: () => cancel.mutate({ unitId: u.id, batchId: activeBatch, input: { reason_code: 'unspecified' } }),
-                              })
-                            }
-                            aria-label={`Cancel batch on ${u.code}`}
-                          >
-                            <Ban className="size-4" />
-                          </Button>
-                        </TooltipTrigger>
-                        <TooltipContent>Cancel batch on {u.code}</TooltipContent>
-                      </Tooltip>
-                    </div>
+                    {unitActions(u)}
                   </TableCell>
                 </TableRow>
               );
@@ -1334,6 +1148,12 @@ export default function FacilitiesPage() {
         </div>
       </nav>
 
+      {openStart !== null && (
+        <Dialog open onOpenChange={(open) => !open && setOpenStart(null)}>
+          <StartBatchDialog unit={openStart} onClose={() => setOpenStart(null)} />
+        </Dialog>
+      )}
+
       {openOutput !== null && openOutput.active_batch_id !== null && openOutput.active_batch_id !== undefined && (
         <Dialog open onOpenChange={(o) => !o && setOpenOutput(null)}>
           <RecordOutputDialog
@@ -1389,6 +1209,5 @@ export default function FacilitiesPage() {
         onCancel={() => setConfirm(null)}
       />
     </main>
-    </TooltipProvider>
   );
 }

@@ -25,16 +25,18 @@ final class InventoryController extends ApiController
 
     public function listItems(): ResponseInterface
     {
-        $cursor   = (string) ($this->request->getGet('cursor') ?? '');
-        $limit    = (int)    ($this->request->getGet('limit')  ?? 25);
-        $q        = (string) ($this->request->getGet('q')      ?? '');
-        $archived = (string) ($this->request->getGet('include_archived') ?? '');
+        $cursor    = (string) ($this->request->getGet('cursor') ?? '');
+        $limit     = (int)    ($this->request->getGet('limit')  ?? 25);
+        $q         = (string) ($this->request->getGet('q')      ?? '');
+        $archived  = (string) ($this->request->getGet('include_archived') ?? '');
+        $lowStock  = (string) ($this->request->getGet('low_stock') ?? '');
 
         $page = $this->service->listItems(
             $cursor !== '' ? $cursor : null,
             $limit,
             $q !== '' ? $q : null,
             $archived === '1' || $archived === 'true',
+            $lowStock === '1' || $lowStock === 'true',
         );
 
         return $this->ok(

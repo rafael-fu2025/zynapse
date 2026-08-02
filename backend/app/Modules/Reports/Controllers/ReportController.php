@@ -21,7 +21,7 @@ use Modules\Reports\Services\ReportService;
  */
 final class ReportController extends ApiController
 {
-    private const MODULES = ['clinic', 'counselling', 'inventory'];
+    private const MODULES = ReportService::MODULES;
 
     private readonly ReportService $service;
 
@@ -46,13 +46,33 @@ final class ReportController extends ApiController
             'clinic'      => $this->service->clinic($range),
             'counselling' => $this->service->counselling($range),
             'inventory'   => $this->service->inventory($range),
+            'referrals'   => $this->service->referrals($range),
+            'facilities'  => $this->service->facilities($range),
         };
 
-        if ((string) ($this->request->getGet('summarize') ?? '') === '1') {
-            $data['narrative'] = $this->service->summarize($module, $range, $data)['narrative'];
-        }
-
         return $this->ok($data);
+    }
+
+    /** Persist a deterministic narrative through an explicit write action. */
+    public function narrative(string $module): ResponseInterface
+    {
+        $this->authorize('reports.configure');
+        $this->assertModule($module);
+
+        $payload = $this->request->getJSON(true) ?? [];
+        $range = $this->service->range(
+            is_string($payload['start'] ?? null) ? $payload['start'] : null,
+            is_string($payload['end'] ?? null) ? $payload['end'] : null,
+        );
+        $data = match ($module) {
+            'clinic'      => $this->service->clinic($range),
+            'counselling' => $this->service->counselling($range),
+            'inventory'   => $this->service->inventory($range),
+            'referrals'   => $this->service->referrals($range),
+            'facilities'  => $this->service->facilities($range),
+        };
+
+        return $this->ok($this->service->summarize($module, $range, $data), null, 201);
     }
 
     public function export(string $module): ResponseInterface
@@ -61,7 +81,7 @@ final class ReportController extends ApiController
         $this->assertModule($module);
 
         $range = $this->rangeFromQuery();
-        [$headers, $rows] = $this->service->exportRows($module, $range);
+        [$headers, $rows] = $this->service->exportStream($module, $range);
 
         Services::auditOutbox()->enqueue(
             'reports.exported',
@@ -86,9 +106,16 @@ final class ReportController extends ApiController
      */
     private function rangeFromQuery(): array
     {
+        $start = $this->request->getGet('start');
+        $end = $this->request->getGet('end');
+        if (($start !== null && ! is_string($start)) || ($end !== null && ! is_string($end))) {
+            throw ApiException::validationFailure([
+                ['code' => 'validation.field', 'message' => 'Report dates must be scalar YYYY-MM-DD values.', 'field' => 'start'],
+            ]);
+        }
         return $this->service->range(
-            $this->request->getGet('start'),
-            $this->request->getGet('end'),
+            $start,
+            $end,
         );
     }
 

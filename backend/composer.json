@@ -23,7 +23,8 @@
             "Modules\\Clinic\\": "app/Modules/Clinic/",
             "Modules\\Counselling\\": "app/Modules/Counselling/",
             "Modules\\Facilities\\": "app/Modules/Facilities/",
-            "Modules\\Referrals\\": "app/Modules/Referrals/"
+            "Modules\\Referrals\\": "app/Modules/Referrals/",
+            "Modules\\Reports\\": "app/Modules/Reports/"
         }
     },
     "autoload-dev": {

@@ -23,6 +23,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import {
   CalendarPlus,
   Check,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   Eye,
@@ -51,6 +52,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
@@ -461,44 +469,62 @@ interface AppointmentActionProps {
 function AppointmentActions({ a, onView, onEdit, transition, onConfirm, transitionPending, canEdit }: AppointmentActionProps) {
   return (
     <>
-      <Button size="sm" variant="outline" onClick={() => onView(a)} aria-label={`View appointment #${a.id}`}>
-        <Eye /> View
-      </Button>
-      {canEdit && (
-        <Button size="sm" variant="outline" onClick={() => onEdit(a)} aria-label={`Edit appointment #${a.id}`}>
-          <Pencil /> Edit
+      {a.status === 'scheduled' && (
+        <Button className="min-h-11" size="sm" variant="secondary" disabled={transitionPending} onClick={() => transition({ id: a.id, status: 'checked_in' })}>
+          <LogIn /> Check in
         </Button>
       )}
-      {a.status === 'scheduled' && (
-        <>
-          <Button size="sm" variant="secondary" disabled={transitionPending} onClick={() => transition({ id: a.id, status: 'checked_in' })}>
-            <LogIn /> Check in
-          </Button>
-          <Button size="sm" variant="outline" disabled={transitionPending} onClick={() => onConfirm({
-            title: `Mark appointment #${a.id} as no-show?`,
-            description: 'This records a no-show, which counts toward the patient’s three-strike counter.',
-            confirmLabel: 'Mark no-show',
-            run: () => transition({ id: a.id, status: 'no_show' }),
-          })}>
-            No-show
-          </Button>
-        </>
-      )}
       {a.status === 'checked_in' && (
-        <Button size="sm" variant="secondary" disabled={transitionPending} onClick={() => transition({ id: a.id, status: 'completed' })}>
+        <Button className="min-h-11" size="sm" variant="secondary" disabled={transitionPending} onClick={() => transition({ id: a.id, status: 'completed' })}>
           <Check /> Complete
         </Button>
       )}
-      {(a.status === 'scheduled' || a.status === 'checked_in') && (
-        <Button size="sm" variant="outline" disabled={transitionPending} onClick={() => onConfirm({
-          title: `Cancel appointment #${a.id}?`,
-          description: 'The appointment will be cancelled. This cannot be undone.',
-          confirmLabel: 'Cancel appointment',
-          run: () => transition({ id: a.id, status: 'cancelled' }),
-        })}>
-          <X /> Cancel
-        </Button>
-      )}
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button className="min-h-11" size="sm" variant="outline" aria-label={`Actions for appointment #${a.id}`}>
+            Actions <ChevronDown className="size-3.5" aria-hidden />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="w-52">
+          <DropdownMenuItem className="min-h-11" onSelect={() => onView(a)}>
+            <Eye /> View appointment
+          </DropdownMenuItem>
+          {canEdit && (
+            <DropdownMenuItem className="min-h-11" onSelect={() => onEdit(a)}>
+              <Pencil /> Edit appointment
+            </DropdownMenuItem>
+          )}
+          {(a.status === 'scheduled' || a.status === 'checked_in') && <DropdownMenuSeparator />}
+          {a.status === 'scheduled' && (
+            <DropdownMenuItem
+              className="min-h-11"
+              disabled={transitionPending}
+              onSelect={() => onConfirm({
+                title: `Mark appointment #${a.id} as no-show?`,
+                description: 'This records a no-show, which counts toward the patient’s three-strike counter.',
+                confirmLabel: 'Mark no-show',
+                run: () => transition({ id: a.id, status: 'no_show' }),
+              })}
+            >
+              <X /> Mark no-show
+            </DropdownMenuItem>
+          )}
+          {(a.status === 'scheduled' || a.status === 'checked_in') && (
+            <DropdownMenuItem
+              className="min-h-11 text-destructive focus:text-destructive"
+              disabled={transitionPending}
+              onSelect={() => onConfirm({
+                title: `Cancel appointment #${a.id}?`,
+                description: 'The appointment will be cancelled. This cannot be undone.',
+                confirmLabel: 'Cancel appointment',
+                run: () => transition({ id: a.id, status: 'cancelled' }),
+              })}
+            >
+              <X /> Cancel appointment
+            </DropdownMenuItem>
+          )}
+        </DropdownMenuContent>
+      </DropdownMenu>
     </>
   );
 }

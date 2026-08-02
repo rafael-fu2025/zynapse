@@ -29,6 +29,8 @@ final class ApiErrorCode
     public const AUTH_CREDENTIALS_INVALID       = 'auth.credentials_invalid';
     public const AUTH_USER_NOT_FOUND            = 'auth.user_not_found';
     public const AUTH_LOGIN_LOCKED              = 'auth.login_locked';
+    public const AUTH_ACCOUNT_DISABLED          = 'auth.account_disabled';
+    public const AUTH_PASSWORD_CHANGE_REQUIRED  = 'auth.password_change_required';
 
     public const RBAC_FORBIDDEN                 = 'rbac.forbidden';
     public const RBAC_PERMISSION_DENIED         = 'rbac.permission_denied';
@@ -68,6 +70,7 @@ final class ApiErrorCode
     {
         return match (true) {
             str_starts_with($code, 'auth.login_locked')                => 429,
+            $code === self::AUTH_PASSWORD_CHANGE_REQUIRED              => 403,
             str_starts_with($code, 'auth.')                            => 401,
             str_starts_with($code, 'rbac.')                            => 403,
             str_starts_with($code, 'resource.not_found')               => 404,

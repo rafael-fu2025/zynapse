@@ -101,6 +101,12 @@ final class MedicineController extends ApiController
             'received_date'   => 'permit_empty|valid_date[Y-m-d]',
             'supplier'        => 'permit_empty|max_length[200]',
             'note'            => 'permit_empty|max_length[255]',
+            // Gap 8 — optional overrides for partial deliveries. Backend
+            // clamps `quantity` to the reorder's `requested_quantity` in
+            // the service so a fat-finger over the ordered amount is
+            // rejected with a clear message.
+            'quantity'        => 'permit_empty|is_natural',
+            'shortage_note'   => 'permit_empty|max_length[255]',
         ];
         if (! $this->makeValidation($rules)->run($payload)) {
             throw ApiException::validationFailure($this->collectErrors());

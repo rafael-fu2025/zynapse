@@ -1,7 +1,7 @@
 /**
  * Reorder hooks — procurement workflow (Phase 13).
  */
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { z } from 'zod';
 import { toast } from 'sonner';
 import { apiClient } from '@/api/client';
@@ -39,6 +39,10 @@ export function useReorders(
       const data = z.array(reorderSchema).parse(res.data);
       return { data, next: res.data?.next ?? null };
     },
+    // Keep the previous page visible while the next one is in-flight so
+    // typing in the search box doesn't flash an empty state between
+    // keystrokes.
+    placeholderData: keepPreviousData,
   });
 }
 

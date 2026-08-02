@@ -11,6 +11,7 @@ use App\Services\Audit\AuditOutboxService;
 use App\Services\Crypto\EncryptionService;
 use App\Services\Notify\NotificationOutboxService;
 use App\Services\Rbac\PermissionService;
+use App\Services\RequestIdService;
 use CodeIgniter\Config\Services as CoreServices;
 use CodeIgniter\Database\BaseConnection;
 
@@ -59,6 +60,14 @@ class Services extends CoreServices
             return static::getSharedInstance('notificationOutbox');
         }
         return new NotificationOutboxService();
+    }
+
+    public static function requestId(bool $getShared = true): RequestIdService
+    {
+        if ($getShared) {
+            return static::getSharedInstance('requestId');
+        }
+        return new RequestIdService();
     }
 
     public static function encryptionService(bool $getShared = true): EncryptionService

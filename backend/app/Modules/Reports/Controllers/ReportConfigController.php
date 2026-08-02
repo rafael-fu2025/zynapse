@@ -32,7 +32,12 @@ final class ReportConfigController extends ApiController
     {
         $this->authorize('reports.read');
         $archived = (string) ($this->request->getGet('include_archived') ?? '');
-        return $this->ok($this->service->listConfigs($archived === '1' || $archived === 'true'));
+        return $this->ok($this->service->listConfigs(
+            $archived === '1' || $archived === 'true',
+            max(1, (int) ($this->request->getGet('page') ?? 1)),
+            max(1, (int) ($this->request->getGet('limit') ?? ReportConfigService::DEFAULT_PAGE_SIZE)),
+            $this->queryFilter('module'),
+        ));
     }
 
     public function createConfig(): ResponseInterface
@@ -42,9 +47,7 @@ final class ReportConfigController extends ApiController
 
         $rules = [
             'name'          => 'required|max_length[120]',
-            'module'        => 'required|in_list[clinic,counselling,inventory]',
-            'report_type'   => 'permit_empty|max_length[32]',
-            'schedule_cron' => 'permit_empty|max_length[64]',
+            'module'        => 'required|in_list[clinic,counselling,inventory,referrals,facilities]',
         ];
         if (! $this->makeValidation($rules)->run($payload)) {
             throw ApiException::validationFailure($this->collectErrors());
@@ -61,7 +64,7 @@ final class ReportConfigController extends ApiController
     public function run(int $id): ResponseInterface
     {
         $this->authorize('reports.configure');
-        return $this->ok($this->service->run($id), null, 201);
+        return $this->ok($this->service->run($id), null, 202);
     }
 
     public function updateConfig(int $id): ResponseInterface
@@ -71,9 +74,7 @@ final class ReportConfigController extends ApiController
 
         $rules = [
             'name'          => 'permit_empty|max_length[120]',
-            'module'        => 'permit_empty|in_list[clinic,counselling,inventory]',
-            'report_type'   => 'permit_empty|max_length[32]',
-            'schedule_cron' => 'permit_empty|max_length[64]',
+            'module'        => 'permit_empty|in_list[clinic,counselling,inventory,referrals,facilities]',
         ];
         if (! $this->makeValidation($rules)->run($payload)) {
             throw ApiException::validationFailure($this->collectErrors());
@@ -103,7 +104,12 @@ final class ReportConfigController extends ApiController
     public function listGenerated(): ResponseInterface
     {
         $this->authorize('reports.read');
-        return $this->ok($this->service->listGenerated());
+        return $this->ok($this->service->listGenerated(
+            max(1, (int) ($this->request->getGet('page') ?? 1)),
+            max(1, (int) ($this->request->getGet('limit') ?? ReportConfigService::DEFAULT_PAGE_SIZE)),
+            $this->queryFilter('module'),
+            $this->queryFilter('status'),
+        ));
     }
 
     public function download(int $id): ResponseInterface
@@ -119,13 +125,12 @@ final class ReportConfigController extends ApiController
             ['resource_code' => $meta['name']],
         );
 
-        $this->response->setHeader('Content-Type', 'text/csv; charset=utf-8');
-        $this->response->setHeader('Content-Disposition', 'attachment; filename="' . $meta['name'] . '"');
-        $this->response->setHeader('Cache-Control', 'no-store');
-        $this->response->setHeader('X-Content-Type-Options', 'nosniff');
-        $this->response->setBody((string) file_get_contents($meta['path']));
-
-        return $this->response;
+        return $this->response
+            ->download($meta['path'], null)
+            ->setFileName($meta['name'])
+            ->setContentType('text/csv', 'UTF-8')
+            ->setHeader('Cache-Control', 'no-store')
+            ->setHeader('X-Content-Type-Options', 'nosniff');
     }
 
     private function collectErrors(): array
@@ -135,5 +140,14 @@ final class ReportConfigController extends ApiController
             $errs[] = ['code' => 'validation.field', 'message' => (string) $msg, 'field' => (string) $field];
         }
         return $errs;
+    }
+
+    private function queryFilter(string $name): ?string
+    {
+        $value = $this->request->getGet($name);
+        if (! is_string($value) || trim($value) === '') {
+            return null;
+        }
+        return trim($value);
     }
 }

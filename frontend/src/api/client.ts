@@ -4,7 +4,9 @@
  * in localStorage. Refresh tokens are HttpOnly cookies set by the backend.
  */
 import type {
-  AxiosError} from 'axios';
+  AxiosError,
+  AxiosResponse,
+} from 'axios';
 import axios, {
   type AxiosInstance,
   type InternalAxiosRequestConfig,
@@ -16,6 +18,15 @@ const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL as string | undefined) ?
 
 interface RetryConfig extends InternalAxiosRequestConfig {
   _synapseRetried?: boolean;
+}
+
+interface NormalizedResponse extends AxiosResponse {
+  synapseMeta?: ApiEnvelope<unknown>['meta'];
+}
+
+/** Read pagination metadata retained by the response normalizer. */
+export function getNextCursor(response: AxiosResponse): string | null {
+  return (response as NormalizedResponse).synapseMeta?.pagination?.next_cursor ?? null;
 }
 
 let inflightRefresh: Promise<string | null> | null = null;
@@ -70,6 +81,7 @@ apiClient.interceptors.response.use(
     }
     // Normalize: replace response.data with the unwrapped data OR rethrow.
     if (envelope.success) {
+      (response as NormalizedResponse).synapseMeta = envelope.meta;
       response.data = envelope.data;
       return response;
     }
