@@ -27,7 +27,7 @@ Full detail in [`../docs/PHASE6.md`](../docs/PHASE6.md).
 - BMG state machine (`active_unit_id` UNIQUE + mass invariant triggers + `bmg_mass_invariant` rule).
 - Clinic encounters + vitals; Counselling encrypted notes; Referrals bridge + QR.
 - `JwtService`, `PermissionService`, `AuditOutboxService`, `EncryptionService`.
-- CLI: `synapse:smoke`, `synapse:audit-drain`, `synapse:audit-verify`.
+- CLI: `synapse:smoke`, `synapse:audit-drain`, `synapse:audit-verify`, `synapse:reports-drain`.
 - Refresh-token rotation chain (Phase 4).
 - Audit CSV export, dashboard counters, `ApiErrorCode` catalog, per-module READMEs (Phase 4).
 
@@ -43,8 +43,15 @@ php spark db:seed App\\Database\\Seeds\\DevUserSeeder
 php spark synapse:smoke
 php spark synapse:audit-drain
 php spark synapse:audit-verify
+php spark synapse:reports-drain --limit=10
 composer test
 ```
+
+Run `synapse:reports-drain` every minute in production. It claims queued
+generated reports, writes aggregate rows without holding a database
+transaction open, and removes files after the 30-day retention window.
+Run one reports worker at a time; send command failures and the nightly
+`synapse:audit-verify` result to operational alerting.
 
 ## Default development credentials
 

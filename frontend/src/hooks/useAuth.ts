@@ -87,8 +87,12 @@ export function useChangePassword() {
       setAccessToken(res.data.access_token);
     },
     onSuccess: async () => {
-      // AWAIT the refetch: navigating while the cached `me` still says
-      // force_reset=true would bounce straight back to /change-password.
+      // The password-change response is the authoritative transition.
+      // Clear the cached gate before navigation so Layout cannot bounce
+      // back while the confirming /me refetch is still in flight.
+      qc.setQueryData<Session>(['me'], (current) => current === undefined
+        ? current
+        : { ...current, force_reset: false });
       await qc.invalidateQueries({ queryKey: ['me'] });
       toast.success('Password changed.');
       navigate('/', { replace: true });

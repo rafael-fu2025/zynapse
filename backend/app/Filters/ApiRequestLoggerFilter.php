@@ -22,20 +22,22 @@ final class ApiRequestLoggerFilter implements FilterInterface
 {
     public function before(RequestInterface $request, $arguments = null): RequestInterface
     {
-        $this->rid = bin2hex(random_bytes(16));
+        $rid = Services::requestId()->bind((string) $request->getHeaderLine('X-Request-Id'));
 
         // Surface a per-request id for cross-layer correlation.
-        $request->setHeader('X-Request-Id', $this->rid);
+        $request->setHeader('X-Request-Id', $rid);
 
         return $request;
     }
 
     public function after(RequestInterface $request, ResponseInterface $response, $arguments = null): ?ResponseInterface
     {
-        $response->setHeader('X-Request-Id', $this->rid ?? bin2hex(random_bytes(16)));
+        $rid = Services::requestId()->current()
+            ?? Services::requestId()->bind((string) $request->getHeaderLine('X-Request-Id'));
+        $response->setHeader('X-Request-Id', $rid);
 
         Services::logger()->info(json_encode([
-            'rid'      => $this->rid ?? null,
+            'rid'      => $rid,
             'method'   => $request->getMethod(),
             'route'    => $request->getUri()->getPath(),
             'status'   => $response->getStatusCode(),
@@ -45,8 +47,6 @@ final class ApiRequestLoggerFilter implements FilterInterface
 
         return $response;
     }
-
-    private string $rid = '';
 
     /**
      * Returns the query string with sensitive keys redacted.

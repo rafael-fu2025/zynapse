@@ -14,6 +14,7 @@ final class Routes implements BaseRoutes
         $routes->group('api/v1/reports', ['namespace' => 'Modules\\Reports\\Controllers', 'filter' => 'api_auth'], static function (RouteCollection $r): void {
             $r->get('summary',               'ReportController::summary');
             $r->get('export/(:segment)',     'ReportController::export/$1');
+            $r->post('narratives/(:segment)', 'ReportController::narrative/$1');
 
             // Saved & generated reports (Phase P6). Static segments MUST
             // precede the (:segment) module catch-all below.

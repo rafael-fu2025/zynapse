@@ -33,7 +33,7 @@ final class InventoryService extends BaseService
     /**
      * @return array{data: array<int, array<string, mixed>>, next: ?string, count: int}
      */
-    public function listItems(?string $cursor, int $limit, ?string $q = null, bool $includeArchived = false): array
+    public function listItems(?string $cursor, int $limit, ?string $q = null, bool $includeArchived = false, bool $lowStockOnly = false): array
     {
         $this->policy->check('inventoryRead');
 
@@ -44,6 +44,13 @@ final class InventoryService extends BaseService
 
         if (! $includeArchived) {
             $builder->where('archived_at', null);
+        }
+
+        // Frontend "Low stock only" chip — mirrors the DTO's `low_stock`
+        // boolean (`quantity_on_hand <= reorder_level`). Both columns are
+        // NOT NULL INT, so the comparison is safe.
+        if ($lowStockOnly) {
+            $builder->where('quantity_on_hand <= reorder_level', null, false);
         }
 
         $qTrim = $q !== null ? trim($q) : '';

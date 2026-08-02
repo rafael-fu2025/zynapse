@@ -6,6 +6,7 @@ namespace App\Controllers\Api\Admin;
 
 use App\Controllers\Api\ApiController;
 use App\Exceptions\ApiException;
+use App\Pagination\KeysetPaginator;
 use App\Services\Admin\UserAdminService;
 use CodeIgniter\HTTP\ResponseInterface;
 use Config\Services;
@@ -30,14 +31,52 @@ final class UserController extends ApiController
     {
         $this->authorize('rbac.read');
 
-        $cursor = (string) ($this->request->getGet('cursor') ?? '');
-        $limit  = (int)    ($this->request->getGet('limit')  ?? 25);
+        $cursorRaw = $this->request->getGet('cursor');
+        $cursor = is_string($cursorRaw) ? trim($cursorRaw) : '';
+        $limitRaw = $this->request->getGet('limit');
+        $limit = $limitRaw === null ? 25 : filter_var($limitRaw, FILTER_VALIDATE_INT);
+        $search = trim((string) ($this->request->getGet('q') ?? ''));
+        $status = trim((string) ($this->request->getGet('status') ?? 'all'));
+        $group = trim((string) ($this->request->getGet('group') ?? 'all'));
+        $sort = trim((string) ($this->request->getGet('sort') ?? 'newest'));
 
-        $page = $this->service->list($cursor !== '' ? $cursor : null, $limit);
+        $errors = [];
+        if ($limit === false || $limit < 1 || $limit > 100) {
+            $errors[] = ['code' => 'validation.field', 'message' => 'limit must be between 1 and 100.', 'field' => 'limit'];
+        }
+        if ($cursor !== '' && KeysetPaginator::decode($cursor) === null) {
+            $errors[] = ['code' => 'validation.field', 'message' => 'cursor is invalid.', 'field' => 'cursor'];
+        }
+        if (mb_strlen($search) > 100) {
+            $errors[] = ['code' => 'validation.field', 'message' => 'q must not exceed 100 characters.', 'field' => 'q'];
+        }
+        if (! in_array($status, ['all', 'active', 'disabled'], true)) {
+            $errors[] = ['code' => 'validation.field', 'message' => 'status must be all, active, or disabled.', 'field' => 'status'];
+        }
+        if ($group !== 'all' && preg_match('/^[a-z][a-z0-9_]{0,63}$/', $group) !== 1) {
+            $errors[] = ['code' => 'validation.field', 'message' => 'group is invalid.', 'field' => 'group'];
+        }
+        if (! in_array($sort, ['newest', 'oldest'], true)) {
+            $errors[] = ['code' => 'validation.field', 'message' => 'sort must be newest or oldest.', 'field' => 'sort'];
+        }
+        if ($errors !== []) {
+            throw ApiException::validationFailure($errors);
+        }
+
+        $page = $this->service->list(
+            $cursor !== '' ? $cursor : null,
+            (int) $limit,
+            $search,
+            $status,
+            $group,
+            $sort,
+        );
 
         return $this->ok(
             $page['data'],
-            \App\Http\ApiResponse::paginationMeta($page['count'], $page['next'], null),
+            \App\Http\ApiResponse::paginationMeta((int) $limit, $page['next'], null) + [
+                'result_count' => $page['count'],
+            ],
         );
     }
 
@@ -48,7 +87,7 @@ final class UserController extends ApiController
 
         $rules = [
             'email'    => 'required|valid_email|max_length[255]',
-            'password' => 'required|min_length[12]|max_length[256]',
+            'password' => 'permit_empty|min_length[12]|max_length[256]',
             'username' => 'permit_empty|alpha_dash|max_length[64]',
             'groups'   => 'permit_empty',
         ];
@@ -56,11 +95,13 @@ final class UserController extends ApiController
             throw ApiException::validationFailure($this->collectErrors());
         }
 
-        $groups = is_array($payload['groups'] ?? null) ? array_values(array_map('strval', $payload['groups'])) : [];
+        $groups = is_array($payload['groups'] ?? null)
+            ? array_values(array_unique(array_map(static fn ($group): string => trim((string) $group), $payload['groups'])))
+            : [];
 
         $out = $this->service->create(
             (string) $payload['email'],
-            (string) $payload['password'],
+            isset($payload['password']) && $payload['password'] !== '' ? (string) $payload['password'] : null,
             isset($payload['username']) && $payload['username'] !== '' ? (string) $payload['username'] : null,
             $groups,
         );
@@ -94,7 +135,7 @@ final class UserController extends ApiController
             ]);
         }
 
-        $groups = array_values(array_map('strval', $payload['groups']));
+        $groups = array_values(array_unique(array_map(static fn ($group): string => trim((string) $group), $payload['groups'])));
         return $this->ok($this->service->replaceGroups($userId, $groups));
     }
 

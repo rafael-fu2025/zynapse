@@ -6,19 +6,18 @@ namespace App\Controllers\Api\Audit;
 
 use App\Controllers\Api\ApiController;
 use App\Exceptions\ApiException;
+use App\Http\ApiResponse;
 use App\Pagination\KeysetPaginator;
 use App\Services\Audit\AuditChainVerifier;
+use App\Services\Audit\AuditPayload;
 use App\Services\Export\CsvWriter;
+use CodeIgniter\Database\BaseBuilder;
 use CodeIgniter\HTTP\ResponseInterface;
+use DateTimeImmutable;
 use Config\Services;
 
 /**
- * AuditEventController — read-only audit reader + audit.export CSV +
- * hash-chain verification (Phase 6).
- *
- * Read endpoints require `audit.read`. Export requires `audit.export`.
- * The CSV writer applies a PII redaction pass: sensitive keys under
- * `payload_json` are replaced with `<redacted>` before streaming.
+ * Read-only administrative reader for the immutable audit event chain.
  */
 final class AuditEventController extends ApiController
 {
@@ -26,150 +25,298 @@ final class AuditEventController extends ApiController
     {
         $this->authorize('audit.read');
 
-        $cursor = (string) ($this->request->getGet('cursor') ?? '');
-        $limit  = (int)    ($this->request->getGet('limit')  ?? 50);
-        $action = $this->request->getGet('action');
-        $entity = $this->request->getGet('entity_type');
-
-        $builder = Services::database()
-            ->table('audit_events')
-            ->select('id, prev_id, action_code, entity_type, entity_id, actor_user_id, request_id, commited_at, commit_hash')
-            ->orderBy('commited_at', 'DESC')
-            ->orderBy('id', 'DESC');
-
-        if (is_string($action) && $action !== '') {
-            $builder->where('action_code', $action);
-        }
-        if (is_string($entity) && $entity !== '') {
-            $builder->where('entity_type', $entity);
+        $filters = $this->readFilters();
+        $cursor  = trim((string) ($this->request->getGet('cursor') ?? ''));
+        $limit   = (int) ($this->request->getGet('limit') ?? 50);
+        if ($limit < 1 || $limit > 100) {
+            throw $this->invalidFilter('limit', 'limit must be between 1 and 100.');
         }
 
-        KeysetPaginator::apply($builder, $cursor !== '' ? $cursor : null, $limit, 'commited_at');
-        $rows = $builder->get()->getResultArray();
-        $final = KeysetPaginator::finalize($rows, $limit, 'commited_at');
+        $builder = $this->eventBuilder(false);
+        $this->applyFilters($builder, $filters);
+        $builder
+            ->orderBy('ae.commited_at', 'DESC')
+            ->orderBy('ae.id', 'DESC');
 
-        $data = array_map(static function (array $r): array {
-            return [
-                'id'             => (int)    $r['id'],
-                'prev_id'        => $r['prev_id'] !== null ? (int) $r['prev_id'] : null,
-                'action_code'    => (string) $r['action_code'],
-                'entity_type'    => (string) $r['entity_type'],
-                'entity_id'      => $r['entity_id'] !== null ? (int) $r['entity_id'] : null,
-                'actor_user_id'  => $r['actor_user_id'] !== null ? (int) $r['actor_user_id'] : null,
-                'request_id'     => $r['request_id'] !== null ? (string) $r['request_id'] : null,
-                'committed_at'   => (string) $r['commited_at'],
-                'commit_hash'    => (string) $r['commit_hash'],
-            ];
-        }, $final['rows']);
+        KeysetPaginator::apply($builder, $cursor !== '' ? $cursor : null, $limit, 'ae.commited_at', 'ae.id');
+        $final = KeysetPaginator::finalize($builder->get()->getResultArray(), $limit, 'commited_at');
 
         return $this->ok(
-            $data,
-            \App\Http\ApiResponse::paginationMeta($limit, $final['nextCursor'], null),
+            array_map(fn (array $row): array => $this->mapEvent($row), $final['rows']),
+            ApiResponse::paginationMeta($limit, $final['nextCursor'], null),
         );
+    }
+
+    /**
+     * Return values already present in the evidence store for filter controls.
+     */
+    public function facets(): ResponseInterface
+    {
+        $this->authorize('audit.read');
+        $db = Services::database();
+
+        $actions = array_column(
+            $db->table(SYNAPSE_AUDIT_EVENTS)
+                ->distinct()->select('action_code')->orderBy('action_code', 'ASC')
+                ->get()->getResultArray(),
+            'action_code',
+        );
+        $entities = array_column(
+            $db->table(SYNAPSE_AUDIT_EVENTS)
+                ->distinct()->select('entity_type')->orderBy('entity_type', 'ASC')
+                ->get()->getResultArray(),
+            'entity_type',
+        );
+        $actors = $db->table(SYNAPSE_AUDIT_EVENTS . ' ae')
+            ->distinct()
+            ->select('u.id, u.username AS display_name, ai.secret AS email')
+            ->join('users u', 'u.id = ae.actor_user_id', 'inner')
+            ->join('auth_identities ai', "ai.user_id = u.id AND ai.type = 'email_password'", 'left')
+            ->orderBy('ai.secret', 'ASC')
+            ->get()->getResultArray();
+
+        return $this->ok([
+            'action_codes' => array_values(array_map('strval', $actions)),
+            'entity_types' => array_values(array_map('strval', $entities)),
+            'actors'       => array_map(static fn (array $actor): array => [
+                'id'           => (int) $actor['id'],
+                'email'        => $actor['email'] !== null ? (string) $actor['email'] : null,
+                'display_name' => $actor['display_name'] !== null ? (string) $actor['display_name'] : null,
+            ], $actors),
+        ]);
     }
 
     public function show(int $id): ResponseInterface
     {
         $this->authorize('audit.read');
-        $row = Services::database()
-            ->table('audit_events')
-            ->where('id', $id)
-            ->get()->getRowArray();
 
+        $row = $this->eventBuilder(true)
+            ->where('ae.id', $id)
+            ->get()->getRowArray();
         if ($row === null) {
             throw ApiException::notFound('audit.event_not_found');
         }
 
+        $payload = json_decode((string) $row['payload_json'], true);
         return $this->ok([
-            'id'           => (int)    $row['id'],
-            'action_code'  => (string) $row['action_code'],
-            'entity_type'  => (string) $row['entity_type'],
-            'entity_id'    => $row['entity_id'] !== null ? (int) $row['entity_id'] : null,
-            'payload'      => json_decode((string) $row['payload_json'], true),
-            'committed_at' => (string) $row['commited_at'],
-            'commit_hash'  => (string) $row['commit_hash'],
+            ...$this->mapEvent($row),
+            'payload' => AuditPayload::redact(is_array($payload) ? $payload : []),
         ]);
     }
 
     /**
-     * Streams a CSV of audit events. Optional `cursor` argument lets
-     * callers break a large window into chunks. The endpoint enforces
-     * a hard cap of 5,000 rows per request to keep the response bounded.
-     * Accepts the same `action` / `entity_type` filters as `index()` so
-     * a filtered on-screen view exports the same slice.
+     * Stream up to 5,000 events from the complete filtered range.
      */
     public function export(): ResponseInterface
     {
         $this->authorize('audit.export');
 
-        $cursor = (string) ($this->request->getGet('cursor') ?? '');
-        $limit  = (int)    ($this->request->getGet('limit')  ?? 1000);
-        $limit  = max(1, min(5_000, $limit));
-        $action = $this->request->getGet('action');
-        $entity = $this->request->getGet('entity_type');
+        $filters = $this->readFilters();
+        $cursor  = trim((string) ($this->request->getGet('cursor') ?? ''));
+        $limit   = max(1, min(5_000, (int) ($this->request->getGet('limit') ?? 5_000)));
 
-        $builder = Services::database()
-            ->table('audit_events')
-            ->select('id, prev_id, action_code, entity_type, entity_id, actor_user_id, request_id, commited_at, commit_hash, payload_json')
-            ->orderBy('commited_at', 'DESC')
-            ->orderBy('id', 'DESC');
-
-        if (is_string($action) && $action !== '') {
-            $builder->where('action_code', $action);
-        }
-        if (is_string($entity) && $entity !== '') {
-            $builder->where('entity_type', $entity);
-        }
-
-        KeysetPaginator::apply($builder, $cursor !== '' ? $cursor : null, $limit, 'commited_at', 'id', 5_000);
-        $rows = $builder->get()->getResultArray();
+        $builder = $this->eventBuilder(true);
+        $this->applyFilters($builder, $filters);
+        $builder
+            ->orderBy('ae.commited_at', 'DESC')
+            ->orderBy('ae.id', 'DESC');
+        KeysetPaginator::apply($builder, $cursor !== '' ? $cursor : null, $limit, 'ae.commited_at', 'ae.id', 5_000);
+        $final = KeysetPaginator::finalize($builder->get()->getResultArray(), $limit, 'commited_at');
 
         $writer = new CsvWriter($this->response, 'synapse-audit');
         $writer->writeHeader([
             'id', 'prev_id', 'action_code', 'entity_type', 'entity_id',
-            'actor_user_id', 'request_id', 'commited_at', 'commit_hash', 'payload_json_redacted',
+            'actor_user_id', 'actor_email', 'actor_display_name', 'request_id',
+            'committed_at', 'commit_hash', 'payload_json_redacted',
         ]);
 
-        foreach ($rows as $r) {
-            $payload = json_decode((string) $r['payload_json'], true);
-            $writer->writeRowWithRedactedPayload(
-                [
-                    $r['id'],
-                    $r['prev_id'] ?? '',
-                    $r['action_code'],
-                    $r['entity_type'],
-                    $r['entity_id'] ?? '',
-                    $r['actor_user_id'] ?? '',
-                    $r['request_id'] ?? '',
-                    $r['commited_at'],
-                    $r['commit_hash'],
-                ],
-                is_array($payload) ? $payload : null,
-            );
+        foreach ($final['rows'] as $row) {
+            $payload = json_decode((string) $row['payload_json'], true);
+            $writer->writeRowWithRedactedPayload([
+                $row['id'],
+                $row['prev_id'] ?? '',
+                $row['action_code'],
+                $row['entity_type'],
+                $row['entity_id'] ?? '',
+                $row['actor_user_id'] ?? '',
+                $row['actor_email'] ?? '',
+                $row['actor_display_name'] ?? '',
+                $row['request_id'] ?? '',
+                $row['commited_at'],
+                $row['commit_hash'],
+            ], is_array($payload) ? $payload : null);
         }
 
         $writer->close();
         return $this->response;
     }
 
-    /**
-     * Recompute the hash chain from genesis up to `{id}` and report the
-     * first divergence, if any. Read-only; requires `audit.read`.
-     */
+    /** Verify the complete chain from genesis. */
+    public function verifyAll(): ResponseInterface
+    {
+        $this->authorize('audit.read');
+        return $this->ok((new AuditChainVerifier())->verify());
+    }
+
+    /** Verify the chain from genesis through a specific event. */
     public function verify(int $id): ResponseInterface
     {
         $this->authorize('audit.read');
 
-        $exists = Services::database()
-            ->table('audit_events')
-            ->select('id')
-            ->where('id', $id)
-            ->get()->getRowArray();
-
+        $exists = Services::database()->table(SYNAPSE_AUDIT_EVENTS)
+            ->select('id')->where('id', $id)->get()->getRowArray();
         if ($exists === null) {
             throw ApiException::notFound('audit.event_not_found');
         }
 
         return $this->ok((new AuditChainVerifier())->verify($id));
+    }
+
+    private function eventBuilder(bool $withPayload): BaseBuilder
+    {
+        $columns = 'ae.id, ae.prev_id, ae.action_code, ae.entity_type, ae.entity_id, '
+            . 'ae.actor_user_id, ae.request_id, ae.commited_at, ae.commit_hash, '
+            . 'u.username AS actor_display_name, ai.secret AS actor_email';
+        if ($withPayload) {
+            $columns .= ', ae.payload_json';
+        }
+
+        return Services::database()->table(SYNAPSE_AUDIT_EVENTS . ' ae')
+            ->select($columns)
+            ->join('users u', 'u.id = ae.actor_user_id', 'left')
+            ->join('auth_identities ai', "ai.user_id = u.id AND ai.type = 'email_password'", 'left');
+    }
+
+    /**
+     * @return array{action:?string,entity_type:?string,entity_id:?int,actor_user_id:?int,request_id:?string,from:?string,to:?string,q:?string}
+     */
+    private function readFilters(): array
+    {
+        $action     = $this->optionalString('action', 64);
+        $entityType = $this->optionalString('entity_type', 64);
+        $query      = $this->optionalString('q', 120);
+        $entityId   = $this->optionalPositiveInt('entity_id');
+        $actorId    = $this->optionalPositiveInt('actor_user_id');
+        $from       = $this->optionalDate('from');
+        $to         = $this->optionalDate('to');
+        if ($from !== null && $to !== null && $from > $to) {
+            throw $this->invalidFilter('from', 'from must be on or before to.');
+        }
+
+        $requestIdRaw = trim((string) ($this->request->getGet('request_id') ?? ''));
+        $requestId = null;
+        if ($requestIdRaw !== '') {
+            $normalized = strtolower((string) preg_replace('/[^a-fA-F0-9]/', '', $requestIdRaw));
+            if (strlen($normalized) !== 32) {
+                throw $this->invalidFilter('request_id', 'request_id must contain exactly 32 hexadecimal characters.');
+            }
+            $requestId = $normalized;
+        }
+
+        return [
+            'action'        => $action,
+            'entity_type'   => $entityType,
+            'entity_id'     => $entityId,
+            'actor_user_id' => $actorId,
+            'request_id'    => $requestId,
+            'from'          => $from,
+            'to'            => $to,
+            'q'             => $query,
+        ];
+    }
+
+    /** @param array{action:?string,entity_type:?string,entity_id:?int,actor_user_id:?int,request_id:?string,from:?string,to:?string,q:?string} $filters */
+    private function applyFilters(BaseBuilder $builder, array $filters): void
+    {
+        if ($filters['action'] !== null) {
+            $builder->where('ae.action_code', $filters['action']);
+        }
+        if ($filters['entity_type'] !== null) {
+            $builder->where('ae.entity_type', $filters['entity_type']);
+        }
+        if ($filters['entity_id'] !== null) {
+            $builder->where('ae.entity_id', $filters['entity_id']);
+        }
+        if ($filters['actor_user_id'] !== null) {
+            $builder->where('ae.actor_user_id', $filters['actor_user_id']);
+        }
+        if ($filters['request_id'] !== null) {
+            $builder->where('ae.request_id', $filters['request_id']);
+        }
+        if ($filters['from'] !== null) {
+            $builder->where('ae.commited_at >=', $filters['from'] . ' 00:00:00');
+        }
+        if ($filters['to'] !== null) {
+            $exclusiveEnd = (new DateTimeImmutable($filters['to']))->modify('+1 day')->format('Y-m-d');
+            $builder->where('ae.commited_at <', $exclusiveEnd . ' 00:00:00');
+        }
+        if ($filters['q'] !== null) {
+            $builder->like('ae.payload_json', $filters['q']);
+        }
+    }
+
+    /** @return array<string, mixed> */
+    private function mapEvent(array $row): array
+    {
+        $actorId = $row['actor_user_id'] !== null ? (int) $row['actor_user_id'] : null;
+        return [
+            'id'            => (int) $row['id'],
+            'prev_id'       => $row['prev_id'] !== null ? (int) $row['prev_id'] : null,
+            'action_code'   => (string) $row['action_code'],
+            'entity_type'   => (string) $row['entity_type'],
+            'entity_id'     => $row['entity_id'] !== null ? (int) $row['entity_id'] : null,
+            'actor'         => $actorId === null ? null : [
+                'id'           => $actorId,
+                'email'        => $row['actor_email'] !== null ? (string) $row['actor_email'] : null,
+                'display_name' => $row['actor_display_name'] !== null ? (string) $row['actor_display_name'] : null,
+            ],
+            'request_id'    => $row['request_id'] !== null ? (string) $row['request_id'] : null,
+            'committed_at'  => (string) $row['commited_at'],
+            'commit_hash'   => (string) $row['commit_hash'],
+        ];
+    }
+
+    private function optionalString(string $field, int $maxLength): ?string
+    {
+        $value = trim((string) ($this->request->getGet($field) ?? ''));
+        if ($value === '') {
+            return null;
+        }
+        if (mb_strlen($value) > $maxLength) {
+            throw $this->invalidFilter($field, $field . " must not exceed {$maxLength} characters.");
+        }
+        return $value;
+    }
+
+    private function optionalPositiveInt(string $field): ?int
+    {
+        $raw = trim((string) ($this->request->getGet($field) ?? ''));
+        if ($raw === '') {
+            return null;
+        }
+        if (! ctype_digit($raw) || (int) $raw < 1) {
+            throw $this->invalidFilter($field, $field . ' must be a positive integer.');
+        }
+        return (int) $raw;
+    }
+
+    private function optionalDate(string $field): ?string
+    {
+        $value = trim((string) ($this->request->getGet($field) ?? ''));
+        if ($value === '') {
+            return null;
+        }
+        $parts = explode('-', $value);
+        if (count($parts) !== 3 || ! checkdate((int) $parts[1], (int) $parts[2], (int) $parts[0]) || strlen($parts[0]) !== 4) {
+            throw $this->invalidFilter($field, $field . ' must be a valid YYYY-MM-DD date.');
+        }
+        return $value;
+    }
+
+    private function invalidFilter(string $field, string $message): ApiException
+    {
+        return ApiException::validationFailure([
+            ['code' => 'validation.field', 'message' => $message, 'field' => $field],
+        ]);
     }
 }

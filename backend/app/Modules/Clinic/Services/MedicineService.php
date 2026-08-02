@@ -70,6 +70,7 @@ final class MedicineService extends BaseService
         $final = KeysetPaginator::finalize($rows, $limit);
 
         $stock = $this->stockByMedicine(array_map(static fn (array $r): int => (int) $r['id'], $final['rows']));
+        $movement = $this->lastMovementByMedicine(array_map(static fn (array $r): int => (int) $r['id'], $final['rows']));
 
         return [
             'data' => array_map(
@@ -77,6 +78,7 @@ final class MedicineService extends BaseService
                     $r,
                     $stock[(int) $r['id']]['on_hand'] ?? 0,
                     $stock[(int) $r['id']]['earliest_expiry'] ?? null,
+                    $movement[(int) $r['id']] ?? null,
                 )->toArray(),
                 $final['rows'],
             ),
@@ -105,11 +107,13 @@ final class MedicineService extends BaseService
             ->get()->getResultArray();
 
         $stock = $this->stockByMedicine([$id]);
+        $movement = $this->lastMovementByMedicine([$id]);
 
         return MedicineDto::fromRow(
             $row,
             $stock[$id]['on_hand'] ?? 0,
             $stock[$id]['earliest_expiry'] ?? null,
+            $movement[$id] ?? null,
             $batches,
         );
     }
@@ -199,8 +203,21 @@ final class MedicineService extends BaseService
                 ]);
             }
 
-            // Quantity comes from the fulfilled order, never the payload.
-            $qty      = (int) $reorder['requested_quantity'];
+            // Quantity defaults to the reorder's requested quantity but can
+            // be lowered by the payload to record a partial delivery (Gap 8).
+            // `0` is rejected — a "we got nothing" delivery doesn't justify
+            // a batch row; the operator should keep the reorder in `received`
+            // and chase the supplier instead.
+            $ordered = (int) $reorder['requested_quantity'];
+            $qty     = isset($input['quantity']) && (int) $input['quantity'] > 0
+                ? (int) $input['quantity']
+                : $ordered;
+            if ($qty > $ordered) {
+                throw ApiException::validationFailure([
+                    ['code' => 'validation.field', 'message' => 'quantity cannot exceed the ordered amount.', 'field' => 'quantity'],
+                ]);
+            }
+
             $expires  = (string) $input['expiration_date'];
             $received = (string) ($input['received_date'] ?? (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d'));
             if ($expires <= $received) {
@@ -223,6 +240,19 @@ final class MedicineService extends BaseService
             ]);
             $batchId = (int) $this->db->insertID();
 
+            // Build the ledger note. For partial receives, append the
+            // shortage so the discrepancy is visible without joining tables.
+            $baseNote       = $this->strOrNull($input, 'note');
+            $shortageNote   = $this->strOrNull($input, 'shortage_note');
+            $isPartial      = $qty < $ordered;
+            $shortageSuffix = '';
+            if ($isPartial) {
+                $shortage = $ordered - $qty;
+                $reason   = $shortageNote !== null ? ' — ' . $shortageNote : '';
+                $shortageSuffix = sprintf(' (short by %d%s)', $shortage, $reason);
+            }
+            $ledgerNote = ($baseNote ?? '') . $shortageSuffix;
+
             $this->db->table('clinic_medicine_transactions')->insert([
                 'medicine_id'          => $medicineId,
                 'batch_id'             => $batchId,
@@ -230,14 +260,47 @@ final class MedicineService extends BaseService
                 'quantity'             => $qty,
                 'balance_after'        => $this->lastBalance($medicineId) + $qty,
                 'performed_by_user_id' => $userId,
-                'note'                 => $this->strOrNull($input, 'note'),
+                'note'                 => $ledgerNote !== '' ? $ledgerNote : null,
                 'created_at'           => $now,
             ]);
 
-            // Close the procurement loop.
-            $this->db->table('clinic_reorder_requests')
-                ->where('id', (int) $reorder['id'])
-                ->update(['status' => 'completed', 'fulfilled_at' => $now, 'updated_at' => $now]);
+            // Close the procurement loop only when the delivery was complete.
+            // For a partial receive, the reorder stays in `received` so the
+            // operator can either chase the supplier for the remainder or
+            // raise a follow-up reorder. (Auto-check already excludes
+            // `received` rows from re-creating.)
+            if ($isPartial) {
+                $this->db->table('clinic_reorder_requests')
+                    ->where('id', (int) $reorder['id'])
+                    ->update([
+                        'status'              => 'received',
+                        'actual_delivery_date' => $received,
+                        'updated_at'          => $now,
+                    ]);
+                $this->audit->enqueue(
+                    'clinic.reorder_partial',
+                    'clinic_reorder_requests',
+                    (int) $reorder['id'],
+                    $userId,
+                    [
+                        'resource_code' => 'medicine#' . (string) $medicineId,
+                        'outcome'       => 'partial',
+                        'ordered'       => $ordered,
+                        'received'      => $qty,
+                    ],
+                );
+            } else {
+                $this->db->table('clinic_reorder_requests')
+                    ->where('id', (int) $reorder['id'])
+                    ->update(['status' => 'completed', 'fulfilled_at' => $now, 'updated_at' => $now]);
+                $this->audit->enqueue(
+                    'clinic.reorder_completed',
+                    'clinic_reorder_requests',
+                    (int) $reorder['id'],
+                    $userId,
+                    ['resource_code' => 'medicine#' . (string) $medicineId, 'outcome' => 'completed'],
+                );
+            }
 
             $this->audit->enqueue(
                 'clinic.medicine_batch_received',
@@ -245,13 +308,6 @@ final class MedicineService extends BaseService
                 $batchId,
                 $userId,
                 ['resource_code' => 'batch#' . $batchNumber],
-            );
-            $this->audit->enqueue(
-                'clinic.reorder_completed',
-                'clinic_reorder_requests',
-                (int) $reorder['id'],
-                $userId,
-                ['resource_code' => 'medicine#' . (string) $medicineId, 'outcome' => 'completed'],
             );
 
             return $this->getMedicine($medicineId);
@@ -374,12 +430,18 @@ final class MedicineService extends BaseService
             ->get()->getResultArray();
 
         $stock = $this->stockByMedicine(array_map(static fn (array $r): int => (int) $r['id'], $rows));
+        $movement = $this->lastMovementByMedicine(array_map(static fn (array $r): int => (int) $r['id'], $rows));
 
         $out = [];
         foreach ($rows as $r) {
             $onHand = $stock[(int) $r['id']]['on_hand'] ?? 0;
             if ($onHand <= (int) $r['reorder_threshold']) {
-                $out[] = MedicineDto::fromRow($r, $onHand, $stock[(int) $r['id']]['earliest_expiry'] ?? null)->toArray();
+                $out[] = MedicineDto::fromRow(
+                    $r,
+                    $onHand,
+                    $stock[(int) $r['id']]['earliest_expiry'] ?? null,
+                    $movement[(int) $r['id']] ?? null,
+                )->toArray();
             }
         }
         return $out;
@@ -605,6 +667,56 @@ final class MedicineService extends BaseService
             $out[(int) $r['medicine_id']] = [
                 'on_hand'         => (int) $r['on_hand'],
                 'earliest_expiry' => $r['earliest_expiry'] !== null ? (string) $r['earliest_expiry'] : null,
+            ];
+        }
+        return $out;
+    }
+
+    /**
+     * Latest transaction per medicine in ONE query (Gap 13 — powers the
+     * row-level "last move" hint in the catalog). Inner JOINs against the
+     * MAX(id) per medicine_id subquery so the result is exactly one row
+     * per id, no matter how many transactions the medicine has.
+     *
+     * @param array<int, int> $ids
+     * @return array<int, array{type: string, quantity: int, created_at: string, user_email: ?string}>
+     */
+    private function lastMovementByMedicine(array $ids): array
+    {
+        if ($ids === []) {
+            return [];
+        }
+        // IDs are integers from a primary-key column on the same page;
+        // casting to int here kills any sql-injection vector before the
+        // values touch the raw query below.
+        $idList = implode(',', array_map(static fn ($id) => (string) (int) $id, $ids));
+
+        // Shield stores email as `auth_identities.secret` (type = 'email_password')
+        // — `users.email` does not exist. The `u.username` fallback keeps the
+        // "last moved by" hint useful when an account is missing the identity
+        // row (e.g. seed users created without a password identity).
+        $rows = $this->db->query(
+            "SELECT t.medicine_id, t.type, t.quantity, t.created_at,"
+            . " COALESCE(NULLIF(ai.secret, ''), u.username) AS user_email"
+            . " FROM `clinic_medicine_transactions` t"
+            . " INNER JOIN ("
+            . "   SELECT medicine_id, MAX(id) AS max_id"
+            . "   FROM `clinic_medicine_transactions`"
+            . "   WHERE medicine_id IN ($idList)"
+            . "   GROUP BY medicine_id"
+            . " ) latest ON latest.max_id = t.id"
+            . ' LEFT JOIN `users` u ON u.id = t.performed_by_user_id'
+            . " LEFT JOIN `auth_identities` ai"
+            . "   ON ai.user_id = u.id AND ai.type = 'email_password'"
+        )->getResultArray();
+
+        $out = [];
+        foreach ($rows as $r) {
+            $out[(int) $r['medicine_id']] = [
+                'type'       => (string) $r['type'],
+                'quantity'   => (int)    $r['quantity'],
+                'created_at' => (string) $r['created_at'],
+                'user_email' => $r['user_email'] !== null ? (string) $r['user_email'] : null,
             ];
         }
         return $out;

@@ -10,6 +10,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import {
   Archive,
   ArchiveRestore,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   Eye,
@@ -38,6 +39,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
@@ -784,6 +792,82 @@ export default function PatientsPage() {
   const retrying = searching ? search.isFetching : list.isFetching;
   const retry = () => void (searching ? search.refetch() : list.refetch());
 
+  const studentActions = (student: Student) => (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button className="min-h-11" size="sm" variant="outline" aria-label={`Actions for ${student.student_number}`}>
+          Actions <ChevronDown className="size-3.5" aria-hidden />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-48">
+        <DropdownMenuItem className="min-h-11" onSelect={() => setDetailId(student.id)}>
+          <Eye /> View record
+        </DropdownMenuItem>
+        <DropdownMenuItem className="min-h-11" onSelect={() => setEditStudent(student)}>
+          <Pencil /> Edit record
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem
+          className="min-h-11"
+          disabled={setArchived.isPending}
+          onSelect={() => {
+            if (student.archived) {
+              setArchived.mutate({ id: student.id, archived: false });
+            } else {
+              setConfirm({
+                title: `Archive ${student.student_number}?`,
+                description: 'The student is soft-archived (never deleted) and removed from active workflows. You can restore them later.',
+                confirmLabel: 'Archive',
+                run: () => setArchived.mutate({ id: student.id, archived: true }),
+              });
+            }
+          }}
+        >
+          {student.archived ? <ArchiveRestore /> : <Archive />}
+          {student.archived ? 'Restore record' : 'Archive record'}
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+
+  const employeeActions = (employee: Employee) => (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button className="min-h-11" size="sm" variant="outline" aria-label={`Actions for ${employee.employee_number}`}>
+          Actions <ChevronDown className="size-3.5" aria-hidden />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-48">
+        <DropdownMenuItem className="min-h-11" onSelect={() => setEmpDetailId(employee.id)}>
+          <Eye /> View record
+        </DropdownMenuItem>
+        <DropdownMenuItem className="min-h-11" onSelect={() => setEditEmp(employee)}>
+          <Pencil /> Edit record
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem
+          className="min-h-11"
+          disabled={archiveEmp.isPending}
+          onSelect={() => {
+            if (employee.archived) {
+              archiveEmp.mutate({ id: employee.id, archived: false });
+            } else {
+              setConfirm({
+                title: `Archive ${employee.employee_number}?`,
+                description: 'The employee is soft-archived (never deleted) and removed from active workflows. You can restore them later.',
+                confirmLabel: 'Archive',
+                run: () => archiveEmp.mutate({ id: employee.id, archived: true }),
+              });
+            }
+          }}
+        >
+          {employee.archived ? <ArchiveRestore /> : <Archive />}
+          {employee.archived ? 'Restore record' : 'Archive record'}
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+
   return (
     <main className="mx-auto max-w-7xl space-y-4 p-6">
       <header className="flex flex-wrap items-center justify-between gap-3">
@@ -878,34 +962,7 @@ export default function PatientsPage() {
                       {s.archived ? <Badge variant="secondary">Archived</Badge> : <Badge variant="success">Active</Badge>}
                     </TableCell>
                     <TableCell className="px-3 text-right">
-                      <div className="flex justify-end gap-1">
-                        <Button size="sm" variant="outline" onClick={() => setDetailId(s.id)}>
-                          <Eye /> View
-                        </Button>
-                        <Button size="sm" variant="outline" onClick={() => setEditStudent(s)}>
-                          <Pencil /> Edit
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          disabled={setArchived.isPending}
-                          onClick={() => {
-                            if (s.archived) {
-                              setArchived.mutate({ id: s.id, archived: false });
-                            } else {
-                              setConfirm({
-                                title: `Archive ${s.student_number}?`,
-                                description: 'The student is soft-archived (never deleted) and removed from active workflows. You can restore them later.',
-                                confirmLabel: 'Archive',
-                                run: () => setArchived.mutate({ id: s.id, archived: true }),
-                              });
-                            }
-                          }}
-                        >
-                          {s.archived ? <ArchiveRestore /> : <Archive />}
-                          {s.archived ? 'Restore' : 'Archive'}
-                        </Button>
-                      </div>
+                      {studentActions(s)}
                     </TableCell>
                   </TableRow>
                 ))}
@@ -945,34 +1002,7 @@ export default function PatientsPage() {
                     ? <Badge variant="destructive">{s.consecutive_no_shows}</Badge>
                     : <span className="text-xs">{s.consecutive_no_shows}</span>}
                 </MobileCardField>
-                <MobileCardActions>
-                  <Button size="sm" variant="outline" onClick={() => setDetailId(s.id)}>
-                    <Eye /> View
-                  </Button>
-                  <Button size="sm" variant="outline" onClick={() => setEditStudent(s)}>
-                    <Pencil /> Edit
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    disabled={setArchived.isPending}
-                    onClick={() => {
-                      if (s.archived) {
-                        setArchived.mutate({ id: s.id, archived: false });
-                      } else {
-                        setConfirm({
-                          title: `Archive ${s.student_number}?`,
-                          description: 'The student is soft-archived (never deleted) and removed from active workflows. You can restore them later.',
-                          confirmLabel: 'Archive',
-                          run: () => setArchived.mutate({ id: s.id, archived: true }),
-                        });
-                      }
-                    }}
-                  >
-                    {s.archived ? <ArchiveRestore /> : <Archive />}
-                    {s.archived ? 'Restore' : 'Archive'}
-                  </Button>
-                </MobileCardActions>
+                <MobileCardActions>{studentActions(s)}</MobileCardActions>
               </MobileCard>
             ))}
           </MobileCardList>
@@ -1087,34 +1117,7 @@ export default function PatientsPage() {
                         </div>
                       </TableCell>
                       <TableCell className="px-3 text-right">
-                        <div className="flex justify-end gap-1">
-                          <Button size="sm" variant="outline" aria-label={`View ${e.employee_number}`} onClick={() => setEmpDetailId(e.id)}>
-                            <Eye /> View
-                          </Button>
-                          <Button size="sm" variant="outline" aria-label={`Edit ${e.employee_number}`} onClick={() => setEditEmp(e)}>
-                            <Pencil /> Edit
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            aria-label={`${e.archived ? 'Restore' : 'Archive'} ${e.employee_number}`}
-                            disabled={archiveEmp.isPending}
-                            onClick={() => {
-                              if (e.archived) {
-                                archiveEmp.mutate({ id: e.id, archived: false });
-                              } else {
-                                setConfirm({
-                                  title: `Archive ${e.employee_number}?`,
-                                  description: 'The employee is soft-archived (never deleted) and removed from active workflows. You can restore them later.',
-                                  confirmLabel: 'Archive',
-                                  run: () => archiveEmp.mutate({ id: e.id, archived: true }),
-                                });
-                              }
-                            }}
-                          >
-                            {e.archived ? <ArchiveRestore /> : <Archive />} {e.archived ? 'Restore' : 'Archive'}
-                          </Button>
-                        </div>
+                        {employeeActions(e)}
                       </TableCell>
                     </TableRow>
                   ));
@@ -1162,34 +1165,7 @@ export default function PatientsPage() {
                       <MobileCardField label="Number"><span className="font-mono text-xs">{e.employee_number}</span></MobileCardField>
                       <MobileCardField label="Department"><span className="text-xs">{e.department ?? '—'}</span></MobileCardField>
                       <MobileCardField label="Position"><span className="text-xs">{e.position ?? '—'}</span></MobileCardField>
-                      <MobileCardActions>
-                        <Button size="sm" variant="outline" aria-label={`View ${e.employee_number}`} onClick={() => setEmpDetailId(e.id)}>
-                          <Eye /> View
-                        </Button>
-                        <Button size="sm" variant="outline" aria-label={`Edit ${e.employee_number}`} onClick={() => setEditEmp(e)}>
-                          <Pencil /> Edit
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          aria-label={`${e.archived ? 'Restore' : 'Archive'} ${e.employee_number}`}
-                          disabled={archiveEmp.isPending}
-                          onClick={() => {
-                            if (e.archived) {
-                              archiveEmp.mutate({ id: e.id, archived: false });
-                            } else {
-                              setConfirm({
-                                title: `Archive ${e.employee_number}?`,
-                                description: 'The employee is soft-archived (never deleted) and removed from active workflows. You can restore them later.',
-                                confirmLabel: 'Archive',
-                                run: () => archiveEmp.mutate({ id: e.id, archived: true }),
-                              });
-                            }
-                          }}
-                        >
-                          {e.archived ? <ArchiveRestore /> : <Archive />} {e.archived ? 'Restore' : 'Archive'}
-                        </Button>
-                      </MobileCardActions>
+                      <MobileCardActions>{employeeActions(e)}</MobileCardActions>
                     </MobileCard>
                   ))}
                 </MobileCardList>

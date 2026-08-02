@@ -53,8 +53,10 @@ Modules\Reports\Routes::register($routes);
 // ---------------------------------------------------------------------
 $routes->group('api/v1/audit', ['namespace' => 'App\Controllers\Api\Audit', 'filter' => 'api_auth'], static function (RouteCollection $r): void {
     $r->get('events',        'AuditEventController::index');
+    $r->get('facets',        'AuditEventController::facets');
     $r->get('events/(:num)', 'AuditEventController::show/$1');
     $r->get('export',        'AuditEventController::export');
+    $r->get('verify',        'AuditEventController::verifyAll');
     $r->get('verify/(:num)', 'AuditEventController::verify/$1');
 });
 

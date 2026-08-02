@@ -1,10 +1,10 @@
 /**
  * Admin user hooks — list/create/status/reset (rbac.manage).
  */
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { z } from 'zod';
 import { toast } from 'sonner';
-import { apiClient } from '@/api/client';
+import { apiClient, getNextCursor } from '@/api/client';
 import type { ApiEnvelopeError } from '@/api/envelope';
 
 export const adminUserSchema = z.object({
@@ -15,36 +15,89 @@ export const adminUserSchema = z.object({
   status: z.string(),
   groups: z.array(z.string()),
   created_at: z.string(),
+  updated_at: z.string(),
+  last_active: z.string().nullable(),
+  force_reset: z.boolean(),
 });
 export type AdminUser = z.infer<typeof adminUserSchema>;
 
 export const createUserSchema = z.object({
   email: z.string().email().max(255),
-  password: z.string().min(12).max(256),
   username: z.string().max(64).regex(/^[A-Za-z0-9_-]*$/, 'Letters, digits, - and _ only').optional(),
-  groups: z.array(z.string()).default([]),
+  groups: z.array(z.string()).min(1, 'Select at least one role.'),
 });
 export type CreateUserInput = z.infer<typeof createUserSchema>;
 
-export function useAdminUsers(cursor: string | null, limit = 25) {
+export const adminRoleSchema = z.object({
+  code: z.string(),
+  name: z.string(),
+  permissions: z.array(z.string()),
+});
+export type AdminRole = z.infer<typeof adminRoleSchema>;
+
+const rolesResponseSchema = z.object({ roles: z.array(adminRoleSchema) });
+const createUserResponseSchema = z.object({
+  id: z.number().int().positive(),
+  email: z.string().email(),
+  username: z.string().nullable(),
+  groups: z.array(z.string()),
+  temporary_password: z.string().min(12),
+  force_reset: z.literal(true),
+});
+const statusResponseSchema = z.object({ id: z.number().int().positive(), active: z.boolean() });
+const groupsResponseSchema = z.object({ id: z.number().int().positive(), groups: z.array(z.string()) });
+const resetResponseSchema = z.object({
+  id: z.number().int().positive(),
+  temporary_password: z.string().min(12),
+  force_reset: z.literal(true),
+});
+
+export interface AdminUsersFilters {
+  search: string;
+  status: 'all' | 'active' | 'disabled';
+  group: string;
+  sort: 'newest' | 'oldest';
+}
+
+export function useAdminUsers(cursor: string | null, filters: AdminUsersFilters, limit = 25) {
   return useQuery<{ data: AdminUser[]; next: string | null }, ApiEnvelopeError>({
-    queryKey: ['admin', 'users', { cursor, limit }],
+    queryKey: ['admin', 'users', { cursor, limit, ...filters }],
     queryFn: async () => {
       const params = new URLSearchParams();
       if (cursor !== null) params.set('cursor', cursor);
       params.set('limit', String(limit));
-      const res = await apiClient.get<{ data: unknown[]; next: string | null }>(
-        `/admin/users?${params.toString()}`,
-      );
-      return { data: z.array(adminUserSchema).parse(res.data), next: res.data?.next ?? null };
+      if (filters.search !== '') params.set('q', filters.search);
+      if (filters.status !== 'all') params.set('status', filters.status);
+      if (filters.group !== 'all') params.set('group', filters.group);
+      if (filters.sort !== 'newest') params.set('sort', filters.sort);
+      const res = await apiClient.get<unknown[]>(`/admin/users?${params.toString()}`);
+      return { data: z.array(adminUserSchema).parse(res.data), next: getNextCursor(res) };
     },
+    // Keep the previous page visible while the next one is in-flight, so
+    // typing in the search box doesn't flash an empty skeleton between
+    // every keystroke. Cancelled fetches resolve to the prior data.
+    placeholderData: keepPreviousData,
+  });
+}
+
+export function useAdminRoles() {
+  return useQuery<AdminRole[], ApiEnvelopeError>({
+    queryKey: ['admin', 'roles'],
+    queryFn: async () => {
+      const res = await apiClient.get<unknown>('/rbac/roles');
+      return rolesResponseSchema.parse(res.data).roles;
+    },
+    staleTime: 5 * 60_000,
   });
 }
 
 export function useCreateUser() {
   const qc = useQueryClient();
-  return useMutation<unknown, ApiEnvelopeError, CreateUserInput>({
-    mutationFn: async (input) => apiClient.post('/admin/users', createUserSchema.parse(input)),
+  return useMutation<z.infer<typeof createUserResponseSchema>, ApiEnvelopeError, CreateUserInput>({
+    mutationFn: async (input) => {
+      const res = await apiClient.post<unknown>('/admin/users', createUserSchema.parse(input));
+      return createUserResponseSchema.parse(res.data);
+    },
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['admin'] });
       toast.success('User created.');
@@ -55,8 +108,11 @@ export function useCreateUser() {
 
 export function useSetUserActive() {
   const qc = useQueryClient();
-  return useMutation<unknown, ApiEnvelopeError, { id: number; active: boolean }>({
-    mutationFn: async ({ id, active }) => apiClient.post(`/admin/users/${id}/status`, { active }),
+  return useMutation<z.infer<typeof statusResponseSchema>, ApiEnvelopeError, { id: number; active: boolean }>({
+    mutationFn: async ({ id, active }) => {
+      const res = await apiClient.post<unknown>(`/admin/users/${id}/status`, { active });
+      return statusResponseSchema.parse(res.data);
+    },
     onSuccess: (_d, vars) => {
       void qc.invalidateQueries({ queryKey: ['admin'] });
       toast.success(vars.active ? 'User activated.' : 'User deactivated.');
@@ -65,18 +121,29 @@ export function useSetUserActive() {
   });
 }
 
-interface ResetOut {
-  id: number;
-  temporary_password: string;
-  force_reset: boolean;
+export function useSetUserGroups() {
+  const qc = useQueryClient();
+  return useMutation<z.infer<typeof groupsResponseSchema>, ApiEnvelopeError, { id: number; groups: string[] }>({
+    mutationFn: async ({ id, groups }) => {
+      const res = await apiClient.post<unknown>(`/admin/users/${id}/groups`, { groups });
+      return groupsResponseSchema.parse(res.data);
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['admin', 'users'] });
+      toast.success('Roles updated.');
+    },
+    onError: (err) => toast.error(err.errors[0]?.message ?? 'Role update failed.'),
+  });
 }
 
 export function useResetUserPassword() {
-  return useMutation<ResetOut, ApiEnvelopeError, number>({
+  const qc = useQueryClient();
+  return useMutation<z.infer<typeof resetResponseSchema>, ApiEnvelopeError, number>({
     mutationFn: async (id) => {
-      const res = await apiClient.post<ResetOut>(`/admin/users/${id}/reset-password`);
-      return res.data;
+      const res = await apiClient.post<unknown>(`/admin/users/${id}/reset-password`);
+      return resetResponseSchema.parse(res.data);
     },
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ['admin', 'users'] }),
     onError: (err) => toast.error(err.errors[0]?.message ?? 'Reset failed.'),
   });
 }

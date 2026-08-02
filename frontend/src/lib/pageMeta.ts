@@ -49,7 +49,7 @@ export function resolvePageMeta(pathname: string): PageMeta {
   // Strip trailing slash and try again.
   const trimmed = pathname.replace(/\/+$/, '');
   if (trimmed !== '' && PAGE_META[trimmed] !== undefined) {
-    return PAGE_META[trimmed]!;
+    return PAGE_META[trimmed];
   }
 
   return { title: '' };

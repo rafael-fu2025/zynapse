@@ -103,7 +103,7 @@ export function DateRangePicker({
           {from !== undefined ? (
             to !== undefined ? (
               <>
-                {format(from, HUMAN)} – {format(to, HUMAN)}
+                {format(from, HUMAN)} to {format(to, HUMAN)}
               </>
             ) : (
               format(from, HUMAN)
@@ -146,8 +146,9 @@ export function DateRangePicker({
           <PresetButton
             label="Last 7 days"
             onClick={() => {
-              const f = startOfDay(now);
-              onChange({ start: formatYmd(f), end: formatYmd(f) });
+              const e = startOfDay(now);
+              const f = addDays(e, -6);
+              onChange({ start: formatYmd(f), end: formatYmd(e) });
               setOpen(false);
             }}
           />
@@ -189,7 +190,7 @@ function PresetButton({ label, onClick }: { label: string; onClick: () => void }
     <button
       type="button"
       onClick={onClick}
-      className="rounded-md border px-2 py-1 text-xs text-foreground transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+      className="min-h-10 rounded-md border px-3 py-2 text-xs text-foreground transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 md:min-h-8 md:py-1"
     >
       {label}
     </button>

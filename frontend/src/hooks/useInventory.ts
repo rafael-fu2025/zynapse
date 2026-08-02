@@ -1,7 +1,7 @@
 /**
  * Inventory hooks — items list + create + stock movements.
  */
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { z } from 'zod';
 import { toast } from 'sonner';
 import { apiClient } from '@/api/client';
@@ -24,21 +24,32 @@ interface ItemPage {
   next: string | null;
 }
 
-export function useInventoryItems(cursor: string | null, limit = 25, q: string | null = null, includeArchived = false) {
+export function useInventoryItems(
+  cursor: string | null,
+  limit = 25,
+  q: string | null = null,
+  includeArchived = false,
+  lowStockOnly = false,
+) {
   return useQuery<ItemPage, ApiEnvelopeError>({
-    queryKey: ['inventory', 'items', { cursor, limit, q, includeArchived }],
+    queryKey: ['inventory', 'items', { cursor, limit, q, includeArchived, lowStockOnly }],
     queryFn: async () => {
       const params = new URLSearchParams();
       if (cursor !== null) params.set('cursor', cursor);
       params.set('limit', String(limit));
       if (q !== null && q.trim() !== '') params.set('q', q.trim());
       if (includeArchived) params.set('include_archived', '1');
+      if (lowStockOnly) params.set('low_stock', '1');
       const res = await apiClient.get<{ data: unknown[]; next: string | null }>(
         `/clinic/inventory?${params.toString()}`,
       );
       const data = z.array(inventoryItemSchema).parse(res.data);
       return { data, next: res.data?.next ?? null };
     },
+    // Keep the previous page visible while the next one is in-flight so
+    // typing in the search box doesn't flash an empty state between
+    // keystrokes.
+    placeholderData: keepPreviousData,
   });
 }
 

@@ -9,7 +9,7 @@
  * - Verify endpoint (PUBLIC) — minimum-disclosure envelope.
  */
 import { zodResolver } from '@hookform/resolvers/zod';
-import { Camera, ChevronLeft, ChevronRight, Loader2, Plus, QrCode, ShieldCheck, X } from 'lucide-react';
+import { Camera, ChevronDown, ChevronLeft, ChevronRight, Loader2, Plus, QrCode, ShieldCheck, X } from 'lucide-react';
 import { QRCodeCanvas } from 'qrcode.react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useForm } from 'react-hook-form';
@@ -28,6 +28,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -381,22 +388,36 @@ export default function ReferralsPage() {
                 </TableCell>
                 <TableCell className="px-3 font-mono text-xs text-muted-foreground">{fmtUtcToApp(r.updated_at)}</TableCell>
                 <TableCell className="px-3 text-right">
-                  <div className="flex justify-end gap-2">
+                  <div className="flex justify-end gap-1">
                     {r.status === 'submitted' && (
-                      <Button size="sm" variant="secondary" disabled={ack.isPending} onClick={() => ack.mutate(r.id)}>Acknowledge</Button>
+                      <Button className="min-h-11" size="sm" variant="secondary" disabled={ack.isPending} onClick={() => ack.mutate(r.id)}>Acknowledge</Button>
                     )}
                     {r.status === 'acknowledged' && (
-                      <Button size="sm" variant="secondary" disabled={rev.isPending} onClick={() => rev.mutate(r.id)}>Review</Button>
-                    )}
-                    {(r.status === 'under_review' || r.status === 'acknowledged') && (
-                      <Button size="sm" variant="outline" onClick={() => setOpenQr(r)}>
-                        <QrCode /> QR
-                      </Button>
+                      <Button className="min-h-11" size="sm" variant="secondary" disabled={rev.isPending} onClick={() => rev.mutate(r.id)}>Review</Button>
                     )}
                     {r.status !== 'closed' && (
-                      <Button size="sm" variant="outline" disabled={close.isPending} onClick={() => setClosing(r)}>
-                        <X /> Close
-                      </Button>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button className="min-h-11" size="sm" variant="outline" aria-label={`Actions for referral #${r.id}`}>
+                            Actions <ChevronDown className="size-3.5" aria-hidden />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" className="w-48">
+                          {(r.status === 'under_review' || r.status === 'acknowledged') && (
+                            <DropdownMenuItem className="min-h-11" onSelect={() => setOpenQr(r)}>
+                              <QrCode /> Issue QR code
+                            </DropdownMenuItem>
+                          )}
+                          {(r.status === 'under_review' || r.status === 'acknowledged') && <DropdownMenuSeparator />}
+                          <DropdownMenuItem
+                            className="min-h-11 text-destructive focus:text-destructive"
+                            disabled={close.isPending}
+                            onSelect={() => setClosing(r)}
+                          >
+                            <X /> Close referral
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
                     )}
                   </div>
                 </TableCell>

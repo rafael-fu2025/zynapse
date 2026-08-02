@@ -1,7 +1,7 @@
 /**
  * Medicine hooks — batch-tracked inventory with FEFO dispensing (Phase 12).
  */
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { z } from 'zod';
 import { toast } from 'sonner';
 import { apiClient } from '@/api/client';
@@ -10,6 +10,7 @@ import {
   addBatchSchema,
   createMedicineSchema,
   dispenseSchema,
+  expiringBatchSchema,
   medicineForecastSchema,
   medicineSchema,
   medicineTxnSchema,
@@ -17,6 +18,7 @@ import {
   type AddBatchInput,
   type CreateMedicineInput,
   type DispenseInput,
+  type ExpiringBatch,
   type Medicine,
   type MedicineForecast,
   type MedicineTxn,
@@ -43,6 +45,10 @@ export function useMedicines(cursor: string | null, limit = 25, q: string | null
       const data = z.array(medicineSchema).parse(res.data);
       return { data, next: res.data?.next ?? null };
     },
+    // Keep the previous page visible while the next one is in-flight so
+    // typing in the search box doesn't flash an empty state between
+    // keystrokes.
+    placeholderData: keepPreviousData,
   });
 }
 
@@ -54,6 +60,41 @@ export function useMedicine(id: number | null) {
       const res = await apiClient.get<unknown>(`/clinic/medicines/${id}`);
       return medicineSchema.parse(res.data);
     },
+  });
+}
+
+/**
+ * Insight: every medicine currently below its reorder threshold. The
+ * `/low-stock` endpoint already filters server-side, so this hook just
+ * composes against the existing list. Stale time is generous — the
+ * list is for the morning stock-check, not a live dashboard.
+ */
+export function useLowStockMedicines() {
+  return useQuery<Medicine[], ApiEnvelopeError>({
+    queryKey: ['medicines', 'insights', 'low-stock'],
+    queryFn: async () => {
+      const res = await apiClient.get<unknown>('/clinic/medicines/low-stock');
+      return z.array(medicineSchema).parse(res.data);
+    },
+    staleTime: 60_000,
+  });
+}
+
+/**
+ * Insight: every ACTIVE batch expiring within the next `days` days.
+ * The response shape is a batch row joined with the medicine's
+ * `generic_name` + `unit` (so the chip can show what the batch is for).
+ */
+export function useExpiringMedicines(days = 30) {
+  return useQuery<ExpiringBatch[], ApiEnvelopeError>({
+    queryKey: ['medicines', 'insights', 'expiring', days],
+    queryFn: async () => {
+      const params = new URLSearchParams();
+      params.set('days', String(days));
+      const res = await apiClient.get<unknown>(`/clinic/medicines/expiring?${params.toString()}`);
+      return z.array(expiringBatchSchema).parse(res.data);
+    },
+    staleTime: 60_000,
   });
 }
 

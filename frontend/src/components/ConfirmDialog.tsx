@@ -54,14 +54,14 @@ export function ConfirmDialog({
   const shownConfirmLabel = open ? confirmLabel : frozen.confirmLabel;
 
   return (
-    <Dialog open={open} onOpenChange={(o) => !o && onCancel()}>
+    <Dialog open={open} onOpenChange={(o) => !o && !pending && onCancel()}>
       <DialogContent>
         <DialogHeader>
           <DialogTitle>{shownTitle}</DialogTitle>
           {shownDescription !== undefined && <DialogDescription>{shownDescription}</DialogDescription>}
         </DialogHeader>
         <DialogFooter>
-          <Button type="button" variant="outline" onClick={onCancel}>
+          <Button type="button" variant="outline" onClick={onCancel} disabled={pending}>
             {cancelLabel}
           </Button>
           <Button

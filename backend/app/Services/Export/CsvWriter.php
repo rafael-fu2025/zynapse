@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Services\Export;
 
 use App\Exceptions\ApiException;
+use App\Services\Audit\AuditPayload;
 use CodeIgniter\HTTP\ResponseInterface;
 
 /**
@@ -16,9 +17,8 @@ use CodeIgniter\HTTP\ResponseInterface;
  *
  * Redaction:
  *   - Sensitive payload keys are replaced with `<redacted>` recursively
- *     before being JSON-encoded into the last column. The redaction list
- *     is duplicated here (rather than imported from a controller) so
- *     future export surfaces (referrals export, etc.) pick it up for free.
+ *     before being JSON-encoded into the last column. The shared
+ *     AuditPayload policy also protects JSON detail responses.
  */
 final class CsvWriter
 {
@@ -26,11 +26,7 @@ final class CsvWriter
      * Sensitive keys whose values MUST be replaced with `<redacted>`
      * before being streamed. Keys are matched case-insensitively.
      */
-    public const REDACT_KEYS = [
-        'password', 'refresh_token', 'access_token', 'authorization',
-        'cookie', 'token', 'qr_secret', 'plaintext', 'notes_plaintext',
-        'patient_school_id',
-    ];
+    public const REDACT_KEYS = AuditPayload::REDACT_KEYS;
 
     /** @var resource|null */
     private $handle = null;
@@ -99,15 +95,7 @@ final class CsvWriter
      */
     public static function redact(array $payload): array
     {
-        $out = [];
-        foreach ($payload as $k => $v) {
-            if (is_string($k) && in_array(strtolower($k), self::REDACT_KEYS, true)) {
-                $out[$k] = '<redacted>';
-                continue;
-            }
-            $out[$k] = is_array($v) ? self::redact($v) : $v;
-        }
-        return $out;
+        return AuditPayload::redact($payload);
     }
 
     public function close(): void
