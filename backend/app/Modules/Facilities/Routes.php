@@ -29,10 +29,15 @@ final class Routes implements BaseRoutes
             $r->post('batches/(:num)/output',         'BmgController::recordOutput/$1');
             $r->post('batches/(:num)/finish',         'BmgController::finishBatch/$1');
             $r->post('batches/(:num)/cancel',         'BmgController::cancelBatch/$1');
+            $r->post('batches/(:num)/curing',         'BmgController::moveToCuring/$1');
             $r->get('batches/(:num)/logs',            'BmgController::listProcessLogs/$1');
             $r->post('batches/(:num)/logs',           'BmgController::addProcessLog/$1');
+            $r->get('batches/(:num)/alerts',          'BmgController::listAlerts/$1');
+            $r->post('alerts/(:num)/acknowledge',     'BmgController::acknowledgeAlert/$1');
             $r->post('batches/(:num)/inputs',         'BmgController::addBatchInput/$1');
             $r->post('batches/(:num)/outputs',        'BmgController::addBatchOutput/$1');
+            $r->post('batches/(:num)/losses',         'BmgController::addBatchLoss/$1');
+            $r->get('batches/(:num)/losses',          'BmgController::listBatchLosses/$1');
             $r->get('batches/(:num)/analytics',       'BmgController::batchAnalytics/$1');
         });
     }

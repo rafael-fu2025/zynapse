@@ -5,14 +5,16 @@
  * Drums" widget: instead of jumping to a table row, the operator lands
  * on a dedicated surface that shows everything about the drum's active
  * batch — identity, input/output weights, ETA + progress, analytics
- * (yield / mass reduction), and the process-log timeline with an
- * inline observation form.
+ * (yield / mass reduction), active SPC alerts, the process-log
+ * timeline with an inline observation form, and a quick-loss form
+ * for the operator to record categorised mass out of the run.
  *
- * Read-mostly: state transitions (finish / cancel / record output)
- * still live on the Facilities table. The only write here is logging
- * an observation, which mirrors the legacy per-drum log sheet.
+ * Read-mostly: state transitions (finish / cancel / record output /
+ * move to curing) still live on the Facilities table. The writes here
+ * are logging an observation and recording a loss — both mirror
+ * per-drum log sheets.
  */
-import { ArrowLeft, Boxes, Calendar, ClipboardList, Cylinder, LineChart, Loader2, MapPin, Scale } from 'lucide-react';
+import { ArrowLeft, Boxes, Calendar, ClipboardList, Cylinder, LineChart, Loader2, MapPin, Scale, Trash2, TriangleAlert, X } from 'lucide-react';
 import { useId, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { toast } from 'sonner';
@@ -30,12 +32,23 @@ import {
 } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import {
+  useAcknowledgeAlert,
   useActiveBatches,
+  useAddBatchLoss,
   useAddProcessLog,
+  useAlerts,
   useBatchAnalytics,
   useProcessLogs,
 } from '@/hooks/useFacilities';
-import { MOISTURE_LEVELS, type ActiveBatch, type MoistureLevel } from '@/schemas/facilities';
+import {
+  BMG_LOSS_CATEGORIES,
+  MOISTURE_LEVELS,
+  type ActiveBatch,
+  type BmgAlert,
+  type BmgAlertSeverity,
+  type BmgLossCategory,
+  type MoistureLevel,
+} from '@/schemas/facilities';
 import { fmtShort, fmtUtcToApp } from '@/utils/date';
 
 /** Process-log timeline + inline observation form for the batch. */
@@ -45,11 +58,37 @@ function ProcessLogSection({ batchId }: { batchId: number }) {
   const [note, setNote] = useState('');
   const [temp, setTemp] = useState('');
   const [moisture, setMoisture] = useState<MoistureLevel | 'unset'>('unset');
+  // Tier 2.2 observability fields — kept separate from the basic
+  // observation block (they require a sensor/scanner at hand) and
+  // submitted only when populated so the simple "note only" path
+  // remains unaffected.
+  const [oxygen, setOxygen] = useState('');
+  const [deviceId, setDeviceId] = useState('');
+  const [calibration, setCalibration] = useState<'ok' | 'due' | 'overdue' | 'unset'>('unset');
   const noteId = useId();
   const tempId = useId();
+  const oxygenId = useId();
+  const deviceIdId = useId();
+  const calibrationId = useId();
+
+  function reset() {
+    setNote('');
+    setTemp('');
+    setMoisture('unset');
+    setOxygen('');
+    setDeviceId('');
+    setCalibration('unset');
+  }
 
   function submit() {
-    if (note.trim() === '' && temp.trim() === '' && moisture === 'unset') {
+    if (
+      note.trim() === '' &&
+      temp.trim() === '' &&
+      moisture === 'unset' &&
+      oxygen.trim() === '' &&
+      deviceId.trim() === '' &&
+      calibration === 'unset'
+    ) {
       toast.error('Enter at least one observation field.');
       return;
     }
@@ -60,14 +99,13 @@ function ProcessLogSection({ batchId }: { batchId: number }) {
           observation_note: note.trim(),
           temperature_celsius: temp.trim(),
           ...(moisture !== 'unset' ? { moisture_level: moisture } : {}),
+          ...(oxygen.trim() !== '' ? { oxygen_pct: oxygen.trim() } : {}),
+          ...(deviceId.trim() !== '' ? { device_id: deviceId.trim() } : {}),
+          ...(calibration !== 'unset' ? { calibration_status: calibration } : {}),
         },
       },
       {
-        onSuccess: () => {
-          setNote('');
-          setTemp('');
-          setMoisture('unset');
-        },
+        onSuccess: () => reset(),
       },
     );
   }
@@ -89,10 +127,29 @@ function ProcessLogSection({ batchId }: { batchId: number }) {
             <section key={l.id} className="rounded-md border p-2">
               <header className="flex items-center justify-between">
                 <p className="font-mono text-[10px] text-muted-foreground">{l.log_date}</p>
-                <div className="flex gap-1">
+                <div className="flex flex-wrap gap-1">
                   {l.temperature_celsius !== null && <Badge variant="info">{l.temperature_celsius}°C</Badge>}
                   {l.moisture_level !== null && (
                     <Badge variant={l.moisture_level === 'normal' ? 'success' : 'warning'}>{l.moisture_level}</Badge>
+                  )}
+                  {l.oxygen_pct !== null && l.oxygen_pct !== undefined && (
+                    <Badge variant="secondary">O₂ {l.oxygen_pct}%</Badge>
+                  )}
+                  {l.calibration_status !== null && l.calibration_status !== undefined && (
+                    <Badge
+                      variant={
+                        l.calibration_status === 'ok'
+                          ? 'success'
+                          : l.calibration_status === 'due'
+                            ? 'warning'
+                            : 'destructive'
+                      }
+                    >
+                      cal {l.calibration_status}
+                    </Badge>
+                  )}
+                  {l.device_id !== null && l.device_id !== undefined && (
+                    <Badge variant="outline" className="font-mono">{l.device_id}</Badge>
                   )}
                 </div>
               </header>
@@ -125,6 +182,33 @@ function ProcessLogSection({ batchId }: { batchId: number }) {
               </Select>
             </div>
           </div>
+          <details className="rounded-md border bg-muted/30 px-3 py-2">
+            <summary className="cursor-pointer text-xs font-medium text-muted-foreground">
+              Sensor / chain-of-custody (optional)
+            </summary>
+            <div className="mt-3 grid grid-cols-3 gap-3">
+              <div className="space-y-1.5">
+                <Label htmlFor={oxygenId}>O₂ (%)</Label>
+                <Input id={oxygenId} type="number" step={0.1} min={0} max={100} value={oxygen} onChange={(e) => setOxygen(e.target.value)} />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor={deviceIdId}>Device ID</Label>
+                <Input id={deviceIdId} maxLength={64} value={deviceId} onChange={(e) => setDeviceId(e.target.value)} />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor={calibrationId}>Calibration</Label>
+                <Select value={calibration} onValueChange={(v) => setCalibration(v as 'ok' | 'due' | 'overdue' | 'unset')}>
+                  <SelectTrigger id={calibrationId}><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="unset">—</SelectItem>
+                    <SelectItem value="ok">ok</SelectItem>
+                    <SelectItem value="due">due</SelectItem>
+                    <SelectItem value="overdue">overdue</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+          </details>
           <div className="flex justify-end">
             <Button onClick={submit} disabled={add.isPending}>
               {add.isPending && <Loader2 className="animate-spin" />}
@@ -134,6 +218,148 @@ function ProcessLogSection({ batchId }: { batchId: number }) {
         </div>
       </CardContent>
     </Card>
+  );
+}
+
+/** Inline form to record a categorised mass loss against the active batch. */
+function LossSection({ batchId }: { batchId: number }) {
+  const addLoss = useAddBatchLoss();
+  const [category, setCategory] = useState<BmgLossCategory | 'unset'>('unset');
+  const [weight, setWeight] = useState('');
+  const [note, setNote] = useState('');
+  const categoryId = useId();
+  const weightId = useId();
+  const noteId = useId();
+
+  function submit() {
+    if (category === 'unset') {
+      toast.error('Pick a loss category.');
+      return;
+    }
+    const w = Number(weight);
+    if (!Number.isFinite(w) || w <= 0) {
+      toast.error('Weight must be a positive number (kg).');
+      return;
+    }
+    addLoss.mutate(
+      {
+        batchId,
+        input: {
+          category_code: category,
+          weight_kg: w,
+          ...(note.trim() !== '' ? { note: note.trim() } : {}),
+        },
+      },
+      {
+        onSuccess: () => {
+          setWeight('');
+          setNote('');
+          setCategory('unset');
+        },
+      },
+    );
+  }
+
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <CardTitle className="flex items-center gap-2 text-base">
+          <Trash2 className="size-4 text-primary" /> Record loss
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <p className="text-xs text-muted-foreground">
+          Track mass that leaves the batch for reasons other than finished output (evaporation, off-gas, sampling, etc.). The total is summed server-side.
+        </p>
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+          <div className="space-y-1.5">
+            <Label htmlFor={categoryId}>Category</Label>
+            <Select value={category} onValueChange={(v) => setCategory(v as BmgLossCategory | 'unset')}>
+              <SelectTrigger id={categoryId}><SelectValue placeholder="Pick…" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="unset">—</SelectItem>
+                {BMG_LOSS_CATEGORIES.map((c) => (
+                  <SelectItem key={c} value={c}>{c.replace(/_/g, ' ')}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor={weightId}>Weight (kg)</Label>
+            <Input id={weightId} type="number" min={0} step={0.01} value={weight} onChange={(e) => setWeight(e.target.value)} />
+          </div>
+          <div className="col-span-2 space-y-1.5 sm:col-span-1">
+            <Label htmlFor={noteId}>Note (optional)</Label>
+            <Input id={noteId} maxLength={255} value={note} onChange={(e) => setNote(e.target.value)} />
+          </div>
+        </div>
+        <div className="flex justify-end">
+          <Button onClick={submit} disabled={addLoss.isPending}>
+            {addLoss.isPending && <Loader2 className="animate-spin" />}
+            Record loss
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+const SEVERITY_VARIANT: Record<BmgAlertSeverity, 'default' | 'info' | 'warning' | 'destructive'> = {
+  info: 'info',
+  warning: 'warning',
+  critical: 'destructive',
+};
+
+/** Active SPC alerts for the batch — operator can dismiss each one. */
+function AlertBanner({ batchId }: { batchId: number }) {
+  const alerts = useAlerts(batchId);
+  const ack = useAcknowledgeAlert();
+  const open = (alerts.data ?? []).filter((a) => a.acknowledged_at === null);
+
+  if (alerts.isLoading || open.length === 0) {
+    // Keep the banner collapsed (render nothing) when there's nothing
+    // to show so the page rhythm isn't disturbed.
+    return null;
+  }
+
+  return (
+    <section
+      role="alert"
+      aria-live="polite"
+      className="space-y-2 rounded-md border border-warning/40 bg-warning/5 p-3"
+    >
+      <header className="flex items-center gap-2 text-warning">
+        <TriangleAlert className="size-4" />
+        <p className="text-sm font-medium">
+          {open.length} active alert{open.length === 1 ? '' : 's'}
+        </p>
+      </header>
+      <ul className="space-y-2">
+        {open.map((a) => (
+          <AlertRow key={a.id} alert={a} disabled={ack.isPending} onAck={() => ack.mutate({ alertId: a.id, batchId })} />
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+function AlertRow({ alert, disabled, onAck }: { alert: BmgAlert; disabled: boolean; onAck: () => void }) {
+  return (
+    <li className="flex flex-wrap items-start justify-between gap-2 rounded-md border bg-background/60 p-2">
+      <div className="space-y-1">
+        <div className="flex flex-wrap items-center gap-1.5">
+          <Badge variant={SEVERITY_VARIANT[alert.severity]} className="uppercase">
+            {alert.severity}
+          </Badge>
+          <span className="font-mono text-xs text-muted-foreground">{alert.code}</span>
+          <span className="font-mono text-[10px] text-muted-foreground">{fmtUtcToApp(alert.triggered_at)}</span>
+        </div>
+        <p className="text-sm text-foreground">{alert.message}</p>
+      </div>
+      <Button size="sm" variant="outline" onClick={onAck} disabled={disabled} aria-label="Acknowledge alert">
+        <X /> Acknowledge
+      </Button>
+    </li>
   );
 }
 
@@ -332,6 +558,8 @@ function DrumDetail({ batch }: { batch: ActiveBatch }) {
         <AnalyticsSection batchId={batch.batch_id} />
         <ProcessLogSection batchId={batch.batch_id} />
       </div>
+      <AlertBanner batchId={batch.batch_id} />
+      <LossSection batchId={batch.batch_id} />
     </>
   );
 }

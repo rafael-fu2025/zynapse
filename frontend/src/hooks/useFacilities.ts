@@ -21,32 +21,40 @@ import { apiClient } from '@/api/client';
 import { ApiEnvelopeError } from '@/api/envelope';
 import { toast } from 'sonner';
 import {
+  addBatchInputSchema,
+  addBatchLossSchema,
   addProcessLogSchema,
   activeBatchSchema,
   batchAnalyticsSchema,
+  bmgAlertSchema,
   bmgBatchSchema,
   bmgUnitSchema,
   cancelBatchSchema,
   createUnitSchema,
   createWasteCategorySchema,
+  moveToCuringSchema,
   processLogSchema,
   updateUnitSchema,
   updateWasteCategorySchema,
   wasteCategorySchema,
   type ActiveBatch,
+  type AddBatchInputInput,
+  type AddBatchLossInput,
   type AddProcessLogInput,
   type BatchAnalytics,
+  type BmgAlert,
   type BmgBatch,
   type BmgUnit,
   type CancelBatchInput,
   type CreateUnitInput,
   type CreateWasteCategoryInput,
+  type MoveToCuringInput,
   type ProcessLog,
+  type RecordOutputInput,
+  type StartBatchInput,
   type UpdateUnitInput,
   type UpdateWasteCategoryInput,
   type WasteCategory,
-  type RecordOutputInput,
-  type StartBatchInput,
 } from '@/schemas/facilities';
 
 const UNITS_KEY = ['facilities', 'units'] as const;
@@ -300,6 +308,9 @@ export function useAddProcessLog() {
       if (valid.observation_note !== undefined && valid.observation_note !== '') payload['observation_note'] = valid.observation_note;
       if (valid.temperature_celsius !== undefined && valid.temperature_celsius !== '') payload['temperature_celsius'] = valid.temperature_celsius;
       if (valid.moisture_level !== undefined) payload['moisture_level'] = valid.moisture_level;
+      if (valid.oxygen_pct !== undefined && valid.oxygen_pct !== '') payload['oxygen_pct'] = valid.oxygen_pct;
+      if (valid.device_id !== undefined && valid.device_id !== '') payload['device_id'] = valid.device_id;
+      if (valid.calibration_status !== undefined) payload['calibration_status'] = valid.calibration_status;
       const res = await apiClient.post<unknown>(`/facilities/batches/${batchId}/logs`, payload);
       return processLogSchema.parse(res.data);
     },
@@ -310,6 +321,7 @@ export function useAddProcessLog() {
       void qc.invalidateQueries({ queryKey: ['facilities', 'process-logs', vars.batchId] });
       void qc.invalidateQueries({ queryKey: ACTIVE_BATCHES_KEY });
       void qc.invalidateQueries({ queryKey: ['facilities', 'analytics', vars.batchId] });
+      void qc.invalidateQueries({ queryKey: ['facilities', 'alerts', vars.batchId] });
       toast.success('Observation logged.');
     },
     onError: (err) => {
@@ -696,6 +708,179 @@ export function useSetUnitMaintenance() {
     },
     onSuccess: (d) => {
       toast.success(`Unit → ${d.status}.`);
+    },
+  });
+}
+
+// ------------------------------------------------------ Curing transition
+
+/**
+ * Move a batch from `awaiting_output` to `curing` — industry practice when
+ * the drum has residue that needs a slow maturation phase (1–3 months at
+ * lower monitoring frequency) before final QA / output. Mirrors the
+ * `useFinishBatch` / `useCancelBatch` pattern: optimistic unit status
+ * patch, rollback on error, reconcile via invalidate on settle.
+ *
+ * Note: the unit also flips to `curing` so the dashboard widget's join
+ * (which filters by `curing` as an active status) still surfaces the row.
+ */
+export interface UseMoveToCuringVars {
+  unitId: number;
+  batchId: number;
+  input?: MoveToCuringInput;
+}
+
+export function useMoveToCuring() {
+  const qc = useQueryClient();
+  return useMutation<BmgBatch, ApiEnvelopeError, UseMoveToCuringVars, UnitsMutationCtx>({
+    mutationFn: async ({ batchId, input }) => {
+      // The form may pass an empty object (no AIP snapshot) — Zod
+      // makes every field optional so we just always parse.
+      const valid = moveToCuringSchema.parse(input ?? {});
+      const payload: Record<string, unknown> = {};
+      if (valid.accumulated_in_process_kg !== undefined && valid.accumulated_in_process_kg !== '') {
+        payload['accumulated_in_process_kg'] = valid.accumulated_in_process_kg;
+      }
+      const res = await apiClient.post<BmgBatch>(`/facilities/batches/${batchId}/curing`, payload);
+      return bmgBatchSchema.parse(res.data);
+    },
+    onMutate: async ({ unitId }) => {
+      await qc.cancelQueries({ queryKey: UNITS_KEY });
+      const snapshots = snapshotUnits(qc);
+      // Curing is an ACTIVE state — keep `active_batch_id` populated so
+      // the "Processing Drums" widget still shows the drum.
+      patchUnitInCache(qc, unitId, { status: 'curing' });
+      return { snapshots };
+    },
+    onError: (err, _vars, ctx) => {
+      for (const [key, snap] of ctx?.snapshots ?? []) {
+        qc.setQueryData(key, snap);
+      }
+      toast.error(err.errors[0]?.message ?? 'Failed to move batch to curing.');
+    },
+    onSettled: (_d, _e, vars) => {
+      invalidateFacilities(qc, vars.batchId);
+    },
+    onSuccess: () => {
+      toast.success('Batch moved to curing.');
+    },
+  });
+}
+
+// ------------------------------------------------------ Batch inputs (feedstock)
+
+/**
+ * Record a feedstock input against a batch — required for mass-balance
+ * analytics. Supports the Tier 2.1 characterisation columns (C:N,
+ * bulk density, pH) as optional fields; empty strings are stripped so
+ * the backend sees nulls (matches the existing `permit_empty` rule).
+ */
+export function useAddBatchInput() {
+  const qc = useQueryClient();
+  return useMutation<unknown, ApiEnvelopeError, { batchId: number; input: AddBatchInputInput }>({
+    mutationFn: async ({ batchId, input }) => {
+      const valid = addBatchInputSchema.parse(input);
+      const payload: Record<string, unknown> = { weight_kg: valid.weight_kg };
+      if (valid.cn_ratio !== undefined && valid.cn_ratio !== '') payload['cn_ratio'] = valid.cn_ratio;
+      if (valid.bulk_density_kg_per_m3 !== undefined && valid.bulk_density_kg_per_m3 !== '') {
+        payload['bulk_density_kg_per_m3'] = valid.bulk_density_kg_per_m3;
+      }
+      if (valid.ph !== undefined && valid.ph !== '') payload['ph'] = valid.ph;
+      if (valid.note !== undefined && valid.note !== '') payload['note'] = valid.note;
+      const res = await apiClient.post<unknown>(`/facilities/batches/${batchId}/inputs`, payload);
+      return res.data;
+    },
+    onSuccess: (_d, vars) => {
+      // Recording an input shifts the analytics; the active-batches
+      // widget also re-evaluates expected completion.
+      void qc.invalidateQueries({ queryKey: ['facilities', 'analytics', vars.batchId] });
+      void qc.invalidateQueries({ queryKey: ACTIVE_BATCHES_KEY });
+      toast.success('Input recorded.');
+    },
+    onError: (err) => {
+      toast.error(err.errors[0]?.message ?? 'Failed to record input.');
+    },
+  });
+}
+
+// ------------------------------------------------------ Batch losses
+
+/**
+ * Record an in-process loss against a batch. The backend recomputes
+ * `total_loss_kg` on the batch row and emits `bmg.loss_recorded` audit;
+ * we only need to drop the analytics cache so the UI reflects the new
+ * mass balance.
+ */
+export function useAddBatchLoss() {
+  const qc = useQueryClient();
+  return useMutation<unknown, ApiEnvelopeError, { batchId: number; input: AddBatchLossInput }>({
+    mutationFn: async ({ batchId, input }) => {
+      const valid = addBatchLossSchema.parse(input);
+      const payload: Record<string, unknown> = {
+        category_code: valid.category_code,
+        weight_kg: valid.weight_kg,
+      };
+      if (valid.note !== undefined && valid.note !== '') payload['note'] = valid.note;
+      const res = await apiClient.post<unknown>(`/facilities/batches/${batchId}/losses`, payload);
+      return res.data;
+    },
+    onSuccess: (_d, vars) => {
+      void qc.invalidateQueries({ queryKey: ['facilities', 'analytics', vars.batchId] });
+      void qc.invalidateQueries({ queryKey: ACTIVE_BATCHES_KEY });
+      toast.success('Loss recorded.');
+    },
+    onError: (err) => {
+      toast.error(err.errors[0]?.message ?? 'Failed to record loss.');
+    },
+  });
+}
+
+// ------------------------------------------------------ Alerts
+
+/**
+ * Pull every alert (acknowledged or not) for a batch. Disabled until a
+ * real batchId is available so the request doesn't fire on the dashboard
+ * list view. The DrumDetailPage renders the unacknowledged subset as a
+ * banner.
+ */
+export function useAlerts(batchId: number | null) {
+  return useQuery<BmgAlert[], ApiEnvelopeError>({
+    queryKey: ['facilities', 'alerts', batchId],
+    queryFn: async () => {
+      const res = await apiClient.get<unknown[]>(`/facilities/batches/${batchId}/alerts`);
+      return z.array(bmgAlertSchema).parse(res.data);
+    },
+    enabled: batchId !== null && batchId > 0,
+  });
+}
+
+/**
+ * Acknowledge a single alert. Idempotent on the server (re-acking an
+ * already-acknowledged alert returns the row without a duplicate audit
+ * event) so the client can safely call this from a banner dismiss
+ * without debouncing.
+ */
+export function useAcknowledgeAlert() {
+  const qc = useQueryClient();
+  return useMutation<BmgAlert, ApiEnvelopeError, { alertId: number; batchId: number }>({
+    mutationFn: async ({ alertId }) => {
+      const res = await apiClient.post<BmgAlert>(`/facilities/alerts/${alertId}/acknowledge`, {});
+      return bmgAlertSchema.parse(res.data);
+    },
+    onSuccess: (_d, vars) => {
+      // Patch just this alert inside the cached batch list — cheaper
+      // than invalidating and avoids a network round-trip.
+      qc.setQueriesData<BmgAlert[]>(
+        { queryKey: ['facilities', 'alerts', vars.batchId] },
+        (old) => {
+          if (old === undefined) return old;
+          return old.map((a) => (a.id === vars.alertId ? _d : a));
+        },
+      );
+      toast.success('Alert acknowledged.');
+    },
+    onError: (err) => {
+      toast.error(err.errors[0]?.message ?? 'Failed to acknowledge alert.');
     },
   });
 }

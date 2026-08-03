@@ -64,7 +64,6 @@ final class PermissionsAndGroupsSeeder extends Seeder
         'facilities.units.manage'                    => 'facilities',
         'facilities.bmg.transition'                  => 'facilities',
         'facilities.bmg.record_output'               => 'facilities',
-        'facilities.inventory.write'                 => 'facilities',
         'facilities.bmg.logs.read'                   => 'facilities',
         'facilities.bmg.logs.record'                 => 'facilities',
         'facilities.categories.manage'               => 'facilities',

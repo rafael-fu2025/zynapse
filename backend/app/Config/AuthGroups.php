@@ -117,7 +117,6 @@ class AuthGroups extends ShieldAuthGroups
             'facilities.units.manage',
             'facilities.bmg.transition',
             'facilities.bmg.record_output',
-            'facilities.inventory.write',
             'facilities.bmg.logs.read',
             'facilities.bmg.logs.record',
             'facilities.categories.manage',
