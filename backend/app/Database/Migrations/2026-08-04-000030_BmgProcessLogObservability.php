@@ -26,6 +26,7 @@ namespace App\Database\Migrations;
  *
  * All columns nullable — manual logs remain valid.
  */
+use CodeIgniter\Database\Exceptions\DatabaseException;
 use CodeIgniter\Database\Migration;
 
 final class BmgProcessLogObservability extends Migration
@@ -89,8 +90,20 @@ final class BmgProcessLogObservability extends Migration
         if (! $this->db->tableExists('facilities_bmg_process_logs')) {
             return;
         }
-        $this->db->query('ALTER TABLE `facilities_bmg_process_logs` DROP CHECK `chk_pl_oxygen`');
-        $this->db->query('ALTER TABLE `facilities_bmg_process_logs` DROP CHECK `chk_pl_calibration`');
+        // MariaDB 10.4 (XAMPP) doesn't support `DROP CHECK <name>`;
+        // use `DROP CONSTRAINT` which works on both MariaDB 10.4+ and
+        // MySQL 8+. Swallow "doesn't exist" errors for idempotence.
+        $dropCheck = function (string $name) {
+            try {
+                $this->db->query(
+                    "ALTER TABLE `facilities_bmg_process_logs` DROP CONSTRAINT `{$name}`"
+                );
+            } catch (DatabaseException $e) {
+                // ignore
+            }
+        };
+        $dropCheck('chk_pl_oxygen');
+        $dropCheck('chk_pl_calibration');
         $drop = [];
         foreach (['oxygen_pct', 'device_id', 'calibration_status'] as $col) {
             if ($this->db->fieldExists($col, 'facilities_bmg_process_logs')) {

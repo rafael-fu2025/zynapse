@@ -39,10 +39,16 @@ final class ClinicalForeignKeys extends Migration
      */
     private const TABLES = [
         'clinic_encounters'      => ['kind' => null,         'has_archived_at' => true],
-        'clinic_appointments'     => ['kind' => null,         'has_archived_at' => true],
+        'clinic_appointments'    => ['kind' => null,         'has_archived_at' => true],
         'counselling_sessions'   => ['kind' => null,         'has_archived_at' => true],
-        'clinic_checkins'         => ['kind' => null,         'has_archived_at' => true],
-        'referral_referrals'      => ['kind' => null,         'has_archived_at' => true],
+        // clinic_checkins is intentionally checked in via the kiosk
+        // flow and is hard-deleted after `KioskCheckinEnhancements`
+        // — it does NOT carry an `archived_at` column. The migration
+        // historically mis-asserted it did, which caused MySQL to
+        // reject the join with "Unknown column 't.archived_at' in
+        // 'on clause'".
+        'clinic_checkins'        => ['kind' => null,         'has_archived_at' => false],
+        'referral_referrals'     => ['kind' => null,         'has_archived_at' => true],
         // clinic_queue_entries and clinic_treatments do not have
         // patient_school_id; they are linked via encounter_id and need
         // a separate treatment (handled in Phase 2.2 below).

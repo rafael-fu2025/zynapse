@@ -25,6 +25,7 @@ namespace App\Database\Migrations;
  * FK to `users(id)` is RESTRICT (ack note may outlive user, but we never
  * want to silently lose the audit trail by a user hard-delete).
  */
+use CodeIgniter\Database\Exceptions\DatabaseException;
 use CodeIgniter\Database\Migration;
 
 final class BmgAlerts extends Migration
@@ -55,9 +56,21 @@ final class BmgAlerts extends Migration
 
         // Idempotent: CHECKs are added unconditionally (ALTER … ADD
         // CHECK fails with "Duplicate key name" if rerun, so we DROP
-        // first). Mirrors the same pattern used in
-        // `BmgProcessLogObservability`.
-        $this->db->query('ALTER TABLE `facilities_bmg_alerts` DROP CHECK `chk_alert_severity`');
+        // first). MariaDB 10.4 (XAMPP) doesn't support `DROP CHECK
+        // <name>` — `DROP CONSTRAINT <name>` works on both MariaDB
+        // 10.4+ and MySQL 8+ and the constraint is a CHECK either
+        // way. Swallow "constraint does not exist" errors so the
+        // migration is safely idempotent.
+        $dropCheck = function (string $name) {
+            try {
+                $this->db->query(
+                    "ALTER TABLE `facilities_bmg_alerts` DROP CONSTRAINT `{$name}`"
+                );
+            } catch (DatabaseException $e) {
+                // ER_CHECK_CONSTRAINT_NOT_FOUND or ER_CANT_DROP_FIELD_OR_KEY
+            }
+        };
+        $dropCheck('chk_alert_severity');
         $this->db->query(<<<'SQL'
             ALTER TABLE `facilities_bmg_alerts`
                 ADD CONSTRAINT `chk_alert_severity`
@@ -68,7 +81,13 @@ final class BmgAlerts extends Migration
     public function down(): void
     {
         if ($this->db->tableExists('facilities_bmg_alerts')) {
-            $this->db->query('ALTER TABLE `facilities_bmg_alerts` DROP CHECK `chk_alert_severity`');
+            try {
+                $this->db->query(
+                    'ALTER TABLE `facilities_bmg_alerts` DROP CONSTRAINT `chk_alert_severity`'
+                );
+            } catch (DatabaseException $e) {
+                // ignore
+            }
             $this->forge->dropTable('facilities_bmg_alerts', true);
         }
     }

@@ -28,6 +28,7 @@ namespace App\Database\Migrations;
  * the mass-balance invariant; that remains composition-weight sum
  * vs `total_input_weight_kg`.
  */
+use CodeIgniter\Database\Exceptions\DatabaseException;
 use CodeIgniter\Database\Migration;
 
 final class BmgFeedstockCharacterization extends Migration
@@ -94,10 +95,22 @@ final class BmgFeedstockCharacterization extends Migration
         }
 
         // Drop CHECKs first — required before dropping the columns they
-        // reference. Use IF EXISTS for idempotence on re-runs.
-        $this->db->query('ALTER TABLE `facilities_bmg_inputs` DROP CHECK `chk_fbi_cn_ratio`');
-        $this->db->query('ALTER TABLE `facilities_bmg_inputs` DROP CHECK `chk_fbi_bulk_density`');
-        $this->db->query('ALTER TABLE `facilities_bmg_inputs` DROP CHECK `chk_fbi_ph`');
+        // reference. MariaDB 10.4 (XAMPP) doesn't support
+        // `DROP CHECK <name>` — use `DROP CONSTRAINT` which works on
+        // both MariaDB 10.4+ and MySQL 8+. Swallow "doesn't exist"
+        // errors for idempotence on re-runs.
+        $dropCheck = function (string $name) {
+            try {
+                $this->db->query(
+                    "ALTER TABLE `facilities_bmg_inputs` DROP CONSTRAINT `{$name}`"
+                );
+            } catch (DatabaseException $e) {
+                // ignore
+            }
+        };
+        $dropCheck('chk_fbi_cn_ratio');
+        $dropCheck('chk_fbi_bulk_density');
+        $dropCheck('chk_fbi_ph');
 
         $drop = [];
         foreach (['cn_ratio', 'bulk_density_kg_per_m3', 'ph'] as $col) {

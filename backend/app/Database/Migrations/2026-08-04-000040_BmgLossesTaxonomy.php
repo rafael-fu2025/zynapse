@@ -32,6 +32,7 @@ namespace App\Database\Migrations;
  *     chain-of-custody intact.
  *   - All columns nullable/defaulted so legacy rows remain valid.
  */
+use CodeIgniter\Database\Exceptions\DatabaseException;
 use CodeIgniter\Database\Migration;
 
 final class BmgLossesTaxonomy extends Migration
@@ -49,7 +50,11 @@ final class BmgLossesTaxonomy extends Migration
                 'category_code'       => ['type' => 'VARCHAR', 'constraint' => 32, 'null' => false],
                 'weight_kg'           => ['type' => 'DECIMAL', 'constraint' => '10,2', 'null' => false],
                 'note'                => ['type' => 'VARCHAR', 'constraint' => 255, 'null' => true],
-                'recorded_by_user_id' => ['type' => 'INT', 'unsigned' => true, 'null' => false],
+                // BIGINT UNSIGNED to match `users.id` (BIGINT UNSIGNED).
+                // The historical INT UNSIGNED here broke the FK with
+                // errno 150 on MySQL — INT and BIGINT are not interchangeable
+                // for FK purposes.
+                'recorded_by_user_id' => ['type' => 'BIGINT', 'unsigned' => true, 'null' => false],
                 'recorded_at'         => ['type' => 'DATETIME', 'null' => false],
                 'created_at'          => ['type' => 'DATETIME', 'null' => false],
             ]);
@@ -62,8 +67,24 @@ final class BmgLossesTaxonomy extends Migration
         }
 
         // Range / enum guards. Idempotent: drop first, then re-add.
-        $this->db->query('ALTER TABLE `facilities_bmg_losses` DROP CHECK `chk_fbl_weight`');
-        $this->db->query('ALTER TABLE `facilities_bmg_losses` DROP CHECK `chk_fbl_category`');
+        // MariaDB 10.4 (XAMPP) does NOT support `DROP CHECK <name>` —
+        // it expects `DROP CONSTRAINT <name>` (the constraint type
+        // is a CHECK either way). MySQL 8+ accepts both. We try
+        // DROP CONSTRAINT and swallow "constraint does not exist"
+        // errors so the migration is safely idempotent on either DB.
+        $dropCheck = function (string $name) {
+            try {
+                $this->db->query(
+                    "ALTER TABLE `facilities_bmg_losses` DROP CONSTRAINT `{$name}`"
+                );
+            } catch (DatabaseException $e) {
+                // ER_CHECK_CONSTRAINT_NOT_FOUND (3946) or
+                // ER_CANT_DROP_FIELD_OR_KEY (1091): both fine,
+                // the constraint simply isn't there yet.
+            }
+        };
+        $dropCheck('chk_fbl_weight');
+        $dropCheck('chk_fbl_category');
         $this->db->query(<<<'SQL'
             ALTER TABLE `facilities_bmg_losses`
                 ADD CONSTRAINT `chk_fbl_weight`
@@ -105,13 +126,22 @@ final class BmgLossesTaxonomy extends Migration
 
             // Loss-total guard: must be ≥ 0 when set. NULL is allowed
             // (legacy / not yet computed).
-            $this->db->query('ALTER TABLE `facilities_bmg_batches` DROP CHECK `chk_fbb_loss_nonneg`');
+            $dropCheck = function (string $name) {
+                try {
+                    $this->db->query(
+                        "ALTER TABLE `facilities_bmg_batches` DROP CONSTRAINT `{$name}`"
+                    );
+                } catch (DatabaseException $e) {
+                    // ignore
+                }
+            };
+            $dropCheck('chk_fbb_loss_nonneg');
             $this->db->query(<<<'SQL'
                 ALTER TABLE `facilities_bmg_batches`
                     ADD CONSTRAINT `chk_fbb_loss_nonneg`
                     CHECK (`total_loss_kg` IS NULL OR `total_loss_kg` >= 0)
             SQL);
-            $this->db->query('ALTER TABLE `facilities_bmg_batches` DROP CHECK `chk_fbb_aip_nonneg`');
+            $dropCheck('chk_fbb_aip_nonneg');
             $this->db->query(<<<'SQL'
                 ALTER TABLE `facilities_bmg_batches`
                     ADD CONSTRAINT `chk_fbb_aip_nonneg`
@@ -123,8 +153,17 @@ final class BmgLossesTaxonomy extends Migration
     public function down(): void
     {
         if ($this->db->tableExists('facilities_bmg_batches')) {
-            $this->db->query('ALTER TABLE `facilities_bmg_batches` DROP CHECK `chk_fbb_loss_nonneg`');
-            $this->db->query('ALTER TABLE `facilities_bmg_batches` DROP CHECK `chk_fbb_aip_nonneg`');
+            $dropCheck = function (string $name) {
+                try {
+                    $this->db->query(
+                        "ALTER TABLE `facilities_bmg_batches` DROP CONSTRAINT `{$name}`"
+                    );
+                } catch (DatabaseException $e) {
+                    // ignore
+                }
+            };
+            $dropCheck('chk_fbb_loss_nonneg');
+            $dropCheck('chk_fbb_aip_nonneg');
             $drop = [];
             foreach (['total_loss_kg', 'accumulated_in_process_kg'] as $col) {
                 if ($this->db->fieldExists($col, 'facilities_bmg_batches')) {
@@ -137,8 +176,17 @@ final class BmgLossesTaxonomy extends Migration
         }
 
         if ($this->db->tableExists('facilities_bmg_losses')) {
-            $this->db->query('ALTER TABLE `facilities_bmg_losses` DROP CHECK `chk_fbl_weight`');
-            $this->db->query('ALTER TABLE `facilities_bmg_losses` DROP CHECK `chk_fbl_category`');
+            $dropCheck = function (string $name) {
+                try {
+                    $this->db->query(
+                        "ALTER TABLE `facilities_bmg_losses` DROP CONSTRAINT `{$name}`"
+                    );
+                } catch (DatabaseException $e) {
+                    // ignore
+                }
+            };
+            $dropCheck('chk_fbl_weight');
+            $dropCheck('chk_fbl_category');
             $this->forge->dropTable('facilities_bmg_losses', true);
         }
     }

@@ -108,10 +108,11 @@ final class FacilitiesSeeder extends Seeder
         $this->wipe();
         $this->seedCategories();
         $this->seedUnits();
+        $this->seedActiveBatches();
 
         // Surface the canonical login so the developer can hit the
         // dashboard immediately after running the seeder.
-        fwrite(STDOUT, "FacilitiesSeeder: 3 categories + 4 drums inserted.\n");
+        fwrite(STDOUT, "FacilitiesSeeder: 3 categories + 4 drums + 3 active batches inserted.\n");
         fwrite(STDOUT, "  Admin login:  admin@synapse.dev / DevPassw0rd!\n");
     }
 
@@ -195,5 +196,125 @@ final class FacilitiesSeeder extends Seeder
             ];
         }
         $this->db->table('facilities_bmg_units')->insertBatch($rows);
+    }
+
+    /**
+     * Seed three in-flight batches so the "Processing Drums" card
+     * and the per-unit "Active batch" column have data to show.
+     *
+     * Pins batches to the canonical DRM-01..04 units, transitions
+     * each unit's status to match the batch lifecycle (Processing /
+     * AwaitingOutput), and keeps one unit Idle so the operator can
+     * demo the "Start batch" flow.
+     *
+     * Idempotent: the wipe() call empties `facilities_bmg_batches`
+     * before we run, so re-seeding always yields the same end state.
+     */
+    private function seedActiveBatches(): void
+    {
+        $now = date('Y-m-d H:i:s');
+        $startedAgo = (new \DateTimeImmutable('-3 days'))->format('Y-m-d H:i:s');
+        $awaitingAgo = (new \DateTimeImmutable('-1 day'))->format('Y-m-d H:i:s');
+
+        // Map of unit_code => demo batch payload + post-batch unit status.
+        $plan = [
+            [
+                'unit_code'        => 'DRM-01',
+                'reference_code'   => 'BATCH-2026-0001',
+                'status'           => BMG_STATE_PROCESSING,
+                'unit_status'      => BMG_STATE_PROCESSING,
+                'started_at'       => $startedAgo,
+                'awaiting_output_at' => null,
+                'finished_at'      => null,
+                'total_input_kg'   => 80.0000,
+                'output_kg'        => null,
+                'input_items'      => json_encode([
+                    ['category_code' => 'FOOD-SCRP', 'category_name' => 'Food Scraps', 'weight_kg' => 80.0],
+                ], JSON_UNESCAPED_SLASHES),
+                'output_items'     => null,
+                'notes'            => 'Demo batch — cafeteria scraps, day 3 of composting cycle.',
+            ],
+            [
+                'unit_code'        => 'DRM-02',
+                'reference_code'   => 'BATCH-2026-0002',
+                'status'           => BMG_STATE_PROCESSING,
+                'unit_status'      => BMG_STATE_PROCESSING,
+                'started_at'       => $startedAgo,
+                'awaiting_output_at' => null,
+                'finished_at'      => null,
+                'total_input_kg'   => 120.0000,
+                'output_kg'        => null,
+                'input_items'      => json_encode([
+                    ['category_code' => 'MIXED-FY', 'category_name' => 'Mixed Food + Yard', 'weight_kg' => 120.0],
+                ], JSON_UNESCAPED_SLASHES),
+                'output_items'     => null,
+                'notes'            => 'Demo batch — north canteen mixed load, day 3 of composting cycle.',
+            ],
+            [
+                'unit_code'        => 'DRM-03',
+                'reference_code'   => 'BATCH-2026-0003',
+                'status'           => BMG_STATE_AWAITING_OUTPUT,
+                'unit_status'      => BMG_STATE_AWAITING_OUTPUT,
+                'started_at'       => $startedAgo,
+                'awaiting_output_at' => $awaitingAgo,
+                'finished_at'      => null,
+                'total_input_kg'   => 150.0000,
+                'output_kg'        => null,
+                'input_items'      => json_encode([
+                    ['category_code' => 'YARD-GRDN', 'category_name' => 'Yard & Garden Waste', 'weight_kg' => 150.0],
+                ], JSON_UNESCAPED_SLASHES),
+                'output_items'     => null,
+                'notes'            => 'Demo batch — grounds shed greens, ready to record output.',
+            ],
+            // DRM-04 is intentionally left Idle so the operator can
+            // demo the "Start batch" flow against a fresh unit.
+        ];
+
+        $unitByCode = [];
+        foreach ($this->db->table('facilities_bmg_units')->get()->getResultArray() as $row) {
+            $unitByCode[(string) $row['code']] = (int) $row['id'];
+        }
+
+        $rows = [];
+        $unitStatusUpdates = [];
+        foreach ($plan as $b) {
+            if (! isset($unitByCode[$b['unit_code']])) {
+                continue;
+            }
+            $rows[] = [
+                'unit_id'              => $unitByCode[$b['unit_code']],
+                'reference_code'       => $b['reference_code'],
+                'status'               => $b['status'],
+                'total_input_weight_kg' => $b['total_input_kg'],
+                'output_weight_kg'     => $b['output_kg'],
+                'input_items'          => $b['input_items'],
+                'output_items'         => $b['output_items'],
+                'notes'                => $b['notes'],
+                'started_by_user_id'   => 1,
+                'finished_by_user_id'  => null,
+                'started_at'           => $b['started_at'],
+                'awaiting_output_at'   => $b['awaiting_output_at'],
+                'finished_at'          => $b['finished_at'],
+                'cancelled_at'         => null,
+                'archived_at'          => null,
+                'created_at'           => $now,
+                'updated_at'           => $now,
+            ];
+            $unitStatusUpdates[$b['unit_code']] = $b['unit_status'];
+        }
+
+        if ($rows === []) {
+            return;
+        }
+
+        $this->db->table('facilities_bmg_batches')->insertBatch($rows);
+
+        // Synchronise the unit's status to match the freshly-seeded
+        // batch so the BMG list and the "Processing Drums" card agree.
+        foreach ($unitStatusUpdates as $code => $status) {
+            $this->db->table('facilities_bmg_units')
+                ->where('code', $code)
+                ->update(['status' => $status, 'updated_at' => $now]);
+        }
     }
 }

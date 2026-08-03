@@ -29,13 +29,15 @@ use Modules\Facilities\Policies\BmgPolicy;
  */
 final class BmgService extends BaseService
 {
+    private ?BmgAlertEngine $alertEngine = null;
+
     public function __construct(
         private readonly BmgPolicy $policy,
         private readonly AuditOutboxService $audit,
-        private readonly ?BmgAlertEngine $alertEngine = null,
+        ?BmgAlertEngine $alertEngine = null,
     ) {
         parent::__construct();
-        $this->alertEngine ??= new BmgAlertEngine();
+        $this->alertEngine = $alertEngine ?? new BmgAlertEngine();
     }
 
     /**
@@ -757,7 +759,17 @@ final class BmgService extends BaseService
             ->where('b.archived_at', null)
             ->where('b.tenant_id', CurrentTenant::id())
             ->where('u.tenant_id', CurrentTenant::id())
-            ->where('c.tenant_id', CurrentTenant::id())
+            // The category table is LEFT-joined, so we must guard the
+            // tenant_id filter with a NULL check. Otherwise batches
+            // whose `category_id` is NULL (legacy rows, seeded rows)
+            // get silently dropped because `c.tenant_id = X` evaluates
+            // to NULL when the join produced no match — and the WHERE
+            // filter treats NULL as false, effectively turning the
+            // LEFT JOIN into an INNER JOIN and hiding the batch.
+            ->groupStart()
+                ->where('c.tenant_id', CurrentTenant::id())
+                ->orWhere('c.id', null)
+            ->groupEnd()
             ->whereIn('b.status', [BMG_STATE_PROCESSING, BMG_STATE_AWAITING_OUTPUT])
             ->orderBy('b.started_at', 'ASC')
             ->get()->getResultArray();
