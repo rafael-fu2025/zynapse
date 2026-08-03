@@ -18,12 +18,17 @@ final class EmployeeDto extends BaseDTO
     public function jsonSerialize(): array
     {
         return [
-            'id'                      => (int)    $this->row['id'],
+            // Phase 2.2: unified-identity fields surfaced via EmployeeSelfService.
+            'kind'                   => isset($this->row['person_kind']) ? (string) $this->row['person_kind'] : 'employee',
+            'persons_id'             => isset($this->row['persons_id']) && $this->row['persons_id'] !== null ? (int) $this->row['persons_id'] : null,
+            'patient_identifier_id'  => isset($this->row['patient_identifier_id']) && $this->row['patient_identifier_id'] !== null ? (int) $this->row['patient_identifier_id'] : null,
+            'identifier'             => (string) $this->row['employee_number'],
+            'id'                     => (int)    $this->row['id'],
             // `user_id` is the Phase 11 link to `users.id`. We expose
             // it as nullable so DTOs built from a row missing the
             // column (legacy callers) still serialize.
-            'user_id'                 => isset($this->row['user_id']) && $this->row['user_id'] !== null ? (int) $this->row['user_id'] : null,
-            'employee_number'         => (string) $this->row['employee_number'],
+            'user_id'                => isset($this->row['user_id']) && $this->row['user_id'] !== null ? (int) $this->row['user_id'] : null,
+            'employee_number'        => (string) $this->row['employee_number'],
             'first_name'              => (string) $this->row['first_name'],
             'last_name'               => (string) $this->row['last_name'],
             'middle_name'             => $this->row['middle_name'] !== null ? (string) $this->row['middle_name'] : null,

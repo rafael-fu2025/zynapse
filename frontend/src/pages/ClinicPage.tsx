@@ -29,7 +29,7 @@ import {
   Upload,
   X,
 } from 'lucide-react';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import { toast } from 'sonner';
@@ -585,8 +585,33 @@ function QueueTab() {
   const transition = useQueueTransition();
   const [confirm, setConfirm] = useState<ConfirmAction | null>(null);
 
-  const rows = queue.data ?? [];
+  // `queue.data` is a fresh array on every React Query refetch tick,
+  // so `queue.data ?? []` would allocate a new reference each render
+  // and invalidate the sort memo below. Stabilise `rows` first, then
+  // derive the sorted view from the stable reference.
+  const rows = useMemo(() => queue.data ?? [], [queue.data]);
   const hasWaiting = rows.some((q) => q.status === 'waiting');
+
+  // Surface active entries first so the operator's eye lands on the
+  // work that matters: in-session → called → waiting → done/skipped.
+  // Within each group we keep the natural position ASC so the audit
+  // trail (e.g. position 8 vs position 1) stays intact — the DB
+  // positions don't change, only the display order.
+  const sortedRows = useMemo(() => {
+    const priority: Record<string, number> = {
+      in_session: 0,
+      called:     1,
+      waiting:    2,
+      done:       3,
+      skipped:    4,
+    };
+    return [...rows].sort((a, b) => {
+      const pa = priority[a.status] ?? 99;
+      const pb = priority[b.status] ?? 99;
+      if (pa !== pb) return pa - pb;
+      return a.position - b.position;
+    });
+  }, [rows]);
 
   return (
     <div className="space-y-4">
@@ -629,7 +654,7 @@ function QueueTab() {
             {queue.isError && !queue.isLoading && (
               <QueryErrorRow colSpan={5} message="Failed to load the queue." onRetry={() => void queue.refetch()} pending={queue.isFetching} />
             )}
-            {rows.map((q) => (
+            {sortedRows.map((q) => (
               <TableRow key={q.id}>
                 <TableCell className="px-3 font-mono text-sm font-semibold">{q.position}</TableCell>
                 <TableCell className="px-3">
@@ -689,7 +714,7 @@ function QueueTab() {
         <p className="rounded-xl border border-dashed p-6 text-center text-sm text-muted-foreground md:hidden">Queue is empty — use “Queue” on an open encounter.</p>
       )}
       <MobileCardList>
-        {rows.map((q) => (
+        {sortedRows.map((q) => (
           <MobileCard key={q.id} aria-label={`Queue position ${q.position}`}>
             <div className="mb-1 flex items-center justify-between gap-2">
               <span className="font-mono text-sm font-semibold text-foreground">#{q.position}</span>

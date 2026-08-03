@@ -69,7 +69,15 @@ final class PatientController extends ApiController
             throw ApiException::validationFailure($this->collectErrors());
         }
 
-        return $this->ok($this->service->createStudent($payload)->toArray(), null, 201);
+        [$dto, $portalAccount] = $this->service->createStudent($payload);
+        $out = $dto->toArray();
+        if ($portalAccount !== null) {
+            // Phase 3.5: surface the temporary password alongside the
+            // patient row so the admin can share it once. The frontend
+            // pops a modal showing these credentials.
+            $out['portal_account'] = $portalAccount;
+        }
+        return $this->ok($out, null, 201);
     }
 
     public function updateStudent(int $id): ResponseInterface
@@ -167,12 +175,21 @@ final class PatientController extends ApiController
             'emergency_contact_phone' => 'permit_empty|max_length[20]',
             'date_of_birth'           => 'permit_empty|valid_date[Y-m-d]',
             'gender'                  => 'permit_empty|in_list[male,female,other]',
+            // Phase 3.5: optional portal-login creation.
+            'create_account'          => 'permit_empty|is_bool',
+            'account_email'           => 'permit_empty|valid_email|max_length[255]',
         ];
         if (! $this->makeValidation($rules)->run($payload)) {
             throw ApiException::validationFailure($this->collectErrors());
         }
 
-        return $this->ok($this->service->createEmployee($payload)->toArray(), null, 201);
+        [$dto, $portalAccount] = $this->service->createEmployee($payload);
+        $out = $dto->toArray();
+        if ($portalAccount !== null) {
+            // Phase 3.5: same as createStudent above.
+            $out['portal_account'] = $portalAccount;
+        }
+        return $this->ok($out, null, 201);
     }
 
     public function showEmployee(int $id): ResponseInterface
@@ -278,6 +295,9 @@ final class PatientController extends ApiController
             'date_of_birth' => 'permit_empty|valid_date[Y-m-d]',
             'gender'        => 'permit_empty|in_list[male,female,other]',
             'blood_type'    => 'permit_empty|max_length[5]',
+            // Phase 3.5: optional portal-login creation.
+            'create_account' => 'permit_empty|is_bool',
+            'account_email'  => 'permit_empty|valid_email|max_length[255]',
         ];
         if ($create) {
             $rules['student_number'] = 'required|max_length[50]';

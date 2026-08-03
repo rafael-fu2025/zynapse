@@ -30,10 +30,13 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
   KioskCameraDialog,
+  QueueAssignmentDialog,
   RejectedScansAlert,
+  ScanErrorBanner,
   ScanFlashOverlay,
   ScanReadyBadge,
   ScanResultCard,
+  hasQueueAssignment,
   useKioskController,
 } from '@/components/KioskCheckin';
 import { unlockAudio } from '@/lib/chime';
@@ -47,6 +50,7 @@ export default function KioskStationPage() {
   const [largeText, setLargeText] = useState(false);
   const [idle, setIdle] = useState(false);
   const idleTimer = useRef<ReturnType<typeof setTimeout>>();
+  const modalOpen = hasQueueAssignment(k.result);
 
   // Attract screen: arm an inactivity timer; any interaction resets it.
   useEffect(() => {
@@ -70,7 +74,9 @@ export default function KioskStationPage() {
   }, [k.result]);
 
   // Gap #10: never let a stray tap swallow HID-scanner keystrokes.
+  // Skip while the queue-assignment dialog is open so its focus trap wins.
   useEffect(() => {
+    if (modalOpen) return;
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.ctrlKey || e.metaKey || e.altKey || e.key.length !== 1) return;
       const el = document.activeElement;
@@ -82,7 +88,7 @@ export default function KioskStationPage() {
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [k.inputRef]);
+  }, [k.inputRef, modalOpen]);
 
   return (
     <main
@@ -167,6 +173,8 @@ export default function KioskStationPage() {
                   k.submit();
                 }
               }}
+              aria-invalid={k.scanError !== null}
+              aria-describedby={k.scanError !== null ? 'station-id-error' : undefined}
               className="h-16 text-2xl md:h-16 md:text-2xl"
             />
             <Button
@@ -178,6 +186,7 @@ export default function KioskStationPage() {
               Check in
             </Button>
           </div>
+          <ScanErrorBanner message={k.scanError} errorId="station-id-error" large />
           <div className="flex flex-wrap items-center justify-between gap-2">
             <Button variant="outline" onClick={() => setOpenCamera(true)}>
               <Camera /> Scan QR with camera
@@ -228,6 +237,7 @@ export default function KioskStationPage() {
           />
         )}
       </Dialog>
+      <QueueAssignmentDialog result={k.result} onDone={k.clearResult} large />
     </main>
   );
 }

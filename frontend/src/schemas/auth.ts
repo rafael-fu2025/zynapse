@@ -1,8 +1,8 @@
 /**
  * Zod schemas — mirror the backend's CI4 validation rules and DTOs.
  *
- * If the backend changes a validation rule, this file MUST be updated
- * in the same PR. Drift here is a P1 defect.
+ * Phase 2.1: sessionSchema now exposes the unified-identity fields
+ * returned by /auth/me (persons_id, person_kind, patient_identifier_id).
  */
 import { z } from 'zod';
 
@@ -19,6 +19,10 @@ export const sessionSchema = z.object({
   username: z.string(),
   is_active: z.boolean(),
   force_reset: z.boolean().default(false),
+  persons_id: z.number().int().positive().nullable().optional(),
+  person_kind: z.enum(['student', 'employee', 'contractor', 'alumni']).nullable().optional(),
+  person_name: z.string().nullable().optional(),
+  patient_identifier_id: z.number().int().positive().nullable().optional(),
   permissions: z.array(z.string()),
 });
 

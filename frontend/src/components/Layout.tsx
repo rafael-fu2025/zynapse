@@ -8,6 +8,7 @@
  * password locks every route to /change-password until rotated.
  */
 import { Suspense } from 'react';
+import { AlertTriangle } from 'lucide-react';
 import { Navigate, Outlet, useLocation } from 'react-router-dom';
 import { Search } from 'lucide-react';
 import { AppSidebar } from '@/components/AppSidebar';
@@ -36,6 +37,15 @@ export default function Layout() {
     return <Navigate to="/change-password" replace />;
   }
 
+  // Phase 3.2: surface a one-time banner when a user has a person_kind
+  // (so we know what role they are) but their canonical
+  // patient_identifier row is missing or archived — the patient
+  // record is effectively inactive even though the user is signed in.
+  const showInactivePatientBanner =
+    me.data?.person_kind !== null &&
+    me.data?.person_kind !== undefined &&
+    (me.data?.patient_identifier_id === null || me.data?.patient_identifier_id === undefined);
+
   return (
     <SidebarProvider>
       <a
@@ -48,6 +58,17 @@ export default function Layout() {
       <AppSidebar />
 
       <SidebarInset>
+        {showInactivePatientBanner && (
+          <div
+            role="status"
+            className="flex items-center gap-2 border-b bg-amber-50 px-4 py-2 text-xs text-amber-900 dark:bg-amber-950/40 dark:text-amber-100"
+          >
+            <AlertTriangle aria-hidden className="size-3.5 shrink-0" />
+            <span>
+              Your patient record is inactive. Contact the registrar to re-link your account.
+            </span>
+          </div>
+        )}
         <header
           className={
             'sticky top-0 z-20 flex h-14 shrink-0 items-center gap-2 overflow-hidden border-b bg-background px-4 shadow-sm transition-transform duration-200 ease-out lg:px-6 ' +

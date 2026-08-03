@@ -19,6 +19,7 @@ import {
   Recycle,
   ScanLine,
   ScrollText,
+  Settings,
   Share2,
   Users,
   type LucideIcon,
@@ -37,6 +38,7 @@ import {
   SidebarRail,
   useSidebar,
 } from '@/components/ui/sidebar';
+import { prefetchRoute } from '@/lib/routeChunks';
 import { hasPermission, useAuthStore } from '@/store/auth';
 
 interface NavItem {
@@ -103,6 +105,7 @@ const NAV_SECTIONS: ReadonlyArray<{ title: string; items: ReadonlyArray<NavItem>
       { label: 'Reports', href: '/reports', icon: BarChart3, permission: 'reports.read' },
       { label: 'Audit', href: '/audit', icon: ScrollText, permission: 'audit.read' },
       { label: 'Users', href: '/admin/users', icon: Users, permission: 'rbac.manage' },
+      { label: 'Kiosk Settings', href: '/admin/kiosk-settings', icon: Settings, permission: 'rbac.manage' },
     ],
   },
 ];
@@ -164,7 +167,28 @@ export function AppSidebar() {
                   {items.map((item) => (
                     <SidebarMenuItem key={item.href}>
                       <SidebarMenuButton asChild isActive={isActive(item.href)} tooltip={item.label}>
-                        <NavLink to={item.href} end={item.href === '/'} onClick={closeMobile}>
+                        {/*
+                          Intent-based chunk prefetch. Fires on the
+                          earliest signal a user might be heading
+                          to this route:
+                            - mouseenter (desktop hover)
+                            - focus      (keyboard / screen reader)
+                            - touchstart (mobile tap; cheaper than
+                                          waiting for the click)
+                          Vite has already pre-bundled the chunk via
+                          optimizeDeps.entries, so the import is a
+                          warm cache hit and resolves in <1ms — the
+                          dynamic-import race is gone before the
+                          user can click.
+                        */}
+                        <NavLink
+                          to={item.href}
+                          end={item.href === '/'}
+                          onClick={closeMobile}
+                          onMouseEnter={() => void prefetchRoute(item.href)}
+                          onFocus={() => void prefetchRoute(item.href)}
+                          onTouchStart={() => void prefetchRoute(item.href)}
+                        >
                           <item.icon aria-hidden />
                           <span>{item.label}</span>
                         </NavLink>

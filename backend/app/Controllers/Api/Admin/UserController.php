@@ -11,13 +11,6 @@ use App\Services\Admin\UserAdminService;
 use CodeIgniter\HTTP\ResponseInterface;
 use Config\Services;
 
-/**
- * UserController — administrative user lifecycle. Every endpoint
- * requires `rbac.manage` (list additionally accepts `rbac.read`).
- *
- * The temporary password from `resetPassword` appears ONLY in the
- * response body — never in logs or audit rows.
- */
 final class UserController extends ApiController
 {
     private readonly UserAdminService $service;
@@ -90,6 +83,7 @@ final class UserController extends ApiController
             'password' => 'permit_empty|min_length[12]|max_length[256]',
             'username' => 'permit_empty|alpha_dash|max_length[64]',
             'groups'   => 'permit_empty',
+            'person_id' => 'permit_empty|is_natural_no_zero',
         ];
         if (! $this->makeValidation($rules)->run($payload)) {
             throw ApiException::validationFailure($this->collectErrors());
@@ -104,6 +98,7 @@ final class UserController extends ApiController
             isset($payload['password']) && $payload['password'] !== '' ? (string) $payload['password'] : null,
             isset($payload['username']) && $payload['username'] !== '' ? (string) $payload['username'] : null,
             $groups,
+            isset($payload['person_id']) && $payload['person_id'] !== '' ? (int) $payload['person_id'] : null,
         );
         return $this->ok($out, null, 201);
     }
@@ -113,8 +108,6 @@ final class UserController extends ApiController
         $this->authorize('rbac.manage');
         $payload = $this->request->getJSON(true) ?? [];
 
-        // NOTE: CI4's `required` rule treats boolean false as "empty",
-        // so `{"active": false}` must be validated by hand.
         if (! array_key_exists('active', $payload) || ! is_bool($payload['active'])) {
             throw ApiException::validationFailure([
                 ['code' => 'validation.field', 'message' => 'active must be a boolean.', 'field' => 'active'],

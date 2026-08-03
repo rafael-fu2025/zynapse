@@ -1,5 +1,8 @@
 <?php
-
+/**
+ * Phase 1.2: StudentSelfService — return persons_id and patient_identifier_id
+ * alongside the legacy patients_students row.
+ */
 declare(strict_types=1);
 
 namespace Modules\Clinic\Services;
@@ -7,8 +10,6 @@ namespace Modules\Clinic\Services;
 use App\Auth\CurrentUser;
 use App\Exceptions\ApiException;
 use App\Modules\Shared\BaseService;
-use DateTimeImmutable;
-use DateTimeZone;
 use Modules\Clinic\DTOs\StudentDto;
 
 /**
@@ -17,18 +18,13 @@ use Modules\Clinic\DTOs\StudentDto;
  * Mirror of `EmployeeSelfService` for the student side. Resolves
  * the caller's `users.id` to a `patients_students` row by the
  * UNIQUE `user_id` link added in `StudentUserLink`. Returns 404
- * when the user has no linked student record (the calling user is
- * not on the patient registry).
- *
- * The student surface is currently READ-ONLY. The full self-
- * service flow (book appointment, QR check-in) is still
- * deferred — this service intentionally exposes no mutators.
+ * when the user has no linked student record.
  */
 final class StudentSelfService extends BaseService
 {
     /**
-     * Return the calling user's student record, or throw 404 if
-     * the user is not on the student registry.
+     * Return the calling user's student record, or throw 404.
+     * Now also returns persons_id and patient_identifier_id (Phase 1.2).
      */
     public function getMyProfile(): StudentDto
     {
@@ -39,15 +35,12 @@ final class StudentSelfService extends BaseService
                 ['code' => 'student.not_registered', 'message' => 'No student record is linked to your account.'],
             ]);
         }
+        // Phase 1.2: enrich with unified-identity fields.
+        $row = $this->enrichWithUnifiedFields($row);
         return StudentDto::fromRow($row);
     }
 
     /**
-     * Return the calling student's own clinic encounters, newest
-     * first. Strictly self-scoped: we look up the caller's
-     * student_number, then filter the encounters table on that
-     * key. The user CANNOT see anyone else's visits.
-     *
      * @return list<array<string, mixed>>
      */
     public function listMyClinicVisits(int $limit = 50): array
@@ -70,8 +63,6 @@ final class StudentSelfService extends BaseService
             ->limit($limit)
             ->get()->getResultArray();
 
-        // Decorate with the attending clinician's username (same
-        // join pattern as EmployeeSelfService + AppointmentService).
         $names = [];
         if ($rows !== []) {
             $userIds = array_values(array_unique(array_filter(array_map(
@@ -111,10 +102,36 @@ final class StudentSelfService extends BaseService
     private function findStudentRowForUserId(int $userId): ?array
     {
         $row = $this->db->table('patients_students')
-            ->select('id, user_id, student_number, first_name, last_name, middle_name, qr_code, rfid_tag, course, year_level, section, date_of_birth, gender, address, blood_type, consecutive_no_shows, archived_at, created_at, updated_at')
+            ->select('id, user_id, student_number, first_name, last_name, middle_name, qr_code, rfid_tag, course, year_level, section, date_of_birth, gender, address, blood_type, consecutive_no_shows, archived_at, created_at, updated_at, persons_id')
             ->where('user_id', $userId)
             ->where('archived_at', null)
             ->get()->getRowArray();
+        return $row;
+    }
+
+    /**
+     * Phase 1.2: enrich a patients_students row with persons_id and
+     * patient_identifier_id (both from the new unified-identity
+     * tables). persons_id is already on the legacy table; the patient
+     * identifier id comes from patient_identifiers.
+     */
+    private function enrichWithUnifiedFields(array $row): array
+    {
+        $personsId = isset($row['persons_id']) ? (int) $row['persons_id'] : null;
+        $patientIdentifierId = null;
+        if ($personsId !== null) {
+            $piRow = $this->db->table('patient_identifiers')
+                ->select('id')
+                ->where('persons_id', $personsId)
+                ->where('kind', 'student')
+                ->where('archived_at IS NULL', null, false)
+                ->get()->getRowArray();
+            if ($piRow !== null) {
+                $patientIdentifierId = (int) $piRow['id'];
+            }
+        }
+        $row['persons_id'] = $personsId;
+        $row['patient_identifier_id'] = $patientIdentifierId;
         return $row;
     }
 }

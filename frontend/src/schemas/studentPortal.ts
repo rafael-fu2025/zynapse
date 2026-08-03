@@ -9,6 +9,11 @@
 import { z } from 'zod';
 
 export const studentPortalProfileSchema = z.object({
+  // Phase 3.4: unified-identity fields surfaced via StudentSelfService.
+  kind: z.enum(['student', 'employee', 'contractor', 'alumni']).optional(),
+  persons_id: z.number().int().positive().nullable().optional(),
+  patient_identifier_id: z.number().int().positive().nullable().optional(),
+  identifier: z.string().optional(),
   id: z.number().int().positive(),
   user_id: z.number().int().positive().nullable(),
   student_number: z.string(),

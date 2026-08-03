@@ -14,14 +14,9 @@ use DateTimeImmutable;
 use DateTimeZone;
 
 /**
- * UserAdminService — administrative user lifecycle (Phase 10).
- *
- * Gated by `rbac.manage` at the controller. Rules:
- *   - NEVER physical DELETE: deactivation flips `users.active` only.
- *   - Password resets store a new hash and set `force_reset`; the
- *     plaintext is returned ONCE to the admin caller and never logged.
- *   - Audit context carries user ids and group codes — never emails
- *     or password material.
+ * Phase 1.4 + 1.5: UserAdminService now accepts an optional person_id
+ * at create time and exposes the linked patient (person_id, person_kind,
+ * person_name) at list time.
  */
 final class UserAdminService extends BaseService
 {
@@ -40,11 +35,11 @@ final class UserAdminService extends BaseService
         string $status = 'all',
         string $group = 'all',
         string $sort = 'newest',
-    ): array
-    {
+    ): array {
         $builder = $this->db->table('users u')
-            ->select("u.id, u.username, u.status, u.active, u.created_at, u.updated_at, u.last_active, i.secret AS email, COALESCE(i.force_reset, 0) AS force_reset", false)
+            ->select("u.id, u.username, u.status, u.active, u.created_at, u.updated_at, u.last_active, u.person_id, i.secret AS email, COALESCE(i.force_reset, 0) AS force_reset, p.kind AS person_kind, p.first_name AS person_first_name, p.last_name AS person_last_name", false)
             ->join("auth_identities i", "i.user_id = u.id AND i.type = 'email_password'", 'left')
+            ->join("persons p", "p.id = u.person_id AND p.archived_at IS NULL", 'left')
             ->where('u.deleted_at', null);
 
         if ($search !== '') {
@@ -85,16 +80,19 @@ final class UserAdminService extends BaseService
 
         return [
             'data' => array_map(static fn (array $r): array => [
-                'id'         => (int)    $r['id'],
-                'username'   => $r['username'] !== null ? (string) $r['username'] : null,
-                'email'      => $r['email'] !== null ? (string) $r['email'] : null,
-                'active'     => (bool)   $r['active'],
-                'status'     => (string) $r['status'],
-                'groups'     => $groupsByUser[(int) $r['id']] ?? [],
-                'created_at' => (string) $r['created_at'],
-                'updated_at' => (string) $r['updated_at'],
-                'last_active'=> $r['last_active'] !== null ? (string) $r['last_active'] : null,
-                'force_reset'=> (bool) $r['force_reset'],
+                'id'             => (int)    $r['id'],
+                'username'       => $r['username'] !== null ? (string) $r['username'] : null,
+                'email'          => $r['email'] !== null ? (string) $r['email'] : null,
+                'active'         => (bool)   $r['active'],
+                'status'         => (string) $r['status'],
+                'groups'         => $groupsByUser[(int) $r['id']] ?? [],
+                'person_id'      => $r['person_id'] !== null ? (int) $r['person_id'] : null,
+                'person_kind'    => $r['person_kind'] !== null ? (string) $r['person_kind'] : null,
+                'person_name'    => self::composePersonName($r),
+                'created_at'     => (string) $r['created_at'],
+                'updated_at'     => (string) $r['updated_at'],
+                'last_active'    => $r['last_active'] !== null ? (string) $r['last_active'] : null,
+                'force_reset'    => (bool)   $r['force_reset'],
             ], $final['rows']),
             'next'  => $final['nextCursor'],
             'count' => count($final['rows']),
@@ -102,10 +100,14 @@ final class UserAdminService extends BaseService
     }
 
     /**
+     * Phase 1.4: create() accepts an optional $personId. When provided,
+     * the new user's `users.person_id` is set so the unified-identity
+     * link is established at creation time.
+     *
      * @param list<string> $groups
-     * @return array{id:int, email:string, username:?string, groups:list<string>, temporary_password:string, force_reset:true}
+     * @return array{id:int, email:string, username:?string, groups:list<string>, temporary_password:string, force_reset:true, person_id:?int}
      */
-    public function create(string $email, ?string $password, ?string $username, array $groups): array
+    public function create(string $email, ?string $password, ?string $username, array $groups, ?int $personId = null): array
     {
         $actorId = \App\Auth\CurrentUser::assert();
         $this->assertAtLeastOneGroup($groups);
@@ -115,7 +117,19 @@ final class UserAdminService extends BaseService
             ? $password
             : rtrim(strtr(base64_encode(random_bytes(12)), '+/', '-_'), '=');
 
-        return $this->txn(function () use ($email, $temporaryPassword, $username, $groups, $actorId): array {
+        if ($personId !== null) {
+            $exists = (int) $this->db->table('persons')
+                ->where('id', $personId)
+                ->where('archived_at IS NULL', null, false)
+                ->countAllResults();
+            if ($exists === 0) {
+                throw new ApiException('request.validation_failed', 422, [
+                    ['code' => 'validation.field', 'message' => "Person {$personId} not found.", 'field' => 'person_id'],
+                ]);
+            }
+        }
+
+        return $this->txn(function () use ($email, $temporaryPassword, $username, $groups, $actorId, $personId): array {
             $exists = $this->db->table('auth_identities')
                 ->where('type', 'email_password')
                 ->where('secret', $email)
@@ -128,13 +142,17 @@ final class UserAdminService extends BaseService
 
             $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
 
-            $this->db->table('users')->insert([
+            $userInsert = [
                 'username'   => $username,
                 'status'     => 'active',
                 'active'     => 1,
                 'created_at' => $now,
                 'updated_at' => $now,
-            ]);
+            ];
+            if ($personId !== null) {
+                $userInsert['person_id'] = $personId;
+            }
+            $this->db->table('users')->insert($userInsert);
             $userId = (int) $this->db->insertID();
 
             try {
@@ -170,6 +188,7 @@ final class UserAdminService extends BaseService
                 'groups'             => array_values($groups),
                 'temporary_password' => $temporaryPassword,
                 'force_reset'        => true,
+                'person_id'          => $personId,
             ];
         });
     }
@@ -196,7 +215,6 @@ final class UserAdminService extends BaseService
                 'updated_at' => $now,
             ]);
 
-            // Kill refresh-token families on deactivation.
             if (! $active) {
                 Services::refreshTokenService()->revokeAllFor($userId);
             }
@@ -223,7 +241,6 @@ final class UserAdminService extends BaseService
                 throw ApiException::notFound('resource.not_found');
             }
 
-            // Escalation + availability guards (RBAC_SECURITY_REVIEW R3).
             $this->assertAtLeastOneGroup($groups);
             $this->assertMayAssignGroups($actorId, $groups);
             $this->assertNotRemovingLastOrOwnAdmin($actorId, $userId, $groups);
@@ -239,11 +256,6 @@ final class UserAdminService extends BaseService
         });
     }
 
-    /**
-     * Admin-driven password reset. Returns a CSPRNG temporary password
-     * exactly once; `force_reset` marks the identity for rotation at
-     * next login (UI flow).
-     */
     public function resetPassword(int $userId): array
     {
         $actorId = \App\Auth\CurrentUser::assert();
@@ -293,8 +305,6 @@ final class UserAdminService extends BaseService
             }
         }
 
-        // Membership is not an operational record — replacement is the
-        // whole point of the endpoint, and every change is audited.
         $this->db->table('auth_groups_users')->where('user_id', $userId)->delete();
         foreach ($groups as $g) {
             $this->db->table('auth_groups_users')->insert([
@@ -306,11 +316,6 @@ final class UserAdminService extends BaseService
     }
 
     /**
-     * Escalation guard (RBAC_SECURITY_REVIEW R3): only a member of the
-     * `admin` group may grant the `admin` group. This blocks a holder of
-     * `rbac.manage` (which is NOT the admin wildcard) from elevating
-     * anyone — including themselves — to full administrator.
-     *
      * @param list<string> $groups
      */
     private function assertMayAssignGroups(int $actorId, array $groups): void
@@ -331,20 +336,15 @@ final class UserAdminService extends BaseService
     }
 
     /**
-     * Availability guard (RBAC_SECURITY_REVIEW R3): an admin may not strip
-     * their OWN admin membership, and the LAST remaining admin may not be
-     * demoted — either would lock the platform out of all administrative
-     * control.
-     *
-     * @param list<string> $groups The user's new group set.
+     * @param list<string> $groups
      */
     private function assertNotRemovingLastOrOwnAdmin(int $actorId, int $userId, array $groups): void
     {
         if (in_array('admin', $groups, true)) {
-            return; // target remains an admin
+            return;
         }
         if (! $this->userIsAdmin($userId)) {
-            return; // target was not an admin; nothing to protect
+            return;
         }
         if ($userId === $actorId) {
             throw new ApiException('request.validation_failed', 422, [
@@ -395,5 +395,18 @@ final class UserAdminService extends BaseService
             $out[(int) $r['user_id']][] = (string) $r['name'];
         }
         return $out;
+    }
+
+    /**
+     * Phase 1.5: build a display name from first + last.
+     */
+    private static function composePersonName(array $r): ?string
+    {
+        $first = isset($r['person_first_name']) ? trim((string) $r['person_first_name']) : '';
+        $last  = isset($r['person_last_name'])  ? trim((string) $r['person_last_name'])  : '';
+        if ($first === '' && $last === '') {
+            return null;
+        }
+        return trim($first . ' ' . $last);
     }
 }

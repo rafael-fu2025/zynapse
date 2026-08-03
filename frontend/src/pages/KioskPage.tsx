@@ -51,10 +51,13 @@ import {
   KioskCameraDialog,
   OUTCOME_LABEL,
   OUTCOME_VARIANT,
+  QueueAssignmentDialog,
   RejectedScansAlert,
+  ScanErrorBanner,
   ScanFlashOverlay,
   ScanReadyBadge,
   ScanResultCard,
+  hasQueueAssignment,
   useKioskController,
 } from '@/components/KioskCheckin';
 import { useCheckinsToday } from '@/hooks/useCheckin';
@@ -66,11 +69,15 @@ export default function KioskPage() {
   const trail = useCheckinsToday();
   const [openCamera, setOpenCamera] = useState(false);
   const [editStation, setEditStation] = useState(false);
+  const modalOpen = hasQueueAssignment(k.result);
 
   // Gap #10: a stray tap must not silently swallow scanner keystrokes.
   // Any printable key typed while nothing text-editable is focused
-  // refocuses the identifier input so the keystroke lands there.
+  // refocuses the identifier input so the keystroke lands there. While
+  // the queue-assignment dialog is open, leave focus inside it so the
+  // Radix focus trap wins (and HID keystrokes don't reopen the input).
   useEffect(() => {
+    if (modalOpen) return;
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.ctrlKey || e.metaKey || e.altKey || e.key.length !== 1) return;
       const el = document.activeElement;
@@ -82,7 +89,7 @@ export default function KioskPage() {
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [k.inputRef]);
+  }, [k.inputRef, modalOpen]);
 
   // Gap #11: daily stat strip from the already-fetched trail.
   const stats = useMemo(() => {
@@ -162,6 +169,8 @@ export default function KioskPage() {
                     k.submit();
                   }
                 }}
+                aria-invalid={k.scanError !== null}
+                aria-describedby={k.scanError !== null ? 'kiosk-id-error' : undefined}
                 className="h-12 text-lg"
               />
               <Button className="h-12" onClick={k.submit} disabled={k.scanPending || k.identifier.trim() === ''}>
@@ -169,6 +178,7 @@ export default function KioskPage() {
                 Check in
               </Button>
             </div>
+            <ScanErrorBanner message={k.scanError} errorId="kiosk-id-error" />
           </div>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div className="space-y-1.5">
@@ -288,6 +298,7 @@ export default function KioskPage() {
           />
         )}
       </Dialog>
+      <QueueAssignmentDialog result={k.result} onDone={k.clearResult} />
     </main>
   );
 }

@@ -24,6 +24,7 @@ import { hasPermission, useAuthStore } from '@/store/auth';
 
 const AuditPage = lazyWithRetry(() => import('@/pages/AuditPage'));
 const AdminUsersPage = lazyWithRetry(() => import('@/pages/AdminUsersPage'));
+const AdminKioskSettingsPage = lazyWithRetry(() => import('@/pages/AdminKioskSettingsPage'));
 const AppointmentsPage = lazyWithRetry(() => import('@/pages/AppointmentsPage'));
 const ChangePasswordPage = lazyWithRetry(() => import('@/pages/ChangePasswordPage'));
 const EmployeePortalPage = lazyWithRetry(() => import('@/pages/EmployeePortalPage'));
@@ -287,6 +288,14 @@ const router = createBrowserRouter([
         element: (
           <ProtectedRoute anyOf={['rbac.manage']}>
             <AdminUsersPage />
+          </ProtectedRoute>
+        ),
+      },
+      {
+        path: '/admin/kiosk-settings',
+        element: (
+          <ProtectedRoute anyOf={['rbac.manage']}>
+            <AdminKioskSettingsPage />
           </ProtectedRoute>
         ),
       },

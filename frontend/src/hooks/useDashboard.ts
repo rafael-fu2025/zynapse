@@ -16,6 +16,12 @@ export interface DashboardCounters {
     closed: number;
   };
   audit?: { events_last_24h: number };
+  // Phase 3.6: identity coverage from the dashboard counters endpoint.
+  identity_coverage?: {
+    linked_users: number;
+    total_users: number;
+    percent: number;
+  };
 }
 
 export function useDashboardCounters() {

@@ -13,10 +13,12 @@ import {
   ArrowRight,
   Building2,
   CheckCircle2,
+  Hash,
   IdCard,
   Mail,
   Phone,
   Stethoscope,
+  UserCircle2,
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { Badge } from '@/components/ui/badge';
@@ -26,6 +28,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { CopyButton } from '@/components/CopyButton';
 import { QueryErrorState } from '@/components/QueryErrorState';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { useMe } from '@/hooks/useAuth';
 import { useMyClinicVisits, useMyEmployeeProfile } from '@/hooks/useEmployeePortal';
 import { useNotifications } from '@/hooks/useNotifications';
 import { fmtUtcToApp } from '@/utils/date';
@@ -63,6 +66,7 @@ export default function EmployeePortalPage() {
   const profile = useMyEmployeeProfile();
   const visits = useMyClinicVisits();
   const notifications = useNotifications(5);
+  const me = useMe();
 
   if (profile.error?.httpStatus === 404) {
     return <NotOnRegistry />;
@@ -85,6 +89,51 @@ export default function EmployeePortalPage() {
 
       {profile.data !== undefined && (
         <>
+          {/* Phase 3.4: Unified identity card.
+              Surfaces the cross-cutting person row so the user can verify
+              their user <-> patient link. */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <UserCircle2 className="size-4" aria-hidden /> Identity
+              </CardTitle>
+              <CardDescription>Your SYNAPSE identity across the user and patient registries.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1.5 text-xs">
+                <dt className="text-muted-foreground">Full name</dt>
+                <dd className="font-medium">
+                  {profile.data.first_name} {profile.data.middle_name !== null ? `${profile.data.middle_name} ` : ''}
+                  {profile.data.last_name}
+                </dd>
+                <dt className="text-muted-foreground">Kind</dt>
+                <dd>
+                  <Badge variant="secondary">{(profile.data.kind ?? 'employee')}</Badge>
+                </dd>
+                <dt className="text-muted-foreground">Employee No.</dt>
+                <dd className="flex items-center gap-1.5 font-mono">
+                  <Hash className="size-3" aria-hidden /> {profile.data.employee_number}
+                </dd>
+                <dt className="text-muted-foreground">Email</dt>
+                <dd className="text-foreground">
+                  {me.data?.email ?? <span className="text-muted-foreground">—</span>}
+                </dd>
+                <dt className="text-muted-foreground">persons_id</dt>
+                <dd className="font-mono text-muted-foreground">
+                  {profile.data.persons_id !== null && profile.data.persons_id !== undefined
+                    ? `#${profile.data.persons_id}`
+                    : <span className="text-muted-foreground">—</span>}
+                </dd>
+                <dt className="text-muted-foreground">patient_identifier_id</dt>
+                <dd className="font-mono text-muted-foreground">
+                  {profile.data.patient_identifier_id !== null && profile.data.patient_identifier_id !== undefined
+                    ? `#${profile.data.patient_identifier_id}`
+                    : <span className="text-muted-foreground">—</span>}
+                </dd>
+              </dl>
+            </CardContent>
+          </Card>
+
           {/* Profile + Kiosk QR */}
           <div className="grid gap-4 lg:grid-cols-3">
             <Card className="lg:col-span-1">

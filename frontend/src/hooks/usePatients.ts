@@ -14,6 +14,7 @@ import {
   createStudentSchema,
   departmentSchema,
   employeeSchema,
+  portalAccountSchema,
   studentSchema,
   updateEmployeeSchema,
   updateStudentSchema,
@@ -24,6 +25,7 @@ import {
   type CreateStudentInput,
   type Department,
   type Employee,
+  type PortalAccount,
   type Student,
   type UpdateEmployeeInput,
   type UpdateStudentInput,
@@ -82,11 +84,23 @@ export function useStudent(id: number | null) {
 
 export function useCreateStudent() {
   const qc = useQueryClient();
-  return useMutation<Student, ApiEnvelopeError, CreateStudentInput>({
+  // Phase 3.5: the response may also include a portal_account envelope
+  // (when create_account=true on the payload). We merge it into the
+  // Student type so callers can read result.portal_account.
+  type CreateStudentResult = Student & { portal_account?: PortalAccount };
+  return useMutation<CreateStudentResult, ApiEnvelopeError, CreateStudentInput>({
     mutationFn: async (input) => {
       const valid = createStudentSchema.parse(input);
       const res = await apiClient.post<unknown>('/clinic/students', valid);
-      return studentSchema.parse(res.data);
+      // Parse the known patient fields first, then attach the optional
+      // portal_account envelope untouched.
+      const parsed = studentSchema.parse(res.data);
+      const envelope = (res.data as Record<string, unknown>).portal_account;
+      const merged: CreateStudentResult = { ...parsed };
+      if (envelope !== undefined && envelope !== null && typeof envelope === 'object') {
+        merged.portal_account = portalAccountSchema.parse(envelope);
+      }
+      return merged;
     },
     onSuccess: (s) => {
       void qc.invalidateQueries({ queryKey: ['patients'] });
@@ -235,11 +249,18 @@ export function useEmployee(id: number | null) {
 
 export function useCreateEmployee() {
   const qc = useQueryClient();
-  return useMutation<Employee, ApiEnvelopeError, CreateEmployeeInput>({
+  type CreateEmployeeResult = Employee & { portal_account?: PortalAccount };
+  return useMutation<CreateEmployeeResult, ApiEnvelopeError, CreateEmployeeInput>({
     mutationFn: async (input) => {
       const valid = createEmployeeSchema.parse(input);
       const res = await apiClient.post<unknown>('/clinic/employees', valid);
-      return employeeSchema.parse(res.data);
+      const parsed = employeeSchema.parse(res.data);
+      const envelope = (res.data as Record<string, unknown>).portal_account;
+      const merged: CreateEmployeeResult = { ...parsed };
+      if (envelope !== undefined && envelope !== null && typeof envelope === 'object') {
+        merged.portal_account = portalAccountSchema.parse(envelope);
+      }
+      return merged;
     },
     onSuccess: (e) => {
       void qc.invalidateQueries({ queryKey: ['patients'] });

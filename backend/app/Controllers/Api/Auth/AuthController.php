@@ -15,21 +15,6 @@ use App\Services\Audit\AuditOutboxService;
 use CodeIgniter\HTTP\ResponseInterface;
 use Config\Services;
 
-/**
- * AuthController — login / refresh / logout / me.
- *
- * Refresh tokens are now rotated via `RefreshTokenService`, which:
- *   - Persists all tokens in a single `family_id` chain.
- *   - Detects REPLAY (a token whose `replaced_by_hash` is set) and
- *     revokes the entire family in a single transaction.
- *
- * The access token still lives in the Authorization header. The refresh
- * token still lives in an HttpOnly Secure cookie (never returned to JS).
- *
- * Auth events (login / refresh / logout, plus failure / replay variants)
- * are written to `audit_outbox` via `AuditOutboxService` so they appear
- * in the hash-chained `audit_events` log after a drain.
- */
 final class AuthController extends ApiController
 {
     private readonly JwtService $jwt;
@@ -38,10 +23,6 @@ final class AuthController extends ApiController
     private readonly LoginThrottleService $throttle;
     private readonly AccountStateService $accountState;
 
-    /**
-     * CI4 instantiates controllers with no arguments — dependencies
-     * self-resolve through the Services registry; tests may inject.
-     */
     public function __construct(
         ?JwtService $jwt = null,
         ?RefreshTokenService $refreshTokens = null,
@@ -69,9 +50,6 @@ final class AuthController extends ApiController
             throw ApiException::validationFailure($this->validationErrorList());
         }
 
-        // Per-account lockout (Phase 6) — checked BEFORE the credential
-        // lookup so locked accounts never reach password_verify. The
-        // attempted email is never persisted or audited.
         if ($this->throttle->isLocked($payload['email'])) {
             $this->audit->enqueue(
                 'auth.login_locked',
@@ -88,7 +66,6 @@ final class AuthController extends ApiController
         $user  = $users->findByCredentials(['email' => $payload['email']]);
         if ($user === null || ! password_verify($payload['password'], (string) $user->password_hash)) {
             $this->throttle->registerFailure($payload['email']);
-            // Anonymous audit — do not log the attempted email.
             $this->audit->enqueue(
                 'auth.login_failed',
                 'auth_sessions',
@@ -170,7 +147,6 @@ final class AuthController extends ApiController
 
         $userId = (int) ($result['user_id'] ?? 0);
         if ($userId <= 0) {
-            // The token rotated but the row vanished — bail.
             throw ApiException::unauthorized('auth.refresh_invalid_or_replayed');
         }
 
@@ -211,6 +187,11 @@ final class AuthController extends ApiController
         return $this->ok(['logged_out' => true]);
     }
 
+    /**
+     * Phase 1.1: /auth/me now exposes persons_id, person_kind, and
+     * patient_identifier_id so the SPA can render the unified identity
+     * context (UserMenu, portal pages, AdminUsersPage).
+     */
     public function me(): ResponseInterface
     {
         $userId = CurrentUser::assert();
@@ -221,22 +202,37 @@ final class AuthController extends ApiController
 
         $permissions = $this->permissions->allForUser($userId);
 
+        $db = Services::database();
+        $personRow = $db->table('persons p')
+            ->select('p.id AS persons_id, p.kind AS person_kind, p.first_name AS person_first_name, p.last_name AS person_last_name, pi.id AS patient_identifier_id')
+            ->join('patient_identifiers pi', 'pi.persons_id = p.id AND pi.archived_at IS NULL', 'left')
+            ->where('p.user_id', $userId)
+            ->where('p.archived_at IS NULL')
+            ->get()->getRowArray();
+
+        $personName = null;
+        if ($personRow !== null) {
+            $first = isset($personRow['person_first_name']) ? trim((string) $personRow['person_first_name']) : '';
+            $last  = isset($personRow['person_last_name'])  ? trim((string) $personRow['person_last_name'])  : '';
+            if ($first !== '' || $last !== '') {
+                $personName = trim($first . ' ' . $last);
+            }
+        }
+
         return $this->ok([
-            'id'          => (int) $user->id,
-            'email'       => (string) $user->email,
-            'username'    => (string) $user->username,
-            'is_active'   => (bool)   $user->active,
-            'force_reset' => (bool) ($user->force_reset ?? false),
-            'permissions' => $permissions,
+            'id'                    => (int)    $user->id,
+            'email'                 => (string) $user->email,
+            'username'              => (string) $user->username,
+            'is_active'             => (bool)   $user->active,
+            'force_reset'           => (bool)   ($user->force_reset ?? false),
+            'persons_id'            => isset($personRow['persons_id']) ? (int) $personRow['persons_id'] : null,
+            'person_kind'           => isset($personRow['person_kind']) ? (string) $personRow['person_kind'] : null,
+            'person_name'           => $personName,
+            'patient_identifier_id' => isset($personRow['patient_identifier_id']) ? (int) $personRow['patient_identifier_id'] : null,
+            'permissions'           => $permissions,
         ]);
     }
 
-    /**
-     * Self-service password change (also clears `force_reset`). The
-     * current password is always re-verified; all refresh-token
-     * families are revoked and a fresh pair is issued so other
-     * sessions die immediately.
-     */
     public function changePassword(): ResponseInterface
     {
         $userId  = CurrentUser::assert();
@@ -275,7 +271,6 @@ final class AuthController extends ApiController
                 'updated_at'  => date('Y-m-d H:i:s'),
             ]);
 
-        // Kill every other session; the response carries a fresh pair.
         $this->refreshTokens->revokeAllFor($userId);
 
         $this->audit->enqueue(
@@ -292,7 +287,6 @@ final class AuthController extends ApiController
     private function finalizeAuth(int $userId, ?array $preIssued = null): ResponseInterface
     {
         $access = $this->jwt->sign($userId);
-
         $refresh = $preIssued ?? $this->refreshTokens->issue($userId);
 
         $this->response->setCookie([

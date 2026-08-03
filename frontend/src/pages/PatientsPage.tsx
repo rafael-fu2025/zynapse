@@ -15,7 +15,9 @@ import {
   ChevronRight,
   Eye,
   HeartPulse,
+  KeyRound,
   Loader2,
+  Mail,
   Pencil,
   Phone,
   Plus,
@@ -96,6 +98,7 @@ import {
   type CreateEmployeeInput,
   type CreateStudentInput,
   type Employee,
+  type PortalAccount,
   type Student,
   type UpdateEmployeeInput,
   type UpdateStudentInput,
@@ -103,21 +106,82 @@ import {
 
 const SEVERITY_VARIANT = { mild: 'info', moderate: 'warning', severe: 'destructive' } as const;
 
+function PortalCredentialModal({
+  kind,
+  identifier,
+  account,
+  onClose,
+}: {
+  kind: 'student' | 'employee';
+  identifier: string;
+  account: PortalAccount;
+  onClose: () => void;
+}) {
+  return (
+    <Dialog open onOpenChange={(open) => ! open && onClose()}>
+      <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <KeyRound className="size-4" aria-hidden /> Portal account created
+          </DialogTitle>
+        </DialogHeader>
+        <p className="text-sm text-muted-foreground">
+          A SYNAPSE account was created for {kind} <span className="font-mono">{identifier}</span>.
+          Share these credentials once through a secure channel — the password is shown here and cannot be retrieved later.
+        </p>
+        <dl className="space-y-2 text-sm">
+          <div className="space-y-0.5">
+            <dt className="text-xs text-muted-foreground">Email</dt>
+            <dd className="flex items-center gap-2 font-mono">
+              <Mail className="size-3.5 text-muted-foreground" aria-hidden />
+              <span className="min-w-0 flex-1 truncate">{account.email}</span>
+            </dd>
+          </div>
+          <div className="space-y-0.5">
+            <dt className="text-xs text-muted-foreground">Temporary password</dt>
+            <dd className="rounded-md border bg-muted/50 px-3 py-2 font-mono text-xs break-all">
+              {account.temporary_password}
+            </dd>
+          </div>
+          <div className="space-y-0.5 text-xs text-muted-foreground">
+            <dt>Persons ID</dt>
+            <dd className="font-mono">#{account.persons_id}</dd>
+          </div>
+        </dl>
+        <DialogFooter>
+          <Button onClick={onClose}>Done</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function CreateStudentDialog({ onClose }: { onClose: () => void }) {
   const create = useCreateStudent();
+  const [createdAccount, setCreatedAccount] = useState<{ identifier: string; account: PortalAccount } | null>(null);
   const { register, handleSubmit, formState: { errors }, reset, setValue, watch } =
     useForm<CreateStudentInput>({ resolver: zodResolver(createStudentSchema) });
 
   const gender = watch('gender');
+  const createAccount = watch('create_account');
 
   const onSubmit = handleSubmit((values) => {
     create.mutate(values, {
-      onSuccess: () => {
-        reset();
-        onClose();
+      onSuccess: (result) => {
+        if (result.portal_account !== undefined) {
+          setCreatedAccount({ identifier: result.student_number, account: result.portal_account });
+        } else {
+          reset();
+          onClose();
+        }
       },
     });
   });
+
+  function handleClose() {
+    reset();
+    onClose();
+  }
 
   return (
     <DialogContent>
@@ -179,13 +243,49 @@ function CreateStudentDialog({ onClose }: { onClose: () => void }) {
           <Label htmlFor="blood_type">Blood type</Label>
           <Input id="blood_type" placeholder="O+" {...register('blood_type')} />
         </div>
+        {/* Phase 3.5: optional portal-login creation. */}
+        <div className="col-span-2 rounded-lg border bg-muted/30 p-3">
+          <div className="flex items-start gap-2">
+            <Checkbox
+              id="student-create-account"
+              checked={createAccount === true}
+              onCheckedChange={(c) => setValue('create_account', c === true, { shouldValidate: true })}
+            />
+            <Label htmlFor="student-create-account" className="font-normal">
+              Create portal login for this patient
+            </Label>
+          </div>
+          {createAccount === true && (
+            <div className="mt-3 space-y-1.5">
+              <Label htmlFor="student-account-email">Account email <span className="text-muted-foreground">(defaults to <code>{`<student_number>@synapse.dev`}</code>)</span></Label>
+              <Input
+                id="student-account-email"
+                type="email"
+                placeholder="patient@synapse.dev"
+                aria-invalid={errors.account_email !== undefined}
+                {...register('account_email')}
+              />
+              {errors.account_email !== undefined && (
+                <p role="alert" className="text-xs text-destructive">{errors.account_email.message}</p>
+              )}
+            </div>
+          )}
+        </div>
         <DialogFooter className="col-span-2">
-          <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
+          <Button type="button" variant="outline" onClick={handleClose}>Cancel</Button>
           <Button type="submit" disabled={create.isPending}>
             {create.isPending && <Loader2 className="animate-spin" />} Register
           </Button>
         </DialogFooter>
       </form>
+      {createdAccount !== null && (
+        <PortalCredentialModal
+          kind="student"
+          identifier={createdAccount.identifier}
+          account={createdAccount.account}
+          onClose={() => { setCreatedAccount(null); handleClose(); }}
+        />
+      )}
     </DialogContent>
   );
 }
@@ -214,7 +314,11 @@ function EditStudentDialog({ student, onClose }: { student: Student; onClose: ()
       course:      student.course ?? '',
       year_level:  student.year_level ?? undefined,
       section:     student.section ?? '',
-      gender:      student.gender ?? undefined,
+      // student.gender is `string | null` from the schema; narrow it to
+      // the male/female/other literal union the edit schema expects.
+      gender:      student.gender === 'male' || student.gender === 'female' || student.gender === 'other'
+        ? student.gender
+        : undefined,
       blood_type:  student.blood_type ?? '',
     },
   });
@@ -429,21 +533,32 @@ function StudentDetailDialog({ studentId, onClose }: { studentId: number; onClos
 function CreateEmployeeDialog({ onClose }: { onClose: () => void }) {
   const create = useCreateEmployee();
   const departments = useDepartments(true);
+  const [createdAccount, setCreatedAccount] = useState<{ identifier: string; account: PortalAccount } | null>(null);
   const { register, handleSubmit, formState: { errors }, reset, setValue, watch } =
     useForm<CreateEmployeeInput>({
       resolver: zodResolver(createEmployeeSchema),
       defaultValues: { employment_status: 'active' },
     });
   const department = watch('department');
+  const createAccount = watch('create_account');
 
   const onSubmit = handleSubmit((values) => {
     create.mutate(values, {
-      onSuccess: () => {
-        reset();
-        onClose();
+      onSuccess: (result) => {
+        if (result.portal_account !== undefined) {
+          setCreatedAccount({ identifier: result.employee_number, account: result.portal_account });
+        } else {
+          reset();
+          onClose();
+        }
       },
     });
   });
+
+  function handleClose() {
+    reset();
+    onClose();
+  }
 
   return (
     <DialogContent>
@@ -496,13 +611,49 @@ function CreateEmployeeDialog({ onClose }: { onClose: () => void }) {
           <Label htmlFor="position">Position</Label>
           <Input id="position" {...register('position')} />
         </div>
+        {/* Phase 3.5: optional portal-login creation. */}
+        <div className="col-span-2 rounded-lg border bg-muted/30 p-3">
+          <div className="flex items-start gap-2">
+            <Checkbox
+              id="employee-create-account"
+              checked={createAccount === true}
+              onCheckedChange={(c) => setValue('create_account', c === true, { shouldValidate: true })}
+            />
+            <Label htmlFor="employee-create-account" className="font-normal">
+              Create portal login for this employee
+            </Label>
+          </div>
+          {createAccount === true && (
+            <div className="mt-3 space-y-1.5">
+              <Label htmlFor="employee-account-email">Account email <span className="text-muted-foreground">(defaults to <code>{`<employee_number>@synapse.dev`}</code>)</span></Label>
+              <Input
+                id="employee-account-email"
+                type="email"
+                placeholder="employee@synapse.dev"
+                aria-invalid={errors.account_email !== undefined}
+                {...register('account_email')}
+              />
+              {errors.account_email !== undefined && (
+                <p role="alert" className="text-xs text-destructive">{errors.account_email.message}</p>
+              )}
+            </div>
+          )}
+        </div>
         <DialogFooter className="col-span-2">
-          <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
+          <Button type="button" variant="outline" onClick={handleClose}>Cancel</Button>
           <Button type="submit" disabled={create.isPending}>
             {create.isPending && <Loader2 className="animate-spin" />} Register
           </Button>
         </DialogFooter>
       </form>
+      {createdAccount !== null && (
+        <PortalCredentialModal
+          kind="employee"
+          identifier={createdAccount.identifier}
+          account={createdAccount.account}
+          onClose={() => { setCreatedAccount(null); handleClose(); }}
+        />
+      )}
     </DialogContent>
   );
 }
