@@ -86,6 +86,7 @@ defined('SYNAPSE_TIMEZONE_DEFAULT') || define('SYNAPSE_TIMEZONE_DEFAULT', 'Asia/
 defined('BMG_STATE_IDLE')            || define('BMG_STATE_IDLE',            'idle');
 defined('BMG_STATE_PROCESSING')      || define('BMG_STATE_PROCESSING',      'processing');
 defined('BMG_STATE_AWAITING_OUTPUT') || define('BMG_STATE_AWAITING_OUTPUT', 'awaiting_output');
+defined('BMG_STATE_CURING')          || define('BMG_STATE_CURING',          'curing');
 defined('BMG_STATE_CANCELLED')       || define('BMG_STATE_CANCELLED',       'cancelled');
 defined('BMG_STATE_MAINTENANCE')     || define('BMG_STATE_MAINTENANCE',     'maintenance');
 

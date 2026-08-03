@@ -7,7 +7,7 @@
  * status badge and roll back on error. shadcn Table / Dialog /
  * Textarea primitives.
  */
-import { Play, Square, StopCircle, Loader2, Ban, ChevronDown, ChevronLeft, ChevronRight, ClipboardList, Boxes, LineChart, Plus, Wrench, Eye, Cylinder, Pencil, Archive, ArchiveRestore, X } from 'lucide-react';
+import { Play, Square, StopCircle, Loader2, Ban, ChevronDown, ChevronLeft, ChevronRight, ClipboardList, Boxes, LineChart, Plus, Wrench, Eye, Cylinder, Pencil, Archive, ArchiveRestore, X, Timer } from 'lucide-react';
 import { useId, useMemo, useState } from 'react';
 import { Link, Navigate, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
@@ -58,6 +58,7 @@ import {
   useCancelBatch,
   useCreateUnit,
   useFinishBatch,
+  useMoveToCuring,
   useProcessLogs,
   useRecordOutput,
   useSetUnitMaintenance,
@@ -85,6 +86,7 @@ function unitStatusVariant(status: BmgUnit['status']): 'default' | 'info' | 'war
     case 'idle': return 'success';
     case 'processing': return 'info';
     case 'awaiting_output': return 'warning';
+    case 'curing': return 'info';
     case 'cancelled': return 'destructive';
     case 'maintenance': return 'secondary';
     default: return 'default';
@@ -885,6 +887,7 @@ export default function FacilitiesPage() {
   const units = useBmgUnits(cursor, 50, showArchived);
   const finish = useFinishBatch();
   const cancel = useCancelBatch();
+  const moveCuring = useMoveToCuring();
   const maintenance = useSetUnitMaintenance();
   const unarchiveUnit = useUnarchiveUnit();
   const [openStart, setOpenStart] = useState<BmgUnit | null>(null);
@@ -960,6 +963,18 @@ export default function FacilitiesPage() {
           })}
         >
             <StopCircle /> Finish batch
+          </DropdownMenuItem>
+          <DropdownMenuItem
+          className="min-h-11"
+          disabled={u.status !== 'awaiting_output' || activeBatch === null || moveCuring.isPending}
+          onSelect={() => activeBatch !== null && setConfirm({
+            title: `Move batch #${activeBatch} on ${u.code} to curing?`,
+            description: 'The batch and drum will enter the curing phase (slow maturation, lower monitoring). The batch is not finished — you can record output or finish it later.',
+            confirmLabel: 'Move to curing',
+            run: () => moveCuring.mutate({ unitId: u.id, batchId: activeBatch }),
+          })}
+        >
+            <Timer /> Move to curing
           </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem className="min-h-11" disabled={activeBatch === null} onSelect={() => setOpenLogs(u)}>

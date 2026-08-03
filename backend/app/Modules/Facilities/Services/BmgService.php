@@ -9,9 +9,11 @@ use App\Modules\Shared\BaseService;
 use App\Modules\Shared\StateMachineException;
 use App\Pagination\KeysetPaginator;
 use App\Services\Audit\AuditOutboxService;
+use App\Services\CurrentTenant;
 use Config\Services;
 use DateTimeImmutable;
 use DateTimeZone;
+use Modules\Facilities\DTOs\BmgAlertDto;
 use Modules\Facilities\DTOs\BmgBatchDto;
 use Modules\Facilities\DTOs\BmgUnitDto;
 use Modules\Facilities\Policies\BmgPolicy;
@@ -30,8 +32,10 @@ final class BmgService extends BaseService
     public function __construct(
         private readonly BmgPolicy $policy,
         private readonly AuditOutboxService $audit,
+        private readonly ?BmgAlertEngine $alertEngine = null,
     ) {
         parent::__construct();
+        $this->alertEngine ??= new BmgAlertEngine();
     }
 
     /**
@@ -43,9 +47,10 @@ final class BmgService extends BaseService
 
         $builder = $this->db->table('facilities_bmg_units AS u')
             ->select('u.id, u.code, u.display_name, u.status, u.location_code, u.spec_capacity_kg, u.default_category_id, u.notes, u.created_at, u.updated_at, u.archived_at, c.name AS default_category_name, b.id AS active_batch_id')
+            ->where('u.tenant_id', CurrentTenant::id())
             ->join(
                 'facilities_bmg_batches AS b',
-                "b.unit_id = u.id AND b.archived_at IS NULL AND b.status IN ('" . BMG_STATE_PROCESSING . "', '" . BMG_STATE_AWAITING_OUTPUT . "')",
+                "b.unit_id = u.id AND b.archived_at IS NULL AND b.status IN ('" . BMG_STATE_PROCESSING . "', '" . BMG_STATE_AWAITING_OUTPUT . "', '" . BMG_STATE_CURING . "')",
                 'left',
                 false, // no identifier escaping — the ON clause carries quoted literals
             )
@@ -92,7 +97,7 @@ final class BmgService extends BaseService
 
         return $this->txn(function () use ($unitId, $inputItems, $totalInputKg, $composition, $userId): BmgBatchDto {
             // Lock the unit row.
-            $unit = $this->selectForUpdate('facilities_bmg_units', ['id' => $unitId, 'archived_at' => null]);
+            $unit = $this->selectForUpdate('facilities_bmg_units', ['id' => $unitId, 'tenant_id' => CurrentTenant::id(), 'archived_at' => null]);
 
             if ($unit === null) {
                 throw new ApiException('resource.not_found', 404, [
@@ -116,6 +121,7 @@ final class BmgService extends BaseService
                 $catIds = array_map(static fn (array $c): int => $c['category_id'], $composition);
                 $catRows = $this->db->table('facilities_waste_categories')
                     ->select('id, code')
+                    ->where('tenant_id', CurrentTenant::id())
                     ->whereIn('id', $catIds)
                     ->get()->getResultArray();
                 foreach ($catRows as $cr) {
@@ -152,6 +158,7 @@ final class BmgService extends BaseService
 
             $this->db->table('facilities_bmg_batches')->insert([
                 'unit_id'               => $unitId,
+                'tenant_id'             => CurrentTenant::id(),
                 'category_id'           => $categoryId,
                 'reference_code'        => $ref,
                 'status'                => BMG_STATE_PROCESSING,
@@ -169,6 +176,7 @@ final class BmgService extends BaseService
             foreach ($composition as $c) {
                 $this->db->table('facilities_bmg_composition')->insert([
                     'batch_id'    => $batchId,
+                    'tenant_id'   => CurrentTenant::id(),
                     'category_id' => $c['category_id'],
                     'weight_kg'   => $c['weight_kg'],
                     'created_at'  => $now,
@@ -207,6 +215,7 @@ final class BmgService extends BaseService
         $row = $this->db->table('facilities_bmg_batches')
             ->select('total_input_weight_kg')
             ->where('id', $batchId)
+            ->where('tenant_id', CurrentTenant::id())
             ->where('archived_at', null)
             ->get()->getRowArray();
 
@@ -223,11 +232,18 @@ final class BmgService extends BaseService
      */
     public function recordOutput(int $batchId, float $outputKg, array $outputItems): BmgBatchDto
     {
-        $this->policy->check('record_output');
+        // Ownership check first — load the row outside the txn (no lock yet).
+        $batch = $this->policy->loadBatchForOwnership($batchId);
+        if ($batch === null) {
+            throw new ApiException('resource.not_found', 404, [
+                ['code' => 'resource.not_found', 'message' => "BMG batch #{$batchId} not found."],
+            ]);
+        }
+        $this->policy->check('record_output', $batch);
         $userId = \App\Auth\CurrentUser::assert();
 
         return $this->txn(function () use ($batchId, $outputKg, $outputItems, $userId): BmgBatchDto {
-            $batch = $this->selectForUpdate('facilities_bmg_batches', ['id' => $batchId, 'archived_at' => null]);
+            $batch = $this->selectForUpdate('facilities_bmg_batches', ['id' => $batchId, 'tenant_id' => CurrentTenant::id(), 'archived_at' => null]);
 
             if ($batch === null) {
                 throw new ApiException('resource.not_found', 404, [
@@ -277,13 +293,85 @@ final class BmgService extends BaseService
         });
     }
 
+    /**
+     * Industry lifecycle: `AwaitingOutput → Curing`. Curing is a
+     * long-tail phase (1–3 months) with reduced monitoring cadence.
+     * The batch and unit both transition; the `active_unit_id`
+     * generated column remains populated (curing is "active" for
+     * the one-active-batch-per-unit invariant) so the unit cannot
+     * start a fresh batch until the cure finishes.
+     *
+     * Operator may supply an `accumulated_in_process_kg` snapshot of
+     * the residue mass left on the unit at the transition point, for
+     * trace-back across long cures. Defaulted to 0.00.
+     */
+    public function moveToCuring(int $batchId, ?float $accumulatedKg = null): BmgBatchDto
+    {
+        $batch = $this->policy->loadBatchForOwnership($batchId);
+        if ($batch === null) {
+            throw new ApiException('resource.not_found', 404, [
+                ['code' => 'resource.not_found', 'message' => "BMG batch #{$batchId} not found."],
+            ]);
+        }
+        $this->policy->check('move_to_curing', $batch);
+        $userId = \App\Auth\CurrentUser::assert();
+
+        return $this->txn(function () use ($batchId, $accumulatedKg, $userId): BmgBatchDto {
+            $batch = $this->selectForUpdate('facilities_bmg_batches', ['id' => $batchId, 'tenant_id' => CurrentTenant::id(), 'archived_at' => null]);
+            if ($batch === null) {
+                throw new ApiException('resource.not_found', 404, [
+                    ['code' => 'resource.not_found', 'message' => "Batch #{$batchId} not found."],
+                ]);
+            }
+            if ($batch['status'] !== BMG_STATE_AWAITING_OUTPUT) {
+                throw StateMachineException::invalidTransition($batch['status'], BMG_STATE_CURING, 'bmg');
+            }
+
+            $now = $this->utcNow();
+            $aip = $accumulatedKg !== null ? round($accumulatedKg, 2) : 0.00;
+
+            $this->db->table('facilities_bmg_batches')
+                ->where('id', $batchId)
+                ->update([
+                    'status'                    => BMG_STATE_CURING,
+                    'accumulated_in_process_kg' => $aip,
+                    'updated_at'                => $now,
+                ]);
+
+            $this->db->table('facilities_bmg_units')
+                ->where('id', (int) $batch['unit_id'])
+                ->update(['status' => BMG_STATE_CURING, 'updated_at' => $now]);
+
+            $this->audit->enqueue(
+                'bmg.batch_curing',
+                'facilities_bmg_batches',
+                $batchId,
+                $userId,
+                [
+                    'previous_status'           => BMG_STATE_AWAITING_OUTPUT,
+                    'next_status'               => BMG_STATE_CURING,
+                    'accumulated_in_process_kg' => $aip,
+                ],
+            );
+
+            $fresh = $this->db->table('facilities_bmg_batches')->where('id', $batchId)->get()->getRowArray();
+            return BmgBatchDto::fromRow($fresh);
+        });
+    }
+
     public function finishBatch(int $batchId): BmgBatchDto
     {
-        $this->policy->check('finish');
+        $batch = $this->policy->loadBatchForOwnership($batchId);
+        if ($batch === null) {
+            throw new ApiException('resource.not_found', 404, [
+                ['code' => 'resource.not_found', 'message' => "BMG batch #{$batchId} not found."],
+            ]);
+        }
+        $this->policy->check('finish', $batch);
         $userId = \App\Auth\CurrentUser::assert();
 
         return $this->txn(function () use ($batchId, $userId): BmgBatchDto {
-            $batch = $this->selectForUpdate('facilities_bmg_batches', ['id' => $batchId, 'archived_at' => null]);
+            $batch = $this->selectForUpdate('facilities_bmg_batches', ['id' => $batchId, 'tenant_id' => CurrentTenant::id(), 'archived_at' => null]);
 
             if ($batch === null) {
                 throw new ApiException('resource.not_found', 404, [
@@ -325,11 +413,17 @@ final class BmgService extends BaseService
 
     public function cancelBatch(int $batchId, string $reasonCode): BmgBatchDto
     {
-        $this->policy->check('cancel');
+        $batch = $this->policy->loadBatchForOwnership($batchId);
+        if ($batch === null) {
+            throw new ApiException('resource.not_found', 404, [
+                ['code' => 'resource.not_found', 'message' => "BMG batch #{$batchId} not found."],
+            ]);
+        }
+        $this->policy->check('cancel', $batch);
         $userId = \App\Auth\CurrentUser::assert();
 
         return $this->txn(function () use ($batchId, $reasonCode, $userId): BmgBatchDto {
-            $batch = $this->selectForUpdate('facilities_bmg_batches', ['id' => $batchId, 'archived_at' => null]);
+            $batch = $this->selectForUpdate('facilities_bmg_batches', ['id' => $batchId, 'tenant_id' => CurrentTenant::id(), 'archived_at' => null]);
 
             if ($batch === null) {
                 throw new ApiException('resource.not_found', 404, [
@@ -392,7 +486,7 @@ final class BmgService extends BaseService
         $defaultCategoryId = $this->resolveCategoryId($input['default_category_id'] ?? null);
 
         return $this->txn(function () use ($input, $code, $defaultCategoryId, $userId): BmgUnitDto {
-            $dup = $this->db->table('facilities_bmg_units')->where('code', $code)->get()->getRowArray();
+            $dup = $this->db->table('facilities_bmg_units')->where('code', $code)->where('tenant_id', CurrentTenant::id())->get()->getRowArray();
             if ($dup !== null) {
                 throw new ApiException('resource.conflict', 409, [
                     ['code' => 'resource.conflict', 'message' => "A unit with code '{$code}' already exists.", 'field' => 'code'],
@@ -401,6 +495,7 @@ final class BmgService extends BaseService
             $now = $this->utcNow();
             $this->db->table('facilities_bmg_units')->insert([
                 'code'                => $code,
+                'tenant_id'           => CurrentTenant::id(),
                 'display_name'        => trim((string) $input['display_name']),
                 'location_code'       => isset($input['location_code']) && $input['location_code'] !== ''
                     ? trim((string) $input['location_code']) : null,
@@ -446,7 +541,7 @@ final class BmgService extends BaseService
         $userId = \App\Auth\CurrentUser::assert();
 
         return $this->txn(function () use ($unitId, $input, $userId): BmgUnitDto {
-            $unit = $this->selectForUpdate('facilities_bmg_units', ['id' => $unitId, 'archived_at' => null]);
+            $unit = $this->selectForUpdate('facilities_bmg_units', ['id' => $unitId, 'tenant_id' => CurrentTenant::id(), 'archived_at' => null]);
             if ($unit === null) {
                 throw new ApiException('resource.not_found', 404, [
                     ['code' => 'resource.not_found', 'message' => "BMG unit #{$unitId} not found."],
@@ -515,6 +610,7 @@ final class BmgService extends BaseService
         $row = $this->db->table('facilities_waste_categories')
             ->select('id, is_active')
             ->where('id', $id)
+            ->where('tenant_id', CurrentTenant::id())
             ->get()->getRowArray();
         if ($row === null) {
             throw new ApiException('resource.not_found', 404, [
@@ -536,7 +632,7 @@ final class BmgService extends BaseService
         $userId = \App\Auth\CurrentUser::assert();
 
         return $this->txn(function () use ($unitId, $userId): BmgUnitDto {
-            $unit = $this->selectForUpdate('facilities_bmg_units', ['id' => $unitId, 'archived_at' => null]);
+            $unit = $this->selectForUpdate('facilities_bmg_units', ['id' => $unitId, 'tenant_id' => CurrentTenant::id(), 'archived_at' => null]);
             if ($unit === null) {
                 throw new ApiException('resource.not_found', 404, [
                     ['code' => 'resource.not_found', 'message' => "BMG unit #{$unitId} not found or already archived."],
@@ -546,6 +642,7 @@ final class BmgService extends BaseService
             $active = $this->db->table('facilities_bmg_batches')
                 ->where('unit_id', $unitId)
                 ->where('archived_at', null)
+                ->where('tenant_id', CurrentTenant::id())
                 ->whereIn('status', [BMG_STATE_PROCESSING, BMG_STATE_AWAITING_OUTPUT])
                 ->countAllResults();
             if ($active > 0) {
@@ -585,7 +682,7 @@ final class BmgService extends BaseService
         $userId = \App\Auth\CurrentUser::assert();
 
         return $this->txn(function () use ($unitId, $userId): BmgUnitDto {
-            $unit = $this->selectForUpdate('facilities_bmg_units', ['id' => $unitId]);
+            $unit = $this->selectForUpdate('facilities_bmg_units', ['id' => $unitId, 'tenant_id' => CurrentTenant::id()]);
             if ($unit === null) {
                 throw new ApiException('resource.not_found', 404, [
                     ['code' => 'resource.not_found', 'message' => "BMG unit #{$unitId} not found."],
@@ -658,6 +755,9 @@ final class BmgService extends BaseService
             ->join('facilities_bmg_units AS u', 'u.id = b.unit_id', 'left')
             ->join('facilities_waste_categories AS c', 'c.id = b.category_id', 'left')
             ->where('b.archived_at', null)
+            ->where('b.tenant_id', CurrentTenant::id())
+            ->where('u.tenant_id', CurrentTenant::id())
+            ->where('c.tenant_id', CurrentTenant::id())
             ->whereIn('b.status', [BMG_STATE_PROCESSING, BMG_STATE_AWAITING_OUTPUT])
             ->orderBy('b.started_at', 'ASC')
             ->get()->getResultArray();
@@ -732,13 +832,22 @@ final class BmgService extends BaseService
      */
     public function listProcessLogs(int $batchId): array
     {
-        $this->policy->check('logs_read');
+        // Tier 3.2 — `logs_read` is owned, so load the batch row to
+        // satisfy `canOnRecord`.
+        $batch = $this->policy->loadBatchForOwnership($batchId);
+        if ($batch === null) {
+            throw new ApiException('resource.not_found', 404, [
+                ['code' => 'resource.not_found', 'message' => "BMG batch #{$batchId} not found."],
+            ]);
+        }
+        $this->policy->check('logs_read', $batch);
 
         // 404 on missing/archived batch (reuses the read helper).
         $this->peekInputKg($batchId);
 
         $rows = $this->db->table('facilities_bmg_process_logs')
             ->where('batch_id', $batchId)
+            ->where('tenant_id', CurrentTenant::id())
             ->orderBy('log_date', 'ASC')
             ->orderBy('id', 'ASC')
             ->get()->getResultArray();
@@ -750,6 +859,9 @@ final class BmgService extends BaseService
             'observation_note'    => $r['observation_note'] !== null ? (string) $r['observation_note'] : null,
             'temperature_celsius' => $r['temperature_celsius'] !== null ? (float) $r['temperature_celsius'] : null,
             'moisture_level'      => $r['moisture_level'] !== null ? (string) $r['moisture_level'] : null,
+            'oxygen_pct'          => isset($r['oxygen_pct']) && $r['oxygen_pct'] !== null ? (float) $r['oxygen_pct'] : null,
+            'device_id'           => isset($r['device_id']) && $r['device_id'] !== null ? (string) $r['device_id'] : null,
+            'calibration_status'  => isset($r['calibration_status']) && $r['calibration_status'] !== null ? (string) $r['calibration_status'] : null,
             'recorded_by_user_id' => (int) $r['recorded_by_user_id'],
             'created_at'          => (string) $r['created_at'],
         ], $rows);
@@ -765,11 +877,17 @@ final class BmgService extends BaseService
      */
     public function addProcessLog(int $batchId, array $input): array
     {
-        $this->policy->check('logs_record');
+        $batch = $this->policy->loadBatchForOwnership($batchId);
+        if ($batch === null) {
+            throw new ApiException('resource.not_found', 404, [
+                ['code' => 'resource.not_found', 'message' => "BMG batch #{$batchId} not found."],
+            ]);
+        }
+        $this->policy->check('logs_record', $batch);
         $userId = \App\Auth\CurrentUser::assert();
 
         return $this->txn(function () use ($batchId, $input, $userId): array {
-            $batch = $this->selectForUpdate('facilities_bmg_batches', ['id' => $batchId, 'archived_at' => null]);
+            $batch = $this->selectForUpdate('facilities_bmg_batches', ['id' => $batchId, 'tenant_id' => CurrentTenant::id(), 'archived_at' => null]);
             if ($batch === null) {
                 throw new ApiException('resource.not_found', 404, [
                     ['code' => 'resource.not_found', 'message' => "Batch #{$batchId} not found."],
@@ -784,10 +902,14 @@ final class BmgService extends BaseService
             $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
             $this->db->table('facilities_bmg_process_logs')->insert([
                 'batch_id'            => $batchId,
+                'tenant_id'           => CurrentTenant::id(),
                 'log_date'            => (string) ($input['log_date'] ?? substr($now, 0, 10)),
                 'observation_note'    => isset($input['observation_note']) && $input['observation_note'] !== '' ? (string) $input['observation_note'] : null,
                 'temperature_celsius' => isset($input['temperature_celsius']) && $input['temperature_celsius'] !== '' ? (float) $input['temperature_celsius'] : null,
                 'moisture_level'      => isset($input['moisture_level']) && $input['moisture_level'] !== '' ? (string) $input['moisture_level'] : null,
+                'oxygen_pct'          => isset($input['oxygen_pct']) && $input['oxygen_pct'] !== '' ? (float) $input['oxygen_pct'] : null,
+                'device_id'           => isset($input['device_id']) && $input['device_id'] !== '' ? (string) $input['device_id'] : null,
+                'calibration_status'  => isset($input['calibration_status']) && $input['calibration_status'] !== '' ? (string) $input['calibration_status'] : null,
                 'recorded_by_user_id' => $userId,
                 'created_at'          => $now,
             ]);
@@ -801,7 +923,72 @@ final class BmgService extends BaseService
                 ['resource_code' => (string) $batch['reference_code']],
             );
 
+            // -----------------------------------------------------------------
+            // Alert engine: SPC evaluation in the same transaction so a
+            // rollback drops both. We compute staleness against the
+            // PREVIOUS log (the one we just superseded); the engine
+            // uses the freshly-inserted row as `lastLog`.
+            // -----------------------------------------------------------------
+            $previousLog = $this->db->table('facilities_bmg_process_logs')
+                ->select('log_date')
+                ->where('batch_id', $batchId)
+                ->where('id !=', $id)
+                ->orderBy('log_date', 'DESC')
+                ->orderBy('id', 'DESC')
+                ->limit(1)
+                ->get()
+                ->getRowArray();
+
             $row = $this->db->table('facilities_bmg_process_logs')->where('id', $id)->get()->getRowArray();
+
+            $daysSince = $this->alertEngine->daysSinceLastLog($previousLog ?: null);
+            $alerts = $this->alertEngine->evaluate(
+                [
+                    'id'          => $batchId,
+                    'status'      => (string) $batch['status'],
+                    'started_at'  => (string) $batch['started_at'],
+                    'archived_at' => null,
+                ],
+                $row,
+                $daysSince,
+            );
+
+            $persistedAlerts = [];
+            foreach ($alerts as $alert) {
+                $this->db->table('facilities_bmg_alerts')->insert([
+                    'batch_id'      => $batchId,
+                    'tenant_id'     => CurrentTenant::id(),
+                    'code'          => (string) $alert['code'],
+                    'severity'      => (string) $alert['severity'],
+                    'message'       => (string) $alert['message'],
+                    'triggered_at'  => $now,
+                    'created_at'    => $now,
+                    'updated_at'    => $now,
+                ]);
+                $alertId = (int) $this->db->insertID();
+                $this->audit->enqueue(
+                    'bmg.alert_triggered',
+                    'facilities_bmg_alerts',
+                    $alertId,
+                    $userId,
+                    [
+                        'resource_code' => (string) $batch['reference_code'],
+                        'alert_code'    => (string) $alert['code'],
+                        'severity'      => (string) $alert['severity'],
+                    ],
+                );
+                $persistedAlerts[] = BmgAlertDto::fromRow([
+                    'id'                      => $alertId,
+                    'batch_id'                => $batchId,
+                    'code'                    => (string) $alert['code'],
+                    'severity'                => (string) $alert['severity'],
+                    'message'                 => (string) $alert['message'],
+                    'triggered_at'            => $now,
+                    'acknowledged_at'         => null,
+                    'acknowledged_by_user_id' => null,
+                ])->toArray();
+            }
+
             return [
                 'id'                  => (int) $row['id'],
                 'batch_id'            => (int) $row['batch_id'],
@@ -809,10 +996,151 @@ final class BmgService extends BaseService
                 'observation_note'    => $row['observation_note'] !== null ? (string) $row['observation_note'] : null,
                 'temperature_celsius' => $row['temperature_celsius'] !== null ? (float) $row['temperature_celsius'] : null,
                 'moisture_level'      => $row['moisture_level'] !== null ? (string) $row['moisture_level'] : null,
+                'oxygen_pct'          => $row['oxygen_pct'] !== null ? (float) $row['oxygen_pct'] : null,
+                'device_id'           => $row['device_id'] !== null ? (string) $row['device_id'] : null,
+                'calibration_status'  => $row['calibration_status'] !== null ? (string) $row['calibration_status'] : null,
                 'recorded_by_user_id' => (int) $row['recorded_by_user_id'],
                 'created_at'          => (string) $row['created_at'],
+                'alerts'              => $persistedAlerts,
             ];
         });
+    }
+
+    // -------------------------------------------------------- losses
+
+    /**
+     * Industry-standard mass-balance tracking. Records a single
+     * categorised loss against an ACTIVE batch and recomputes the
+     * denormalised `total_loss_kg` on the batch row in the same
+     * transaction. Cancellable / finished batches reject losses —
+     * post-hoc mass reconciliation runs through `recordOutput` /
+     * `finishBatch`, not through the losses log.
+     *
+     * @param array<string, mixed> $input
+     * @return array<string, mixed>
+     */
+    public function addBatchLoss(int $batchId, array $input): array
+    {
+        $batch = $this->policy->loadBatchForOwnership($batchId);
+        if ($batch === null) {
+            throw new ApiException('resource.not_found', 404, [
+                ['code' => 'resource.not_found', 'message' => "BMG batch #{$batchId} not found."],
+            ]);
+        }
+        $this->policy->check('losses_record', $batch);
+        $userId = \App\Auth\CurrentUser::assert();
+
+        return $this->txn(function () use ($batchId, $input, $userId): array {
+            $batch = $this->selectForUpdate('facilities_bmg_batches', [
+                'id'          => $batchId,
+                'tenant_id'   => CurrentTenant::id(),
+                'archived_at' => null,
+            ]);
+            if ($batch === null) {
+                throw new ApiException('resource.not_found', 404, [
+                    ['code' => 'resource.not_found', 'message' => "Batch #{$batchId} not found."],
+                ]);
+            }
+            if (! in_array($batch['status'], [BMG_STATE_PROCESSING, BMG_STATE_AWAITING_OUTPUT], true)) {
+                throw new ApiException('statemachine.bmg.loss_terminal_batch', 409, [
+                    ['code' => 'statemachine.bmg.loss_terminal_batch', 'message' => 'Losses can only be recorded while a batch is active.'],
+                ]);
+            }
+
+            $now = $this->utcNow();
+            $this->db->table('facilities_bmg_losses')->insert([
+                'batch_id'            => $batchId,
+                'tenant_id'           => CurrentTenant::id(),
+                'category_code'       => (string) $input['category_code'],
+                'weight_kg'           => (float) $input['weight_kg'],
+                'note'                => isset($input['note']) && $input['note'] !== '' ? (string) $input['note'] : null,
+                'recorded_by_user_id' => $userId,
+                'recorded_at'         => $now,
+                'created_at'          => $now,
+            ]);
+            $id = (int) $this->db->insertID();
+
+            // Recompute the denormalised total from the row-level truth.
+            // SUM() returns NULL when no rows; coalesce to 0 so the
+            // CHECK (>= 0) passes.
+            $sum = $this->db->table('facilities_bmg_losses')
+                ->select('COALESCE(SUM(weight_kg), 0) AS s', false)
+                ->where('batch_id', $batchId)
+                ->where('tenant_id', CurrentTenant::id())
+                ->get()->getRowArray();
+            $total = $sum !== null ? (float) $sum['s'] : 0.0;
+
+            $this->db->table('facilities_bmg_batches')
+                ->where('id', $batchId)
+                ->where('tenant_id', CurrentTenant::id())
+                ->update([
+                    'total_loss_kg' => $total,
+                    'updated_at'    => $now,
+                ]);
+
+            $this->audit->enqueue('bmg.loss_recorded', 'facilities_bmg_losses', $id, $userId, [
+                'resource_code' => (string) $batch['reference_code'],
+                'category_code' => (string) $input['category_code'],
+                'weight_kg'     => (float) $input['weight_kg'],
+                'total_loss_kg' => $total,
+            ]);
+
+            return [
+                'id'              => $id,
+                'batch_id'        => $batchId,
+                'category_code'   => (string) $input['category_code'],
+                'weight_kg'       => (float) $input['weight_kg'],
+                'total_loss_kg'   => $total,
+            ];
+        });
+    }
+
+    /**
+     * Read-only feed of losses for a batch (oldest first so operators
+     * see the timeline). Includes the running total so the panel
+     * doesn't need to re-aggregate client-side.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public function listBatchLosses(int $batchId): array
+    {
+        // Tier 3.2 — `logs_read` is owned; load the batch row (which
+        // is also our tenant guard) and pass it to the policy.
+        $batch = $this->policy->loadBatchForOwnership($batchId);
+        if ($batch === null) {
+            throw new ApiException('resource.not_found', 404, [
+                ['code' => 'resource.not_found', 'message' => "BMG batch #{$batchId} not found."],
+            ]);
+        }
+        $this->policy->check('logs_read', $batch);
+        if ($batch === null) {
+            throw new ApiException('resource.not_found', 404, [
+                ['code' => 'resource.not_found', 'message' => "Batch #{$batchId} not found."],
+            ]);
+        }
+
+        $rows = $this->db->table('facilities_bmg_losses')
+            ->select('id, batch_id, category_code, weight_kg, note, recorded_by_user_id, recorded_at, created_at')
+            ->where('batch_id', $batchId)
+            ->where('tenant_id', CurrentTenant::id())
+            ->orderBy('recorded_at', 'ASC')
+            ->orderBy('id', 'ASC')
+            ->get()->getResultArray();
+
+        $running = 0.0;
+        return array_map(static function (array $r) use (&$running): array {
+            $running += (float) $r['weight_kg'];
+            return [
+                'id'                  => (int)    $r['id'],
+                'batch_id'            => (int)    $r['batch_id'],
+                'category_code'       => (string) $r['category_code'],
+                'weight_kg'           => (float)  $r['weight_kg'],
+                'note'                => $r['note'] !== null ? (string) $r['note'] : null,
+                'recorded_by_user_id' => (int)    $r['recorded_by_user_id'],
+                'recorded_at'         => (string) $r['recorded_at'],
+                'running_total_kg'    => round($running, 2),
+            ];
+        }, $rows);
     }
 
     // ------------------------------------------------- waste categories
@@ -825,6 +1153,7 @@ final class BmgService extends BaseService
         $this->policy->check('list');
         $builder = $this->db->table('facilities_waste_categories')
             ->select('id, code, name, description, expected_yield_pct, reference_duration_days, is_active')
+            ->where('tenant_id', CurrentTenant::id())
             ->orderBy('name', 'ASC');
         if ($activeOnly) {
             $builder->where('is_active', 1);
@@ -868,7 +1197,7 @@ final class BmgService extends BaseService
         $input['code'] = $this->assertSlug((string) $input['code'], 'code');
 
         return $this->txn(function () use ($input, $userId): array {
-            $dup = $this->db->table('facilities_waste_categories')->where('code', (string) $input['code'])->get()->getRowArray();
+            $dup = $this->db->table('facilities_waste_categories')->where('code', (string) $input['code'])->where('tenant_id', CurrentTenant::id())->get()->getRowArray();
             if ($dup !== null) {
                 throw new ApiException('resource.conflict', 409, [
                     ['code' => 'resource.conflict', 'message' => 'A waste category with this code already exists.', 'field' => 'code'],
@@ -877,6 +1206,7 @@ final class BmgService extends BaseService
             $now = $this->utcNow();
             $this->db->table('facilities_waste_categories')->insert([
                 'code'                    => (string) $input['code'],
+                'tenant_id'               => CurrentTenant::id(),
                 'name'                    => (string) $input['name'],
                 'description'             => isset($input['description']) && $input['description'] !== '' ? (string) $input['description'] : null,
                 'expected_yield_pct'      => isset($input['expected_yield_pct']) && $input['expected_yield_pct'] !== '' ? (float) $input['expected_yield_pct'] : null,
@@ -908,7 +1238,7 @@ final class BmgService extends BaseService
         $userId = \App\Auth\CurrentUser::assert();
 
         return $this->txn(function () use ($categoryId, $input, $userId): array {
-            $cat = $this->selectForUpdate('facilities_waste_categories', ['id' => $categoryId]);
+            $cat = $this->selectForUpdate('facilities_waste_categories', ['id' => $categoryId, 'tenant_id' => CurrentTenant::id()]);
             if ($cat === null) {
                 throw new ApiException('resource.not_found', 404, [
                     ['code' => 'resource.not_found', 'message' => "Waste category #{$categoryId} not found."],
@@ -974,7 +1304,7 @@ final class BmgService extends BaseService
         $userId = \App\Auth\CurrentUser::assert();
 
         return $this->txn(function () use ($categoryId, $userId): array {
-            $cat = $this->selectForUpdate('facilities_waste_categories', ['id' => $categoryId]);
+            $cat = $this->selectForUpdate('facilities_waste_categories', ['id' => $categoryId, 'tenant_id' => CurrentTenant::id()]);
             if ($cat === null) {
                 throw new ApiException('resource.not_found', 404, [
                     ['code' => 'resource.not_found', 'message' => "Waste category #{$categoryId} not found."],
@@ -1027,7 +1357,7 @@ final class BmgService extends BaseService
         $userId = \App\Auth\CurrentUser::assert();
 
         return $this->txn(function () use ($categoryId, $userId): array {
-            $cat = $this->selectForUpdate('facilities_waste_categories', ['id' => $categoryId]);
+            $cat = $this->selectForUpdate('facilities_waste_categories', ['id' => $categoryId, 'tenant_id' => CurrentTenant::id()]);
             if ($cat === null) {
                 throw new ApiException('resource.not_found', 404, [
                     ['code' => 'resource.not_found', 'message' => "Waste category #{$categoryId} not found."],
@@ -1070,7 +1400,7 @@ final class BmgService extends BaseService
         $userId = \App\Auth\CurrentUser::assert();
 
         $this->txn(function () use ($categoryId, $userId): void {
-            $cat = $this->selectForUpdate('facilities_waste_categories', ['id' => $categoryId]);
+            $cat = $this->selectForUpdate('facilities_waste_categories', ['id' => $categoryId, 'tenant_id' => CurrentTenant::id()]);
             if ($cat === null) {
                 throw new ApiException('resource.not_found', 404, [
                     ['code' => 'resource.not_found', 'message' => "Waste category #{$categoryId} not found."],
@@ -1128,11 +1458,21 @@ final class BmgService extends BaseService
      */
     private function recordIo(int $batchId, string $kind, array $input): array
     {
-        $this->policy->check('io_record');
+        // Tier 3.2 — load the batch row outside the txn so the policy's
+        // record-level ownership check can see `started_by_user_id`.
+        // `io_record` is in OWNED_BATCH_ACTIONS, so without this load the
+        // policy would fail closed (no record → no permission).
+        $batch = $this->policy->loadBatchForOwnership($batchId);
+        if ($batch === null) {
+            throw new ApiException('resource.not_found', 404, [
+                ['code' => 'resource.not_found', 'message' => "BMG batch #{$batchId} not found."],
+            ]);
+        }
+        $this->policy->check('io_record', $batch);
         $userId = \App\Auth\CurrentUser::assert();
 
         return $this->txn(function () use ($batchId, $kind, $input, $userId): array {
-            $batch = $this->selectForUpdate('facilities_bmg_batches', ['id' => $batchId, 'archived_at' => null]);
+            $batch = $this->selectForUpdate('facilities_bmg_batches', ['id' => $batchId, 'tenant_id' => CurrentTenant::id(), 'archived_at' => null]);
             if ($batch === null) {
                 throw new ApiException('resource.not_found', 404, [
                     ['code' => 'resource.not_found', 'message' => "Batch #{$batchId} not found."],
@@ -1147,20 +1487,32 @@ final class BmgService extends BaseService
 
             if ($kind === 'input') {
                 $this->db->table('facilities_bmg_inputs')->insert([
-                    'batch_id'            => $batchId,
-                    'weight_kg'           => (float) $input['weight_kg'],
-                    'note'                => isset($input['note']) && $input['note'] !== '' ? (string) $input['note'] : null,
-                    'recorded_by_user_id' => $userId,
-                    'recorded_at'         => $now,
-                    'created_at'          => $now,
+                    'batch_id'              => $batchId,
+                    'tenant_id'             => CurrentTenant::id(),
+                    'weight_kg'             => (float) $input['weight_kg'],
+                    'cn_ratio'              => isset($input['cn_ratio']) && $input['cn_ratio'] !== '' ? (float) $input['cn_ratio'] : null,
+                    'bulk_density_kg_per_m3'=> isset($input['bulk_density_kg_per_m3']) && $input['bulk_density_kg_per_m3'] !== '' ? (float) $input['bulk_density_kg_per_m3'] : null,
+                    'ph'                    => isset($input['ph']) && $input['ph'] !== '' ? (float) $input['ph'] : null,
+                    'note'                  => isset($input['note']) && $input['note'] !== '' ? (string) $input['note'] : null,
+                    'recorded_by_user_id'   => $userId,
+                    'recorded_at'           => $now,
+                    'created_at'            => $now,
                 ]);
                 $id = (int) $this->db->insertID();
                 $this->audit->enqueue('bmg.input_recorded', 'facilities_bmg_inputs', $id, $userId, ['resource_code' => (string) $batch['reference_code']]);
-                return ['id' => $id, 'batch_id' => $batchId, 'weight_kg' => (float) $input['weight_kg']];
+                return [
+                    'id'                     => $id,
+                    'batch_id'               => $batchId,
+                    'weight_kg'              => (float) $input['weight_kg'],
+                    'cn_ratio'               => isset($input['cn_ratio']) && $input['cn_ratio'] !== '' ? (float) $input['cn_ratio'] : null,
+                    'bulk_density_kg_per_m3' => isset($input['bulk_density_kg_per_m3']) && $input['bulk_density_kg_per_m3'] !== '' ? (float) $input['bulk_density_kg_per_m3'] : null,
+                    'ph'                     => isset($input['ph']) && $input['ph'] !== '' ? (float) $input['ph'] : null,
+                ];
             }
 
             $this->db->table('facilities_bmg_outputs')->insert([
                 'batch_id'            => $batchId,
+                'tenant_id'           => CurrentTenant::id(),
                 'output_weight_kg'    => (float) $input['output_weight_kg'],
                 'harvest_date'        => isset($input['harvest_date']) && $input['harvest_date'] !== '' ? (string) $input['harvest_date'] : null,
                 'quality_grade'       => isset($input['quality_grade']) && $input['quality_grade'] !== '' ? (string) $input['quality_grade'] : null,
@@ -1181,20 +1533,55 @@ final class BmgService extends BaseService
      */
     public function batchAnalytics(int $batchId): array
     {
-        $this->policy->check('analytics');
-
+        // Tier 3.2 — `analytics` is owned, so the batch row must be
+        // loaded with `started_by_user_id` and tennat/archived filtered
+        // before the policy check fires.
         $batch = $this->db->table('facilities_bmg_batches')
-            ->select('id, reference_code, category_id, status, total_input_weight_kg, output_weight_kg, started_at, finished_at')
-            ->where('id', $batchId)->where('archived_at', null)
+            ->select('id, reference_code, category_id, status, total_input_weight_kg, output_weight_kg, total_loss_kg, accumulated_in_process_kg, started_at, finished_at, started_by_user_id, tenant_id, archived_at')
+            ->where('id', $batchId)->where('archived_at', null)->where('tenant_id', CurrentTenant::id())
             ->get()->getRowArray();
         if ($batch === null) {
             throw new ApiException('resource.not_found', 404, [
-                ['code' => 'resource.not_found', 'message' => "Batch #{$batchId} not found."],
+                ['code' => 'resource.not_found', 'message' => "BMG batch #{$batchId} not found."],
             ]);
         }
+        $this->policy->check('analytics', $batch);
 
         $structuredIn  = (float) ($this->db->table('facilities_bmg_inputs')->selectSum('weight_kg', 't')->where('batch_id', $batchId)->get()->getRowArray()['t'] ?? 0);
         $structuredOut = (float) ($this->db->table('facilities_bmg_outputs')->selectSum('output_weight_kg', 't')->where('batch_id', $batchId)->get()->getRowArray()['t'] ?? 0);
+
+        // Per-category loss breakdown (drives the loss pie/bar chart).
+        // Group-level SUM is safe here (no PII, no tenant mix-up since
+        // we already filtered by batch above and FK guarantees tenancy).
+        $lossRows = $this->db->table('facilities_bmg_losses')
+            ->select('category_code, SUM(weight_kg) AS w')
+            ->where('batch_id', $batchId)
+            ->where('tenant_id', CurrentTenant::id())
+            ->groupBy('category_code')
+            ->orderBy('w', 'DESC')
+            ->get()->getResultArray();
+        $losses = array_map(static fn (array $r): array => [
+            'category_code' => (string) $r['category_code'],
+            'weight_kg'     => round((float) $r['w'], 2),
+        ], $lossRows);
+
+        $totalLossKg = $this->db->table('facilities_bmg_losses')
+            ->select('COALESCE(SUM(weight_kg), 0) AS s', false)
+            ->where('batch_id', $batchId)
+            ->where('tenant_id', CurrentTenant::id())
+            ->get()->getRowArray();
+        $totalLossKg = $totalLossKg !== null ? (float) $totalLossKg['s'] : 0.0;
+
+        // Prefer the row-level recomputed total over the denormalised
+        // column — if they drift, the row source wins (it's the
+        // truth) and the column is corrected in the same response.
+        $denormLoss = isset($batch['total_loss_kg']) && $batch['total_loss_kg'] !== null
+            ? (float) $batch['total_loss_kg']
+            : 0.0;
+
+        $aip = isset($batch['accumulated_in_process_kg']) && $batch['accumulated_in_process_kg'] !== null
+            ? (float) $batch['accumulated_in_process_kg']
+            : null;
 
         $inputKg  = $structuredIn > 0 ? $structuredIn : (float) $batch['total_input_weight_kg'];
         $outputKg = $structuredOut > 0 ? $structuredOut : (float) ($batch['output_weight_kg'] ?? 0);
@@ -1260,26 +1647,39 @@ final class BmgService extends BaseService
             'expected_completion_date'=> $effDays > 0 ? $expected : null,
             'days_until_expected'     => $effDays > 0 ? $a->daysUntilExpected($expected, $today) : null,
             'progress_pct'            => $effDays > 0 ? $a->progressPercent($startDate, $expected, $today) : null,
+            // Mass-balance breakdown.
+            'total_loss_kg'           => round($totalLossKg, 2),
+            'losses_denormalised_kg'  => round($denormLoss, 2),
+            'accumulated_in_process_kg' => $aip !== null ? round($aip, 2) : null,
+            'losses'                  => $losses,
         ];
     }
 
     /** Toggle a unit between Idle and Maintenance (only when not busy). */
     public function setUnitMaintenance(int $unitId, bool $maintenance): array
     {
-        $this->policy->check('finish'); // facilities.bmg.transition
+        // Dedicated `maintenance` action — unit-scoped, not batch-scoped,
+        // so it stays outside the OWNED_BATCH_ACTIONS set in BmgPolicy.
+        $this->policy->check('maintenance'); // facilities.bmg.transition
         $userId = \App\Auth\CurrentUser::assert();
 
         return $this->txn(function () use ($unitId, $maintenance, $userId): array {
-            $unit = $this->selectForUpdate('facilities_bmg_units', ['id' => $unitId, 'archived_at' => null]);
+            $unit = $this->selectForUpdate('facilities_bmg_units', ['id' => $unitId, 'tenant_id' => CurrentTenant::id(), 'archived_at' => null]);
             if ($unit === null) {
                 throw new ApiException('resource.not_found', 404, [
                     ['code' => 'resource.not_found', 'message' => "BMG unit #{$unitId} not found."],
                 ]);
             }
             $current = (string) $unit['status'];
+            // Curing is a long-tail phase (1-3 months) and is intentionally
+            // "active" for the one-active-batch-per-unit invariant (see
+            // moveToCuring). Putting a unit into maintenance while a batch
+            // is curing would orphan the cure and break the generated
+            // `active_unit_id` uniqueness. Reject both directions.
+            $blocked = [BMG_STATE_CURING];
             $allowed = $maintenance ? [BMG_STATE_IDLE] : [BMG_STATE_MAINTENANCE];
             $next = $maintenance ? BMG_STATE_MAINTENANCE : BMG_STATE_IDLE;
-            if (! in_array($current, $allowed, true)) {
+            if (in_array($current, $blocked, true) || ! in_array($current, $allowed, true)) {
                 throw StateMachineException::invalidTransition($current, $next, 'bmg');
             }
             $now = $this->utcNow();
@@ -1488,5 +1888,115 @@ final class BmgService extends BaseService
     private function weightedExpectedDays(array $components, array $expectedByCat): ?int
     {
         return (new \App\Services\Analytics\BmgAnalytics())->weightedExpectedDays($components, $expectedByCat);
+    }
+
+    // -------------------------------------------------------- alerts
+
+    /**
+     * List alerts for a single batch. Read-only; ordered most-recent
+     * first, unacknowledged alerts come before acknowledged ones so
+     * the UI can render a banner without re-sorting.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public function listAlerts(int $batchId): array
+    {
+        // Tier 3.2 — `alerts_read` is owned; the tenant-guarded batch
+        // lookup doubles as the ownership-row source.
+        $batch = $this->db->table('facilities_bmg_batches')
+            ->select('id, started_by_user_id, tenant_id, archived_at')
+            ->where('id', $batchId)
+            ->where('tenant_id', CurrentTenant::id())
+            ->where('archived_at', null)
+            ->get()
+            ->getRowArray();
+        if ($batch === null) {
+            throw new ApiException('resource.not_found', 404, [
+                ['code' => 'resource.not_found', 'message' => "Batch #{$batchId} not found."],
+            ]);
+        }
+        $this->policy->check('alerts_read', $batch);
+
+        $rows = $this->db->table('facilities_bmg_alerts')
+            ->where('batch_id', $batchId)
+            ->where('tenant_id', CurrentTenant::id())
+            ->orderBy('acknowledged_at', 'ASC', false)
+            ->orderBy('triggered_at', 'DESC')
+            ->orderBy('id', 'DESC')
+            ->get()
+            ->getResultArray();
+
+        return array_map(static fn (array $r) => BmgAlertDto::fromRow($r)->toArray(), $rows);
+    }
+
+    /**
+     * Acknowledge an alert. Records the user and timestamp; subsequent
+     * UI fetches will rank the alert below unacknowledged ones.
+     */
+    public function acknowledgeAlert(int $alertId): array
+    {
+        // Tier 3.2 — `alerts_ack` is owned. Load the alert first to
+        // discover its batch_id, then load the batch row for the
+        // ownership check. Both reads are tenant-scoped.
+        $alert = $this->db->table('facilities_bmg_alerts')
+            ->select('id, batch_id, tenant_id')
+            ->where('id', $alertId)
+            ->where('tenant_id', CurrentTenant::id())
+            ->get()->getRowArray();
+        if ($alert === null) {
+            throw new ApiException('resource.not_found', 404, [
+                ['code' => 'resource.not_found', 'message' => "Alert #{$alertId} not found."],
+            ]);
+        }
+        $batch = $this->policy->loadBatchForOwnership((int) $alert['batch_id']);
+        if ($batch === null) {
+            throw new ApiException('resource.not_found', 404, [
+                ['code' => 'resource.not_found', 'message' => "BMG batch #{$alert['batch_id']} not found."],
+            ]);
+        }
+        $this->policy->check('alerts_ack', $batch);
+        $userId = \App\Auth\CurrentUser::assert();
+
+        return $this->txn(function () use ($alertId, $userId): array {
+            $row = $this->selectForUpdate('facilities_bmg_alerts', [
+                'id'        => $alertId,
+                'tenant_id' => CurrentTenant::id(),
+            ]);
+            if ($row === null) {
+                throw new ApiException('resource.not_found', 404, [
+                    ['code' => 'resource.not_found', 'message' => "Alert #{$alertId} not found."],
+                ]);
+            }
+            if ($row['acknowledged_at'] !== null) {
+                // Idempotent — re-acking is allowed and returns the
+                // current row, but we don't write a second audit event.
+                return BmgAlertDto::fromRow($row)->toArray();
+            }
+
+            $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
+            $this->db->table('facilities_bmg_alerts')
+                ->where('id', $alertId)
+                ->where('tenant_id', CurrentTenant::id())
+                ->update([
+                    'acknowledged_at'         => $now,
+                    'acknowledged_by_user_id' => $userId,
+                    'updated_at'              => $now,
+                ]);
+
+            $this->audit->enqueue(
+                'bmg.alert_acknowledged',
+                'facilities_bmg_alerts',
+                $alertId,
+                $userId,
+                [
+                    'batch_id' => (int) $row['batch_id'],
+                    'code'     => (string) $row['code'],
+                ],
+            );
+
+            $row['acknowledged_at'] = $now;
+            $row['acknowledged_by_user_id'] = $userId;
+            return BmgAlertDto::fromRow($row)->toArray();
+        });
     }
 }

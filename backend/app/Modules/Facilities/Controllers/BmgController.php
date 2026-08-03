@@ -171,9 +171,35 @@ final class BmgController extends ApiController
         return $this->ok($dto->toArray());
     }
 
+    public function moveToCuring(int $batchId): ResponseInterface
+    {
+        $payload = $this->request->getJSON(true) ?? [];
+        $rules = [
+            'accumulated_in_process_kg' => 'permit_empty|decimal|greater_than_equal_to[0]',
+        ];
+        if (! $this->makeValidation($rules)->run($payload)) {
+            throw ApiException::validationFailure($this->collectErrors());
+        }
+        $dto = $this->service->moveToCuring(
+            $batchId,
+            isset($payload['accumulated_in_process_kg']) ? (float) $payload['accumulated_in_process_kg'] : null,
+        );
+        return $this->ok($dto->toArray());
+    }
+
     public function listProcessLogs(int $batchId): ResponseInterface
     {
         return $this->ok($this->service->listProcessLogs($batchId));
+    }
+
+    public function listAlerts(int $batchId): ResponseInterface
+    {
+        return $this->ok($this->service->listAlerts($batchId));
+    }
+
+    public function acknowledgeAlert(int $alertId): ResponseInterface
+    {
+        return $this->ok($this->service->acknowledgeAlert($alertId));
     }
 
     public function addProcessLog(int $batchId): ResponseInterface
@@ -185,6 +211,9 @@ final class BmgController extends ApiController
             'observation_note'    => 'permit_empty|max_length[1000]',
             'temperature_celsius' => 'permit_empty|decimal',
             'moisture_level'      => 'permit_empty|in_list[low,normal,high]',
+            'oxygen_pct'          => 'permit_empty|decimal|greater_than_equal_to[0]|less_than_equal_to[25]',
+            'device_id'           => 'permit_empty|max_length[64]',
+            'calibration_status'  => 'permit_empty|in_list[ok,due,overdue]',
         ];
         if (! $this->makeValidation($rules)->run($payload)) {
             throw ApiException::validationFailure($this->collectErrors());
@@ -265,7 +294,13 @@ final class BmgController extends ApiController
     public function addBatchInput(int $batchId): ResponseInterface
     {
         $payload = $this->request->getJSON(true) ?? [];
-        $rules = ['weight_kg' => 'required|decimal|greater_than[0]', 'note' => 'permit_empty|max_length[255]'];
+        $rules = [
+            'weight_kg'                => 'required|decimal|greater_than[0]',
+            'cn_ratio'                 => 'permit_empty|decimal|greater_than_equal_to[0.1]|less_than_equal_to[200]',
+            'bulk_density_kg_per_m3'   => 'permit_empty|decimal|greater_than[0]',
+            'ph'                       => 'permit_empty|decimal|greater_than_equal_to[0]|less_than_equal_to[14]',
+            'note'                     => 'permit_empty|max_length[255]',
+        ];
         if (! $this->makeValidation($rules)->run($payload)) {
             throw ApiException::validationFailure($this->collectErrors());
         }
@@ -312,5 +347,32 @@ final class BmgController extends ApiController
             ]);
         }
         return $this->ok($this->service->setUnitMaintenance($unitId, $payload['maintenance']));
+    }
+
+    /**
+     * Industry-standard mass-balance tracking. Records a single loss
+     * against an active batch (evaporation, off-gas, sampling, etc.)
+     * and recomputes the denormalised `total_loss_kg` on the batch.
+     */
+    public function addBatchLoss(int $batchId): ResponseInterface
+    {
+        $payload = $this->request->getJSON(true) ?? [];
+        $rules = [
+            'category_code' => 'required|in_list[evaporation,off_gas,sampling,spill,cleaning,mechanical_holdup,other]',
+            'weight_kg'     => 'required|decimal|greater_than[0]',
+            'note'          => 'permit_empty|max_length[255]',
+        ];
+        if (! $this->makeValidation($rules)->run($payload)) {
+            throw ApiException::validationFailure($this->collectErrors());
+        }
+        return $this->ok($this->service->addBatchLoss($batchId, $payload), null, 201);
+    }
+
+    /**
+     * Read-only feed of losses for the drum detail panel.
+     */
+    public function listBatchLosses(int $batchId): ResponseInterface
+    {
+        return $this->ok($this->service->listBatchLosses($batchId));
     }
 }

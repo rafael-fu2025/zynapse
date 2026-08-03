@@ -4,8 +4,40 @@
  */
 import { z } from 'zod';
 
-export const BMG_UNIT_STATUSES = ['idle', 'processing', 'awaiting_output', 'cancelled', 'maintenance'] as const;
+export const BMG_UNIT_STATUSES = ['idle', 'processing', 'awaiting_output', 'curing', 'cancelled', 'maintenance'] as const;
 export type BmgUnitStatus = (typeof BMG_UNIT_STATUSES)[number];
+
+export const BMG_BATCH_STATUSES = [
+  'idle',
+  'processing',
+  'awaiting_output',
+  'curing',
+  'cancelled',
+] as const;
+export type BmgBatchStatus = (typeof BMG_BATCH_STATUSES)[number];
+
+export const BMG_ALERT_SEVERITIES = ['info', 'warning', 'critical'] as const;
+export type BmgAlertSeverity = (typeof BMG_ALERT_SEVERITIES)[number];
+
+export const BMG_LOSS_CATEGORIES = [
+  'evaporation',
+  'off_gas',
+  'sampling',
+  'spill',
+  'cleaning',
+  'mechanical_holdup',
+  'other',
+] as const;
+export type BmgLossCategory = (typeof BMG_LOSS_CATEGORIES)[number];
+
+export const BMG_ALERT_CODES = [
+  'TEMP_PFRP_LOW',
+  'TEMP_PFRP_HIGH',
+  'MOISTURE_HIGH',
+  'STALLED',
+  'OXYGEN_OUT',
+] as const;
+export type BmgAlertCode = (typeof BMG_ALERT_CODES)[number];
 
 export const bmgUnitSchema = z.object({
   id: z.number().int().positive(),
@@ -66,7 +98,7 @@ export const bmgBatchSchema = z.object({
   id: z.number().int().positive(),
   unit_id: z.number().int().positive(),
   reference_code: z.string(),
-  status: z.enum(['idle', 'processing', 'awaiting_output', 'cancelled']),
+  status: z.enum(BMG_BATCH_STATUSES),
   total_input_weight_kg: z.number(),
   output_weight_kg: z.number().nullable(),
   input_items: z.array(z.object({ sku: z.string(), qty_kg: z.number() }).passthrough()),
@@ -137,6 +169,12 @@ export const processLogSchema = z.object({
   observation_note: z.string().nullable(),
   temperature_celsius: z.number().nullable(),
   moisture_level: z.enum(MOISTURE_LEVELS).nullable(),
+  // Tier 2.2 observability fields — surfaced on the timeline alongside
+  // temp/moisture so the operator can confirm sensor provenance at a
+  // glance. All optional because older logs (pre-migration) won't have them.
+  oxygen_pct: z.number().nullable().optional(),
+  device_id: z.string().nullable().optional(),
+  calibration_status: z.enum(['ok', 'due', 'overdue']).nullable().optional(),
   recorded_by_user_id: z.number().int().positive(),
   created_at: z.string(),
 });
@@ -146,8 +184,49 @@ export const addProcessLogSchema = z.object({
   observation_note: z.string().max(1000).optional().or(z.literal('')),
   temperature_celsius: z.string().regex(/^-?\d+(\.\d+)?$/, 'Numeric °C.').optional().or(z.literal('')),
   moisture_level: z.enum(MOISTURE_LEVELS).optional(),
+  oxygen_pct: z.string().regex(/^-?\d+(\.\d+)?$/, 'Numeric %.').optional().or(z.literal('')),
+  device_id: z.string().max(64).optional().or(z.literal('')),
+  calibration_status: z.enum(['ok', 'due', 'overdue']).optional(),
 });
 export type AddProcessLogInput = z.infer<typeof addProcessLogSchema>;
+
+/**
+ * Move an AwaitingOutput batch into Curing. The operator may optionally
+ * declare the WIP still inside the drum (residue); the value is
+ * surfaced on the batch row for QA close.
+ */
+export const moveToCuringSchema = z.object({
+  accumulated_in_process_kg: z
+    .union([z.coerce.number().nonnegative(), z.literal('')])
+    .optional(),
+});
+export type MoveToCuringInput = z.infer<typeof moveToCuringSchema>;
+
+/**
+ * Append a single feedstock component to an active batch. Optional
+ * C:N / bulk-density / pH fields support industry-grade
+ * characterization without blocking the simpler "just record weight"
+ * workflow.
+ */
+export const addBatchInputSchema = z.object({
+  weight_kg: z.coerce.number().positive(),
+  cn_ratio: z.coerce.number().min(0.1).max(200).optional().or(z.literal('')),
+  bulk_density_kg_per_m3: z.coerce.number().positive().optional().or(z.literal('')),
+  ph: z.coerce.number().min(0).max(14).optional().or(z.literal('')),
+  note: z.string().max(255).optional().or(z.literal('')),
+});
+export type AddBatchInputInput = z.infer<typeof addBatchInputSchema>;
+
+/**
+ * Record a categorised mass loss against an active batch. The backend
+ * recomputes `total_loss_kg` in the same transaction.
+ */
+export const addBatchLossSchema = z.object({
+  category_code: z.enum(BMG_LOSS_CATEGORIES),
+  weight_kg: z.coerce.number().positive(),
+  note: z.string().max(255).optional().or(z.literal('')),
+});
+export type AddBatchLossInput = z.infer<typeof addBatchLossSchema>;
 
 // ---- Phase P4: waste categories, structured I/O, analytics ----------
 
@@ -236,7 +315,7 @@ export type BatchAnalytics = z.infer<typeof batchAnalyticsSchema>;
 export const activeBatchSchema = z.object({
   batch_id: z.number().int().positive(),
   batch_code: z.string(),
-  batch_status: z.enum(['processing', 'awaiting_output']),
+  batch_status: z.enum(['processing', 'awaiting_output', 'curing']),
   unit_id: z.number().int().positive(),
   unit_code: z.string(),
   unit_name: z.string(),
@@ -254,3 +333,17 @@ export const activeBatchSchema = z.object({
   progress_pct: z.number().int().min(0).max(100),
 });
 export type ActiveBatch = z.infer<typeof activeBatchSchema>;
+
+// ---- Tier 3.3: SPC alert engine -------------------------------------
+
+export const bmgAlertSchema = z.object({
+  id: z.number().int().positive(),
+  batch_id: z.number().int().positive(),
+  code: z.enum(BMG_ALERT_CODES),
+  severity: z.enum(BMG_ALERT_SEVERITIES),
+  message: z.string(),
+  triggered_at: z.string(),
+  acknowledged_at: z.string().nullable(),
+  acknowledged_by_user_id: z.number().int().positive().nullable(),
+});
+export type BmgAlert = z.infer<typeof bmgAlertSchema>;
