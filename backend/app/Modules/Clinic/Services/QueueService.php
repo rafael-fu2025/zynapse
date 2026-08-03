@@ -220,7 +220,12 @@ final class QueueService extends BaseService
      * Each waiting entry carries an indicative wait (people ahead ×
      * today's rolling average service time) — kiosk gap #3.
      *
-     * @return array{now_serving: ?array{position: int, display_name: string}, waiting: array<int, array{position: int, display_name: string, est_wait_minutes: int}>, updated_at: string}
+     * The PUBLIC lobby feed exposes the queue number, full name in
+     * `Last, First` format, and the school id — enough for the patient
+     * to recognise themselves when their number is called, without
+     * disclosing address, contact, or clinical detail.
+     *
+     * @return array{now_serving: ?array{position: int, display_name: string, patient_school_id: string}, waiting: array<int, array{position: int, display_name: string, patient_school_id: string, est_wait_minutes: int}>, updated_at: string}
      */
     public function publicState(): array
     {
@@ -230,8 +235,9 @@ final class QueueService extends BaseService
         foreach ($this->todayRows() as $r) {
             $status = (string) $r['status'];
             $item   = [
-                'position'     => (int) $r['position'],
-                'display_name' => $this->displayName($r),
+                'position'           => (int) $r['position'],
+                'display_name'       => $this->displayName($r, true),
+                'patient_school_id'  => (string) $r['patient_school_id'],
             ];
             if ($status === 'called' || $status === 'in_session') {
                 // Highest-progress entry wins the "now serving" board.
@@ -262,9 +268,15 @@ final class QueueService extends BaseService
     private function todayRows(): array
     {
         return $this->db->table('clinic_queue_entries q')
-            ->select('q.id, q.encounter_id, q.position, q.status, q.called_at, q.started_at, q.finished_at, q.created_at, e.patient_school_id, e.chief_complaint, s.first_name, s.last_name')
+            ->select('q.id, q.encounter_id, q.position, q.status, q.called_at, q.started_at, q.finished_at, q.created_at, e.patient_school_id, e.chief_complaint, COALESCE(s.first_name, emp.first_name) AS first_name, COALESCE(s.last_name, emp.last_name) AS last_name')
             ->join('clinic_encounters e', 'e.id = q.encounter_id')
             ->join('patients_students s', 's.student_number = e.patient_school_id', 'left')
+            // Employee registry is the second half of the unified patient
+            // registry — students and employees both queue at the clinic
+            // kiosk (Phase 17). Without this join, employee rows leave
+            // `first_name` NULL and the public feed falls back to the
+            // masked `EMP…` placeholder, which is unreadable on a lobby TV.
+            ->join('patients_employees emp', 'emp.employee_number = e.patient_school_id', 'left')
             ->where('q.queue_date', $this->utcToday())
             ->orderBy('q.position', 'ASC')
             ->get()->getResultArray();
@@ -273,9 +285,10 @@ final class QueueService extends BaseService
     private function getRow(int $id): array
     {
         $row = $this->db->table('clinic_queue_entries q')
-            ->select('q.id, q.encounter_id, q.position, q.status, q.called_at, q.started_at, q.finished_at, q.created_at, e.patient_school_id, e.chief_complaint, s.first_name, s.last_name')
+            ->select('q.id, q.encounter_id, q.position, q.status, q.called_at, q.started_at, q.finished_at, q.created_at, e.patient_school_id, e.chief_complaint, COALESCE(s.first_name, emp.first_name) AS first_name, COALESCE(s.last_name, emp.last_name) AS last_name')
             ->join('clinic_encounters e', 'e.id = q.encounter_id')
             ->join('patients_students s', 's.student_number = e.patient_school_id', 'left')
+            ->join('patients_employees emp', 'emp.employee_number = e.patient_school_id', 'left')
             ->where('q.id', $id)
             ->get()->getRowArray();
         return $this->row($row, false);
@@ -305,14 +318,36 @@ final class QueueService extends BaseService
     }
 
     /**
-     * First name from the patient registry; masked school id fallback.
+     * Patient name from the unified registry.
+     *
+     * - `$full === false` (legacy staff view / kiosk scan result): first
+     *   name only. This matches what `CheckinService::result()` surfaces
+     *   on the kiosk modal and keeps the historical call site stable.
+     * - `$full === true` (public lobby feed, Phase 14 revision): the
+     *   full name in `Last, First` format so patients in the waiting
+     *   room can identify themselves. Falls back to the masked school
+     *   id prefix if no names are on file (e.g. an archived patient
+     *   still queued).
      *
      * @param array<string, mixed> $r
      */
-    private function displayName(array $r): string
+    private function displayName(array $r, bool $full = false): string
     {
-        if (isset($r['first_name']) && $r['first_name'] !== null && $r['first_name'] !== '') {
-            return (string) $r['first_name'];
+        $first = isset($r['first_name']) && $r['first_name'] !== null ? trim((string) $r['first_name']) : '';
+        $last  = isset($r['last_name'])  && $r['last_name']  !== null ? trim((string) $r['last_name'])  : '';
+
+        if ($full) {
+            if ($first !== '' || $last !== '') {
+                // `Last, First` — the conventional directory order used
+                // by the Foundation University registrar.
+                return trim($last . ($first !== '' ? ', ' . $first : ''));
+            }
+            $sid = (string) $r['patient_school_id'];
+            return mb_substr($sid, 0, 3) . '…';
+        }
+
+        if ($first !== '') {
+            return $first;
         }
         $sid = (string) $r['patient_school_id'];
         return mb_substr($sid, 0, 3) . '…';

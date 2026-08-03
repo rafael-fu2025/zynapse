@@ -39,6 +39,7 @@ import {
   DialogContent,
   DialogTitle,
 } from '@/components/ui/dialog';
+import { prefetchRoute } from '@/lib/routeChunks';
 import { cn } from '@/lib/utils';
 
 type CommandCategory = 'Navigate' | 'Account';
@@ -52,6 +53,14 @@ interface CommandDef {
   icon: ReactNode;
   /** Permission code required to see this command. Omit = visible to all. */
   permission?: string;
+  /**
+   * Optional route to prefetch on intent (hover / arrow-key
+   * highlight). When set, the chunk is warmed before the user
+   * confirms the command, so `run()` navigates to a page that is
+   * already in the browser cache — no "first navigation
+   * requires reload" race against the dev-server dep optimizer.
+   */
+  prefetch?: string;
   /** Executed when the operator picks the row. */
   run: (helpers: CommandHelpers) => void;
 }
@@ -72,6 +81,7 @@ const COMMANDS: ReadonlyArray<CommandDef> = [
     keywords: ['book', 'schedule', 'visit', 'clinic', 'calendar'],
     icon: <CalendarClock className="size-4" />,
     permission: 'clinic.appointments.read',
+    prefetch: '/appointments',
     run: ({ navigate }) => void navigate('/appointments'),
   },
   {
@@ -81,6 +91,7 @@ const COMMANDS: ReadonlyArray<CommandDef> = [
     keywords: ['chain', 'tamper', 'integrity', 'verify'],
     icon: <Shield className="size-4" />,
     permission: 'audit.read',
+    prefetch: '/audit',
     run: ({ navigate }) => void navigate('/audit'),
   },
   {
@@ -90,6 +101,7 @@ const COMMANDS: ReadonlyArray<CommandDef> = [
     keywords: ['patient', 'visit', 'vitals', 'triage'],
     icon: <Stethoscope className="size-4" />,
     permission: 'clinic.encounters.read',
+    prefetch: '/clinic',
     run: ({ navigate }) => void navigate('/clinic'),
   },
   {
@@ -99,6 +111,7 @@ const COMMANDS: ReadonlyArray<CommandDef> = [
     keywords: ['mental', 'session', 'mh'],
     icon: <HeartHandshake className="size-4" />,
     permission: 'counselling.records.read',
+    prefetch: '/counselling',
     run: ({ navigate }) => void navigate('/counselling'),
   },
   {
@@ -107,6 +120,7 @@ const COMMANDS: ReadonlyArray<CommandDef> = [
     category: 'Navigate',
     keywords: ['home', 'overview'],
     icon: <Home className="size-4" />,
+    prefetch: '/',
     run: ({ navigate }) => void navigate('/'),
   },
   {
@@ -116,6 +130,7 @@ const COMMANDS: ReadonlyArray<CommandDef> = [
     keywords: ['composter', 'drum', 'waste'],
     icon: <Factory className="size-4" />,
     permission: 'facilities.units.read',
+    prefetch: '/facilities',
     run: ({ navigate }) => void navigate('/facilities'),
   },
   {
@@ -125,6 +140,7 @@ const COMMANDS: ReadonlyArray<CommandDef> = [
     keywords: ['medicine', 'med', 'stock', 'supply', 'reorder', 'drug', 'pill'],
     icon: <Pill className="size-4" />,
     permission: 'clinic.inventory.read',
+    prefetch: '/inventory',
     run: ({ navigate }) => void navigate('/inventory'),
   },
   {
@@ -134,6 +150,7 @@ const COMMANDS: ReadonlyArray<CommandDef> = [
     keywords: ['profile', 'employee', 'student', 'me'],
     icon: <UserCircle className="size-4" />,
     permission: 'employee.portal.read',
+    prefetch: '/me',
     run: ({ navigate }) => void navigate('/me'),
   },
   {
@@ -143,6 +160,7 @@ const COMMANDS: ReadonlyArray<CommandDef> = [
     keywords: ['rbac', 'permissions', 'roles', 'admin'],
     icon: <UserCog className="size-4" />,
     permission: 'rbac.manage',
+    prefetch: '/admin/users',
     run: ({ navigate }) => void navigate('/admin/users'),
   },
   {
@@ -152,6 +170,7 @@ const COMMANDS: ReadonlyArray<CommandDef> = [
     keywords: ['students', 'employees', 'registry'],
     icon: <Users className="size-4" />,
     permission: 'clinic.patients.read',
+    prefetch: '/patients',
     run: ({ navigate }) => void navigate('/patients'),
   },
   {
@@ -161,6 +180,7 @@ const COMMANDS: ReadonlyArray<CommandDef> = [
     keywords: ['qr', 'issue', 'acknowledge'],
     icon: <ArrowRightLeft className="size-4" />,
     permission: 'referrals.read',
+    prefetch: '/referrals',
     run: ({ navigate }) => void navigate('/referrals'),
   },
   {
@@ -170,6 +190,7 @@ const COMMANDS: ReadonlyArray<CommandDef> = [
     keywords: ['export', 'csv', 'analytics'],
     icon: <BarChart3 className="size-4" />,
     permission: 'reports.read',
+    prefetch: '/reports',
     run: ({ navigate }) => void navigate('/reports'),
   },
   // -------- Account --------
@@ -179,6 +200,7 @@ const COMMANDS: ReadonlyArray<CommandDef> = [
     category: 'Navigate',
     keywords: ['home', 'landing', 'staff'],
     icon: <LayoutDashboard className="size-4" />,
+    prefetch: '/',
     run: ({ navigate }) => void navigate('/'),
   },
   {
@@ -187,6 +209,7 @@ const COMMANDS: ReadonlyArray<CommandDef> = [
     category: 'Account',
     keywords: ['rotate', 'credentials', 'reset'],
     icon: <KeyRound className="size-4" />,
+    prefetch: '/change-password',
     run: ({ navigate }) => void navigate('/change-password'),
   },
   {
@@ -273,6 +296,15 @@ export function CommandPalette() {
   useEffect(() => {
     if (highlight >= flat.length) setHighlight(Math.max(0, flat.length - 1));
   }, [flat.length, highlight]);
+
+  // Intent-based prefetch: as soon as the highlight lands on a
+  // navigation command, warm its chunk. By the time the operator
+  // presses Enter the lazy import is already resolved, so the
+  // destination page renders without a dep-optimizer race.
+  useEffect(() => {
+    const cmd = flat[highlight];
+    if (cmd?.prefetch !== undefined) void prefetchRoute(cmd.prefetch);
+  }, [flat, highlight]);
 
   function execute(index: number): void {
     const cmd = flat[index];
@@ -368,6 +400,10 @@ export function CommandPalette() {
                           onMouseDown={(e) => { e.preventDefault(); }}
                           onClick={() => execute(index)}
                           onMouseEnter={() => setHighlight(index)}
+                          onFocus={() => {
+                            setHighlight(index);
+                            if (cmd.prefetch !== undefined) void prefetchRoute(cmd.prefetch);
+                          }}
                           className={cn(
                             'flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition-colors',
                             isActive ? 'bg-accent text-accent-foreground' : 'text-foreground',

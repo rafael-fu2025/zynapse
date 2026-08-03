@@ -7,6 +7,8 @@
  * (e.g. the queue board's sound toggle) before relying on playback.
  */
 
+import type { KioskSettings } from '@/lib/kioskSettings';
+
 let ctx: AudioContext | null = null;
 
 function context(): AudioContext | null {
@@ -26,6 +28,29 @@ export function unlockAudio(): void {
 
 export type ChimeKind = 'success' | 'warn' | 'error';
 
+function playNotes(
+  ac: AudioContext,
+  notes: ReadonlyArray<{ freq: number; at: number; dur: number }>,
+  volume: number,
+): void {
+  const maxGain = 0.25 * Math.min(1, Math.max(0, volume));
+  if (maxGain === 0) return;
+
+  for (const n of notes) {
+    const osc = ac.createOscillator();
+    const gain = ac.createGain();
+    osc.type = 'sine';
+    osc.frequency.value = n.freq;
+    const t0 = ac.currentTime + n.at;
+    gain.gain.setValueAtTime(0.0001, t0);
+    gain.gain.exponentialRampToValueAtTime(maxGain, t0 + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t0 + n.dur);
+    osc.connect(gain).connect(ac.destination);
+    osc.start(t0);
+    osc.stop(t0 + n.dur + 0.05);
+  }
+}
+
 /** Fire-and-forget feedback tone; silently no-ops when audio is unavailable. */
 export function playChime(kind: ChimeKind): void {
   const ac = context();
@@ -38,17 +63,41 @@ export function playChime(kind: ChimeKind): void {
         ? [{ freq: 660, at: 0, dur: 0.2 }]
         : [{ freq: 220, at: 0, dur: 0.16 }, { freq: 175, at: 0.17, dur: 0.24 }];
 
-  for (const n of notes) {
-    const osc = ac.createOscillator();
-    const gain = ac.createGain();
-    osc.type = 'sine';
-    osc.frequency.value = n.freq;
-    const t0 = ac.currentTime + n.at;
-    gain.gain.setValueAtTime(0.0001, t0);
-    gain.gain.exponentialRampToValueAtTime(0.25, t0 + 0.02);
-    gain.gain.exponentialRampToValueAtTime(0.0001, t0 + n.dur);
-    osc.connect(gain).connect(ac.destination);
-    osc.start(t0);
-    osc.stop(t0 + n.dur + 0.05);
+  playNotes(ac, notes, 1);
+}
+
+/** Play the lobby-TV sound selected by an administrator. */
+export function playConfiguredChime(settings: KioskSettings, queueNumber: string): void {
+  if (!settings.enabled) return;
+
+  const volume = Math.min(1, Math.max(0, settings.volume));
+  if (volume === 0) return;
+
+  if (settings.preset === 'voice') {
+    if (typeof window === 'undefined' || typeof window.speechSynthesis === 'undefined') return;
+    if (typeof SpeechSynthesisUtterance === 'undefined') return;
+
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(`Now serving ${queueNumber}`);
+    utterance.volume = volume;
+    utterance.rate = 0.9;
+    window.speechSynthesis.speak(utterance);
+    return;
   }
+
+  const ac = context();
+  if (ac === null) return;
+
+  const notes =
+    settings.preset === 'chime'
+      ? [
+          { freq: 660, at: 0, dur: 0.1 },
+          { freq: 880, at: 0.08, dur: 0.1 },
+          { freq: 1108, at: 0.16, dur: 0.14 },
+        ]
+      : settings.preset === 'soft'
+        ? [{ freq: 330, at: 0, dur: 0.22 }]
+        : [{ freq: 880, at: 0, dur: 0.12 }, { freq: 1318, at: 0.13, dur: 0.18 }];
+
+  playNotes(ac, notes, volume);
 }

@@ -22,8 +22,14 @@ import { lazy, type ComponentType, type LazyExoticComponent } from 'react';
 
 type Importer<T> = () => Promise<{ default: T }>;
 
-const RETRY_DELAY_MS = 250;
-const MAX_RETRIES = 2;
+// Vite's re-optimize on a cold first load can take 2–4s with our dep
+// list. 250ms × 2 attempts (750ms total) was too short — the third
+// attempt still landed before the optimizer finished and the error
+// boundary won. Give the budget a real backoff so the first retry
+// catches cheap transient blips and the later ones give Vite time.
+const BASE_RETRY_DELAY_MS = 400;
+const MAX_RETRY_DELAY_MS = 2000;
+const MAX_RETRIES = 6;
 
 function isTransientDevFetchError(err: unknown): boolean {
   if (err === null || typeof err !== 'object') return false;
@@ -49,18 +55,37 @@ export function lazyWithRetry<T extends ComponentType<unknown>>(
   const wrappedImporter: Importer<T> = import.meta.env.DEV
     ? () => {
         let attempt = 0;
+        let settled = false;
         const run = (): Promise<{ default: T }> =>
           importer().catch((err: unknown) => {
+            if (settled) throw err instanceof Error ? err : new Error(String(err));
             if (attempt < MAX_RETRIES && isTransientDevFetchError(err)) {
               attempt += 1;
-              // Give Vite a moment to finish re-bundling deps, then retry.
+              // Exponential backoff capped at MAX_RETRY_DELAY_MS. First
+              // retry is fast (400ms) so cheap blips disappear; later
+              // retries stretch up to 2s to outlast Vite re-optimize.
+              const delay = Math.min(
+                MAX_RETRY_DELAY_MS,
+                BASE_RETRY_DELAY_MS * 2 ** (attempt - 1),
+              );
               return new Promise<{ default: T }>((resolve, reject) => {
                 setTimeout(() => {
-                  run().then(resolve, reject);
-                }, RETRY_DELAY_MS * attempt);
+                  run().then(
+                    (mod) => {
+                      settled = true;
+                      resolve(mod);
+                    },
+                    (retryErr: unknown) => {
+                      if (attempt >= MAX_RETRIES || !isTransientDevFetchError(retryErr)) {
+                        settled = true;
+                      }
+                      reject(retryErr instanceof Error ? retryErr : new Error(String(retryErr)));
+                    },
+                  );
+                }, delay);
               });
             }
-            throw err;
+            throw err instanceof Error ? err : new Error(String(err));
           });
         return run();
       }

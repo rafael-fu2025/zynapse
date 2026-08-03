@@ -14,6 +14,7 @@ import {
   MessagesSquare,
   ScrollText,
   Share2,
+  UserCheck,
   Users,
   type LucideIcon,
 } from 'lucide-react';
@@ -136,6 +137,44 @@ export default function DashboardPage() {
           Signed in as {data?.email ?? 'unknown'} — Asia/Manila
         </p>
       </header>
+
+      <section aria-labelledby="identity-title" className="mt-6">
+        <h2 id="identity-title" className="text-lg font-semibold text-foreground">
+          Identity coverage
+        </h2>
+        {counters.data?.identity_coverage !== undefined ? (
+          <Link to="/admin/users" className="mt-3 block touch-manipulation rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+            <Card className="transition-colors hover:border-primary/50">
+              <CardHeader className="p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0 space-y-1">
+                    <CardTitle className="flex items-center gap-2 text-sm">
+                      <UserCheck className="size-4" aria-hidden />
+                      Unified identity rollout
+                    </CardTitle>
+                    <CardDescription className="text-xs">
+                      <span className="font-mono font-semibold text-foreground">
+                        {counters.data.identity_coverage.linked_users}
+                      </span>
+                      {' '}of{' '}
+                      <span className="font-mono">
+                        {counters.data.identity_coverage.total_users}
+                      </span>
+                      {' '}users linked to a patient record ({counters.data.identity_coverage.percent}%).
+                    </CardDescription>
+                    <p className="pt-1 text-[10px] uppercase tracking-wide text-muted-foreground">
+                      Users with person_id &ne; null
+                    </p>
+                  </div>
+                  <Users className="size-5 shrink-0 text-foreground" aria-hidden />
+                </div>
+              </CardHeader>
+            </Card>
+          </Link>
+        ) : (
+          <p className="mt-2 text-xs text-muted-foreground">Identity coverage requires the Users module permission.</p>
+        )}
+      </section>
 
       <section aria-labelledby="modules-title">
         <h2 id="modules-title" className="text-lg font-semibold text-foreground">

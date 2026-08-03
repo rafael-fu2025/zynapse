@@ -62,6 +62,22 @@ final class DashboardController extends ApiController
             ];
         }
 
+        // Phase 3.6: identity coverage — how many of the active users are
+        // linked to a patient record (users.person_id NOT NULL). Gated by
+        // rbac.read so any admin can see the rollout status.
+        if ($this->permissions->userHas(\App\Auth\CurrentUser::assert(), 'rbac.read')) {
+            $totalUsers = (int) $db->table('users')->where('deleted_at', null)->countAllResults();
+            $linkedUsers = (int) $db->table('users')
+                ->where('deleted_at', null)
+                ->where('person_id IS NOT NULL', null, false)
+                ->countAllResults();
+            $out['identity_coverage'] = [
+                'linked_users' => $linkedUsers,
+                'total_users'  => $totalUsers,
+                'percent'      => $totalUsers > 0 ? (int) round(($linkedUsers / $totalUsers) * 100) : 0,
+            ];
+        }
+
         return $this->ok($out);
     }
 

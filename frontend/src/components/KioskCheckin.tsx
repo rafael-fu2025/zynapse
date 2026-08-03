@@ -15,24 +15,75 @@
  *   #10 ready-to-scan indicator driven by real input focus
  */
 import { Html5Qrcode } from 'html5-qrcode';
-import { AlertTriangle, Camera, Loader2 } from 'lucide-react';
+import { AlertTriangle, Camera, Loader2, XCircle } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
+  Dialog,
   DialogContent,
+  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
 import { playChime, type ChimeKind } from '@/lib/chime';
 import { useScan } from '@/hooks/useCheckin';
-import type { BufferedScan, CheckinOutcome, ScanMethod, ScanResult } from '@/schemas/checkin';
+import type { ApiEnvelopeError } from '@/api/envelope';
+import { scanResultSchema, type BufferedScan, type CheckinOutcome, type ScanMethod, type ScanResult } from '@/schemas/checkin';
 
 const BUFFER_KEY = 'kiosk_offline_scans';
 const STATION_KEY = 'kiosk_station_id';
+
+/**
+ * Trim the kiosk identifier before it is sent to the backend.
+ *
+ * The backend `CheckinService::scan` resolves by EXACT equality against
+ * `students_students.student_number` / `patients_employees.employee_number`
+ * (and the qr/rfid columns for those methods). The value is sent verbatim
+ * so users can type their ID exactly as printed on the card (including
+ * dashes). QR / RFID payloads are opaque tokens and pass through as-is.
+ *
+ * Dashless fallback (`dashlessFallback`) is applied separately as a
+ * one-shot retry on 404 — see `submitIdentifier`.
+ */
+export function normalizeKioskIdentifier(raw: string, _method: ScanMethod): string {
+  return raw.trim();
+}
+
+/**
+ * If the typed identifier looks like a dashless student or employee ID,
+ * return the dash-restored variant the backend is most likely to match.
+ * Returns null for values that already contain dashes or that don't fit
+ * the conventional formats (so we don't retry garbage and double the
+ * latency for true unknowns).
+ *
+ * Recognised shapes:
+ *   - Student : `YYYY#####`  (e.g. `202412301` → `2024-12301`)
+ *   - Employee: `EMPYYYY###` (e.g. `EMP2024001` → `EMP-2024-001`)
+ */
+export function dashlessFallback(value: string): string | null {
+  if (value.includes('-')) return null;
+  if (/^20\d{2}\d{5}$/.test(value)) return `${value.slice(0, 4)}-${value.slice(4)}`;
+  if (/^EMP\d{4}\d{3}$/i.test(value)) return `${value.slice(0, 3)}-${value.slice(3, 7)}-${value.slice(7)}`;
+  return null;
+}
+
+/** A scan outcome carries a queue assignment we can show in the modal. */
+export function hasQueueAssignment(result: ScanResult | null): boolean {
+  if (result === null) return false;
+  if (result.outcome !== 'clinic_queued' && result.outcome !== 'clinic_appointment_confirmed') return false;
+  if (result.queue === null) return false;
+  return Number.isInteger(result.queue.position) && result.queue.position > 0;
+}
+
+/** Format a queue position as `C-001` (zero-padded to 3 digits). */
+export function formatQueueNumber(position: number): string {
+  if (!Number.isInteger(position) || position <= 0) return 'C-???';
+  return `C-${String(position).padStart(3, '0')}`;
+}
 
 export const OUTCOME_VARIANT: Record<CheckinOutcome, 'success' | 'info' | 'warning' | 'secondary'> = {
   counselling_confirmed: 'success',
@@ -85,6 +136,12 @@ export interface KioskController {
   /** Auto-clear countdown for the visible result (privacy, gap #5). */
   secondsLeft: number;
   clearResult: () => void;
+  /**
+   * Persistent inline error banner (replaces the previous red full-screen
+   * flash). Cleared automatically when the user edits the identifier.
+   */
+  scanError: string | null;
+  clearError: () => void;
   submit: () => void;
   /** Submit a decoded value directly (camera scan path, gap #8). */
   submitIdentifier: (id: string, method: ScanMethod) => void;
@@ -103,7 +160,7 @@ export interface KioskController {
 
 export function useKioskController(autoClearSeconds = 15): KioskController {
   const scan = useScan();
-  const [identifier, setIdentifier] = useState('');
+  const [identifier, setIdentifierState] = useState('');
   const [method, setMethod] = useState<ScanMethod>('manual');
   // Station id persists across sessions (gap #7).
   const [station, setStationState] = useState(
@@ -114,6 +171,7 @@ export function useKioskController(autoClearSeconds = 15): KioskController {
   const [pending, setPending] = useState<number>(() => readBuffer().length);
   const [syncing, setSyncing] = useState(false);
   const [rejected, setRejected] = useState<Array<{ identifier: string; message: string }>>([]);
+  const [scanError, setScanError] = useState<string | null>(null);
   const [flash, setFlash] = useState<ChimeKind | null>(null);
   const [focused, setFocused] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -125,6 +183,14 @@ export function useKioskController(autoClearSeconds = 15): KioskController {
     setStationState(s);
     localStorage.setItem(STATION_KEY, s);
   }, []);
+
+  // Wrapped so any keystroke that mutates the identifier dismisses the
+  // persistent inline error banner — the user has acknowledged the
+  // failure and is now correcting the input.
+  const setIdentifier = useCallback((v: string) => {
+    setIdentifierState(v);
+    if (scanError !== null) setScanError(null);
+  }, [scanError]);
 
   const feedback = useCallback((kind: ChimeKind) => {
     playChime(kind);
@@ -152,35 +218,62 @@ export function useKioskController(autoClearSeconds = 15): KioskController {
 
   const submitIdentifier = useCallback(
     (rawId: string, m: ScanMethod) => {
-      const id = rawId.trim();
+      const id = normalizeKioskIdentifier(rawId, m);
       if (id === '') return;
-      scan.mutate(
-        { identifier: id, method: m, station_id: station },
-        {
-          onSuccess: (r) => {
-            setResult(r);
-            setIdentifier('');
-            feedback(r.outcome === 'duplicate' ? 'warn' : 'success');
-            inputRef.current?.focus();
-          },
-          onError: (err) => {
-            if (err.httpStatus === 0) {
-              // Network down — buffer for later sync (legacy offline flow).
-              const buffered = readBuffer();
-              buffered.push({ identifier: id, method: m, station_id: station, scanned_at: utcNowSql() });
-              writeBuffer(buffered);
-              setPending(buffered.length);
-              setIdentifier('');
-              toast.warning('Offline — scan buffered locally.');
-              return;
-            }
-            setResult(null);
-            feedback('error');
-            toast.error(err.errors[0]?.message ?? 'Check-in failed.');
-            inputRef.current?.focus();
-          },
-        },
-      );
+      // Clear any prior inline error so a fresh attempt starts clean.
+      setScanError(null);
+      const runAttempt = (attemptId: string): Promise<unknown> =>
+        scan.mutateAsync({ identifier: attemptId, method: m, station_id: station });
+      const attempt = async (first: string, retry: string | null): Promise<unknown> => {
+        try {
+          return await runAttempt(first);
+        } catch (err) {
+          const status =
+            err instanceof Object && 'httpStatus' in err ? (err as { httpStatus: number }).httpStatus : 0;
+          const isUnknown =
+            status === 404 ||
+            (err instanceof Object &&
+              'errors' in err &&
+              ((err as { errors?: { code: string }[] }).errors ?? []).some(
+                (e) => e.code === 'resource.not_found',
+              ));
+          if (isUnknown && retry !== null) {
+            // One-shot dashless fallback so `202412301` still resolves to
+            // `2024-12301` against hyphenated seed data.
+            return await runAttempt(retry);
+          }
+          throw err;
+        }
+      };
+
+      const fallback = dashlessFallback(id);
+      void attempt(id, fallback)
+        .then((data) => {
+          const r = scanResultSchema.parse(data);
+          setResult(r);
+          setIdentifierState('');
+          feedback(r.outcome === 'duplicate' ? 'warn' : 'success');
+          inputRef.current?.focus();
+        })
+        .catch((err: ApiEnvelopeError | { httpStatus: number; errors?: { message?: string }[] }) => {
+          if (err instanceof Object && 'httpStatus' in err && err.httpStatus === 0) {
+            // Network down — buffer for later sync (legacy offline flow).
+            const buffered = readBuffer();
+            buffered.push({ identifier: id, method: m, station_id: station, scanned_at: utcNowSql() });
+            writeBuffer(buffered);
+            setPending(buffered.length);
+            setIdentifierState('');
+            toast.warning('Offline — scan buffered locally.');
+            return;
+          }
+          // Replace the previous jarring red full-screen flash with a
+          // persistent, human-friendly inline banner. The typed value is
+          // left in the input so the user can correct it without re-typing.
+          const message = (err as { errors?: { message?: string }[] }).errors?.[0]?.message
+            ?? 'Unknown ID. Please re-check your number and try again.';
+          setScanError(message);
+          inputRef.current?.focus();
+        });
     },
     [scan, station, feedback],
   );
@@ -201,7 +294,12 @@ export function useKioskController(autoClearSeconds = 15): KioskController {
     const remaining: BufferedScan[] = [];
     for (const s of buffered) {
       try {
-        await scan.mutateAsync({ ...s });
+        // Normalize on replay too — the user might have keyed the ID
+        // with or without dashes during the offline session.
+        await scan.mutateAsync({
+          ...s,
+          identifier: normalizeKioskIdentifier(s.identifier, s.method),
+        });
         synced += 1;
       } catch (err) {
         const status = err instanceof Object && 'httpStatus' in err ? (err as { httpStatus: number }).httpStatus : 0;
@@ -244,7 +342,12 @@ export function useKioskController(autoClearSeconds = 15): KioskController {
     setStation,
     result,
     secondsLeft,
-    clearResult: () => setResult(null),
+    clearResult: () => {
+      setResult(null);
+      setScanError(null);
+    },
+    scanError,
+    clearError: () => setScanError(null),
     submit,
     submitIdentifier,
     scanPending: scan.isPending,
@@ -270,6 +373,117 @@ export function ScanFlashOverlay({ flash }: { flash: ChimeKind | null }) {
       aria-hidden
       className={`pointer-events-none fixed inset-0 z-50 animate-in fade-in-0 ${color}`}
     />
+  );
+}
+
+/**
+ * Inline error banner — replaces the previous jarring red full-screen
+ * flash. Stays visible until the user edits the identifier or submits a
+ * new scan, so a brief glance is enough to understand what went wrong.
+ */
+export function ScanErrorBanner({
+  message,
+  errorId,
+  large = false,
+}: {
+  message: string | null;
+  errorId: string;
+  large?: boolean;
+}) {
+  if (message === null) return null;
+  return (
+    <Alert
+      id={errorId}
+      role="alert"
+      variant="destructive"
+      className={large ? 'py-4 text-base' : undefined}
+    >
+      <XCircle className={large ? 'size-5' : 'size-4'} aria-hidden />
+      <AlertTitle className={large ? 'text-base' : undefined}>
+        {large ? 'We could not find that ID' : 'Check-in failed'}
+      </AlertTitle>
+      <AlertDescription className={large ? 'text-base' : undefined}>{message}</AlertDescription>
+    </Alert>
+  );
+}
+
+/**
+ * Queue assignment dialog — shown after a successful walk-in or
+ * appointment check-in so the patient walks away with their assigned
+ * queue number (formatted `C-001`). The "Done" button hands control
+ * back to the next kiosk user.
+ */
+export function QueueAssignmentDialog({
+  result,
+  onDone,
+  large = false,
+}: {
+  result: ScanResult | null;
+  onDone: () => void;
+  large?: boolean;
+}) {
+  const open = hasQueueAssignment(result);
+  const position = result !== null && result.queue !== null ? result.queue.position : 0;
+  const waitMinutes =
+    result !== null && result.queue !== null && result.queue.estimated_wait_minutes !== undefined
+      ? result.queue.estimated_wait_minutes
+      : null;
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(o) => {
+        // Escape / overlay click / X close — clear result so the next user
+        // can scan immediately. We never want this dialog to "stay open".
+        if (!o) onDone();
+      }}
+    >
+      {open && (
+        <DialogContent
+          className={large ? 'max-w-lg gap-6 p-8' : 'max-w-md gap-4'}
+          onEscapeKeyDown={() => onDone()}
+        >
+          <DialogHeader className={large ? 'gap-2' : undefined}>
+            <DialogTitle className={large ? 'text-2xl' : 'text-lg'}>
+              You’re checked in
+            </DialogTitle>
+            <DialogDescription>
+              Please remember your queue number and wait for your name to be called.
+            </DialogDescription>
+          </DialogHeader>
+          {result !== null && (
+            <div className="space-y-3 text-center">
+              <p className={large ? 'text-lg font-medium text-muted-foreground' : 'text-sm text-muted-foreground'}>
+                {result.student.name}
+              </p>
+              <p
+                aria-label={`Queue number ${formatQueueNumber(position)}`}
+                className={`font-mono font-bold tabular-nums text-primary ${
+                  large ? 'text-8xl leading-none' : 'text-6xl leading-none'
+                }`}
+              >
+                {formatQueueNumber(position)}
+              </p>
+              {waitMinutes !== null && (
+                <p className={large ? 'text-base text-muted-foreground' : 'text-sm text-muted-foreground'}>
+                  Estimated wait ~{waitMinutes} min
+                </p>
+              )}
+            </div>
+          )}
+          <DialogFooter>
+            <Button
+              type="button"
+              size={large ? 'lg' : 'default'}
+              className={large ? 'min-h-12 w-full text-lg' : 'w-full'}
+              onClick={onDone}
+              autoFocus
+            >
+              Done
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      )}
+    </Dialog>
   );
 }
 

@@ -26,13 +26,18 @@ final class StudentDto extends BaseDTO
     public function jsonSerialize(): array
     {
         $out = [
-            'id'                   => (int)    $this->row['id'],
+            // Phase 2.2: unified-identity fields surfaced via StudentSelfService.
+            'kind'                  => isset($this->row['person_kind']) ? (string) $this->row['person_kind'] : 'student',
+            'persons_id'            => isset($this->row['persons_id']) && $this->row['persons_id'] !== null ? (int) $this->row['persons_id'] : null,
+            'patient_identifier_id' => isset($this->row['patient_identifier_id']) && $this->row['patient_identifier_id'] !== null ? (int) $this->row['patient_identifier_id'] : null,
+            'identifier'            => (string) $this->row['student_number'],
+            'id'                    => (int)    $this->row['id'],
             // Phase 13: link to `users.id` via the UNIQUE
             // `patients_students.user_id` added in
             // `StudentUserLink`. Nullable so legacy rows without
             // the column still serialize.
-            'user_id'              => isset($this->row['user_id']) && $this->row['user_id'] !== null ? (int) $this->row['user_id'] : null,
-            'student_number'       => (string) $this->row['student_number'],
+            'user_id'               => isset($this->row['user_id']) && $this->row['user_id'] !== null ? (int) $this->row['user_id'] : null,
+            'student_number'        => (string) $this->row['student_number'],
             'first_name'           => (string) $this->row['first_name'],
             'last_name'            => (string) $this->row['last_name'],
             'middle_name'          => $this->row['middle_name'] !== null ? (string) $this->row['middle_name'] : null,

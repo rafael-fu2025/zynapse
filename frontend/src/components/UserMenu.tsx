@@ -1,14 +1,8 @@
 /**
- * UserMenu — topbar identity capsule + popover.
- *
- * Capsule trigger: round avatar (initials from `me.email`/`me.username`)
- * on the left, truncated email on the right. The popover mirrors the
- * NotificationBell layout: theme toggle and sign-out stacked vertically
- * with dividers, all keyboard-accessible via Radix Popover.
- *
- * Identity is read from the cached `me` query (the same source the
- * sidebar and force-reset gate use) so the avatar and email are always
- * in sync with the server.
+ * Phase 3.1: UserMenu now shows the linked patient's full name
+ * (from the unified PersonDto) and a small kind badge in the
+ * popover. Falls back to email/username when no patient record
+ * is linked.
  */
 import { CirclePower, Moon, Sun } from 'lucide-react';
 import { useState } from 'react';
@@ -17,24 +11,10 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { useLogout, useMe } from '@/hooks/useAuth';
 import { useTheme } from '@/hooks/useTheme';
 
-/**
- * Derive two-letter initials from a free-form identifier.
- *
- *   "admin@synapse.dev"   -> "AD"
- *   "jose.rizal"          -> "JR"
- *   "maria"               -> "MA"
- *   ""                    -> "··"   (neutral placeholder)
- */
 function initialsFor(identity: string | null | undefined): string {
   const raw = (identity ?? '').trim();
   if (raw === '') return '··';
-
-  // Prefer the local-part of an email; fall back to the raw string.
   const source = raw.includes('@') ? raw.split('@')[0] ?? raw : raw;
-
-  // Split on common separators (`.`, `_`, `-`, whitespace, digits) and
-  // pull the first letter of the first two non-empty parts. This gives
-  // "jose.rizal" -> JR and "maria" -> MA without needing a name field.
   const parts = source.split(/[._\-\s\d]+/).filter((p) => p.length > 0);
   if (parts.length >= 2) {
     return (parts[0]![0]! + parts[1]![0]!).toUpperCase();
@@ -43,14 +23,24 @@ function initialsFor(identity: string | null | undefined): string {
   return (single.length >= 2 ? single.slice(0, 2) : single).toUpperCase();
 }
 
+function kindLabel(kind: 'student' | 'employee' | 'contractor' | 'alumni' | null | undefined): string {
+  if (kind === 'student') return 'Student';
+  if (kind === 'employee') return 'Employee';
+  if (kind === 'contractor') return 'Contractor';
+  if (kind === 'alumni') return 'Alumni';
+  return 'No patient link';
+}
+
 export function UserMenu() {
   const me = useMe();
   const logout = useLogout();
   const { theme, toggleTheme } = useTheme();
   const [confirmSignOut, setConfirmSignOut] = useState(false);
 
-  const identity = me.data?.email ?? me.data?.username ?? null;
+  const linkedName = me.data?.person_name ?? me.data?.email ?? me.data?.username ?? null;
+  const identity = linkedName ?? me.data?.email ?? me.data?.username ?? null;
   const initials = initialsFor(identity);
+  const personKind = me.data?.person_kind ?? null;
 
   return (
     <Popover>
@@ -75,14 +65,22 @@ export function UserMenu() {
       </PopoverTrigger>
       <PopoverContent align="end" sideOffset={8} className="w-56 p-1">
         <div className="px-2 py-1.5">
+          {me.data?.person_name !== undefined && me.data.person_name !== null && (
+            <p className="truncate text-sm font-medium text-foreground">
+              {me.data.person_name}
+            </p>
+          )}
           <p className="truncate text-sm font-medium text-foreground">
-            {me.data?.email ?? 'Signed in'}
+            {me.data?.person_name ? '' : (me.data?.email ?? 'Signed in')}
           </p>
           {me.data?.username !== undefined && me.data.username !== '' && (
             <p className="truncate text-[11px] text-muted-foreground">
               @{me.data.username}
             </p>
           )}
+          <p className="mt-1 truncate text-[11px] text-muted-foreground">
+            {kindLabel(personKind)}
+          </p>
         </div>
         <div className="my-1 h-px bg-border" />
         <button

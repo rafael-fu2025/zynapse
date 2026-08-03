@@ -1,5 +1,6 @@
 /**
- * Admin user hooks — list/create/status/reset (rbac.manage).
+ * Phase 2.3: adminUserSchema now exposes person_id, person_kind,
+ * person_name. createUserSchema accepts an optional person_id link.
  */
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { z } from 'zod';
@@ -14,6 +15,10 @@ export const adminUserSchema = z.object({
   active: z.boolean(),
   status: z.string(),
   groups: z.array(z.string()),
+  // Phase 2.3: unified-identity fields.
+  person_id: z.number().int().positive().nullable(),
+  person_kind: z.enum(['student', 'employee', 'contractor', 'alumni']).nullable(),
+  person_name: z.string().nullable(),
   created_at: z.string(),
   updated_at: z.string(),
   last_active: z.string().nullable(),
@@ -25,6 +30,8 @@ export const createUserSchema = z.object({
   email: z.string().email().max(255),
   username: z.string().max(64).regex(/^[A-Za-z0-9_-]*$/, 'Letters, digits, - and _ only').optional(),
   groups: z.array(z.string()).min(1, 'Select at least one role.'),
+  // Phase 2.3: optional link to an existing person record.
+  person_id: z.number().int().positive().optional(),
 });
 export type CreateUserInput = z.infer<typeof createUserSchema>;
 
@@ -43,6 +50,7 @@ const createUserResponseSchema = z.object({
   groups: z.array(z.string()),
   temporary_password: z.string().min(12),
   force_reset: z.literal(true),
+  person_id: z.number().int().positive().nullable(),
 });
 const statusResponseSchema = z.object({ id: z.number().int().positive(), active: z.boolean() });
 const groupsResponseSchema = z.object({ id: z.number().int().positive(), groups: z.array(z.string()) });
@@ -73,9 +81,6 @@ export function useAdminUsers(cursor: string | null, filters: AdminUsersFilters,
       const res = await apiClient.get<unknown[]>(`/admin/users?${params.toString()}`);
       return { data: z.array(adminUserSchema).parse(res.data), next: getNextCursor(res) };
     },
-    // Keep the previous page visible while the next one is in-flight, so
-    // typing in the search box doesn't flash an empty skeleton between
-    // every keystroke. Cancelled fetches resolve to the prior data.
     placeholderData: keepPreviousData,
   });
 }
