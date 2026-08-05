@@ -21,6 +21,7 @@ export const referralSchema = z.object({
   created_at: z.string(),
   updated_at: z.string(),
   qr_expires_at: z.string().nullable(),
+  qr_revoked_at: z.string().nullable().optional(),
 });
 export type Referral = z.infer<typeof referralSchema>;
 

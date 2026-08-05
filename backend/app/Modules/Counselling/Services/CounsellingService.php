@@ -33,7 +33,7 @@ final class CounsellingService extends BaseService
         $this->policy->check('list');
 
         $builder = $this->db->table('counselling_sessions')
-            ->select('id, patient_school_id, counsellor_user_id, started_at, ended_at, created_at')
+            ->select('id, patient_user_id, patient_school_id, counsellor_user_id, started_at, ended_at, created_at')
             ->where('archived_at', null)
             ->orderBy('created_at', 'DESC')
             ->orderBy('id', 'DESC');
@@ -58,7 +58,10 @@ final class CounsellingService extends BaseService
         return $this->txn(function () use ($patientSchoolId, $userId): SessionDto {
             $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
 
+            [, $patient] = (new \Modules\Clinic\Services\PatientLookupService())->findByIdentifier($patientSchoolId);
+
             $this->db->table('counselling_sessions')->insert([
+                'patient_user_id'    => $patient !== null ? (int) $patient['id'] : null,
                 'patient_school_id'  => $patientSchoolId,
                 'counsellor_user_id' => $userId,
                 'started_at'         => $now,

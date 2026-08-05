@@ -88,11 +88,23 @@ export default function LoginPage() {
         style={{ zIndex: 2 }}
         aria-labelledby="login-title"
       >
-        <CardHeader>
-          <CardTitle id="login-title" className="text-xl">
-            Sign in to SYNAPSE
-          </CardTitle>
-          <CardDescription>Use your university credentials. All access is audited.</CardDescription>
+        {/* Branded header — SYNAPSE mark on a light surface so the
+            maroon artwork reads. */}
+        <CardHeader className="items-center gap-3 text-center">
+          <img
+            src="/synapse-maroon.png"
+            alt=""
+            className="no-copy h-14 w-auto select-none object-contain"
+            draggable={false}
+            onDragStart={swallow}
+            onContextMenu={swallow}
+          />
+          <div className="space-y-1">
+            <CardTitle id="login-title" className="text-xl">
+              Sign in to SYNAPSE
+            </CardTitle>
+            <CardDescription>Use your university credentials. All access is audited.</CardDescription>
+          </div>
         </CardHeader>
 
         <CardContent>

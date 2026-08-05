@@ -145,7 +145,7 @@ function CreateUserDialog({
     watch,
   } = useForm<CreateUserInput>({
     resolver: zodResolver(createUserSchema),
-    defaultValues: { email: '', username: '', groups: [], person_id: undefined as number | undefined },
+    defaultValues: { email: '', username: '', groups: [] },
   });
 
   const groups = watch('groups') ?? [];
@@ -204,24 +204,6 @@ function CreateUserDialog({
           {errors.username !== undefined && (
             <p id="new-user-username-error" role="alert" className="text-xs text-destructive">{errors.username.message}</p>
           )}
-        </div>
-        <div className="space-y-1.5">
-          <Label htmlFor="new-user-person-id">
-            Link to existing patient <span className="text-muted-foreground">(optional, persons_id)</span>
-          </Label>
-          <Input
-            id="new-user-person-id"
-            type="number"
-            min="1"
-            placeholder="e.g. 42"
-            aria-invalid={errors.person_id !== undefined}
-            aria-describedby={errors.person_id !== undefined ? 'new-user-person-id-error' : undefined}
-            {...register('person_id', { valueAsNumber: true })}
-          />
-          {errors.person_id !== undefined && (
-            <p id="new-user-person-id-error" role="alert" className="text-xs text-destructive">{errors.person_id.message}</p>
-          )}
-          <p className="text-xs text-muted-foreground">Leave blank to create a standalone account with no patient link.</p>
         </div>
         <fieldset aria-describedby={errors.groups !== undefined ? 'new-user-roles-error' : undefined}>
           <legend className="text-sm font-medium">Roles</legend>
@@ -669,9 +651,6 @@ export default function AdminUsersPage() {
                             <span className="truncate text-sm">{user.person_name}</span>
                             {user.person_kind !== null && (
                               <span className="text-[10px] uppercase tracking-wide text-muted-foreground">{user.person_kind}</span>
-                            )}
-                            {user.person_id !== null && (
-                              <span className="text-[10px] text-muted-foreground">#{user.person_id}</span>
                             )}
                           </div>
                         ) : (

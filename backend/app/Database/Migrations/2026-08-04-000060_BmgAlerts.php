@@ -53,11 +53,12 @@ final class BmgAlerts extends Migration
             $this->forge->createTable('facilities_bmg_alerts');
         }
 
-        // Idempotent: CHECKs are added unconditionally (ALTER … ADD
-        // CHECK fails with "Duplicate key name" if rerun, so we DROP
-        // first). Mirrors the same pattern used in
-        // `BmgProcessLogObservability`.
-        $this->db->query('ALTER TABLE `facilities_bmg_alerts` DROP CHECK `chk_alert_severity`');
+        // Idempotent: drop-if-present, then add. On first run the
+        // table was just created above and the constraint doesn't
+        // exist yet, so the DROP is skipped; on re-run the DROP wipes
+        // it so the ADD can re-create cleanly. Portable across MySQL 8
+        // and MariaDB 10.4 (the latter doesn't support `DROP CHECK`).
+        $this->dropConstraintIfExists('facilities_bmg_alerts', 'chk_alert_severity');
         $this->db->query(<<<'SQL'
             ALTER TABLE `facilities_bmg_alerts`
                 ADD CONSTRAINT `chk_alert_severity`
@@ -68,8 +69,27 @@ final class BmgAlerts extends Migration
     public function down(): void
     {
         if ($this->db->tableExists('facilities_bmg_alerts')) {
-            $this->db->query('ALTER TABLE `facilities_bmg_alerts` DROP CHECK `chk_alert_severity`');
+            $this->dropConstraintIfExists('facilities_bmg_alerts', 'chk_alert_severity');
             $this->forge->dropTable('facilities_bmg_alerts', true);
+        }
+    }
+
+    /**
+     * Drop a CHECK constraint only if it exists. Portable across MySQL 8
+     * and MariaDB 10.4.
+     */
+    private function dropConstraintIfExists(string $table, string $constraint): void
+    {
+        $r = $this->db->query(
+            "SELECT CONSTRAINT_NAME FROM information_schema.TABLE_CONSTRAINTS"
+            . " WHERE CONSTRAINT_SCHEMA = DATABASE()"
+            . "   AND TABLE_NAME = " . $this->db->escape($table)
+            . "   AND CONSTRAINT_NAME = " . $this->db->escape($constraint)
+        );
+        if ($r->getNumRows() > 0) {
+            $this->db->query(
+                "ALTER TABLE `{$table}` DROP CONSTRAINT `{$constraint}`"
+            );
         }
     }
 }

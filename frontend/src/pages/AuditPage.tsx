@@ -2,8 +2,10 @@ import { type ColumnDef, flexRender, getCoreRowModel, useReactTable } from '@tan
 import { addDays, format } from 'date-fns';
 import {
   CheckCircle2,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
+  ChevronUp,
   Clipboard,
   Download,
   Eye,
@@ -69,6 +71,11 @@ const FILTER_KEYS = [
   'q',
 ] as const;
 
+// Power-user filters hidden behind the “Advanced filters” toggle.
+const ADVANCED_FILTER_KEYS = ['entity_type', 'entity_id', 'actor_user_id', 'request_id'] as const;
+
+type AdvancedFilterKey = (typeof ADVANCED_FILTER_KEYS)[number];
+
 function defaultRange(): Pick<AuditFilters, 'from' | 'to'> {
   const today = new Date();
   return {
@@ -107,6 +114,7 @@ export default function AuditPage() {
   const [draft, setDraft] = useState<AuditFilters>(applied);
   const [cursor, setCursor] = useState<string | null>(null);
   const [history, setHistory] = useState<Array<string | null>>([null]);
+  const [showAdvanced, setShowAdvanced] = useState(false);
 
   const selectedRaw = searchParams.get('event');
   const selectedId = selectedRaw !== null && /^\d+$/.test(selectedRaw) ? Number(selectedRaw) : null;
@@ -131,6 +139,12 @@ export default function AuditPage() {
     setDraft(applied);
     setCursor(null);
     setHistory([null]);
+    // Auto-open the advanced section when a shared URL carries an
+    // advanced filter so the applied state is never hidden.
+    const advancedActive = (ADVANCED_FILTER_KEYS as readonly string[]).some(
+      (key) => applied[key as AdvancedFilterKey] !== undefined,
+    );
+    setShowAdvanced(advancedActive);
   }, [applied, signature]);
 
   const actionOptions = useMemo(
@@ -194,10 +208,12 @@ export default function AuditPage() {
 
   const columns: ColumnDef<AuditEvent>[] = [
     {
-      header: 'Committed',
-      accessorKey: 'committed_at',
-      cell: ({ getValue }) => (
-        <span className="font-mono text-xs text-foreground">{fmtUtcToApp(String(getValue()))}</span>
+      header: 'Occurred',
+      accessorKey: 'occurred_at',
+      cell: ({ row }) => (
+        <span className="text-xs text-foreground">
+          {fmtUtcToApp(String(row.original.occurred_at ?? row.original.committed_at))}
+        </span>
       ),
     },
     {
@@ -280,13 +296,28 @@ export default function AuditPage() {
       <VerificationStatus verification={verification} />
 
       <form aria-label="Audit filters" onSubmit={applyFilters} className="border bg-card p-4 shadow-sm">
-        <div className="mb-3 flex items-center justify-between gap-3">
-          <div>
-            <h2 className="text-sm font-semibold text-foreground">Evidence filters</h2>
-            <p className="text-xs text-muted-foreground">Applied filters are saved in the URL for review handoffs.</p>
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <div>
+              <h2 className="text-sm font-semibold text-foreground">Evidence filters</h2>
+              <p className="text-xs text-muted-foreground">Applied filters are saved in the URL for review handoffs.</p>
+            </div>
+            {activeCount > 0 && <Badge variant="secondary">{activeCount} active</Badge>}
           </div>
-          {activeCount > 0 && <Badge variant="secondary">{activeCount} active</Badge>}
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={() => setShowAdvanced((current) => !current)}
+            aria-expanded={showAdvanced}
+            aria-controls="audit-advanced-filters"
+            className="text-muted-foreground hover:text-foreground"
+          >
+            {showAdvanced ? <ChevronUp /> : <ChevronDown />}
+            {showAdvanced ? 'Hide advanced filters' : 'Advanced filters'}
+          </Button>
         </div>
+        {/* Basic — the everyday filters, always visible. */}
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <FilterField label="Action" htmlFor="audit-action">
             <ComboboxField
@@ -300,29 +331,6 @@ export default function AuditPage() {
               normalize={false}
             />
           </FilterField>
-          <FilterField label="Entity type" htmlFor="audit-entity-type">
-            <ComboboxField
-              id="audit-entity-type"
-              value={draft.entity_type ?? ''}
-              onChange={(entity_type) => setDraft((current) => ({ ...current, entity_type }))}
-              sourceKey="audit-entity-types"
-              options={entityOptions}
-              placeholder="Select or enter entity"
-              allowCreate
-              normalize={false}
-            />
-          </FilterField>
-          <FilterField label="Actor" htmlFor="audit-actor">
-            <ComboboxField
-              id="audit-actor"
-              value={draft.actor_user_id ?? ''}
-              onChange={(actor_user_id) => setDraft((current) => ({ ...current, actor_user_id }))}
-              sourceKey="audit-actors"
-              options={actorOptions}
-              placeholder="Email or username"
-              normalize={false}
-            />
-          </FilterField>
           <FilterField label="Date range" htmlFor="audit-range">
             <DateRangePicker
               id="audit-range"
@@ -331,35 +339,63 @@ export default function AuditPage() {
               onChange={({ start, end }) => setDraft((current) => ({ ...current, from: start, to: end }))}
             />
           </FilterField>
-          <FilterField label="Entity ID" htmlFor="audit-entity-id">
-            <Input
-              id="audit-entity-id"
-              inputMode="numeric"
-              pattern="[1-9][0-9]*"
-              value={draft.entity_id ?? ''}
-              onChange={(event) => setDraft((current) => ({ ...current, entity_id: event.target.value }))}
-              placeholder="Exact numeric ID"
-            />
-          </FilterField>
-          <FilterField label="Request ID" htmlFor="audit-request-id">
-            <Input
-              id="audit-request-id"
-              value={draft.request_id ?? ''}
-              onChange={(event) => setDraft((current) => ({ ...current, request_id: event.target.value }))}
-              placeholder="32-char ID or UUID"
-              className="font-mono text-xs"
-            />
-          </FilterField>
-          <FilterField label="Payload contains" htmlFor="audit-payload-query" className="sm:col-span-2">
+          <FilterField label="Search events" htmlFor="audit-payload-query" className="sm:col-span-2">
             <Input
               id="audit-payload-query"
               value={draft.q ?? ''}
               onChange={(event) => setDraft((current) => ({ ...current, q: event.target.value }))}
-              placeholder="Search event context"
+              placeholder="Search by action, actor, or anything in the event context"
               maxLength={120}
             />
           </FilterField>
         </div>
+        {/* Advanced — power-user filters behind the toggle. */}
+        {showAdvanced && (
+          <div id="audit-advanced-filters" className="mt-3 grid gap-3 border-t pt-3 sm:grid-cols-2 lg:grid-cols-4">
+            <FilterField label="Entity type" htmlFor="audit-entity-type">
+              <ComboboxField
+                id="audit-entity-type"
+                value={draft.entity_type ?? ''}
+                onChange={(entity_type) => setDraft((current) => ({ ...current, entity_type }))}
+                sourceKey="audit-entity-types"
+                options={entityOptions}
+                placeholder="Select or enter entity"
+                allowCreate
+                normalize={false}
+              />
+            </FilterField>
+            <FilterField label="Actor" htmlFor="audit-actor">
+              <ComboboxField
+                id="audit-actor"
+                value={draft.actor_user_id ?? ''}
+                onChange={(actor_user_id) => setDraft((current) => ({ ...current, actor_user_id }))}
+                sourceKey="audit-actors"
+                options={actorOptions}
+                placeholder="Email or username"
+                normalize={false}
+              />
+            </FilterField>
+            <FilterField label="Entity ID" htmlFor="audit-entity-id">
+              <Input
+                id="audit-entity-id"
+                inputMode="numeric"
+                pattern="[1-9][0-9]*"
+                value={draft.entity_id ?? ''}
+                onChange={(event) => setDraft((current) => ({ ...current, entity_id: event.target.value }))}
+                placeholder="Exact numeric ID"
+              />
+            </FilterField>
+            <FilterField label="Request ID" htmlFor="audit-request-id">
+              <Input
+                id="audit-request-id"
+                value={draft.request_id ?? ''}
+                onChange={(event) => setDraft((current) => ({ ...current, request_id: event.target.value }))}
+                placeholder="32-char ID or UUID"
+                className="font-mono text-xs"
+              />
+            </FilterField>
+          </div>
+        )}
         <div className="mt-4 flex flex-wrap justify-end gap-2 border-t pt-3">
           <Button type="button" variant="ghost" onClick={clearFilters}>
             <X /> Clear all
@@ -375,7 +411,7 @@ export default function AuditPage() {
           <div className="flex items-center justify-between gap-3">
             <div>
               <h2 id="audit-results-heading" className="text-sm font-semibold text-foreground">Event stream</h2>
-              <p className="text-xs text-muted-foreground">Newest committed evidence first.</p>
+              <p className="text-xs text-muted-foreground">Newest event first.</p>
             </div>
             {events.isFetching && !events.isLoading && <Loader2 className="size-4 animate-spin text-muted-foreground" aria-label="Refreshing events" />}
           </div>
@@ -428,7 +464,7 @@ export default function AuditPage() {
             <MobileCardList>
               {(events.data?.data ?? []).map((event) => (
                 <MobileCard key={event.id} aria-label={`Audit event ${String(event.id)}`}>
-                  <MobileCardField label="Committed"><span className="font-mono text-xs">{fmtUtcToApp(event.committed_at)}</span></MobileCardField>
+                  <MobileCardField label="Occurred"><span className="text-xs">{fmtUtcToApp(event.occurred_at ?? event.committed_at)}</span></MobileCardField>
                   <MobileCardField label="Action"><Badge variant="info">{event.action_code}</Badge></MobileCardField>
                   <MobileCardField label="Entity"><EntityLabel event={event} /></MobileCardField>
                   <MobileCardField label="Actor"><ActorLabel actor={event.actor} /></MobileCardField>
@@ -558,7 +594,7 @@ function EventDetailDialog({ id, detail, onClose }: { id: number | null; detail:
             <div className="space-y-5 p-5">
               <div className="flex flex-wrap items-center gap-2">
                 <Badge variant="info">{event.action_code}</Badge>
-                <span className="font-mono text-xs text-muted-foreground">{fmtUtcToApp(event.committed_at)}</span>
+                <span className="text-xs text-muted-foreground">{fmtUtcToApp(event.occurred_at ?? event.committed_at)}</span>
               </div>
               <dl className="grid grid-cols-[110px_minmax(0,1fr)] gap-x-3 gap-y-3 text-xs">
                 <dt className="text-muted-foreground">Entity</dt><dd className="break-all text-foreground">{event.entity_type} / {event.entity_id ?? 'not assigned'}</dd>

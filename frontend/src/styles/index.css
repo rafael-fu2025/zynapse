@@ -20,7 +20,7 @@
   --card-foreground: oklch(0.145 0 0);
   --popover: oklch(1 0 0);
   --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.4 0.155 27.5);
+  --primary: #800000;
   --primary-foreground: oklch(0.985 0 0);
   --secondary: oklch(0.97 0 0);
   --secondary-foreground: oklch(0.205 0 0);
@@ -32,17 +32,17 @@
   --destructive-foreground: oklch(0.985 0 0);
   --border: oklch(0.922 0 0);
   --input: oklch(0.922 0 0);
-  --ring: oklch(0.4 0.155 27.5);
-  --chart-1: oklch(0.4 0.155 27.5);
+  --ring: #800000;
+  --chart-1: #800000;
   --chart-2: oklch(0.556 0 0);
   --chart-3: oklch(0.708 0 0);
   --chart-4: oklch(0.269 0 0);
   --chart-5: oklch(0.85 0 0);
-  --sidebar: oklch(0.4 0.155 27.5);
+  --sidebar: #800000;
   --sidebar-foreground: oklch(0.985 0 0);
   --sidebar-primary: oklch(0.985 0 0);
-  --sidebar-primary-foreground: oklch(0.4 0.155 27.5);
-  --sidebar-accent: oklch(0.5 0.155 27.5);
+  --sidebar-primary-foreground: #800000;
+  --sidebar-accent: #800000;
   --sidebar-accent-foreground: oklch(0.985 0 0);
   --sidebar-border: oklch(1 0 0 / 12%);
   --sidebar-ring: oklch(0.985 0 0);
@@ -55,7 +55,7 @@
   --card-foreground: oklch(0.985 0 0);
   --popover: oklch(0.205 0 0);
   --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.55 0.17 27.5);
+  --primary: #800000;
   --primary-foreground: oklch(0.985 0 0);
   --secondary: oklch(0.269 0 0);
   --secondary-foreground: oklch(0.985 0 0);
@@ -67,17 +67,17 @@
   --destructive-foreground: oklch(0.985 0 0);
   --border: oklch(1 0 0 / 10%);
   --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.55 0.17 27.5);
-  --chart-1: oklch(0.55 0.17 27.5);
+  --ring: #800000;
+  --chart-1: #800000;
   --chart-2: oklch(0.708 0 0);
   --chart-3: oklch(0.556 0 0);
   --chart-4: oklch(0.85 0 0);
   --chart-5: oklch(0.4 0 0);
-  --sidebar: oklch(0.32 0.16 27.5);
+  --sidebar: #800000;
   --sidebar-foreground: oklch(0.985 0 0);
   --sidebar-primary: oklch(0.985 0 0);
-  --sidebar-primary-foreground: oklch(0.32 0.16 27.5);
-  --sidebar-accent: oklch(0.42 0.16 27.5);
+  --sidebar-primary-foreground: #800000;
+  --sidebar-accent: #800000;
   --sidebar-accent-foreground: oklch(0.985 0 0);
   --sidebar-border: oklch(1 0 0 / 14%);
   --sidebar-ring: oklch(0.985 0 0);
@@ -272,5 +272,48 @@
   }
   [data-sidebar='content']::-webkit-scrollbar-thumb:active {
     background-color: oklch(1 0 0 / 55%);
+  }
+}
+
+/*
+ * Command palette open/close — slide down + fade in on open, slide up
+ * + fade out on close. The slide and fade are split into separate
+ * animations so the fade can run longer than the slide (350/300ms vs
+ * 200/150ms); at matching durations the fade barely registers. Only
+ * `translateY` and `opacity` are touched; the panel is centered via
+ * `inset-x-0 mx-auto` on the element so the keyframe never has any
+ * X-axis work to do. Unlayered CSS so it overrides the shared
+ * DialogContent's layered `animate-in`/`animate-out` without
+ * `!important`. Scoped to ≥sm — on mobile the palette falls back to
+ * the shared bottom-sheet slide.
+ *
+ * `fill-mode` — enter uses `backwards` so the panel starts at the
+ * `from` keyframe (no flash of the rest position). Exit uses
+ * `forwards` so the panel stays at the `to` keyframe after the
+ * animation; Radix unmounts the element immediately after, so the
+ * off-screen / fully-transparent state is never visible.
+ */
+@keyframes synapse-palette-in {
+  from { transform: translateY(-40vh); }
+}
+@keyframes synapse-palette-out {
+  to { transform: translateY(-40vh); }
+}
+@keyframes synapse-palette-fade-in {
+  from { opacity: 0; }
+}
+@keyframes synapse-palette-fade-out {
+  to { opacity: 0; }
+}
+@media (min-width: 40rem) {
+  .synapse-palette-content[data-state='open'] {
+    animation:
+      synapse-palette-in 200ms ease-out backwards,
+      synapse-palette-fade-in 800ms ease-out backwards;
+  }
+  .synapse-palette-content[data-state='closed'] {
+    animation:
+      synapse-palette-out 150ms ease-in forwards,
+      synapse-palette-fade-out 700ms ease-in forwards;
   }
 }

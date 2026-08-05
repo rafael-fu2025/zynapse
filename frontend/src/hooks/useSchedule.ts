@@ -20,6 +20,7 @@ import {
   type BookAppointmentInput,
   type SlotAnalytics,
 } from '@/schemas/schedule';
+import { fmtHumanDate } from '@/utils/date';
 
 export function useAvailability() {
   return useQuery<Availability[], ApiEnvelopeError>({
@@ -89,7 +90,7 @@ export function useBookAppointment() {
     },
     onSuccess: (a) => {
       void qc.invalidateQueries({ queryKey: ['schedule', 'appointments'] });
-      toast.success(`Appointment #${a.id} booked for ${a.appointment_date}.`);
+      toast.success(`Appointment #${a.id} booked for ${fmtHumanDate(a.appointment_date)}.`);
     },
     onError: (err) => {
       toast.error(err.errors[0]?.message ?? 'Booking failed.');

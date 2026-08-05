@@ -70,21 +70,29 @@ final class BmgFeedstockCharacterization extends Migration
         }
 
         // Range guards. CHECK is nullable-tolerant: NULL passes.
-        $this->db->query(<<<'SQL'
-            ALTER TABLE `facilities_bmg_inputs`
-                ADD CONSTRAINT `chk_fbi_cn_ratio`
-                CHECK (`cn_ratio` IS NULL OR (`cn_ratio` >= 0.1 AND `cn_ratio` <= 200))
-        SQL);
-        $this->db->query(<<<'SQL'
-            ALTER TABLE `facilities_bmg_inputs`
-                ADD CONSTRAINT `chk_fbi_bulk_density`
-                CHECK (`bulk_density_kg_per_m3` IS NULL OR `bulk_density_kg_per_m3` > 0)
-        SQL);
-        $this->db->query(<<<'SQL'
-            ALTER TABLE `facilities_bmg_inputs`
-                ADD CONSTRAINT `chk_fbi_ph`
-                CHECK (`ph` IS NULL OR (`ph` >= 0 AND `ph` <= 14))
-        SQL);
+        // Idempotent: skip if the constraint already exists (so a replayed
+        // migration doesn't fail with "Duplicate key name").
+        if ($this->constraintDoesNotExist('facilities_bmg_inputs', 'chk_fbi_cn_ratio')) {
+            $this->db->query(<<<'SQL'
+                ALTER TABLE `facilities_bmg_inputs`
+                    ADD CONSTRAINT `chk_fbi_cn_ratio`
+                    CHECK (`cn_ratio` IS NULL OR (`cn_ratio` >= 0.1 AND `cn_ratio` <= 200))
+            SQL);
+        }
+        if ($this->constraintDoesNotExist('facilities_bmg_inputs', 'chk_fbi_bulk_density')) {
+            $this->db->query(<<<'SQL'
+                ALTER TABLE `facilities_bmg_inputs`
+                    ADD CONSTRAINT `chk_fbi_bulk_density`
+                    CHECK (`bulk_density_kg_per_m3` IS NULL OR `bulk_density_kg_per_m3` > 0)
+            SQL);
+        }
+        if ($this->constraintDoesNotExist('facilities_bmg_inputs', 'chk_fbi_ph')) {
+            $this->db->query(<<<'SQL'
+                ALTER TABLE `facilities_bmg_inputs`
+                    ADD CONSTRAINT `chk_fbi_ph`
+                    CHECK (`ph` IS NULL OR (`ph` >= 0 AND `ph` <= 14))
+            SQL);
+        }
     }
 
     public function down(): void
@@ -94,10 +102,11 @@ final class BmgFeedstockCharacterization extends Migration
         }
 
         // Drop CHECKs first — required before dropping the columns they
-        // reference. Use IF EXISTS for idempotence on re-runs.
-        $this->db->query('ALTER TABLE `facilities_bmg_inputs` DROP CHECK `chk_fbi_cn_ratio`');
-        $this->db->query('ALTER TABLE `facilities_bmg_inputs` DROP CHECK `chk_fbi_bulk_density`');
-        $this->db->query('ALTER TABLE `facilities_bmg_inputs` DROP CHECK `chk_fbi_ph`');
+        // reference. Use dropConstraintIfExists() so a replayed migration
+        // doesn't fail with "check that it exists".
+        $this->dropConstraintIfExists('facilities_bmg_inputs', 'chk_fbi_cn_ratio');
+        $this->dropConstraintIfExists('facilities_bmg_inputs', 'chk_fbi_bulk_density');
+        $this->dropConstraintIfExists('facilities_bmg_inputs', 'chk_fbi_ph');
 
         $drop = [];
         foreach (['cn_ratio', 'bulk_density_kg_per_m3', 'ph'] as $col) {
@@ -107,6 +116,32 @@ final class BmgFeedstockCharacterization extends Migration
         }
         if ($drop !== []) {
             $this->forge->dropColumn('facilities_bmg_inputs', $drop);
+        }
+    }
+
+    private function constraintDoesNotExist(string $table, string $constraint): bool
+    {
+        $r = $this->db->query(
+            "SELECT CONSTRAINT_NAME FROM information_schema.TABLE_CONSTRAINTS"
+            . " WHERE CONSTRAINT_SCHEMA = DATABASE()"
+            . "   AND TABLE_NAME = " . $this->db->escape($table)
+            . "   AND CONSTRAINT_NAME = " . $this->db->escape($constraint)
+        );
+        return $r->getNumRows() === 0;
+    }
+
+    private function dropConstraintIfExists(string $table, string $constraint): void
+    {
+        $r = $this->db->query(
+            "SELECT CONSTRAINT_NAME FROM information_schema.TABLE_CONSTRAINTS"
+            . " WHERE CONSTRAINT_SCHEMA = DATABASE()"
+            . "   AND TABLE_NAME = " . $this->db->escape($table)
+            . "   AND CONSTRAINT_NAME = " . $this->db->escape($constraint)
+        );
+        if ($r->getNumRows() > 0) {
+            $this->db->query(
+                "ALTER TABLE `{$table}` DROP CONSTRAINT `{$constraint}`"
+            );
         }
     }
 }

@@ -224,7 +224,9 @@ final class ScheduleService extends BaseService
             }
 
             $now = $this->utcNow();
+            [, $patient] = (new \Modules\Clinic\Services\PatientLookupService())->findByIdentifier((string) $input['patient_school_id']);
             $this->db->table('counselling_appointments')->insert([
+                'patient_user_id'    => $patient !== null ? (int) $patient['id'] : null,
                 'patient_school_id'  => (string) $input['patient_school_id'],
                 'counsellor_user_id' => $counsellorId,
                 'appointment_date'   => $date,
@@ -285,19 +287,21 @@ final class ScheduleService extends BaseService
             }
             $this->db->table('counselling_appointments')->where('id', $id)->update($update);
 
-            // Three-strike no-show counter (registry as shared reference
-            // data; UPDATE by student_number, never a JOIN).
-            $sid = (string) $row['patient_school_id'];
-            if ($action === 'no_show') {
+            // Three-strike no-show counter (consolidated `users`
+            // column; UPDATE by patient_user_id, never a JOIN).
+            $patientUserId = isset($row['patient_user_id']) && $row['patient_user_id'] !== null
+                ? (int) $row['patient_user_id']
+                : null;
+            if ($action === 'no_show' && $patientUserId !== null) {
                 $this->db->query(
-                    'UPDATE `patients_students` SET `consecutive_no_shows` = `consecutive_no_shows` + 1 WHERE `student_number` = ?',
-                    [$sid],
+                    'UPDATE `users` SET `consecutive_no_shows` = `consecutive_no_shows` + 1 WHERE `id` = ?',
+                    [$patientUserId],
                 );
             }
-            if ($action === 'complete') {
+            if ($action === 'complete' && $patientUserId !== null) {
                 $this->db->query(
-                    'UPDATE `patients_students` SET `consecutive_no_shows` = 0 WHERE `student_number` = ?',
-                    [$sid],
+                    'UPDATE `users` SET `consecutive_no_shows` = 0 WHERE `id` = ?',
+                    [$patientUserId],
                 );
             }
 
@@ -433,6 +437,7 @@ final class ScheduleService extends BaseService
     {
         return [
             'id'                  => (int)    $r['id'],
+            'patient_user_id'     => isset($r['patient_user_id']) && $r['patient_user_id'] !== null ? (int) $r['patient_user_id'] : null,
             'patient_school_id'   => (string) $r['patient_school_id'],
             'counsellor_user_id'  => (int)    $r['counsellor_user_id'],
             'appointment_date'    => (string) $r['appointment_date'],

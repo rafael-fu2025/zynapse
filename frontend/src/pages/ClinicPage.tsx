@@ -1,10 +1,17 @@
 /**
- * ClinicPage — encounters list + create + vitals + close.
+ * ClinicPage — queue-first clinic surface (panel revision, August 2026).
  *
- * shadcn Tabs split the screen into "Open" / "Closed". Encounter list
- * is keyset-paginated (shadcn Table). Vitals capture happens in a
- * shadcn Dialog with full RHF + Zod validation. Closed encounters show
- * a close-timestamp.
+ * Tabs: **Queue (today)** → **Closed** → **Staff schedules**. The legacy
+ * "Open" tab is gone — every encounter is queued at creation (walk-in)
+ * or auto-checked-in at appointment time, so the Queue tab IS the open
+ * encounters view. Action buttons (Care, Record vitals, Close encounter,
+ * Mark no-show) live on each queue row.
+ *
+ * Lazy side effects on `/clinic/queue` staff read:
+ *   1. Auto-check-in today's `scheduled` appointments
+ *   2. Auto-close stale `open` encounters from prior days
+ * Both run server-side in `QueueService::today()`; the page does not
+ * trigger them directly.
  */
 import { zodResolver } from '@hookform/resolvers/zod';
 import {
@@ -16,10 +23,9 @@ import {
   ChevronLeft,
   ChevronRight,
   ClipboardPlus,
-  Info,
-  ListPlus,
   Loader2,
   Megaphone,
+  Pencil,
   Play,
   Plus,
   SkipForward,
@@ -27,6 +33,7 @@ import {
   Stethoscope,
   Trash2,
   Upload,
+  UserX,
   X,
 } from 'lucide-react';
 import { useMemo, useState } from 'react';
@@ -38,7 +45,10 @@ import { Button } from '@/components/ui/button';
 import { ConfirmDialog, type ConfirmAction } from '@/components/ConfirmDialog';
 import { QueryErrorRow } from '@/components/QueryErrorState';
 import { MobileCardList, MobileCard, MobileCardField, MobileCardActions } from '@/components/MobileCardList';
+import { PatientIdCell } from '@/components/PatientIdCell';
+import { PatientPicker } from '@/components/PatientPicker';
 import { useTabParam } from '@/hooks/useTabParam';
+import { DatePicker } from '@/components/ui/date-picker';
 import { TimePicker } from '@/components/ui/time-picker';
 import {
   Dialog,
@@ -78,7 +88,9 @@ import {
   useCloseEncounter,
   useCreateEncounter,
   useDecideTriage,
+  useEncounterNoShow,
   useEncounters,
+  useEncounterVitals,
   useImportEncounters,
   useRecordVitals,
   useSetAssessment,
@@ -86,12 +98,13 @@ import {
   useTreatments,
 } from '@/hooks/useClinic';
 import { useMedicines } from '@/hooks/useMedicines';
-import { useCallNext, useEnqueue, useQueueToday, useQueueTransition } from '@/hooks/useQueue';
+import { useCallNext, useQueueToday, useQueueTransition } from '@/hooks/useQueue';
 import {
   useArchiveStaffSchedule,
   useCreateStaffSchedule,
   useStaffSchedules,
   useUnarchiveStaffSchedule,
+  useUpdateStaffSchedule,
 } from '@/hooks/useStaffSchedules';
 import {
   createEncounterSchema,
@@ -104,11 +117,14 @@ import {
   type TreatmentType,
   type TriagePriority,
 } from '@/schemas/clinic';
+import { type QueueEntry } from '@/schemas/queue';
 import { DAY_NAMES } from '@/schemas/schedule';
 import {
   createStaffScheduleSchema,
   SCHEDULE_TYPES,
+  updateStaffScheduleSchema,
   type ScheduleType,
+  type StaffSchedule,
 } from '@/schemas/staffSchedule';
 import { fmtUtcToApp } from '@/utils/date';
 import { statusLabel } from '@/utils/status';
@@ -133,9 +149,13 @@ function CreateEncounterDialog({ onClose }: { onClose: () => void }) {
   const {
     register,
     handleSubmit,
+    setValue,
+    watch,
     formState: { errors },
     reset,
   } = useForm<CreateEncounterInput>({ resolver: zodResolver(createEncounterSchema) });
+
+  const patientId = watch('patient_school_id') ?? '';
 
   const onSubmit = handleSubmit((values) => {
     create.mutate(values, {
@@ -152,13 +172,14 @@ function CreateEncounterDialog({ onClose }: { onClose: () => void }) {
         <DialogTitle>New encounter</DialogTitle>
       </DialogHeader>
       <form onSubmit={(e) => void onSubmit(e)} className="space-y-3" noValidate>
-        <div className="space-y-1.5">
-          <Label htmlFor="patient_school_id">Patient school ID</Label>
-          <Input id="patient_school_id" aria-invalid={errors.patient_school_id !== undefined} {...register('patient_school_id')} />
-          {errors.patient_school_id !== undefined && (
-            <p role="alert" className="text-xs text-destructive">{errors.patient_school_id.message}</p>
-          )}
-        </div>
+        <PatientPicker
+          value={patientId}
+          invalid={errors.patient_school_id !== undefined}
+          onChange={(v) => setValue('patient_school_id', v, { shouldValidate: true })}
+        />
+        {errors.patient_school_id !== undefined && (
+          <p role="alert" className="text-xs text-destructive">{errors.patient_school_id.message}</p>
+        )}
         <div className="space-y-1.5">
           <Label htmlFor="chief_complaint">Chief complaint</Label>
           <Input id="chief_complaint" aria-invalid={errors.chief_complaint !== undefined} {...register('chief_complaint')} />
@@ -571,6 +592,108 @@ function CareDialog({ encounter, onClose }: { encounter: Encounter; onClose: () 
   );
 }
 
+/**
+ * Read-only review of a finalized encounter (Closed tab). Shows the
+ * full record — summary, assessment, vitals history and treatments —
+ * with all editing disabled. Terminal states (closed/referred) cannot
+ * be modified, but staff still need to inspect them.
+ */
+function EncounterViewDialog({ encounter, onClose }: { encounter: Encounter; onClose: () => void }) {
+  const vitals = useEncounterVitals(encounter.id);
+  const treatments = useTreatments(encounter.id);
+
+  return (
+    <DialogContent className="max-w-2xl">
+      <DialogHeader>
+        <DialogTitle>Encounter #{encounter.id}</DialogTitle>
+      </DialogHeader>
+
+      <section className="space-y-3 rounded-md border p-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge variant="secondary">{statusLabel(encounter.status)}</Badge>
+          {encounter.outcome !== null && encounter.outcome !== undefined && (
+            <Badge variant="secondary">{encounter.outcome.replace('_', ' ')}</Badge>
+          )}
+          {encounter.triage_priority !== null && encounter.triage_priority !== undefined && (
+            <Badge variant={TRIAGE_VARIANT[encounter.triage_priority]}>{encounter.triage_priority}</Badge>
+          )}
+          {(encounter.appointment_id ?? null) !== null && (
+            <Badge variant="secondary" className="gap-1">
+              <CalendarClock className="size-3" /> From appointment #{encounter.appointment_id}
+            </Badge>
+          )}
+        </div>
+        <div className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
+          <div>
+            <p className="text-xs text-muted-foreground">Patient</p>
+            <p className="font-mono">{encounter.patient_school_id}</p>
+          </div>
+          <div>
+            <p className="text-xs text-muted-foreground">Chief complaint</p>
+            <p>{encounter.chief_complaint}</p>
+          </div>
+          <div>
+            <p className="text-xs text-muted-foreground">Started</p>
+            <p>{fmtUtcToApp(encounter.started_at)}</p>
+          </div>
+          <div>
+            <p className="text-xs text-muted-foreground">Closed</p>
+            <p>{encounter.closed_at === null ? '—' : fmtUtcToApp(encounter.closed_at)}</p>
+          </div>
+          <div className="sm:col-span-2">
+            <p className="text-xs text-muted-foreground">Diagnosis</p>
+            <p className="whitespace-pre-wrap">{encounter.diagnosis ?? '—'}</p>
+          </div>
+        </div>
+      </section>
+
+      <section className="space-y-3 rounded-md border p-3">
+        <p className="text-sm font-semibold text-foreground">Vitals</p>
+        {vitals.isLoading && <Loader2 className="mx-auto size-4 animate-spin text-muted-foreground" />}
+        {!vitals.isLoading && (vitals.data?.length ?? 0) === 0 && (
+          <p className="text-sm text-muted-foreground">No vitals recorded.</p>
+        )}
+        {vitals.data?.map((v) => (
+          <div key={v.recorded_at + String(v.encounter_id)} className="grid grid-cols-2 gap-1 rounded border px-2 py-1 text-xs sm:grid-cols-4">
+            <span>BP {v.bp_systolic !== null ? `${v.bp_systolic}/${v.bp_diastolic ?? '—'}` : '—'}</span>
+            <span>Pulse {v.pulse_bpm ?? '—'}</span>
+            <span>Temp {v.temp_c !== null ? `${v.temp_c}°C` : '—'}</span>
+            <span>SpO₂ {v.spo2_pct !== null ? `${v.spo2_pct}%` : '—'}</span>
+            <span>Wt {v.weight_kg !== null ? `${v.weight_kg}kg` : '—'}</span>
+            <span>Ht {v.height_cm !== null ? `${v.height_cm}cm` : '—'}</span>
+            <span className="col-span-2 text-muted-foreground">{fmtUtcToApp(v.recorded_at)}</span>
+          </div>
+        ))}
+      </section>
+
+      <section className="space-y-3 rounded-md border p-3">
+        <p className="text-sm font-semibold text-foreground">Treatments</p>
+        {treatments.isLoading && <Loader2 className="mx-auto size-4 animate-spin text-muted-foreground" />}
+        {!treatments.isLoading && (treatments.data?.length ?? 0) === 0 && (
+          <p className="text-sm text-muted-foreground">No treatments recorded.</p>
+        )}
+        {treatments.data?.map((t) => (
+          <div key={t.id} className="flex items-center justify-between rounded border px-2 py-1 text-xs">
+            <span>
+              <Badge variant="secondary">{TREATMENT_LABEL[t.treatment_type]}</Badge>
+              <span className="ml-2">{t.description}</span>
+            </span>
+            {t.quantity_used !== null && (
+              <span className="font-mono text-muted-foreground">
+                {t.quantity_used} {t.unit ?? ''} {t.medicine_name ?? ''}
+              </span>
+            )}
+          </div>
+        ))}
+      </section>
+
+      <DialogFooter>
+        <Button variant="outline" onClick={onClose}>Close</Button>
+      </DialogFooter>
+    </DialogContent>
+  );
+}
+
 const QUEUE_STATUS_VARIANT = {
   waiting: 'info',
   called: 'warning',
@@ -579,10 +702,19 @@ const QUEUE_STATUS_VARIANT = {
   skipped: 'secondary',
 } as const;
 
-function QueueTab() {
+interface QueueTabProps {
+  /** Open the Care dialog for the given encounter. */
+  onOpenCare: (encounter: Encounter) => void;
+  /** Open the Vitals dialog for the given encounter. */
+  onOpenVitals: (encounter: Encounter) => void;
+}
+
+function QueueTab({ onOpenCare, onOpenVitals }: QueueTabProps) {
   const queue = useQueueToday();
   const callNext = useCallNext();
   const transition = useQueueTransition();
+  const close = useCloseEncounter();
+  const noShow = useEncounterNoShow();
   const [confirm, setConfirm] = useState<ConfirmAction | null>(null);
 
   // `queue.data` is a fresh array on every React Query refetch tick,
@@ -613,12 +745,39 @@ function QueueTab() {
     });
   }, [rows]);
 
+  /**
+   * Synthesise a minimal `Encounter`-shaped object from the queue row
+   * so the existing `CareDialog` / `VitalsDialog` (which read only
+   * `encounter.id`, `.triage_priority`, `.diagnosis`) can be opened
+   * directly from the queue without a second round-trip.
+   *
+   * `attending_user_id` / `started_at` are placeholders — the dialogs
+   * ignore them; full fields populate on the next encounter list refresh.
+   */
+  function rowEncounter(q: QueueEntry): Encounter {
+    return {
+      id: q.encounter_id,
+      patient_school_id: q.patient_school_id,
+      chief_complaint: q.chief_complaint,
+      status: q.encounter_status,
+      attending_user_id: 0,
+      started_at: '',
+      closed_at: null,
+    };
+  }
+
+  // Destructive actions disable whenever a destructive mutation is
+  // already in flight; harmless to share across rows because the
+  // spinner only renders on the row that triggered it.
+  const destructivePending = close.isPending || noShow.isPending;
+  const anyPending = transition.isPending || destructivePending;
+
   return (
     <div className="space-y-4">
       <section className="flex flex-wrap items-center justify-between gap-3 rounded-xl border bg-card p-3">
         <p className="text-xs text-muted-foreground">
-          Today's walk-in queue. The public board at <span className="font-mono">/queue-display</span> shows
-          positions and first names only.
+          Today's walk-in queue + open encounters. Auto-checked-in appointments and walk-ins both land here. The
+          public board at <span className="font-mono">/queue-display</span> shows positions and first names only.
         </p>
         <Button disabled={callNext.isPending || !hasWaiting} onClick={() => callNext.mutate()}>
           {callNext.isPending ? <Loader2 className="animate-spin" /> : <Megaphone />} Call next
@@ -647,53 +806,105 @@ function QueueTab() {
             {!queue.isLoading && rows.length === 0 && (
               <TableRow>
                 <TableCell colSpan={5} className="px-3 py-6 text-center text-muted-foreground">
-                  Queue is empty — use "Queue" on an open encounter.
+                  Queue is empty.
                 </TableCell>
               </TableRow>
             )}
             {queue.isError && !queue.isLoading && (
               <QueryErrorRow colSpan={5} message="Failed to load the queue." onRetry={() => void queue.refetch()} pending={queue.isFetching} />
             )}
-            {sortedRows.map((q) => (
-              <TableRow key={q.id}>
-                <TableCell className="px-3 font-mono text-sm font-semibold">{q.position}</TableCell>
-                <TableCell className="px-3">
-                  {q.display_name}
-                  <span className="ml-1.5 font-mono text-xs text-muted-foreground">{q.patient_school_id}</span>
-                </TableCell>
-                <TableCell className="px-3 text-xs">{q.chief_complaint}</TableCell>
-                <TableCell className="px-3">
-                  <Badge variant={QUEUE_STATUS_VARIANT[q.status]}>{q.status.replace('_', ' ')}</Badge>
-                </TableCell>
-                <TableCell className="px-3 text-right">
-                  <div className="flex justify-end gap-1">
-                    {q.status === 'called' && (
-                      <>
+            {sortedRows.map((q) => {
+              const canEncounterAct =
+                q.encounter_status === 'open' &&
+                (q.status === 'waiting' || q.status === 'called' || q.status === 'in_session');
+              const canNoShow = q.encounter_status === 'open';
+              const enc = rowEncounter(q);
+              return (
+                <TableRow key={q.id}>
+                  <TableCell className="px-3 font-mono text-sm font-semibold">{q.position}</TableCell>
+                  <TableCell className="px-3">
+                    {q.display_name}
+                    <span className="ml-1.5">
+                      <PatientIdCell id={q.patient_school_id} name={q.patient_name} />
+                    </span>
+                  </TableCell>
+                  <TableCell className="px-3 text-xs">{q.chief_complaint}</TableCell>
+                  <TableCell className="px-3">
+                    <Badge variant={QUEUE_STATUS_VARIANT[q.status]}>{q.status.replace('_', ' ')}</Badge>
+                    {q.encounter_outcome !== undefined && q.encounter_outcome !== null && (
+                      <Badge variant="secondary" className="ml-1.5">{q.encounter_outcome.replace('_', ' ')}</Badge>
+                    )}
+                  </TableCell>
+                  <TableCell className="px-3 text-right">
+                    <div className="flex justify-end gap-1">
+                      {q.status === 'called' && (
+                        <>
+                          <Button size="sm" variant="secondary" disabled={transition.isPending}
+                            onClick={() => transition.mutate({ id: q.id, action: 'start' })}>
+                            <Play /> Start
+                          </Button>
+                          <Button size="sm" variant="outline" disabled={transition.isPending}
+                            onClick={() => setConfirm({
+                              title: `Skip #${q.position} in the queue?`,
+                              description: 'Skipped entries are removed from the active queue and cannot be recovered from here.',
+                              confirmLabel: 'Skip',
+                              run: () => transition.mutate({ id: q.id, action: 'skip' }),
+                            })}>
+                            <SkipForward /> Skip
+                          </Button>
+                        </>
+                      )}
+                      {q.status === 'in_session' && (
                         <Button size="sm" variant="secondary" disabled={transition.isPending}
-                          onClick={() => transition.mutate({ id: q.id, action: 'start' })}>
-                          <Play /> Start
+                          onClick={() => transition.mutate({ id: q.id, action: 'complete' })}>
+                          <CheckCheck /> Complete
                         </Button>
-                        <Button size="sm" variant="outline" disabled={transition.isPending}
-                          onClick={() => setConfirm({
-                            title: `Skip #${q.position} in the queue?`,
-                            description: 'Skipped entries are removed from the active queue and cannot be recovered from here.',
-                            confirmLabel: 'Skip',
-                            run: () => transition.mutate({ id: q.id, action: 'skip' }),
-                          })}>
-                          <SkipForward /> Skip
-                        </Button>
-                      </>
-                    )}
-                    {q.status === 'in_session' && (
-                      <Button size="sm" variant="secondary" disabled={transition.isPending}
-                        onClick={() => transition.mutate({ id: q.id, action: 'complete' })}>
-                        <CheckCheck /> Complete
-                      </Button>
-                    )}
-                  </div>
-                </TableCell>
-              </TableRow>
-            ))}
+                      )}
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button className="min-h-11" size="sm" variant="outline" aria-label={`Encounter actions for queue #${q.position}`}>
+                            Actions <ChevronDown className="size-3.5" aria-hidden />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" className="w-52">
+                          <DropdownMenuItem className="min-h-11" disabled={anyPending} onSelect={() => onOpenCare(enc)}>
+                            <ClipboardPlus /> Care
+                          </DropdownMenuItem>
+                          <DropdownMenuItem className="min-h-11" disabled={anyPending} onSelect={() => onOpenVitals(enc)}>
+                            <Stethoscope /> Record vitals
+                          </DropdownMenuItem>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem
+                            className="min-h-11 text-destructive focus:text-destructive"
+                            disabled={!canEncounterAct || destructivePending}
+                            onSelect={() => setConfirm({
+                              title: `Close encounter #${q.encounter_id}?`,
+                              description: 'Closing an encounter is final; it can no longer be edited or have vitals or treatments added.',
+                              confirmLabel: 'Close encounter',
+                              run: () => close.mutate(q.encounter_id),
+                            })}
+                          >
+                            <X /> Close encounter
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            className="min-h-11 text-destructive focus:text-destructive"
+                            disabled={!canNoShow || destructivePending}
+                            onSelect={() => setConfirm({
+                              title: `Mark encounter #${q.encounter_id} as no-show?`,
+                              description: 'This closes the encounter with outcome=no_show, advances any linked appointment to no_show, and queues an in-app notification.',
+                              confirmLabel: 'Mark no-show',
+                              run: () => noShow.mutate(q.encounter_id),
+                            })}
+                          >
+                            <UserX /> Mark no-show
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              );
+            })}
           </TableBody>
         </Table>
       </section>
@@ -711,19 +922,29 @@ function QueueTab() {
         </div>
       )}
       {!queue.isLoading && !queue.isError && rows.length === 0 && (
-        <p className="rounded-xl border border-dashed p-6 text-center text-sm text-muted-foreground md:hidden">Queue is empty — use “Queue” on an open encounter.</p>
+        <p className="rounded-xl border border-dashed p-6 text-center text-sm text-muted-foreground md:hidden">Queue is empty.</p>
       )}
       <MobileCardList>
-        {sortedRows.map((q) => (
-          <MobileCard key={q.id} aria-label={`Queue position ${q.position}`}>
-            <div className="mb-1 flex items-center justify-between gap-2">
-              <span className="font-mono text-sm font-semibold text-foreground">#{q.position}</span>
-              <Badge variant={QUEUE_STATUS_VARIANT[q.status]}>{q.status.replace('_', ' ')}</Badge>
-            </div>
-            <p className="text-sm font-medium text-foreground">{q.display_name}</p>
-            <p className="font-mono text-[10px] text-muted-foreground">{q.patient_school_id}</p>
-            <MobileCardField label="Complaint"><span className="text-xs">{q.chief_complaint}</span></MobileCardField>
-            {(q.status === 'called' || q.status === 'in_session') && (
+        {sortedRows.map((q) => {
+          const canEncounterAct =
+            q.encounter_status === 'open' &&
+            (q.status === 'waiting' || q.status === 'called' || q.status === 'in_session');
+          const canNoShow = q.encounter_status === 'open';
+          const enc = rowEncounter(q);
+          return (
+            <MobileCard key={q.id} aria-label={`Queue position ${q.position}`}>
+              <div className="mb-1 flex items-center justify-between gap-2">
+                <span className="font-mono text-sm font-semibold text-foreground">#{q.position}</span>
+                <div className="flex flex-wrap justify-end gap-1.5">
+                  <Badge variant={QUEUE_STATUS_VARIANT[q.status]}>{q.status.replace('_', ' ')}</Badge>
+                  {q.encounter_outcome !== undefined && q.encounter_outcome !== null && (
+                    <Badge variant="secondary">{q.encounter_outcome.replace('_', ' ')}</Badge>
+                  )}
+                </div>
+              </div>
+              <p className="text-sm font-medium text-foreground">{q.display_name}</p>
+              <p className="font-mono text-[10px] text-muted-foreground"><PatientIdCell id={q.patient_school_id} name={q.patient_name} /></p>
+              <MobileCardField label="Complaint"><span className="text-xs">{q.chief_complaint}</span></MobileCardField>
               <MobileCardActions>
                 {q.status === 'called' && (
                   <>
@@ -748,10 +969,50 @@ function QueueTab() {
                     <CheckCheck /> Complete
                   </Button>
                 )}
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button className="min-h-11" size="sm" variant="outline" aria-label={`Encounter actions for queue #${q.position}`}>
+                      Actions <ChevronDown className="size-3.5" aria-hidden />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-52">
+                    <DropdownMenuItem className="min-h-11" disabled={anyPending} onSelect={() => onOpenCare(enc)}>
+                      <ClipboardPlus /> Care
+                    </DropdownMenuItem>
+                    <DropdownMenuItem className="min-h-11" disabled={anyPending} onSelect={() => onOpenVitals(enc)}>
+                      <Stethoscope /> Record vitals
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem
+                      className="min-h-11 text-destructive focus:text-destructive"
+                      disabled={!canEncounterAct || destructivePending}
+                      onSelect={() => setConfirm({
+                        title: `Close encounter #${q.encounter_id}?`,
+                        description: 'Closing an encounter is final; it can no longer be edited or have vitals or treatments added.',
+                        confirmLabel: 'Close encounter',
+                        run: () => close.mutate(q.encounter_id),
+                      })}
+                    >
+                      <X /> Close encounter
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      className="min-h-11 text-destructive focus:text-destructive"
+                      disabled={!canNoShow || destructivePending}
+                      onSelect={() => setConfirm({
+                        title: `Mark encounter #${q.encounter_id} as no-show?`,
+                        description: 'This closes the encounter with outcome=no_show, advances any linked appointment to no_show, and queues an in-app notification.',
+                        confirmLabel: 'Mark no-show',
+                        run: () => noShow.mutate(q.encounter_id),
+                      })}
+                    >
+                      <UserX /> Mark no-show
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
               </MobileCardActions>
-            )}
-          </MobileCard>
-        ))}
+            </MobileCard>
+          );
+        })}
       </MobileCardList>
 
       <ConfirmDialog
@@ -759,7 +1020,8 @@ function QueueTab() {
         title={confirm?.title ?? ''}
         description={confirm?.description}
         confirmLabel={confirm?.confirmLabel}
-        pending={transition.isPending}
+        // Spinner covers whichever mutation the confirm is about to run.
+        pending={anyPending}
         onConfirm={() => {
           confirm?.run();
           setConfirm(null);
@@ -770,76 +1032,25 @@ function QueueTab() {
   );
 }
 
-function StaffSchedulesTab() {
-  const [showArchived, setShowArchived] = useState(false);
+function StaffSchedulesTab({
+  showArchived,
+  openAddShift,
+  onOpenAddShiftChange,
+}: {
+  showArchived: boolean;
+  openAddShift: boolean;
+  onOpenAddShiftChange: (open: boolean) => void;
+}) {
   const schedules = useStaffSchedules(showArchived);
-  const create = useCreateStaffSchedule();
+  const update = useUpdateStaffSchedule();
   const archive = useArchiveStaffSchedule();
   const unarchive = useUnarchiveStaffSchedule();
-  const [userId, setUserId] = useState('');
-  const [dow, setDow] = useState('1');
-  const [start, setStart] = useState('09:00');
-  const [end, setEnd] = useState('17:00');
-  const [type, setType] = useState<ScheduleType>('regular');
   const [confirm, setConfirm] = useState<ConfirmAction | null>(null);
-
-  function submit() {
-    const parsed = createStaffScheduleSchema.safeParse({
-      user_id: userId,
-      day_of_week: dow,
-      shift_start: start,
-      shift_end: end,
-      schedule_type: type,
-    });
-    if (!parsed.success) {
-      toast.error(parsed.error.issues[0]?.message ?? 'Invalid input.');
-      return;
-    }
-    create.mutate(parsed.data, { onSuccess: () => setUserId('') });
-  }
+  // Edit dialog — the row being edited, or null when closed.
+  const [editing, setEditing] = useState<StaffSchedule | null>(null);
 
   return (
     <div className="space-y-4">
-      <section className="flex flex-wrap items-end gap-2 rounded-xl border bg-card p-3">
-        <div className="space-y-1">
-          <Label htmlFor="ss-user" className="text-xs">User ID</Label>
-          <Input id="ss-user" className="h-8 w-24" value={userId} onChange={(e) => setUserId(e.target.value)} />
-        </div>
-        <div className="space-y-1">
-          <Label id="ss-dow-label" className="text-xs">Day</Label>
-          <Select value={dow} onValueChange={setDow}>
-            <SelectTrigger aria-labelledby="ss-dow-label" className="h-8 w-32"><SelectValue /></SelectTrigger>
-            <SelectContent>{DAY_NAMES.map((n, i) => <SelectItem key={n} value={String(i)}>{n}</SelectItem>)}</SelectContent>
-          </Select>
-        </div>
-        <div className="space-y-1">
-          <Label htmlFor="ss-start" className="text-xs">Start</Label>
-          <TimePicker id="ss-start" value={start} onChange={setStart} />
-        </div>
-        <div className="space-y-1">
-          <Label htmlFor="ss-end" className="text-xs">End</Label>
-          <TimePicker id="ss-end" value={end} onChange={setEnd} />
-        </div>
-        <div className="space-y-1">
-          <Label id="ss-type-label" className="text-xs">Type</Label>
-          <Select value={type} onValueChange={(v) => setType(v as ScheduleType)}>
-            <SelectTrigger aria-labelledby="ss-type-label" className="h-8 w-28"><SelectValue /></SelectTrigger>
-            <SelectContent>{SCHEDULE_TYPES.map((t) => <SelectItem key={t} value={t}>{t}</SelectItem>)}</SelectContent>
-          </Select>
-        </div>
-        <Button size="sm" onClick={submit} disabled={create.isPending}>
-          {create.isPending ? <Loader2 className="animate-spin" /> : <Plus />} Add shift
-        </Button>
-        <Button
-          size="sm"
-          variant={showArchived ? 'secondary' : 'outline'}
-          aria-pressed={showArchived}
-          onClick={() => setShowArchived((v) => !v)}
-        >
-          <Archive /> {showArchived ? 'Hide archived' : 'Show archived'}
-        </Button>
-      </section>
-
       <section className="hidden overflow-hidden rounded-xl border bg-card md:block">
         <Table>
           <TableHeader className="bg-muted/50">
@@ -871,7 +1082,14 @@ function StaffSchedulesTab() {
             )}
             {schedules.data?.map((s) => (
               <TableRow key={s.id}>
-                <TableCell className="px-3 font-mono text-xs">#{s.user_id}</TableCell>
+                <TableCell className="px-3">
+                  {s.user_name ? (
+                    <span className="text-sm text-foreground">{s.user_name}</span>
+                  ) : (
+                    <span className="text-xs text-muted-foreground">#{s.user_id}</span>
+                  )}
+                  <span className="ml-1.5"><PatientIdCell id={`#${s.user_id}`} name={s.user_name} /></span>
+                </TableCell>
                 <TableCell className="px-3 text-xs">{DAY_NAMES[s.day_of_week]}</TableCell>
                 <TableCell className="px-3 font-mono text-xs">{s.shift_start.slice(0, 5)}–{s.shift_end.slice(0, 5)}</TableCell>
                 <TableCell className="px-3">
@@ -879,34 +1097,52 @@ function StaffSchedulesTab() {
                     {s.schedule_type}
                   </Badge>
                   {!s.is_active && <Badge variant="secondary" className="ml-1.5">Archived</Badge>}
+                  {s.effective_from !== null && (
+                    <span className="ml-1.5 font-mono text-[10px] text-muted-foreground">
+                      {s.effective_from.slice(0, 10)}{s.effective_to !== null ? ` → ${s.effective_to.slice(0, 10)}` : ' →'}
+                    </span>
+                  )}
                 </TableCell>
                 <TableCell className="px-3 text-right">
-                  {s.is_active ? (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      aria-label={`Archive shift #${s.id}`}
-                      disabled={archive.isPending}
-                      onClick={() => setConfirm({
-                        title: `Archive shift #${s.id}?`,
-                        description: 'The staff shift will be archived and removed from the schedule.',
-                        confirmLabel: 'Archive',
-                        run: () => archive.mutate(s.id),
-                      })}
-                    >
-                      <Trash2 /> Archive
-                    </Button>
-                  ) : (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      aria-label={`Restore shift #${s.id}`}
-                      disabled={unarchive.isPending}
-                      onClick={() => unarchive.mutate(s.id)}
-                    >
-                      <ArchiveRestore /> Restore
-                    </Button>
-                  )}
+                  <div className="flex justify-end gap-1">
+                    {s.is_active ? (
+                      <>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          aria-label={`Edit shift #${s.id}`}
+                          disabled={update.isPending}
+                          onClick={() => setEditing(s)}
+                        >
+                          <Pencil /> Edit
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          aria-label={`Archive shift #${s.id}`}
+                          disabled={archive.isPending}
+                          onClick={() => setConfirm({
+                            title: `Archive shift #${s.id}?`,
+                            description: 'The staff shift will be archived and removed from the schedule.',
+                            confirmLabel: 'Archive',
+                            run: () => archive.mutate(s.id),
+                          })}
+                        >
+                          <Trash2 /> Archive
+                        </Button>
+                      </>
+                    ) : (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        aria-label={`Restore shift #${s.id}`}
+                        disabled={unarchive.isPending}
+                        onClick={() => unarchive.mutate(s.id)}
+                      >
+                        <ArchiveRestore /> Restore
+                      </Button>
+                    )}
+                  </div>
                 </TableCell>
               </TableRow>
             ))}
@@ -933,25 +1169,38 @@ function StaffSchedulesTab() {
         {schedules.data?.map((s) => (
           <MobileCard key={s.id} aria-label={`Shift ${s.id}`}>
             <div className="mb-1 flex items-center justify-between gap-2">
-              <span className="font-mono text-sm font-medium text-foreground">#{s.user_id}</span>
+              <span className="text-sm font-medium text-foreground">{s.user_name ?? `#${s.user_id}`}</span>
               <div className="flex flex-wrap justify-end gap-1.5">
                 <Badge variant={s.schedule_type === 'leave' ? 'warning' : s.schedule_type === 'on_call' ? 'info' : 'secondary'}>{s.schedule_type}</Badge>
                 {!s.is_active && <Badge variant="secondary">Archived</Badge>}
               </div>
             </div>
+            <MobileCardField label="User"><PatientIdCell id={`#${s.user_id}`} name={s.user_name} /></MobileCardField>
             <MobileCardField label="Day"><span className="text-xs">{DAY_NAMES[s.day_of_week]}</span></MobileCardField>
             <MobileCardField label="Shift"><span className="font-mono text-xs">{s.shift_start.slice(0, 5)}–{s.shift_end.slice(0, 5)}</span></MobileCardField>
+            {s.effective_from !== null && (
+              <MobileCardField label="Effective">
+                <span className="font-mono text-xs text-muted-foreground">
+                  {s.effective_from.slice(0, 10)}{s.effective_to !== null ? ` → ${s.effective_to.slice(0, 10)}` : ' →'}
+                </span>
+              </MobileCardField>
+            )}
             <MobileCardActions>
               {s.is_active ? (
-                <Button size="sm" variant="outline" aria-label={`Archive shift #${s.id}`} disabled={archive.isPending}
-                  onClick={() => setConfirm({
-                    title: `Archive shift #${s.id}?`,
-                    description: 'The staff shift will be archived and removed from the schedule.',
-                    confirmLabel: 'Archive',
-                    run: () => archive.mutate(s.id),
-                  })}>
-                  <Trash2 /> Archive
-                </Button>
+                <>
+                  <Button size="sm" variant="outline" aria-label={`Edit shift #${s.id}`} disabled={update.isPending} onClick={() => setEditing(s)}>
+                    <Pencil /> Edit
+                  </Button>
+                  <Button size="sm" variant="outline" aria-label={`Archive shift #${s.id}`} disabled={archive.isPending}
+                    onClick={() => setConfirm({
+                      title: `Archive shift #${s.id}?`,
+                      description: 'The staff shift will be archived and removed from the schedule.',
+                      confirmLabel: 'Archive',
+                      run: () => archive.mutate(s.id),
+                    })}>
+                    <Trash2 /> Archive
+                  </Button>
+                </>
               ) : (
                 <Button size="sm" variant="outline" aria-label={`Restore shift #${s.id}`} disabled={unarchive.isPending}
                   onClick={() => unarchive.mutate(s.id)}>
@@ -962,6 +1211,17 @@ function StaffSchedulesTab() {
           </MobileCard>
         ))}
       </MobileCardList>
+
+      {/* Add-shift dialog — the create form lives in a modal; the
+          "Add shift" trigger sits in the tab bar. */}
+      <Dialog open={openAddShift} onOpenChange={onOpenAddShiftChange}>
+        {openAddShift && <AddShiftDialog onClose={() => onOpenAddShiftChange(false)} />}
+      </Dialog>
+
+      {/* Edit shift dialog — full CRUD is now reachable from the UI. */}
+      <Dialog open={editing !== null} onOpenChange={(o) => !o && setEditing(null)}>
+        {editing !== null && <EditShiftDialog schedule={editing} onClose={() => setEditing(null)} />}
+      </Dialog>
 
       <ConfirmDialog
         open={confirm !== null}
@@ -979,23 +1239,196 @@ function StaffSchedulesTab() {
   );
 }
 
+/** Create a shift template (modal) — mirrors the former inline form. */
+function AddShiftDialog({ onClose }: { onClose: () => void }) {
+  const create = useCreateStaffSchedule();
+  const [userId, setUserId] = useState('');
+  const [dow, setDow] = useState('1');
+  const [start, setStart] = useState('09:00');
+  const [end, setEnd] = useState('17:00');
+  const [type, setType] = useState<ScheduleType>('regular');
+  const [effFrom, setEffFrom] = useState('');
+  const [effTo, setEffTo] = useState('');
+
+  function submit() {
+    const parsed = createStaffScheduleSchema.safeParse({
+      user_id: userId,
+      day_of_week: dow,
+      shift_start: start,
+      shift_end: end,
+      schedule_type: type,
+      effective_from: effFrom === '' ? null : effFrom,
+      effective_to: effTo === '' ? null : effTo,
+    });
+    if (!parsed.success) {
+      toast.error(parsed.error.issues[0]?.message ?? 'Invalid input.');
+      return;
+    }
+    create.mutate(parsed.data, {
+      onSuccess: () => {
+        setUserId('');
+        setEffFrom('');
+        setEffTo('');
+        onClose();
+      },
+    });
+  }
+
+  return (
+    <DialogContent className="max-w-md">
+      <DialogHeader>
+        <DialogTitle>Add staff shift</DialogTitle>
+      </DialogHeader>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <div className="space-y-1.5">
+          <Label htmlFor="ss-user" className="text-xs">User ID</Label>
+          <Input id="ss-user" className="h-8 w-full" value={userId} onChange={(e) => setUserId(e.target.value)} />
+        </div>
+        <div className="space-y-1.5">
+          <Label id="ss-dow-label" className="text-xs">Day</Label>
+          <Select value={dow} onValueChange={setDow}>
+            <SelectTrigger aria-labelledby="ss-dow-label" className="h-8 w-full"><SelectValue /></SelectTrigger>
+            <SelectContent>{DAY_NAMES.map((n, i) => <SelectItem key={n} value={String(i)}>{n}</SelectItem>)}</SelectContent>
+          </Select>
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="ss-start" className="text-xs">Start</Label>
+          <TimePicker id="ss-start" value={start} onChange={setStart} />
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="ss-end" className="text-xs">End</Label>
+          <TimePicker id="ss-end" value={end} onChange={setEnd} />
+        </div>
+        <div className="space-y-1.5">
+          <Label id="ss-type-label" className="text-xs">Type</Label>
+          <Select value={type} onValueChange={(v) => setType(v as ScheduleType)}>
+            <SelectTrigger aria-labelledby="ss-type-label" className="h-8 w-full"><SelectValue /></SelectTrigger>
+            <SelectContent>{SCHEDULE_TYPES.map((t) => <SelectItem key={t} value={t}>{t}</SelectItem>)}</SelectContent>
+          </Select>
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="ss-eff-from" className="text-xs">From (optional)</Label>
+          <DatePicker id="ss-eff-from" value={effFrom} onChange={setEffFrom} className="h-8" />
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="ss-eff-to" className="text-xs">To (optional)</Label>
+          <DatePicker id="ss-eff-to" value={effTo} onChange={setEffTo} className="h-8" />
+        </div>
+      </div>
+      <DialogFooter>
+        <Button variant="outline" onClick={onClose} disabled={create.isPending}>Cancel</Button>
+        <Button onClick={submit} disabled={create.isPending}>
+          {create.isPending && <Loader2 className="animate-spin" />} Add shift
+        </Button>
+      </DialogFooter>
+    </DialogContent>
+  );
+}
+
+/** Edit a shift template — partial update wired to the existing endpoint. */
+function EditShiftDialog({ schedule, onClose }: { schedule: StaffSchedule; onClose: () => void }) {
+  const update = useUpdateStaffSchedule();
+  const [dow, setDow] = useState(String(schedule.day_of_week));
+  const [start, setStart] = useState(schedule.shift_start.slice(0, 5));
+  const [end, setEnd] = useState(schedule.shift_end.slice(0, 5));
+  const [type, setType] = useState<ScheduleType>(schedule.schedule_type);
+  const [effFrom, setEffFrom] = useState(schedule.effective_from?.slice(0, 10) ?? '');
+  const [effTo, setEffTo] = useState(schedule.effective_to?.slice(0, 10) ?? '');
+
+  function save() {
+    const parsed = updateStaffScheduleSchema.safeParse({
+      day_of_week: dow,
+      shift_start: start,
+      shift_end: end,
+      schedule_type: type,
+      effective_from: effFrom === '' ? null : effFrom,
+      effective_to: effTo === '' ? null : effTo,
+    });
+    if (!parsed.success) {
+      toast.error(parsed.error.issues[0]?.message ?? 'Invalid input.');
+      return;
+    }
+    update.mutate(
+      { id: schedule.id, input: parsed.data },
+      { onSuccess: onClose },
+    );
+  }
+
+  return (
+    <DialogContent className="max-w-md">
+      <DialogHeader>
+        <DialogTitle>Edit shift #{schedule.id}</DialogTitle>
+      </DialogHeader>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <div className="space-y-1.5">
+          <Label id="ed-dow-label" className="text-xs">Day</Label>
+          <Select value={dow} onValueChange={setDow}>
+            <SelectTrigger aria-labelledby="ed-dow-label" className="h-8 w-full"><SelectValue /></SelectTrigger>
+            <SelectContent>{DAY_NAMES.map((n, i) => <SelectItem key={n} value={String(i)}>{n}</SelectItem>)}</SelectContent>
+          </Select>
+        </div>
+        <div className="space-y-1.5">
+          <Label id="ed-type-label" className="text-xs">Type</Label>
+          <Select value={type} onValueChange={(v) => setType(v as ScheduleType)}>
+            <SelectTrigger aria-labelledby="ed-type-label" className="h-8 w-full"><SelectValue /></SelectTrigger>
+            <SelectContent>{SCHEDULE_TYPES.map((t) => <SelectItem key={t} value={t}>{t}</SelectItem>)}</SelectContent>
+          </Select>
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="ed-start" className="text-xs">Start</Label>
+          <TimePicker id="ed-start" value={start} onChange={setStart} />
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="ed-end" className="text-xs">End</Label>
+          <TimePicker id="ed-end" value={end} onChange={setEnd} />
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="ed-eff-from" className="text-xs">From (optional)</Label>
+          <DatePicker id="ed-eff-from" value={effFrom} onChange={setEffFrom} className="h-8" />
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="ed-eff-to" className="text-xs">To (optional)</Label>
+          <DatePicker id="ed-eff-to" value={effTo} onChange={setEffTo} className="h-8" />
+        </div>
+      </div>
+      <DialogFooter>
+        <Button variant="outline" onClick={onClose} disabled={update.isPending}>Cancel</Button>
+        <Button onClick={save} disabled={update.isPending}>
+          {update.isPending && <Loader2 className="animate-spin" />} Save changes
+        </Button>
+      </DialogFooter>
+    </DialogContent>
+  );
+}
+
 export default function ClinicPage() {
   const [cursor, setCursor] = useState<string | null>(null);
   const [history, setHistory] = useState<Array<string | null>>([null]);
-  const [tabParam, setTab] = useTabParam('open');
-  const tab = tabParam as 'open' | 'closed' | 'queue' | 'staff';
+  // Default landing surface is the live Queue (panel revision, August
+  // 2026): appointments auto-check-in and auto-queue for the day, and
+  // staff action buttons (Care / Vitals / Close / Mark no-show) live
+  // on each queue row. The Closed tab is the only remaining slice that
+  // drives from the encounter list.
+  const [tabParam, setTab] = useTabParam('queue');
+  const tab = tabParam as 'queue' | 'closed' | 'staff';
   const [openCreate, setOpenCreate] = useState(false);
   const [openImport, setOpenImport] = useState(false);
   const [openVitals, setOpenVitals] = useState<Encounter | null>(null);
   const [openCare, setOpenCare] = useState<Encounter | null>(null);
-  // Server-side status filter: the Open/Closed tabs each fetch their
-  // own slice instead of client-filtering one shared page (which made
-  // tab counts misleading and could hide rows on later pages).
-  const status = tab === 'open' ? 'open' : tab === 'closed' ? 'closed' : null;
+  const [openView, setOpenView] = useState<Encounter | null>(null);
+  // Staff schedules: the "Add shift" + "Show archived" controls live in
+  // the tab bar (right-aligned), so their state must be lifted here.
+  const [openAddShift, setOpenAddShift] = useState(false);
+  const [showArchived, setShowArchived] = useState(false);
+  // Server-side status filter: the Closed tab fetches its own slice
+  // instead of client-filtering one shared page (which made tab counts
+  // misleading and could hide rows on later pages). The Queue tab
+  // drives its data from the queue feed, not this list.
+  const status = tab === 'closed' ? 'closed' : null;
   const list = useEncounters(cursor, 25, status);
-  const close = useCloseEncounter();
-  const enqueue = useEnqueue();
-  const [confirm, setConfirm] = useState<ConfirmAction | null>(null);
+  // Note: encounter close / no-show mutations live inside QueueTab now
+  // — staff action buttons are per-row in the queue table (panel
+  // revision, August 2026). This page shell only manages dialogs.
 
   // Deep-link from the Appointments page: `/clinic?encounter=<id>`
   // highlights the auto-opened visit so staff can pick up where the
@@ -1049,65 +1482,34 @@ export default function ClinicPage() {
       </header>
 
       <Tabs value={tab} onValueChange={switchTab}>
-        <TabsList>
-          <TabsTrigger value="open">Open</TabsTrigger>
-          <TabsTrigger value="closed">Closed</TabsTrigger>
-          <TabsTrigger value="queue">Queue (today)</TabsTrigger>
-          <TabsTrigger value="staff">Staff schedules</TabsTrigger>
-        </TabsList>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <TabsList>
+            <TabsTrigger value="queue">Queue (today)</TabsTrigger>
+            <TabsTrigger value="closed">Closed</TabsTrigger>
+            <TabsTrigger value="staff">Staff schedules</TabsTrigger>
+          </TabsList>
 
-        <TabsContent value="open">
-          <p className="mb-2 flex items-center gap-1.5 text-xs text-muted-foreground">
-            <Info className="size-3.5" />
-            <span><strong className="font-medium text-foreground">Open</strong> = visit in progress; vitals, treatments and dispensing are allowed. Closing completes any linked appointment.</span>
-          </p>
-          <EncounterTable
-            rows={rows}
-            focusId={focusId}
-            isLoading={list.isLoading}
-            isError={list.isError}
-            onRetry={() => void list.refetch()}
-            retrying={list.isFetching}
-            page={history.length}
-            onPrev={prevPage}
-            onNext={nextPage}
-            canPrev={history.length > 1}
-            canNext={list.data?.next !== null && list.data?.next !== undefined}
-            actions={(e) => (
-              <div className="flex justify-end gap-1">
-                <Button className="min-h-11" size="sm" variant="secondary" onClick={() => setOpenCare(e)}>
-                  <ClipboardPlus /> Care
-                </Button>
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button className="min-h-11" size="sm" variant="outline" aria-label={`Actions for encounter #${e.id}`}>
-                      Actions <ChevronDown className="size-3.5" aria-hidden />
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end" className="w-52">
-                    <DropdownMenuItem className="min-h-11" disabled={enqueue.isPending} onSelect={() => enqueue.mutate(e.id)}>
-                      <ListPlus /> Add to queue
-                    </DropdownMenuItem>
-                    <DropdownMenuItem className="min-h-11" onSelect={() => setOpenVitals(e)}>
-                      <Stethoscope /> Record vitals
-                    </DropdownMenuItem>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuItem
-                      className="min-h-11 text-destructive focus:text-destructive"
-                      disabled={close.isPending}
-                      onSelect={() => setConfirm({
-                        title: `Close encounter #${e.id}?`,
-                        description: 'Closing an encounter is final; it can no longer be edited or have vitals or treatments added.',
-                        confirmLabel: 'Close encounter',
-                        run: () => close.mutate(e.id),
-                      })}
-                    >
-                      <X /> Close encounter
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              </div>
-            )}
+          {tab === 'staff' && (
+            <div className="flex items-center gap-2">
+              <Button size="sm" onClick={() => setOpenAddShift(true)}>
+                <Plus /> Add shift
+              </Button>
+              <Button
+                size="sm"
+                variant={showArchived ? 'secondary' : 'outline'}
+                aria-pressed={showArchived}
+                onClick={() => setShowArchived((v) => !v)}
+              >
+                <Archive /> {showArchived ? 'Hide archived' : 'Show archived'}
+              </Button>
+            </div>
+          )}
+        </div>
+
+        <TabsContent value="queue">
+          <QueueTab
+            onOpenCare={(e) => setOpenCare(e)}
+            onOpenVitals={(e) => setOpenVitals(e)}
           />
         </TabsContent>
 
@@ -1124,16 +1526,20 @@ export default function ClinicPage() {
             onNext={nextPage}
             canPrev={history.length > 1}
             canNext={list.data?.next !== null && list.data?.next !== undefined}
-            actions={() => null}
+            actions={(e) => (
+              <Button size="sm" variant="outline" onClick={() => setOpenView(e)}>
+                <Stethoscope className="size-3.5" /> View
+              </Button>
+            )}
           />
         </TabsContent>
 
-        <TabsContent value="queue">
-          <QueueTab />
-        </TabsContent>
-
         <TabsContent value="staff">
-          <StaffSchedulesTab />
+          <StaffSchedulesTab
+            showArchived={showArchived}
+            openAddShift={openAddShift}
+            onOpenAddShiftChange={setOpenAddShift}
+          />
         </TabsContent>
       </Tabs>
 
@@ -1149,18 +1555,11 @@ export default function ClinicPage() {
         </Dialog>
       )}
 
-      <ConfirmDialog
-        open={confirm !== null}
-        title={confirm?.title ?? ''}
-        description={confirm?.description}
-        confirmLabel={confirm?.confirmLabel}
-        pending={close.isPending}
-        onConfirm={() => {
-          confirm?.run();
-          setConfirm(null);
-        }}
-        onCancel={() => setConfirm(null)}
-      />
+      {openView !== null && (
+        <Dialog open onOpenChange={(o) => !o && setOpenView(null)}>
+          <EncounterViewDialog encounter={openView} onClose={() => setOpenView(null)} />
+        </Dialog>
+      )}
     </main>
   );
 }
@@ -1217,7 +1616,7 @@ function EncounterTable(props: EncounterTableProps) {
             {props.rows.map((e) => (
               <TableRow key={e.id} className={props.focusId === e.id ? 'bg-primary/5 outline outline-1 outline-primary/40' : undefined}>
                 <TableCell className="px-3 font-mono text-xs">{e.id}</TableCell>
-                <TableCell className="px-3 font-mono text-xs">{e.patient_school_id}</TableCell>
+                <TableCell className="px-3"><PatientIdCell id={e.patient_school_id} name={e.patient_name} /></TableCell>
                 <TableCell className="px-3">
                   {e.chief_complaint}
                   {(e.triage_priority ?? null) !== null && (
@@ -1231,8 +1630,8 @@ function EncounterTable(props: EncounterTableProps) {
                     </Badge>
                   )}
                 </TableCell>
-                <TableCell className="px-3 font-mono text-xs text-muted-foreground">{fmtUtcToApp(e.started_at)}</TableCell>
-                <TableCell className="px-3 font-mono text-xs text-muted-foreground">
+                <TableCell className="px-3 text-xs text-muted-foreground">{fmtUtcToApp(e.started_at)}</TableCell>
+                <TableCell className="px-3 text-xs text-muted-foreground">
                   {e.closed_at === null ? <Badge variant="info">{statusLabel(e.status)}</Badge> : fmtUtcToApp(e.closed_at)}
                 </TableCell>
                 <TableCell className="px-3 text-right">{props.actions(e)}</TableCell>
@@ -1268,7 +1667,7 @@ function EncounterTable(props: EncounterTableProps) {
               <span className="font-mono text-xs text-muted-foreground">#{e.id}</span>
               {e.closed_at === null
                 ? <Badge variant="info">{statusLabel(e.status)}</Badge>
-                : <span className="font-mono text-xs text-muted-foreground">Closed {fmtUtcToApp(e.closed_at)}</span>}
+                : <span className="text-xs text-muted-foreground">Closed {fmtUtcToApp(e.closed_at)}</span>}
             </div>
             <p className="text-sm font-medium text-foreground">{e.chief_complaint}</p>
             <div className="mt-1 flex flex-wrap gap-1.5">
@@ -1279,8 +1678,8 @@ function EncounterTable(props: EncounterTableProps) {
                 <Badge variant="secondary" className="gap-1"><CalendarClock className="size-3" /> Appt #{e.appointment_id}</Badge>
               )}
             </div>
-            <MobileCardField label="Patient"><span className="font-mono text-xs">{e.patient_school_id}</span></MobileCardField>
-            <MobileCardField label="Started"><span className="font-mono text-xs text-muted-foreground">{fmtUtcToApp(e.started_at)}</span></MobileCardField>
+            <MobileCardField label="Patient"><PatientIdCell id={e.patient_school_id} name={e.patient_name} /></MobileCardField>
+            <MobileCardField label="Started"><span className="text-xs text-muted-foreground">{fmtUtcToApp(e.started_at)}</span></MobileCardField>
             <MobileCardActions>{props.actions(e)}</MobileCardActions>
           </MobileCard>
         ))}

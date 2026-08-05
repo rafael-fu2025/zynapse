@@ -21,6 +21,7 @@ final class ReferralController extends ApiController
             new ReferralPolicy(),
             Services::auditOutbox(),
             Services::encryptionService(),
+            Services::notificationOutbox(),
         );
     }
 
@@ -36,6 +37,19 @@ final class ReferralController extends ApiController
             $page['data'],
             \App\Http\ApiResponse::paginationMeta($page['count'], $page['next'], null),
         );
+    }
+
+    /**
+     * Patient autocomplete for the referral form — narrow, referrals-
+     * scoped lookup (gated by referrals.create, not clinic.patients.read).
+     */
+    public function lookupPatient(): ResponseInterface
+    {
+        $q = trim((string) ($this->request->getGet('q') ?? ''));
+        if (mb_strlen($q) < 2) {
+            return $this->ok([]);
+        }
+        return $this->ok($this->service->lookupPatient($q, (int) ($this->request->getGet('limit') ?? 8)));
     }
 
     public function create(): ResponseInterface
@@ -92,6 +106,12 @@ final class ReferralController extends ApiController
     public function close(int $id): ResponseInterface
     {
         $dto = $this->service->close($id);
+        return $this->ok($dto->toArray());
+    }
+
+    public function revokeQr(int $id): ResponseInterface
+    {
+        $dto = $this->service->revokeQr($id);
         return $this->ok($dto->toArray());
     }
 

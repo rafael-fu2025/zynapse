@@ -9,6 +9,7 @@ use App\Modules\Shared\BaseService;
 use App\Pagination\KeysetPaginator;
 use App\Services\Analytics\TriageAssistant;
 use App\Services\Audit\AuditOutboxService;
+use App\Services\Notify\NotificationOutboxService;
 use DateTimeImmutable;
 use DateTimeZone;
 use Modules\Clinic\DTOs\EncounterDto;
@@ -20,6 +21,7 @@ final class ClinicService extends BaseService
     public function __construct(
         private readonly ClinicPolicy $policy,
         private readonly AuditOutboxService $audit,
+        private readonly NotificationOutboxService $notify,
     ) {
         parent::__construct();
     }
@@ -31,17 +33,37 @@ final class ClinicService extends BaseService
     {
         $this->policy->check('list');
 
-        $builder = $this->db->table('clinic_encounters')
-            ->select('id, patient_school_id, appointment_id, chief_complaint, triage_priority, triage_override, diagnosis, status, attending_user_id, started_at, closed_at, created_at')
-            ->where('archived_at', null)
-            ->orderBy('created_at', 'DESC')
-            ->orderBy('id', 'DESC');
+        $builder = $this->db->table('clinic_encounters e')
+            ->select("e.id, e.patient_user_id, e.patient_school_id, e.appointment_id, e.chief_complaint, e.triage_priority, e.triage_override, e.diagnosis, e.status, e.attending_user_id, e.started_at, e.closed_at, e.created_at, u.first_name, u.last_name")
+            // Patients are `users` (identity-consolidated) — the join
+            // powers the patient-name tooltip in the Closed tab. When
+            // the encounter only carries a school id (legacy/demo
+            // rows, patient_user_id NULL) we fall back to matching the
+            // registry by student/employee number so the name still
+            // resolves. The `e.patient_user_id IS NULL` guard keeps the
+            // canonical id-link authoritative when present (both
+            // number columns are UNIQUE, so at most one row matches).
+            ->join(
+                'users u',
+                'u.id = e.patient_user_id'
+                . ' OR (e.patient_user_id IS NULL'
+                .   ' AND (u.student_number = e.patient_school_id'
+                .     ' OR u.employee_number = e.patient_school_id))',
+                'left',
+            )
+            ->where('e.archived_at', null)
+            ->orderBy('e.created_at', 'DESC')
+            ->orderBy('e.id', 'DESC');
 
         if ($status !== null && in_array($status, ['open', 'closed', 'referred'], true)) {
-            $builder->where('status', $status);
+            // Qualify against the `users` join — both tables have a
+            // `status` column, so an unqualified WHERE would be ambiguous.
+            $builder->where('e.status', $status);
         }
 
-        KeysetPaginator::apply($builder, $cursor, $limit);
+        // Alias-qualified keyset columns keep the WHERE unambiguous
+        // against the `users` join (both tables have `id`/`created_at`).
+        KeysetPaginator::apply($builder, $cursor, $limit, 'e.created_at', 'e.id');
 
         $rows = $builder->get()->getResultArray();
         $final = KeysetPaginator::finalize($rows, $limit);
@@ -62,6 +84,7 @@ final class ClinicService extends BaseService
             $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
 
             $this->db->table('clinic_encounters')->insert([
+                'patient_user_id'   => $this->resolvePatientUserId($patientSchoolId),
                 'patient_school_id' => $patientSchoolId,
                 'chief_complaint'   => $chiefComplaint,
                 'status'            => 'open',
@@ -94,6 +117,13 @@ final class ClinicService extends BaseService
      * single transaction with ONE summary audit event (no PII beyond
      * what single-create already stores).
      *
+     * Panel revision (August 2026): imported encounters are
+     * auto-queued into the same transaction at the row-locked
+     * `MAX(position) + 1` slot, mirroring how `transition()` /
+     * `createEncounter()` keep the encounter + queue entries
+     * side-by-side. The queue date is the import's UTC day so the
+     * bulk-imported rows surface immediately on the staff queue page.
+     *
      * @param list<array{patient_school_id:string, chief_complaint:string}> $rows
      * @return array{imported:int, first_id:int, last_id:int}
      */
@@ -104,11 +134,13 @@ final class ClinicService extends BaseService
 
         return $this->txn(function () use ($rows, $userId): array {
             $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
+            $queueDate = substr($now, 0, 10);
 
             $firstId = 0;
             $lastId  = 0;
             foreach ($rows as $row) {
                 $this->db->table('clinic_encounters')->insert([
+                    'patient_user_id'   => $this->resolvePatientUserId((string) $row['patient_school_id']),
                     'patient_school_id' => $row['patient_school_id'],
                     'chief_complaint'   => $row['chief_complaint'],
                     'status'            => 'open',
@@ -121,6 +153,25 @@ final class ClinicService extends BaseService
                 if ($firstId === 0) {
                     $firstId = $lastId;
                 }
+
+                // Row-locked MAX(position) on the day's queue so
+                // bulk-imported rows never collide with a kiosk
+                // walk-in that's been queueing concurrently.
+                $lastPos = $this->db->query(
+                    'SELECT `position` FROM `clinic_queue_entries`'
+                    . ' WHERE `queue_date` = ? ORDER BY `position` DESC LIMIT 1 FOR UPDATE',
+                    [$queueDate],
+                )->getRowArray();
+                $position = ($lastPos !== null ? (int) $lastPos['position'] : 0) + 1;
+
+                $this->db->table('clinic_queue_entries')->insert([
+                    'encounter_id' => $lastId,
+                    'queue_date'   => $queueDate,
+                    'position'     => $position,
+                    'status'       => 'waiting',
+                    'created_at'   => $now,
+                    'updated_at'   => $now,
+                ]);
             }
 
             $this->audit->enqueue(
@@ -185,6 +236,25 @@ final class ClinicService extends BaseService
         });
     }
 
+    /**
+     * Read-only vitals history for an encounter (used to review a
+     * closed encounter's record). Descending by id so the most recent
+     * reading is first.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public function listVitals(int $encounterId): array
+    {
+        $this->policy->check('vitalsRead');
+
+        $rows = $this->db->table('clinic_vitals')
+            ->where('encounter_id', $encounterId)
+            ->orderBy('id', 'DESC')
+            ->get()->getResultArray();
+
+        return array_map(static fn (array $r): array => VitalsDto::fromRow($r)->toArray(), $rows);
+    }
+
     public function closeEncounter(int $encounterId): EncounterDto
     {
         $userId = \App\Auth\CurrentUser::assert();
@@ -242,6 +312,230 @@ final class ClinicService extends BaseService
             $row = $this->db->table('clinic_encounters')->where('id', $encounterId)->get()->getRowArray();
             return EncounterDto::fromRow($row);
         });
+    }
+
+    // ------------------------------------------------------ outcomes
+
+    /**
+     * Mark an open encounter as no-show (panel revision, August 2026).
+     *
+     * Cascades atomically inside a single transaction:
+     *   - encounter → `closed` + `outcome='no_show'`
+     *   - linked appointment → `no_show` (raw update; matches the
+     *     pattern `closeEncounter` already uses for the
+     *     `checked_in → completed` half of its cascade so we don't
+     *     fight CI4's nested-transaction depth counter)
+     *   - linked queue entry (if present) → `done` +
+     *     `outcome='no_show'` with `finished_at=now`
+     *
+     * Single audit event `clinic.encounter_no_show` and one
+     * notification outbox row to the provider with
+     * `{resource_code, next_status}` (within the existing whitelist).
+     *
+     * Validates encounter is still `open`; the queue entry, if
+     * present, must be in `waiting` (a queue entry that's already
+     * `in_session` means the patient was seen and is not a no-show).
+     */
+    public function markNoShow(int $encounterId): EncounterDto
+    {
+        $userId = \App\Auth\CurrentUser::assert();
+
+        return $this->txn(function () use ($encounterId, $userId): EncounterDto {
+            $enc = $this->selectForUpdate('clinic_encounters', ['id' => $encounterId, 'archived_at' => null]);
+            if ($enc === null) {
+                throw new ApiException('resource.not_found', 404, [
+                    ['code' => 'resource.not_found', 'message' => "Encounter #{$encounterId} not found."],
+                ]);
+            }
+
+            $this->policy->check('markNoShow', $enc);
+
+            if ((string) $enc['status'] !== 'open') {
+                throw new ApiException('statemachine.clinic.encounter_not_open', 409, [
+                    ['code' => 'statemachine.clinic.encounter_not_open',
+                     'message' => "Encounter #{$encounterId} is already {$enc['status']}."],
+                ]);
+            }
+
+            $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
+
+            // Lock the linked queue entry (if present) so we can
+            // validate and update without a TOCTOU race.
+            $queue = null;
+            $queueRow = $this->db->query(
+                'SELECT `id`, `status` FROM `clinic_queue_entries`'
+                . ' WHERE `encounter_id` = ? ORDER BY `id` DESC LIMIT 1 FOR UPDATE',
+                [$encounterId],
+            )->getRowArray();
+            if ($queueRow !== null) {
+                $queue = (string) $queueRow['status'];
+                if (! in_array($queue, ['waiting', 'called', 'in_session'], true)) {
+                    throw new ApiException('statemachine.clinic.queue_already_closed', 409, [
+                        ['code' => 'statemachine.clinic.queue_already_closed',
+                         'message' => "Queue entry is already {$queue}; cannot mark no-show."],
+                    ]);
+                }
+            }
+
+            // 1) Encounter → closed + outcome=no_show
+            $this->db->table('clinic_encounters')
+                ->where('id', $encounterId)
+                ->update([
+                    'status'     => 'closed',
+                    'closed_at'  => $now,
+                    'outcome'    => 'no_show',
+                    'updated_at' => $now,
+                ]);
+
+            // 2) Linked appointment → no_show (if linked + still
+            //    eligible per the widened TRANSITIONS map).
+            if (isset($enc['appointment_id']) && $enc['appointment_id'] !== null) {
+                $apptId = (int) $enc['appointment_id'];
+                $appt = $this->selectForUpdate('clinic_appointments', [
+                    'id'          => $apptId,
+                    'archived_at' => null,
+                ]);
+                if ($appt !== null && in_array((string) $appt['status'], ['scheduled', 'checked_in'], true)) {
+                    $this->db->table('clinic_appointments')
+                        ->where('id', $apptId)
+                        ->update(['status' => 'no_show', 'updated_at' => $now]);
+                    $this->audit->enqueue(
+                        'clinic.appointment_no_show',
+                        'clinic_appointments',
+                        $apptId,
+                        $userId,
+                        ['previous_status' => (string) $appt['status'], 'next_status' => 'no_show',
+                         'reason_code'     => 'encounter_no_show'],
+                    );
+                    // Same-transaction provider notification (within
+                    // the NotificationOutboxService whitelist).
+                    $this->notify->enqueue(
+                        (int) $appt['provider_user_id'],
+                        'appointment.no_show',
+                        ['resource_code' => 'appointment#' . $apptId, 'next_status' => 'no_show'],
+                    );
+                }
+            }
+
+            // 3) Queue entry → done + outcome=no_show (if linked).
+            if ($queueRow !== null) {
+                $this->db->table('clinic_queue_entries')
+                    ->where('id', (int) $queueRow['id'])
+                    ->update([
+                        'status'      => 'done',
+                        'finished_at' => $now,
+                        'outcome'     => 'no_show',
+                        'updated_at'  => $now,
+                    ]);
+            }
+
+            $this->audit->enqueue(
+                'clinic.encounter_no_show',
+                'clinic_encounters',
+                $encounterId,
+                $userId,
+                ['previous_status' => 'open', 'next_status' => 'closed', 'outcome' => 'no_show'],
+            );
+
+            $row = $this->db->table('clinic_encounters')->where('id', $encounterId)->get()->getRowArray();
+            return EncounterDto::fromRow($row);
+        });
+    }
+
+    /**
+     * Auto-close a stale open encounter (panel revision, August 2026).
+     *
+     * Runs once per queue-page load by `QueueService::today()`. Only
+     * fires on encounters whose `started_at` is BEFORE today's UTC
+     * midnight — anything opened today is left alone.
+     *
+     * Cascade mirrors `markNoShow()` minus the policy gate and minus
+     * the no-show-specific notification:
+     *   - encounter → `closed` + `outcome='auto_closed'`
+     *   - linked appointment → `completed` (if it was `checked_in`)
+     *   - queue entry → `done` + `outcome='auto_closed'`
+     *
+     * No-op when the encounter is no longer open (lost the race to a
+     * concurrent close/no-show).
+     */
+    public function autoCloseStaleEncounter(int $encounterId): void
+    {
+        $userId = \App\Auth\CurrentUser::assert();
+
+        try {
+            $this->txn(function () use ($encounterId, $userId): void {
+                $enc = $this->selectForUpdate('clinic_encounters', ['id' => $encounterId, 'archived_at' => null]);
+                if ($enc === null || (string) $enc['status'] !== 'open') {
+                    return; // lost the race — already closed by a parallel close/no-show
+                }
+
+                $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
+
+                $this->db->table('clinic_encounters')
+                    ->where('id', $encounterId)
+                    ->update([
+                        'status'     => 'closed',
+                        'closed_at'  => $now,
+                        'outcome'    => 'auto_closed',
+                        'updated_at' => $now,
+                    ]);
+
+                if (isset($enc['appointment_id']) && $enc['appointment_id'] !== null) {
+                    $appt = $this->selectForUpdate('clinic_appointments', [
+                        'id'          => (int) $enc['appointment_id'],
+                        'archived_at' => null,
+                    ]);
+                    if ($appt !== null && (string) $appt['status'] === 'checked_in') {
+                        $this->db->table('clinic_appointments')
+                            ->where('id', (int) $appt['id'])
+                            ->update(['status' => 'completed', 'updated_at' => $now]);
+                        $this->audit->enqueue(
+                            'clinic.appointment_completed',
+                            'clinic_appointments',
+                            (int) $appt['id'],
+                            $userId,
+                            ['previous_status' => 'checked_in', 'next_status' => 'completed',
+                             'reason_code'     => 'encounter_auto_closed'],
+                        );
+                    }
+                }
+
+                $queueRow = $this->db->query(
+                    'SELECT `id`, `status` FROM `clinic_queue_entries`'
+                    . ' WHERE `encounter_id` = ? ORDER BY `id` DESC LIMIT 1 FOR UPDATE',
+                    [$encounterId],
+                )->getRowArray();
+                if ($queueRow !== null
+                    && in_array((string) $queueRow['status'], ['waiting', 'called', 'in_session'], true)) {
+                    $this->db->table('clinic_queue_entries')
+                        ->where('id', (int) $queueRow['id'])
+                        ->update([
+                            'status'      => 'done',
+                            'finished_at' => $now,
+                            'outcome'     => 'auto_closed',
+                            'updated_at'  => $now,
+                        ]);
+                }
+
+                $this->audit->enqueue(
+                    'clinic.encounter_auto_closed',
+                    'clinic_encounters',
+                    $encounterId,
+                    $userId,
+                    ['previous_status' => 'open', 'next_status' => 'closed', 'outcome' => 'auto_closed'],
+                );
+            });
+        } catch (\Throwable $t) {
+            // The auto-close sweep is best-effort. If a single row
+            // fails (e.g. a concurrent transaction holds the lock)
+            // we log and continue — the next queue page load will
+            // retry it.
+            log_message('warning', sprintf(
+                'ClinicService::autoCloseStaleEncounter: id=%d skipped (%s)',
+                $encounterId,
+                $t->getMessage(),
+            ));
+        }
     }
 
     // ---------------------------------------------- triage + diagnosis
@@ -502,13 +796,18 @@ final class ClinicService extends BaseService
             ->orderBy('id', 'DESC')->limit(1)
             ->get()->getRowArray();
 
-        // Allergies via the clinic patient registry (same module domain):
-        // encounter.patient_school_id maps to patients_students.student_number.
-        $allergies = $this->db->table('patient_allergies a')
-            ->select('a.allergen, a.severity')
-            ->join('patients_students s', 's.id = a.student_id')
-            ->where('s.student_number', (string) $enc['patient_school_id'])
-            ->get()->getResultArray();
+        // Allergies via the consolidated patient (patient_allergies.user_id).
+        // Resolve the encounter's patient to a user id when needed.
+        $patientUserId = isset($enc['patient_user_id']) && $enc['patient_user_id'] !== null
+            ? (int) $enc['patient_user_id']
+            : $this->resolvePatientUserId((string) ($enc['patient_school_id'] ?? ''));
+        $allergies = [];
+        if ($patientUserId !== null) {
+            $allergies = $this->db->table('patient_allergies a')
+                ->select('a.allergen, a.severity')
+                ->where('a.user_id', $patientUserId)
+                ->get()->getResultArray();
+        }
 
         $result = (new TriageAssistant())->analyze(
             (string) $enc['chief_complaint'],
@@ -598,5 +897,18 @@ final class ClinicService extends BaseService
                 'final_priority' => $finalPriority,
             ];
         });
+    }
+
+    /**
+     * Resolve a patient identifier (student/employee number) to a
+     * consolidated `users.id`, or null when unknown.
+     */
+    private function resolvePatientUserId(string $identifier): ?int
+    {
+        if ($identifier === '') {
+            return null;
+        }
+        [, $patient] = (new PatientLookupService())->findByIdentifier($identifier);
+        return $patient !== null ? (int) $patient['id'] : null;
     }
 }

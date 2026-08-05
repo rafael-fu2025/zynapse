@@ -331,15 +331,17 @@ export function CommandPalette() {
       <DialogContent
         // Override the canned padding/sizing + animation. The default
         // DialogContent is a centered modal (top:50% + zoom-in-95); for
-        // a command palette the conventional "launcher" feel is a
-        // top-anchored panel that drops in from above the viewport and
-        // retracts back up on close — so we:
-        //   1. pin it near the top (`sm:top-[10vh]`) and drop the
-        //      vertical-centering `translate-y-[-50%]`
-        //   2. use a much larger slide distance (40vh) so the motion
-        //      reads as "drop down" / "retract up", not "fade and
-        //      zoom 48%". `duration-200` keeps it snappy.
-        className="max-w-xl gap-0 overflow-hidden border bg-popover p-0 text-popover-foreground shadow-lg duration-200 sm:top-[10vh] sm:translate-y-0 sm:data-[state=open]:slide-in-from-top-[-40vh] sm:data-[state=closed]:slide-out-to-top-[-40vh]"
+        // a command palette we pin it near the top (`sm:top-[10vh]`).
+        //
+        // Animation — slide down + fade in on open, slide up + fade out
+        // on close. Centering is done via `inset-x-0 mx-auto` (margin
+        // auto) so the keyframe in `styles/index.css` can animate only
+        // `translateY` and `opacity` — the transform is never touched
+        // on the X axis, so the motion is purely vertical. The
+        // `sm:translate-x-0!` is needed to cancel the base
+        // `translate-x-[-50%]` transform-based centering. Scoped to
+        // ≥sm only; on mobile the shared bottom-sheet applies.
+        className="max-w-xl gap-0 overflow-hidden border bg-popover p-0 text-popover-foreground shadow-lg sm:top-[10vh] sm:inset-x-0 sm:mx-auto sm:translate-x-0! sm:translate-y-0 synapse-palette-content"
         onOpenAutoFocus={(e) => {
           // We drive focus to the search field ourselves, so the title
           // doesn't steal it on every render.

@@ -197,14 +197,20 @@ export function useAddContact() {
   });
 }
 
-export function useEmployees(cursor: string | null, limit = 25, includeArchived = false) {
+export function useEmployees(
+  cursor: string | null,
+  limit = 25,
+  includeArchived = false,
+  teaching: 'all' | 'teaching' | 'non_teaching' = 'all',
+) {
   return useQuery<EmployeePage, ApiEnvelopeError>({
-    queryKey: ['patients', 'employees', { cursor, limit, includeArchived }],
+    queryKey: ['patients', 'employees', { cursor, limit, includeArchived, teaching }],
     queryFn: async () => {
       const params = new URLSearchParams();
       if (cursor !== null) params.set('cursor', cursor);
       params.set('limit', String(limit));
       if (includeArchived) params.set('include_archived', '1');
+      if (teaching !== 'all') params.set('teaching', teaching);
       const res = await apiClient.get<{ data: unknown[]; next: string | null }>(
         `/clinic/employees?${params.toString()}`,
       );

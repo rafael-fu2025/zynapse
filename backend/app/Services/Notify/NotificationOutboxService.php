@@ -26,6 +26,7 @@ final class NotificationOutboxService
      */
     private const CONTEXT_KEYS = [
         'resource_code', 'next_status', 'scheduled_at',
+        'source_module', 'target_module', 'urgency', 'position',
     ];
 
     /**
@@ -52,5 +53,31 @@ final class NotificationOutboxService
             'created_at'        => (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s'),
             'processed_at'      => null,
         ]);
+    }
+
+    /**
+     * Fan out one notification to every user holding ANY of
+     * `$permissionCodes` (union, deduped). Recipients are resolved from
+     * the group matrix + direct grants at ENQUEUE time (inside the
+     * caller's transaction), so the outbox rows are consistent with the
+     * business change. Used for role-based notices (e.g. "the receiving
+     * side should look at this referral").
+     *
+     * @param array<int, string> $permissionCodes
+     * @param array<string, mixed> $contextWhitelist
+     */
+    public function enqueueToPermissions(
+        array $permissionCodes,
+        string $templateCode,
+        array $contextWhitelist = [],
+        string $channel = 'inapp',
+    ): void {
+        $ids = [];
+        foreach ($permissionCodes as $code) {
+            $ids = array_merge($ids, Services::permissionService()->userIdsWithPermission($code));
+        }
+        foreach (array_unique($ids) as $uid) {
+            $this->enqueue((int) $uid, $templateCode, $contextWhitelist, $channel);
+        }
     }
 }

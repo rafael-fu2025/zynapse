@@ -6,10 +6,15 @@ Thumbs.db
 *.swp
 .idea/
 .vscode/
+.zcode/
 
 # --- Dev-only runtime state at workspace root ---
 # Local debug cookies from ad-hoc PowerShell probes
 cookies.txt
+
+# Ad-hoc probe output files
+/backend/probe.out
+/backend/probe.err
 
 # Local dev helper (the actual "dev" workflow is in backend + frontend)
 dev-fast.ps1
@@ -17,8 +22,17 @@ dev-fast.ps1
 # Anything inside writable/ (runtime caches, logs, uploads, backups, sessions)
 /writable/
 
-# Local scripts (sandboxed one-off tooling)
-/scripts/
+# Local scripts (sandboxed one-off tooling) — but the dev-up/down/setup trio
+# are committed so they ship with the repo.
+# (/scripts/ itself stays ignored to keep one-off tooling out of git.)
+/scripts/*
+!/scripts/dev-up.ps1
+!/scripts/dev-down.ps1
+!/scripts/setup.ps1
+!/scripts/_start-mariadb.ps1
+!/scripts/_lint-scripts.ps1
+!/scripts/.gitkeep
+
 
 # --- Backend (CI4) ---
 /backend/vendor/
@@ -60,4 +74,6 @@ dev-fast.ps1
 
 
 zynapsemobile
-docs
+# docs/ contains committed runbooks (SETUP.md, CREDENTIALS.md, ...); do not
+# blanket-ignore it. Add specific subfolder ignores below if any draft dirs
+# are added later.

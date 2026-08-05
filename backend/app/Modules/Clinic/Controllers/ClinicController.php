@@ -17,7 +17,7 @@ final class ClinicController extends ApiController
 
     public function __construct(?ClinicService $service = null)
     {
-        $this->service = $service ?? new ClinicService(new ClinicPolicy(), Services::auditOutbox());
+        $this->service = $service ?? new ClinicService(new ClinicPolicy(), Services::auditOutbox(), Services::notificationOutbox());
     }
 
     public function listEncounters(): ResponseInterface
@@ -72,9 +72,29 @@ final class ClinicController extends ApiController
         return $this->ok($dto->toArray(), null, 201);
     }
 
+    public function listVitals(int $encounterId): ResponseInterface
+    {
+        return $this->ok($this->service->listVitals($encounterId));
+    }
+
     public function closeEncounter(int $encounterId): ResponseInterface
     {
         $dto = $this->service->closeEncounter($encounterId);
+        return $this->ok($dto->toArray());
+    }
+
+    /**
+     * Mark an open encounter as no-show (panel revision, August 2026).
+     *
+     * Cascades atomically: the encounter closes with outcome='no_show',
+     * a linked appointment that was scheduled or checked_in advances
+     * to no_show, and the linked queue entry (if present) lands on
+     * done + outcome='no_show'. The provider receives an in-app
+     * notification in the same transaction.
+     */
+    public function markNoShow(int $encounterId): ResponseInterface
+    {
+        $dto = $this->service->markNoShow($encounterId);
         return $this->ok($dto->toArray());
     }
 

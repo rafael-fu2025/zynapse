@@ -15,7 +15,7 @@
  *   #10 ready-to-scan indicator driven by real input focus
  */
 import { Html5Qrcode } from 'html5-qrcode';
-import { AlertTriangle, Camera, Loader2, XCircle } from 'lucide-react';
+import { AlertTriangle, Camera, CircleAlert, Loader2, XCircle } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
@@ -125,6 +125,13 @@ function utcNowSql(): string {
 // redundant POSTs are avoidable.
 let syncInFlight = false;
 
+export interface ResolvedPatient {
+  id: number;
+  kind: 'student' | 'employee' | 'guest';
+  name: string;
+  schoolId: string | null;
+}
+
 export interface KioskController {
   identifier: string;
   setIdentifier: (v: string) => void;
@@ -144,7 +151,9 @@ export interface KioskController {
   clearError: () => void;
   submit: () => void;
   /** Submit a decoded value directly (camera scan path, gap #8). */
-  submitIdentifier: (id: string, method: ScanMethod) => void;
+  submitIdentifier: (id: string, method: ScanMethod, purpose?: string, asGuest?: boolean) => void;
+  /** Submit a guest walk-in by name (no account / patient record). */
+  submitGuest: (name: string, purpose?: string) => void;
   scanPending: boolean;
   pending: number;
   syncing: boolean;
@@ -156,6 +165,12 @@ export interface KioskController {
   inputRef: React.RefObject<HTMLInputElement>;
   focused: boolean;
   setFocused: (f: boolean) => void;
+  /** Resolved patient from the station's name autocomplete. */
+  resolvedPatient: ResolvedPatient | null;
+  setResolvedPatient: (p: ResolvedPatient | null) => void;
+  /** Selected check-in purpose (station mode). */
+  purpose: string;
+  setPurpose: (p: string) => void;
 }
 
 export function useKioskController(autoClearSeconds = 15): KioskController {
@@ -174,6 +189,8 @@ export function useKioskController(autoClearSeconds = 15): KioskController {
   const [scanError, setScanError] = useState<string | null>(null);
   const [flash, setFlash] = useState<ChimeKind | null>(null);
   const [focused, setFocused] = useState(false);
+  const [resolvedPatient, setResolvedPatient] = useState<ResolvedPatient | null>(null);
+  const [purpose, setPurpose] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
   const flashTimer = useRef<ReturnType<typeof setTimeout>>();
 
@@ -217,13 +234,27 @@ export function useKioskController(autoClearSeconds = 15): KioskController {
   }, [result, autoClearSeconds]);
 
   const submitIdentifier = useCallback(
-    (rawId: string, m: ScanMethod) => {
+    (rawId: string, m: ScanMethod, purposeOverride?: string, asGuest = false) => {
       const id = normalizeKioskIdentifier(rawId, m);
       if (id === '') return;
       // Clear any prior inline error so a fresh attempt starts clean.
       setScanError(null);
       const runAttempt = (attemptId: string): Promise<unknown> =>
-        scan.mutateAsync({ identifier: attemptId, method: m, station_id: station });
+        scan.mutateAsync(
+          asGuest
+            ? {
+                guest_name: attemptId,
+                method: m,
+                station_id: station,
+                purpose: purposeOverride ?? undefined,
+              }
+            : {
+                identifier: attemptId,
+                method: m,
+                station_id: station,
+                purpose: purposeOverride ?? undefined,
+              },
+        );
       const attempt = async (first: string, retry: string | null): Promise<unknown> => {
         try {
           return await runAttempt(first);
@@ -252,17 +283,44 @@ export function useKioskController(autoClearSeconds = 15): KioskController {
           const r = scanResultSchema.parse(data);
           setResult(r);
           setIdentifierState('');
-          feedback(r.outcome === 'duplicate' ? 'warn' : 'success');
+          setResolvedPatient(null);
+          setPurpose('');
+          // Duplicates now surface in a proper modal (DuplicateResultDialog) —
+          // keep the audio cue but drop the full-screen flash so "already
+          // checked in" reads as a clear dialog instead of a color sweep.
+          if (r.outcome === 'duplicate') {
+            playChime('warn');
+          } else {
+            feedback('success');
+          }
           inputRef.current?.focus();
         })
         .catch((err: ApiEnvelopeError | { httpStatus: number; errors?: { message?: string }[] }) => {
           if (err instanceof Object && 'httpStatus' in err && err.httpStatus === 0) {
             // Network down — buffer for later sync (legacy offline flow).
             const buffered = readBuffer();
-            buffered.push({ identifier: id, method: m, station_id: station, scanned_at: utcNowSql() });
+            buffered.push(
+              asGuest
+                ? {
+                    guest_name: id,
+                    method: m,
+                    station_id: station,
+                    ...(purposeOverride !== undefined ? { purpose: purposeOverride } : {}),
+                    scanned_at: utcNowSql(),
+                  }
+                : {
+                    identifier: id,
+                    method: m,
+                    station_id: station,
+                    ...(purposeOverride !== undefined ? { purpose: purposeOverride } : {}),
+                    scanned_at: utcNowSql(),
+                  },
+            );
             writeBuffer(buffered);
             setPending(buffered.length);
             setIdentifierState('');
+            setResolvedPatient(null);
+            setPurpose('');
             toast.warning('Offline — scan buffered locally.');
             return;
           }
@@ -279,8 +337,28 @@ export function useKioskController(autoClearSeconds = 15): KioskController {
   );
 
   const submit = useCallback(
-    () => submitIdentifier(identifier, method),
-    [submitIdentifier, identifier, method],
+    () => {
+      // Station mode: a name-resolved patient checks in by school id so
+      // the backend's exact-match resolution stays authoritative; guests
+      // check in by name. The scan path falls through to the raw input.
+      if (resolvedPatient !== null) {
+        if (resolvedPatient.kind === 'guest') {
+          submitIdentifier(resolvedPatient.name, 'manual', purpose, true);
+        } else {
+          submitIdentifier(resolvedPatient.schoolId ?? '', 'manual', purpose);
+        }
+      } else {
+        submitIdentifier(identifier, method, purpose);
+      }
+    },
+    [submitIdentifier, identifier, method, purpose, resolvedPatient],
+  );
+
+  const submitGuest = useCallback(
+    (name: string, purposeOverride?: string) => {
+      submitIdentifier(name, 'manual', purposeOverride, true);
+    },
+    [submitIdentifier],
   );
 
   const syncBuffer = useCallback(async () => {
@@ -295,11 +373,19 @@ export function useKioskController(autoClearSeconds = 15): KioskController {
     for (const s of buffered) {
       try {
         // Normalize on replay too — the user might have keyed the ID
-        // with or without dashes during the offline session.
-        await scan.mutateAsync({
-          ...s,
-          identifier: normalizeKioskIdentifier(s.identifier, s.method),
-        });
+        // with or without dashes during the offline session. Guest
+        // buffers replay by name instead of identifier.
+        if (s.guest_name !== undefined && s.guest_name !== '') {
+          await scan.mutateAsync({
+            ...s,
+            guest_name: normalizeKioskIdentifier(s.guest_name, 'manual'),
+          });
+        } else {
+          await scan.mutateAsync({
+            ...s,
+            identifier: normalizeKioskIdentifier(s.identifier ?? '', s.method),
+          });
+        }
         synced += 1;
       } catch (err) {
         const status = err instanceof Object && 'httpStatus' in err ? (err as { httpStatus: number }).httpStatus : 0;
@@ -310,7 +396,7 @@ export function useKioskController(autoClearSeconds = 15): KioskController {
           // buffer but record it so the operator can re-key it.
           const message =
             (err as { errors?: { message: string }[] }).errors?.[0]?.message ?? 'Rejected by server.';
-          dropped.push({ identifier: s.identifier, message });
+          dropped.push({ identifier: s.guest_name ?? s.identifier ?? '', message });
         }
       }
     }
@@ -350,6 +436,7 @@ export function useKioskController(autoClearSeconds = 15): KioskController {
     clearError: () => setScanError(null),
     submit,
     submitIdentifier,
+    submitGuest,
     scanPending: scan.isPending,
     pending,
     syncing,
@@ -360,6 +447,10 @@ export function useKioskController(autoClearSeconds = 15): KioskController {
     inputRef,
     focused,
     setFocused,
+    resolvedPatient,
+    setResolvedPatient,
+    purpose,
+    setPurpose,
   };
 }
 
@@ -468,6 +559,78 @@ export function QueueAssignmentDialog({
                   Estimated wait ~{waitMinutes} min
                 </p>
               )}
+            </div>
+          )}
+          <DialogFooter>
+            <Button
+              type="button"
+              size={large ? 'lg' : 'default'}
+              className={large ? 'min-h-12 w-full text-lg' : 'w-full'}
+              onClick={onDone}
+              autoFocus
+            >
+              Done
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      )}
+    </Dialog>
+  );
+}
+
+/**
+ * Duplicate check-in notice — replaces the old full-screen color flash
+ * for a repeat scan with a proper modal, so "already checked in" reads
+ * as a clear dialog (bystander-friendly, no alarm). Auto-clears with the
+ * same controller countdown as the queue dialog; "Done" hands control
+ * back to the next kiosk user.
+ */
+export function DuplicateResultDialog({
+  result,
+  onDone,
+  large = false,
+}: {
+  result: ScanResult | null;
+  onDone: () => void;
+  large?: boolean;
+}) {
+  const open = result !== null && result.outcome === 'duplicate';
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(o) => {
+        // Escape / overlay click / X close — clear result so the next
+        // user can scan immediately.
+        if (!o) onDone();
+      }}
+    >
+      {open && (
+        <DialogContent
+          className={large ? 'max-w-lg gap-6 p-8' : 'max-w-md gap-4'}
+          onEscapeKeyDown={() => onDone()}
+        >
+          <DialogHeader className={large ? 'gap-2' : undefined}>
+            <DialogTitle className={large ? 'text-2xl' : 'text-lg'}>
+              Already checked in
+            </DialogTitle>
+            <DialogDescription>
+              This person was already checked in within the last 5 minutes — no
+              new queue number was issued.
+            </DialogDescription>
+          </DialogHeader>
+          {result !== null && (
+            <div className="flex flex-col items-center gap-3 text-center">
+              <CircleAlert className="size-12 text-amber-500" aria-hidden />
+              <p
+                className={
+                  large
+                    ? 'text-lg font-medium text-foreground'
+                    : 'text-base font-medium text-foreground'
+                }
+              >
+                {result.student.name}
+              </p>
+              <p className="text-sm text-muted-foreground">{result.message}</p>
             </div>
           )}
           <DialogFooter>

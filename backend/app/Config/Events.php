@@ -55,3 +55,28 @@ Events::on('pre_system', static function (): void {
         }
     }
 });
+
+/*
+ * --------------------------------------------------------------------
+ * Audit outbox auto-drain.
+ * --------------------------------------------------------------------
+ * In dev/demo there is no cron worker, so after each web response we
+ * opportunistically drain pending `audit_outbox` rows into the
+ * append-only `audit_events` chain (cooldown-gated, never CLI/tests).
+ * This keeps the Audit reader near-real-time without a scheduler.
+ */
+Events::on('post_system', static function (): void {
+    if (! is_cli()) {
+        \Config\Services::auditAutoDrain()->maybeDrain();
+        // Inventory audit fix: sweep for low-stock reorders so stock-outs
+        // are caught even when nobody clicks "Run auto-check". Cooldown-
+        // gated (30 min) so it is not a write per request.
+        \Config\Services::reorderAutoCheck()->maybeRun();
+        // Notification audit fix (2026-08-05): without this the outbox
+        // rows written in-transaction (appointment.assigned, no_show, …)
+        // pile up forever and the header bell stays empty. Cooldown-
+        // gated (10s) so it is not a write per request.
+        \Config\Services::notificationAutoDrain()->maybeDrain();
+    }
+});
+

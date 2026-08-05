@@ -10,6 +10,14 @@ export const ENCOUNTER_STATUSES = ['open', 'closed', 'referred'] as const;
 export type EncounterStatus = (typeof ENCOUNTER_STATUSES)[number];
 
 /**
+ * Non-staff close outcomes (panel revision, August 2026). Only set
+ * when an encounter closes via a path other than the staff "Close"
+ * action; null for normal closes and referrals.
+ */
+export const ENCOUNTER_OUTCOMES = ['no_show', 'auto_closed'] as const;
+export type EncounterOutcome = (typeof ENCOUNTER_OUTCOMES)[number];
+
+/**
  * Encounter status contract (panel revision):
  *   - `open`     : visit in progress — vitals, treatments and medicine
  *                  dispensing are only allowed in this state.
@@ -19,6 +27,9 @@ export type EncounterStatus = (typeof ENCOUNTER_STATUSES)[number];
 export const encounterSchema = z.object({
   id: z.number().int().positive(),
   patient_school_id: z.string(),
+  // Patient display name from the unified registry — powers the
+  // id-number tooltip in the Closed tab; null for guests.
+  patient_name: z.string().nullable().optional(),
   // Scheduling-layer link — set when the visit was auto-opened by an
   // appointment check-in; null for walk-ins.
   appointment_id: z.number().int().positive().nullable().optional(),
@@ -27,6 +38,7 @@ export const encounterSchema = z.object({
   triage_override: z.boolean().optional(),
   diagnosis: z.string().nullable().optional(),
   status: z.enum(ENCOUNTER_STATUSES),
+  outcome: z.enum(ENCOUNTER_OUTCOMES).nullable().optional(),
   attending_user_id: z.number().int().positive(),
   started_at: z.string(),
   closed_at: z.string().nullable(),
@@ -97,6 +109,9 @@ export const vitalsSchema = z.object({
   recorded_at: z.string(),
 });
 export type Vitals = z.infer<typeof vitalsSchema>;
+
+export const vitalsListSchema = z.array(vitalsSchema);
+export type VitalsList = z.infer<typeof vitalsListSchema>;
 
 export const recordVitalsSchema = z.object({
   bp_systolic:  z.number().int().min(0).max(300).optional(),

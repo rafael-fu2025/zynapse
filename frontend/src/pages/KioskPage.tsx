@@ -283,7 +283,7 @@ export default function KioskPage() {
                 <TableCell className="px-3">
                   <Badge variant={OUTCOME_VARIANT[c.outcome]}>{OUTCOME_LABEL[c.outcome]}</Badge>
                 </TableCell>
-                <TableCell className="px-3 font-mono text-xs text-muted-foreground">{fmtUtcToApp(c.scanned_at)}</TableCell>
+                <TableCell className="px-3 text-xs text-muted-foreground">{fmtUtcToApp(c.scanned_at)}</TableCell>
               </TableRow>
             ))}
           </TableBody>

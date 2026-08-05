@@ -26,6 +26,10 @@ export function useAppointments(cursor: string | null, limit = 25, status: Appoi
     // triggers a fresh fetch (and so a future "All" query does not
     // accidentally render the previously-filtered list).
     queryKey: ['appointments', { cursor, limit, status }],
+    // Appointments are auto-checked-in server-side (the queue sweep +
+    // the kiosk station), so poll to keep statuses current without a
+    // manual refresh.
+    refetchInterval: 30_000,
     queryFn: async () => {
       const params = new URLSearchParams();
       if (cursor !== null) params.set('cursor', cursor);

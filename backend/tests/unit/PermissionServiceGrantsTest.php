@@ -8,11 +8,12 @@ use App\Services\Rbac\PermissionService;
 use PHPUnit\Framework\TestCase;
 
 /**
- * PermissionService::grants() — wildcard-exclusion policy (RBAC_SECURITY_REVIEW R1).
+ * PermissionService::grants() — wildcard-exclusion policy.
  *
- * Exercises the pure grant decision without a database: sensitive
- * counselling codes must never be satisfied by the admin wildcard alone;
- * they require an explicit code in the resolved effective list.
+ * Exercises the pure grant decision without a database. The counselling
+ * records exclusion (RBAC_SECURITY_REVIEW R1) was lifted per product
+ * decision, so the admin wildcard now grants every permission code,
+ * including counselling.records.*.
  */
 final class PermissionServiceGrantsTest extends TestCase
 {
@@ -23,14 +24,11 @@ final class PermissionServiceGrantsTest extends TestCase
         $this->svc = new PermissionService();
     }
 
-    public function testWildcardDoesNotGrantSensitiveCounsellingCodes(): void
+    public function testWildcardGrantsAllCodesIncludingCounselling(): void
     {
-        foreach (PermissionService::WILDCARD_EXCLUSIONS as $code) {
-            $this->assertFalse(
-                $this->svc->grants(['*'], $code),
-                "wildcard must NOT grant excluded code {$code}",
-            );
-        }
+        $this->assertTrue($this->svc->grants(['*'], 'counselling.records.read'));
+        $this->assertTrue($this->svc->grants(['*'], 'counselling.records.write'));
+        $this->assertTrue($this->svc->grants(['*'], 'counselling.records.create'));
     }
 
     public function testWildcardGrantsNonSensitiveCodes(): void
@@ -41,7 +39,7 @@ final class PermissionServiceGrantsTest extends TestCase
         $this->assertTrue($this->svc->grants(['*'], 'audit.export'));
     }
 
-    public function testExplicitGrantAllowsSensitiveCode(): void
+    public function testExplicitGrantAllowsCode(): void
     {
         $counsellor = [
             'counselling.records.create',
@@ -63,12 +61,11 @@ final class PermissionServiceGrantsTest extends TestCase
         $this->assertFalse($this->svc->grants($clinic, 'clinic.patients.write'));
     }
 
-    public function testAdminWithCollapsedListIsDeniedSensitiveCode(): void
+    public function testAdminWithCollapsedListGrantsCounselling(): void
     {
-        // allForUser() collapses any wildcard holder to ['*'] — even a
-        // dev admin carrying legacy per-user grants — so excluded codes
-        // are denied regardless of those legacy grants.
-        $this->assertFalse($this->svc->grants(['*'], 'counselling.records.read'));
+        // allForUser() collapses any wildcard holder to ['*']; with the
+        // R1 exclusion lifted, the wildcard satisfies counselling codes.
+        $this->assertTrue($this->svc->grants(['*'], 'counselling.records.read'));
     }
 
     public function testNonExcludedExplicitCodeAllowedWithoutWildcard(): void
@@ -78,9 +75,9 @@ final class PermissionServiceGrantsTest extends TestCase
 
     public function testCustomWildcardTokenHonoured(): void
     {
-        // The wildcard token is configurable; a non-'*' token must behave
-        // identically for both the grant and the exclusion paths.
+        // The wildcard token is configurable; a non-'*' token behaves
+        // identically for the grant path.
         $this->assertTrue($this->svc->grants(['ALL'], 'clinic.encounters.read', 'ALL'));
-        $this->assertFalse($this->svc->grants(['ALL'], 'counselling.records.read', 'ALL'));
+        $this->assertTrue($this->svc->grants(['ALL'], 'counselling.records.read', 'ALL'));
     }
 }

@@ -41,7 +41,13 @@ final class ClinicalForeignKeys extends Migration
         'clinic_encounters'      => ['kind' => null,         'has_archived_at' => true],
         'clinic_appointments'     => ['kind' => null,         'has_archived_at' => true],
         'counselling_sessions'   => ['kind' => null,         'has_archived_at' => true],
-        'clinic_checkins'         => ['kind' => null,         'has_archived_at' => true],
+        // clinic_checkins was created without an archived_at column (legacy
+        // schema from the Iot\CheckinController migration). The security
+        // spec requires soft-delete via archived_at on every clinical table;
+        // tracked as a follow-up — for now we skip the t.archived_at
+        // predicate so the backfill SQL stays valid. New clinical tables
+        // (added after Phase 18) MUST include archived_at.
+        'clinic_checkins'         => ['kind' => null,         'has_archived_at' => false],
         'referral_referrals'      => ['kind' => null,         'has_archived_at' => true],
         // clinic_queue_entries and clinic_treatments do not have
         // patient_school_id; they are linked via encounter_id and need
@@ -71,7 +77,7 @@ final class ClinicalForeignKeys extends Migration
                         'after'      => 'patient_school_id',
                     ],
                 ]);
-                $this->forge->addKey($table, 'patient_identifier_id', 'idx_' . $table . '_pi');
+                $this->forge->addKey('patient_identifier_id', false, false, 'idx_' . $table . '_pi');
             }
 
             // Backfill — for each row, try to resolve patient_school_id

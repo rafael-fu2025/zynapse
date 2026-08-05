@@ -20,7 +20,12 @@ final class BmgController extends ApiController
 
     public function __construct(?BmgService $service = null)
     {
-        $this->service = $service ?? new BmgService(new BmgPolicy(), Services::auditOutbox());
+        $this->service = $service ?? new BmgService(
+            new BmgPolicy(),
+            Services::auditOutbox(),
+            null,
+            Services::notificationOutbox(),
+        );
     }
 
     public function listUnits(): ResponseInterface
@@ -208,6 +213,7 @@ final class BmgController extends ApiController
 
         $rules = [
             'log_date'            => 'permit_empty|valid_date[Y-m-d]',
+            'event_type'          => 'permit_empty|in_list[observation,turning,aeration,moisture_adjustment,other]',
             'observation_note'    => 'permit_empty|max_length[1000]',
             'temperature_celsius' => 'permit_empty|decimal',
             'moisture_level'      => 'permit_empty|in_list[low,normal,high]',
@@ -374,5 +380,104 @@ final class BmgController extends ApiController
     public function listBatchLosses(int $batchId): ResponseInterface
     {
         return $this->ok($this->service->listBatchLosses($batchId));
+    }
+
+    // ---- Phase P4+: facilities audit fixes #2–#10 ---------------------
+
+    public function listBatches(): ResponseInterface
+    {
+        $unitId  = (string) ($this->request->getGet('unit_id') ?? '');
+        $status  = (string) ($this->request->getGet('status') ?? '');
+        $cursor  = (string) ($this->request->getGet('cursor') ?? '');
+        $limit   = (int) ($this->request->getGet('limit') ?? 25);
+
+        $page = $this->service->listBatches(
+            $unitId !== '' ? (int) $unitId : null,
+            $status !== '' ? $status : null,
+            $cursor !== '' ? $cursor : null,
+            $limit,
+        );
+        return $this->ok($page['data'], \App\Http\ApiResponse::paginationMeta($page['count'], $page['next'], null));
+    }
+
+    public function releaseBatch(int $batchId): ResponseInterface
+    {
+        $payload = $this->request->getJSON(true) ?? [];
+        $rules = [
+            'quality_grade'  => 'required|in_list[excellent,good,fair]',
+            'maturity_level' => 'required|in_list[mature,maturing,immature]',
+            'notes'          => 'permit_empty|max_length[512]',
+        ];
+        if (! $this->makeValidation($rules)->run($payload)) {
+            throw ApiException::validationFailure($this->collectErrors());
+        }
+        return $this->ok($this->service->releaseBatch($batchId, $payload));
+    }
+
+    public function batchCompliance(int $batchId): ResponseInterface
+    {
+        return $this->ok($this->service->batchCompliance($batchId));
+    }
+
+    public function blendCn(int $batchId): ResponseInterface
+    {
+        return $this->ok($this->service->blendCn($batchId));
+    }
+
+    public function listOpenAlerts(): ResponseInterface
+    {
+        return $this->ok($this->service->listOpenAlerts());
+    }
+
+    public function suggestUnit(): ResponseInterface
+    {
+        $categoryId = (int) ($this->request->getGet('category_id') ?? 0);
+        $suggested  = $this->service->suggestUnit($categoryId);
+        return $this->ok($suggested);
+    }
+
+    public function wasteCategoryDeviation(): ResponseInterface
+    {
+        return $this->ok($this->service->wasteCategoryDeviation());
+    }
+
+    public function listSopDocuments(): ResponseInterface
+    {
+        $includeArchived = (string) ($this->request->getGet('include_archived') ?? '') === '1';
+        return $this->ok($this->service->listSopDocuments($includeArchived));
+    }
+
+    public function createSopDocument(): ResponseInterface
+    {
+        $payload = $this->request->getJSON(true) ?? [];
+        $rules = [
+            'title'         => 'required|max_length[200]',
+            'document_ref'  => 'required|max_length[64]',
+            'category'      => 'permit_empty|max_length[64]',
+            'version'       => 'permit_empty|max_length[32]',
+            'owner_user_id' => 'permit_empty|is_natural_no_zero',
+            'notes'         => 'permit_empty|max_length[2000]',
+        ];
+        if (! $this->makeValidation($rules)->run($payload)) {
+            throw ApiException::validationFailure($this->collectErrors());
+        }
+        return $this->ok($this->service->createSopDocument($payload), null, 201);
+    }
+
+    public function updateSopDocument(int $docId): ResponseInterface
+    {
+        $payload = $this->request->getJSON(true) ?? [];
+        $rules = [
+            'title'         => 'permit_empty|max_length[200]',
+            'document_ref'  => 'permit_empty|max_length[64]',
+            'category'      => 'permit_empty|max_length[64]',
+            'version'       => 'permit_empty|max_length[32]',
+            'owner_user_id' => 'permit_empty|is_natural_no_zero',
+            'notes'         => 'permit_empty|max_length[2000]',
+        ];
+        if (! $this->makeValidation($rules)->run($payload)) {
+            throw ApiException::validationFailure($this->collectErrors());
+        }
+        return $this->ok($this->service->updateSopDocument($docId, $payload));
     }
 }

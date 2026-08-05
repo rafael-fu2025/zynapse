@@ -9,6 +9,8 @@ use App\Exceptions\ApiException;
 use CodeIgniter\HTTP\ResponseInterface;
 use Config\Services;
 use Modules\Clinic\Policies\ClinicPolicy;
+use Modules\Clinic\Services\AppointmentService;
+use Modules\Clinic\Services\ClinicService;
 use Modules\Clinic\Services\QueueService;
 
 /**
@@ -21,23 +23,26 @@ final class QueueController extends ApiController
 
     public function __construct(?QueueService $service = null)
     {
-        $this->service = $service ?? new QueueService(new ClinicPolicy(), Services::auditOutbox());
+        $this->service = $service ?? new QueueService(
+            new ClinicPolicy(),
+            Services::auditOutbox(),
+            new AppointmentService(
+                new ClinicPolicy(),
+                Services::auditOutbox(),
+                Services::notificationOutbox(),
+            ),
+            new ClinicService(
+                new ClinicPolicy(),
+                Services::auditOutbox(),
+                Services::notificationOutbox(),
+            ),
+            Services::notificationOutbox(),
+        );
     }
 
     public function today(): ResponseInterface
     {
         return $this->ok($this->service->today());
-    }
-
-    public function enqueue(): ResponseInterface
-    {
-        $payload = $this->request->getJSON(true) ?? [];
-
-        if (! $this->makeValidation(['encounter_id' => 'required|is_natural_no_zero'])->run($payload)) {
-            throw ApiException::validationFailure($this->collectErrors());
-        }
-
-        return $this->ok($this->service->enqueue((int) $payload['encounter_id']), null, 201);
     }
 
     public function callNext(): ResponseInterface

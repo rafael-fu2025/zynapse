@@ -27,6 +27,9 @@ export function useReorders(
 ) {
   return useQuery<ReorderPage, ApiEnvelopeError>({
     queryKey: ['reorders', { cursor, status, limit, q }],
+    // Reorders are created by the auto-check (and by other operators);
+    // poll so the procurement list updates without a manual refresh.
+    refetchInterval: 60_000,
     queryFn: async () => {
       const params = new URLSearchParams();
       if (cursor !== null) params.set('cursor', cursor);

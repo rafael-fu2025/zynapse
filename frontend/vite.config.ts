@@ -2,7 +2,7 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import path from 'node:path';
 
-const apiProxyTarget = process.env.VITE_API_PROXY_TARGET ?? 'http://localhost:8080';
+const apiProxyTarget = process.env.VITE_API_PROXY_TARGET ?? 'http://localhost:8090';
 const apiProxyPrefix = process.env.VITE_API_PROXY_PREFIX ?? '';
 
 // https://vitejs.dev/config/
@@ -85,7 +85,7 @@ export default defineConfig({
       ],
     },
     proxy: {
-      // Dev proxy defaults to `php spark serve` on 8080 so `npm run dev`
+      // Dev proxy defaults to `php spark serve` on 8090 so `npm run dev`
       // works out of the box. dev-fast.ps1 sets VITE_API_PROXY_TARGET to
       // 8091 to match its own backend; override either way as needed.
       '/api': {

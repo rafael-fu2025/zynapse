@@ -10,8 +10,10 @@ import type { ApiEnvelopeError } from '@/api/envelope';
 import {
   createStaffScheduleSchema,
   staffScheduleSchema,
+  updateStaffScheduleSchema,
   type CreateStaffScheduleInput,
   type StaffSchedule,
+  type UpdateStaffScheduleInput,
 } from '@/schemas/staffSchedule';
 
 const KEY = ['clinic', 'staff-schedules'] as const;
@@ -42,6 +44,25 @@ export function useCreateStaffSchedule() {
     },
     onError: (err) => {
       toast.error(err.errors[0]?.message ?? 'Failed to add schedule.');
+    },
+  });
+}
+
+/** Edit an existing shift template (partial update). */
+export function useUpdateStaffSchedule() {
+  const qc = useQueryClient();
+  return useMutation<StaffSchedule, ApiEnvelopeError, { id: number; input: UpdateStaffScheduleInput }>({
+    mutationFn: async ({ id, input }) => {
+      const valid = updateStaffScheduleSchema.parse(input);
+      const res = await apiClient.post<unknown>(`/clinic/staff-schedules/${id}`, valid);
+      return staffScheduleSchema.parse(res.data);
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: KEY });
+      toast.success('Staff schedule updated.');
+    },
+    onError: (err) => {
+      toast.error(err.errors[0]?.message ?? 'Failed to update schedule.');
     },
   });
 }

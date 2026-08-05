@@ -56,7 +56,7 @@ final class AuthController extends ApiController
                 'auth_sessions',
                 null,
                 null,
-                ['auth_method' => 'password', 'outcome' => 'locked'],
+                ['auth_method' => 'password', 'outcome' => 'locked', ...$this->provenance()],
             );
             $this->response->setHeader('Retry-After', (string) $this->throttle->retryAfterSeconds());
             throw new ApiException(\App\Exceptions\ApiErrorCode::AUTH_LOGIN_LOCKED, 429);
@@ -71,7 +71,7 @@ final class AuthController extends ApiController
                 'auth_sessions',
                 null,
                 null,
-                ['auth_method' => 'password', 'outcome' => 'failure'],
+                ['auth_method' => 'password', 'outcome' => 'failure', ...$this->provenance()],
             );
             throw ApiException::unauthorized('auth.credentials_invalid');
         }
@@ -92,7 +92,7 @@ final class AuthController extends ApiController
             'auth_sessions',
             (int) $user->id,
             (int) $user->id,
-            ['auth_method' => 'password', 'outcome' => 'success'],
+            ['auth_method' => 'password', 'outcome' => 'success', ...$this->provenance()],
         );
 
         return $this->finalizeAuth((int) $user->id);
@@ -108,7 +108,7 @@ final class AuthController extends ApiController
                 'auth_sessions',
                 null,
                 null,
-                ['auth_method' => 'refresh_token', 'outcome' => 'failure'],
+                ['auth_method' => 'refresh_token', 'outcome' => 'failure', ...$this->provenance()],
             );
             throw ApiException::unauthorized('auth.refresh_missing');
         }
@@ -125,6 +125,7 @@ final class AuthController extends ApiController
                     'auth_method' => 'refresh_token',
                     'outcome'     => 'replayed',
                     'family_id'   => $result['family_id'] ?? null,
+                    ...$this->provenance(),
                 ],
             );
             throw ApiException::unauthorized('auth.refresh_invalid_or_replayed');
@@ -140,6 +141,7 @@ final class AuthController extends ApiController
                     'auth_method' => 'refresh_token',
                     'outcome'     => 'failure',
                     'family_id'   => $result['family_id'] ?? null,
+                    ...$this->provenance(),
                 ],
             );
             throw ApiException::unauthorized('auth.refresh_invalid_or_replayed');
@@ -165,6 +167,7 @@ final class AuthController extends ApiController
                 'auth_method' => 'refresh_token',
                 'outcome'     => 'success',
                 'family_id'   => $result['family_id'] ?? null,
+                ...$this->provenance(),
             ],
         );
 
@@ -181,7 +184,7 @@ final class AuthController extends ApiController
             'auth_sessions',
             $userId,
             $userId,
-            ['auth_method' => 'session', 'outcome' => 'success'],
+            ['auth_method' => 'session', 'outcome' => 'success', ...$this->provenance()],
         );
 
         return $this->ok(['logged_out' => true]);
@@ -203,33 +206,35 @@ final class AuthController extends ApiController
         $permissions = $this->permissions->allForUser($userId);
 
         $db = Services::database();
-        $personRow = $db->table('persons p')
-            ->select('p.id AS persons_id, p.kind AS person_kind, p.first_name AS person_first_name, p.last_name AS person_last_name, pi.id AS patient_identifier_id')
-            ->join('patient_identifiers pi', 'pi.persons_id = p.id AND pi.archived_at IS NULL', 'left')
-            ->where('p.user_id', $userId)
-            ->where('p.archived_at IS NULL')
+        // Identity-consolidated: the user IS the person. No persons /
+        // patient_identifiers join — the profile lives on `users`.
+        $userRow = $db->table('users u')
+            ->select('u.id, u.kind AS person_kind, u.first_name AS person_first_name, u.last_name AS person_last_name, u.is_teaching, u.archived_at')
+            ->where('u.id', $userId)
             ->get()->getRowArray();
 
         $personName = null;
-        if ($personRow !== null) {
-            $first = isset($personRow['person_first_name']) ? trim((string) $personRow['person_first_name']) : '';
-            $last  = isset($personRow['person_last_name'])  ? trim((string) $personRow['person_last_name'])  : '';
+        if ($userRow !== null) {
+            $first = isset($userRow['person_first_name']) ? trim((string) $userRow['person_first_name']) : '';
+            $last  = isset($userRow['person_last_name'])  ? trim((string) $userRow['person_last_name'])  : '';
             if ($first !== '' || $last !== '') {
                 $personName = trim($first . ' ' . $last);
             }
         }
 
         return $this->ok([
-            'id'                    => (int)    $user->id,
-            'email'                 => (string) $user->email,
-            'username'              => (string) $user->username,
-            'is_active'             => (bool)   $user->active,
-            'force_reset'           => (bool)   ($user->force_reset ?? false),
-            'persons_id'            => isset($personRow['persons_id']) ? (int) $personRow['persons_id'] : null,
-            'person_kind'           => isset($personRow['person_kind']) ? (string) $personRow['person_kind'] : null,
-            'person_name'           => $personName,
-            'patient_identifier_id' => isset($personRow['patient_identifier_id']) ? (int) $personRow['patient_identifier_id'] : null,
-            'permissions'           => $permissions,
+            'id'          => (int)    $user->id,
+            'email'       => (string) $user->email,
+            'username'    => (string) $user->username,
+            'is_active'   => (bool)   $user->active,
+            'force_reset' => (bool)   ($user->force_reset ?? false),
+            'person_kind' => isset($userRow['person_kind']) && $userRow['person_kind'] !== null ? (string) $userRow['person_kind'] : null,
+            'person_name' => $personName,
+            // Teaching flag for employee accounts — the frontend hides
+            // the "New referral" action for non-teaching staff (the
+            // service gate still enforces it server-side).
+            'is_teaching' => isset($userRow['is_teaching']) && $userRow['is_teaching'] !== null ? (bool) $userRow['is_teaching'] : null,
+            'permissions' => $permissions,
         ]);
     }
 
@@ -258,7 +263,7 @@ final class AuthController extends ApiController
                 'auth_sessions',
                 $userId,
                 $userId,
-                ['auth_method' => 'password', 'outcome' => 'failure'],
+                ['auth_method' => 'password', 'outcome' => 'failure', ...$this->provenance()],
             );
             throw ApiException::unauthorized('auth.credentials_invalid');
         }
@@ -278,10 +283,28 @@ final class AuthController extends ApiController
             'auth_sessions',
             $userId,
             $userId,
-            ['auth_method' => 'password', 'outcome' => 'success'],
+            ['auth_method' => 'password', 'outcome' => 'success', ...$this->provenance()],
         );
 
         return $this->finalizeAuth($userId);
+    }
+
+    /**
+     * Network provenance for auth audit events — source IP + user agent,
+     * truncated defensively. Never PII beyond what the request already
+     * carries; recorded so failed/successful logins are attributable.
+     *
+     * @return array{ip_address: string, user_agent: string}
+     */
+    private function provenance(): array
+    {
+        $ip = trim((string) $this->request->getIPAddress());
+        $ua = trim((string) $this->request->getUserAgent()->getAgentString());
+
+        return [
+            'ip_address' => substr($ip, 0, 45),
+            'user_agent' => substr($ua, 0, 255),
+        ];
     }
 
     private function finalizeAuth(int $userId, ?array $preIssued = null): ResponseInterface

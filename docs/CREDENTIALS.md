@@ -58,7 +58,7 @@ a fresh one via the admin reset endpoint:
 ```powershell
 # 1. Login as admin
 $login = Invoke-RestMethod -Method POST `
-    -Uri 'http://localhost:8080/api/v1/auth/login' `
+    -Uri 'http://localhost:8090/api/v1/auth/login' `
     -ContentType 'application/json' `
     -Body '{"email":"admin@synapse.dev","password":"DevPassw0rd!"}'
 $tok = $login.data.access_token
@@ -66,7 +66,7 @@ $tok = $login.data.access_token
 # 2. Reset a probe account (user ids below)
 $h = @{ Authorization = "Bearer $tok" }
 Invoke-RestMethod -Method POST `
-    -Uri 'http://localhost:8080/api/v1/admin/users/12/reset-password' `
+    -Uri 'http://localhost:8090/api/v1/admin/users/12/reset-password' `
     -Headers $h
 # -> {"data":{"id":12,"temporary_password":"<NEW>","force_reset":true}}
 ```

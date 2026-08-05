@@ -7,7 +7,7 @@
  * status badge and roll back on error. shadcn Table / Dialog /
  * Textarea primitives.
  */
-import { Play, Square, StopCircle, Loader2, Ban, ChevronDown, ChevronLeft, ChevronRight, ClipboardList, Boxes, LineChart, Plus, Wrench, Eye, Cylinder, Pencil, Archive, ArchiveRestore, X, Timer } from 'lucide-react';
+import { Play, Square, StopCircle, Loader2, Ban, ChevronDown, ChevronLeft, ChevronRight, ClipboardList, Boxes, LineChart, Plus, Wrench, Eye, Pencil, Archive, ArchiveRestore, X, Timer, ShieldCheck, FileCheck2, ScrollText, TriangleAlert, History, Sparkles } from 'lucide-react';
 import { useId, useMemo, useState } from 'react';
 import { Link, Navigate, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
@@ -54,31 +54,49 @@ import {
   useAddProcessLog,
   useArchiveUnit,
   useBatchAnalytics,
+  useBatchCompliance,
+  useBatchHistory,
+  useBlendCn,
   useBmgUnits,
   useCancelBatch,
+  useCreateSopDocument,
   useCreateUnit,
   useFinishBatch,
   useMoveToCuring,
+  useOpenAlerts,
   useProcessLogs,
   useRecordOutput,
+  useReleaseBatch,
   useSetUnitMaintenance,
+  useSopDocuments,
   useStartBatch,
+  useSuggestUnit,
   useUnarchiveUnit,
   useUpdateUnit,
+  useUpdateSopDocument,
   useWasteCategories,
 } from '@/hooks/useFacilities';
 import {
+  BMG_MATURITY_LEVELS,
+  BMG_PROCESS_EVENT_TYPES,
+  BMG_QUALITY_GRADES,
   MOISTURE_LEVELS,
   OUTPUT_GRADES,
+  createSopDocumentSchema,
   createUnitSchema,
   recordOutputSchema,
   startBatchSchema,
   updateUnitSchema,
   type ActiveBatch,
+  type BmgMaturityLevel,
+  type BmgProcessEventType,
+  type BmgQualityGrade,
   type BmgUnit,
   type MoistureLevel,
 } from '@/schemas/facilities';
-import { fmtUtcToApp, fmtShort } from '@/utils/date';
+import { ApiEnvelopeError } from '@/api/envelope';
+import { fmtHumanDate, fmtUtcToApp, fmtShort } from '@/utils/date';
+import { slugify, uniqueSlug } from '@/utils/slug';
 import { statusLabel } from '@/utils/status';
 
 function unitStatusVariant(status: BmgUnit['status']): 'default' | 'info' | 'warning' | 'success' | 'destructive' | 'secondary' {
@@ -102,6 +120,10 @@ function StartBatchDialog({ unit, onClose }: { unit: BmgUnit; onClose: () => voi
     { category_id: '', weight_kg: '' },
   ]);
   const totalId = useId();
+
+  // Audit #8: suggest an idle drum matching the selected waste category.
+  const firstCat = rows.find((r) => r.category_id !== '')?.category_id ?? null;
+  const suggest = useSuggestUnit(firstCat !== null ? Number(firstCat) : null);
 
   const total = useMemo(
     () => rows.reduce((s, r) => s + (Number(r.weight_kg) || 0), 0),
@@ -181,6 +203,14 @@ function StartBatchDialog({ unit, onClose }: { unit: BmgUnit; onClose: () => voi
           <Label htmlFor={totalId} className="text-xs">Total input weight</Label>
           <span id={totalId} className="font-mono text-sm font-semibold">{total.toFixed(2)} kg</span>
         </div>
+        {firstCat !== null && suggest.data !== null && suggest.data !== undefined && (
+          <p className="flex items-center gap-1.5 rounded-md border border-primary/20 bg-primary/5 px-3 py-2 text-xs text-foreground">
+            <Sparkles className="size-3.5 text-primary" />
+            Suggested drum for this category: <span className="font-mono font-medium">{suggest.data.code}</span>
+            {suggest.data.location_code !== null && ` · ${suggest.data.location_code}`}
+            {suggest.data.spec_capacity_kg !== null && ` · ${suggest.data.spec_capacity_kg} kg cap`}
+          </p>
+        )}
       </div>
       <DialogFooter>
         <Button variant="outline" onClick={onClose}>Cancel</Button>
@@ -264,11 +294,13 @@ function ProcessLogsDialog({ unit, batchId, onClose }: { unit: BmgUnit; batchId:
   const [note, setNote] = useState('');
   const [temp, setTemp] = useState('');
   const [moisture, setMoisture] = useState<MoistureLevel | 'unset'>('unset');
+  // Audit #6: event_type records WHAT was done (turning, aeration…).
+  const [eventType, setEventType] = useState<BmgProcessEventType | 'unset'>('unset');
   const noteId = useId();
   const tempId = useId();
 
   function submit() {
-    if (note.trim() === '' && temp.trim() === '' && moisture === 'unset') {
+    if (note.trim() === '' && temp.trim() === '' && moisture === 'unset' && eventType === 'unset') {
       toast.error('Enter at least one observation field.');
       return;
     }
@@ -279,6 +311,7 @@ function ProcessLogsDialog({ unit, batchId, onClose }: { unit: BmgUnit; batchId:
           observation_note: note.trim(),
           temperature_celsius: temp.trim(),
           ...(moisture !== 'unset' ? { moisture_level: moisture } : {}),
+          ...(eventType !== 'unset' ? { event_type: eventType } : {}),
         },
       },
       {
@@ -286,6 +319,7 @@ function ProcessLogsDialog({ unit, batchId, onClose }: { unit: BmgUnit; batchId:
           setNote('');
           setTemp('');
           setMoisture('unset');
+          setEventType('unset');
         },
       },
     );
@@ -306,8 +340,11 @@ function ProcessLogsDialog({ unit, batchId, onClose }: { unit: BmgUnit; batchId:
         {logs.data?.map((l) => (
           <section key={l.id} className="rounded-md border p-2">
             <header className="flex items-center justify-between">
-              <p className="font-mono text-[10px] text-muted-foreground">{l.log_date}</p>
-              <div className="flex gap-1">
+              <p className="text-[10px] text-muted-foreground">{fmtHumanDate(l.log_date)}</p>
+              <div className="flex flex-wrap gap-1">
+                {l.event_type !== undefined && l.event_type !== 'observation' && (
+                  <Badge variant="secondary">{l.event_type.replace('_', ' ')}</Badge>
+                )}
                 {l.temperature_celsius !== null && <Badge variant="info">{l.temperature_celsius}°C</Badge>}
                 {l.moisture_level !== null && (
                   <Badge variant={l.moisture_level === 'normal' ? 'success' : 'warning'}>{l.moisture_level}</Badge>
@@ -321,6 +358,18 @@ function ProcessLogsDialog({ unit, batchId, onClose }: { unit: BmgUnit; batchId:
         ))}
       </div>
       <div className="space-y-3">
+        <div className="space-y-1.5">
+          <Label id="event-type-label">Event type</Label>
+          <Select value={eventType} onValueChange={(v) => setEventType(v as BmgProcessEventType | 'unset')}>
+            <SelectTrigger aria-labelledby="event-type-label"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="unset">Observation (default)</SelectItem>
+              {BMG_PROCESS_EVENT_TYPES.filter((t) => t !== 'observation').map((t) => (
+                <SelectItem key={t} value={t}>{t.replace('_', ' ')}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
         <div className="space-y-1.5">
           <Label htmlFor={noteId}>Observation note</Label>
           <Textarea id={noteId} rows={2} maxLength={1000} value={note} onChange={(e) => setNote(e.target.value)} />
@@ -363,6 +412,8 @@ function ProcessLogsDialog({ unit, batchId, onClose }: { unit: BmgUnit; batchId:
 function AnalyticsDialog({ unit, batchId, onClose }: { unit: BmgUnit; batchId: number; onClose: () => void }) {
   const analytics = useBatchAnalytics(batchId);
   const io = useAddBatchIo();
+  // Audit #5: weighted feedstock C:N blend.
+  const blend = useBlendCn(batchId);
   const [inKg, setInKg] = useState('');
   const [outKg, setOutKg] = useState('');
   const [grade, setGrade] = useState<'excellent' | 'good' | 'fair'>('good');
@@ -383,9 +434,29 @@ function AnalyticsDialog({ unit, batchId, onClose }: { unit: BmgUnit; batchId: n
           <div>Mass reduction: <span className="font-mono">{a.mass_reduction_pct}%</span></div>
           {a.expected_yield_pct !== null && <div>Expected: <span className="font-mono">{a.expected_yield_pct}%</span></div>}
           {a.expected_days !== null && <div>Expected days: <span className="font-mono">{a.expected_days}</span> <span className="text-xs text-muted-foreground">(mix-weighted)</span></div>}
-          {a.expected_completion_date !== null && <div>ETA: <span className="font-mono">{a.expected_completion_date}</span></div>}
+          {a.expected_completion_date !== null && <div>ETA: <span>{fmtHumanDate(a.expected_completion_date)}</span></div>}
           {a.days_until_expected !== null && <div>Days left: <span className="font-mono">{a.days_until_expected}</span></div>}
           {a.progress_pct !== null && <div>Progress: <span className="font-mono">{a.progress_pct}%</span></div>}
+        </div>
+      )}
+
+      {blend.data !== undefined && (
+        <div className={`rounded-md border p-3 text-sm ${blend.data.status === 'optimal' ? 'border-success/30 bg-success/5' : blend.data.status === 'unknown' ? '' : 'border-warning/30 bg-warning/5'}`}>
+          <p className="mb-1 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+            <Sparkles className="size-3.5" /> Feedstock C:N blend
+          </p>
+          {blend.data.blend_cn !== null ? (
+            <p className="flex items-center gap-2">
+              <span className="font-mono font-semibold">{blend.data.blend_cn}</span>
+              <Badge variant={blend.data.status === 'optimal' ? 'success' : 'warning'}>
+                {blend.data.status === 'optimal' ? 'optimal (15–30)' : blend.data.status === 'high' ? 'too high' : blend.data.status === 'low' ? 'too low' : 'unknown'}
+              </Badge>
+              <span className="text-xs text-muted-foreground">({blend.data.n_inputs} inputs)</span>
+            </p>
+          ) : (
+            <p className="text-xs text-muted-foreground">No C:N data — record feedstock inputs with a C:N ratio.</p>
+          )}
+          {blend.data.note !== null && <p className="mt-1 text-xs text-muted-foreground">{blend.data.note}</p>}
         </div>
       )}
 
@@ -448,15 +519,42 @@ function AnalyticsDialog({ unit, batchId, onClose }: { unit: BmgUnit; batchId: n
  * Read-only: the widget is a status surface, not a control surface. All
  * state transitions still flow through the table actions below.
  */
+/**
+ * DrumImage — theme-aware drum graphic used by the "Processing Drums"
+ * widget. Replaces the abstract `Cylinder` icon with the actual drum
+ * asset: maroon drum in light mode, white drum in dark mode. Both files
+ * are served from /public (note the white asset filename is `drum-whte`).
+ */
+function DrumImage({ className = '' }: { className?: string }) {
+  return (
+    <>
+      <img
+        src="/drum-maroon.png"
+        alt=""
+        aria-hidden
+        draggable={false}
+        className={`${className} object-contain dark:hidden`}
+      />
+      <img
+        src="/drum-whte.png"
+        alt=""
+        aria-hidden
+        draggable={false}
+        className={`${className} hidden object-contain dark:block`}
+      />
+    </>
+  );
+}
+
 function ProcessingDrumsCard() {
   const active = useActiveBatches();
   const items = active.data ?? [];
 
   return (
-    <Card className="border-l-4 border-l-primary/70">
+    <Card>
       <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-3">
         <CardTitle className="flex items-center gap-2 text-base">
-          <Cylinder className="size-4 text-primary" />
+          <DrumImage className="size-5" />
           Processing Drums
         </CardTitle>
         <Badge variant={items.length > 0 ? 'warning' : 'secondary'} className="font-mono">
@@ -505,8 +603,13 @@ function DrumCard({ batch }: { batch: ActiveBatch }) {
   return (
     <Link
       to={`/facilities/drums/${batch.unit_id}`}
-      className="group flex flex-col gap-2 rounded-lg border border-l-4 border-l-primary/70 bg-card p-3 text-left transition-all hover:shadow-md hover:-translate-y-px focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+      className="group flex flex-col gap-2 rounded-lg border bg-card p-3 text-left transition-all hover:shadow-md hover:-translate-y-px focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
     >
+      {/* Theme-aware drum graphic (white in dark mode, maroon in light mode). */}
+      <div className="flex justify-center py-1">
+        <DrumImage className="h-16 w-auto" />
+      </div>
+
       <header className="flex items-start justify-between gap-2 border-b border-border/60 pb-2">
         <div className="min-w-0">
           <p className="font-mono text-sm font-bold tracking-wide text-foreground">{batch.unit_code}</p>
@@ -589,7 +692,7 @@ function DrumCard({ batch }: { batch: ActiveBatch }) {
  * capacity, notes. `code` is uppercased server-side; submit is blocked
  * until Zod validates.
  */
-function CreateUnitDialog({ onClose }: { onClose: () => void }) {
+function CreateUnitDialog({ onClose, existingCodes }: { onClose: () => void; existingCodes: readonly string[] }) {
   const create = useCreateUnit();
   const cats = useWasteCategories(true);
   const [code, setCode] = useState('');
@@ -607,19 +710,35 @@ function CreateUnitDialog({ onClose }: { onClose: () => void }) {
   const catId = useId();
   const notesId = useId();
 
-  // Panel revision: `code` is a SLUG (lowercase, hyphen-separated).
-  // Auto-generate it from the name until the operator edits it by hand.
-  function slugify(v: string): string {
-    return v.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
-  }
+  // `code` is a SLUG (lowercase, hyphen-separated). Auto-generate it
+  // from the name — deduped with a `-2`/`-3` suffix against the drums
+  // already on screen — until the operator edits the code by hand.
   function onNameChange(v: string) {
     setName(v);
-    if (!codeEdited) setCode(slugify(v).slice(0, 32));
+    if (!codeEdited) {
+      const base = slugify(v).slice(0, 32);
+      setCode(uniqueSlug(base, existingCodes).slice(0, 32));
+    }
+  }
+  // Manual edits keep the RAW value while typing so the field never
+  // fights the operator (live per-keystroke slugify strips the
+  // separator between words — "Hello World" → "helloworld"). The
+  // value is normalized on blur and again on submit, so it always
+  // honors the slug contract before it reaches the server.
+  function onCodeChange(v: string) {
+    setCode(v);
+    setCodeEdited(true);
+  }
+  function onCodeBlur() {
+    setCode(slugify(code).slice(0, 32));
   }
 
   function submit() {
+    // Normalize the slug one final time so the server always receives
+    // a clean value even if the field wasn't blurred before submit.
+    const cleanCode = slugify(code).slice(0, 32);
     const payload = {
-      code,
+      code: cleanCode,
       display_name: name,
       location_code: location,
       spec_capacity_kg: capacity === '' ? undefined : Number(capacity),
@@ -644,6 +763,19 @@ function CreateUnitDialog({ onClose }: { onClose: () => void }) {
         setNotes('');
         onClose();
       },
+      // Surface a server-side uniqueness conflict (409 on the `code`
+      // field — e.g. the slug exists on a drum outside the loaded page)
+      // inline under the slug input instead of only a toast.
+      onError: (err) => {
+        if (err instanceof ApiEnvelopeError) {
+          const field = err.errors.find((e) => e.field === 'code');
+          if (field !== undefined) {
+            setErrors((prev) => ({ ...prev, code: field.message }));
+            return;
+          }
+        }
+        setErrors({});
+      },
     });
   }
 
@@ -661,7 +793,8 @@ function CreateUnitDialog({ onClose }: { onClose: () => void }) {
             <Input
               id={codeId}
               value={code}
-              onChange={(e) => { setCode(e.target.value); setCodeEdited(true); }}
+              onChange={(e) => onCodeChange(e.target.value)}
+              onBlur={onCodeBlur}
               placeholder="drum-01"
               maxLength={32}
               aria-invalid={errors['code'] !== undefined}
@@ -670,7 +803,7 @@ function CreateUnitDialog({ onClose }: { onClose: () => void }) {
             {errors['code'] !== undefined ? (
               <p role="alert" className="text-xs text-destructive">{errors['code']}</p>
             ) : (
-              <p className="text-[10px] text-muted-foreground">URL-safe slug — lowercase, hyphen-separated (e.g. drum-01). Auto-filled from the name.</p>
+              <p className="text-[10px] text-muted-foreground">URL-safe slug — lowercase, hyphen-separated (e.g. drum-01). Auto-filled from the name; appends a -2 suffix if the slug is taken. Read-only after creation.</p>
             )}
           </div>
           <div className="space-y-1.5">
@@ -880,6 +1013,366 @@ function ArchiveUnitDialog({ unit, onClose }: { unit: BmgUnit; onClose: () => vo
   );
 }
 
+/**
+ * ReleaseBatchDialog — the final QA gate (audit #4). Only shown for a
+ * batch that reached AwaitingOutput or Curing: the operator records the
+ * finished compost's quality grade + maturity level, which become the
+ * batch's certificate fields and flip it to the terminal `released`
+ * state (unit returns to Idle).
+ */
+function ReleaseBatchDialog({ unit, batchId, onClose }: { unit: BmgUnit; batchId: number; onClose: () => void }) {
+  const release = useReleaseBatch();
+  const [grade, setGrade] = useState<BmgQualityGrade | 'unset'>('unset');
+  const [maturity, setMaturity] = useState<BmgMaturityLevel | 'unset'>('unset');
+  const [notes, setNotes] = useState('');
+
+  function submit() {
+    if (grade === 'unset' || maturity === 'unset') {
+      toast.error('Select a quality grade and maturity level.');
+      return;
+    }
+    release.mutate(
+      { unitId: unit.id, batchId, input: { quality_grade: grade, maturity_level: maturity, notes } },
+      { onSuccess: () => onClose() },
+    );
+  }
+
+  return (
+    <DialogContent>
+      <DialogHeader>
+        <DialogTitle className="flex items-center gap-2">
+          <ShieldCheck className="size-4 text-primary" /> Release batch #{batchId} on {unit.code}
+        </DialogTitle>
+      </DialogHeader>
+      <div className="space-y-3">
+        <p className="text-xs text-muted-foreground">
+          Final QA gate. Releasing makes the batch terminal and returns the drum to Idle.
+          The grade + maturity are saved on the batch certificate.
+        </p>
+        <div className="grid grid-cols-2 gap-3">
+          <div className="space-y-1.5">
+            <Label id="quality-grade-label">Quality grade</Label>
+            <Select value={grade} onValueChange={(v) => setGrade(v as BmgQualityGrade | 'unset')}>
+              <SelectTrigger aria-labelledby="quality-grade-label"><SelectValue placeholder="Select…" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="unset">—</SelectItem>
+                {BMG_QUALITY_GRADES.map((g) => <SelectItem key={g} value={g}>{g}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1.5">
+            <Label id="maturity-label">Maturity level</Label>
+            <Select value={maturity} onValueChange={(v) => setMaturity(v as BmgMaturityLevel | 'unset')}>
+              <SelectTrigger aria-labelledby="maturity-label"><SelectValue placeholder="Select…" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="unset">—</SelectItem>
+                {BMG_MATURITY_LEVELS.map((m) => <SelectItem key={m} value={m}>{m}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="release-notes">Notes (optional)</Label>
+          <Textarea id="release-notes" rows={2} maxLength={512} value={notes} onChange={(e) => setNotes(e.target.value)} />
+        </div>
+      </div>
+      <DialogFooter>
+        <Button variant="outline" onClick={onClose}>Cancel</Button>
+        <Button onClick={submit} disabled={release.isPending}>
+          {release.isPending && <Loader2 className="animate-spin" />}
+          <ShieldCheck className="size-4" /> Release batch
+        </Button>
+      </DialogFooter>
+    </DialogContent>
+  );
+}
+
+/**
+ * ComplianceDialog — the printable batch certificate (audit #2).
+ * Shows the PFRP temperature evidence (thermophilic days, peak temp,
+ * consecutive PFRP days), the mass-balance reconciliation, and the
+ * final QA fields when released.
+ */
+function ComplianceDialog({ unit, batchId, onClose }: { unit: BmgUnit; batchId: number; onClose: () => void }) {
+  const compliance = useBatchCompliance(batchId);
+  const c = compliance.data;
+
+  return (
+    <DialogContent className="max-w-lg">
+      <DialogHeader>
+        <DialogTitle className="flex items-center gap-2">
+          <FileCheck2 className="size-4 text-primary" /> Batch certificate — #{batchId} on {unit.code}
+        </DialogTitle>
+      </DialogHeader>
+      {compliance.isLoading && <Loader2 className="mx-auto size-4 animate-spin text-muted-foreground" />}
+      {c !== undefined && (
+        <div className="space-y-3">
+          <div className="flex items-center justify-between rounded-md border bg-muted/40 px-3 py-2 text-sm">
+            <span className="font-mono">{c.reference_code}</span>
+            <Badge variant={c.pfrp_met ? 'success' : 'warning'}>
+              {c.pfrp_met ? 'PFRP met' : 'PFRP not met'}
+            </Badge>
+          </div>
+
+          <div className="rounded-md border p-3">
+            <p className="mb-2 text-xs font-medium text-muted-foreground">Pathogen-reduction evidence (PFRP)</p>
+            <div className="grid grid-cols-2 gap-2 text-sm">
+              <div>Thermophilic days (≥55°C): <span className="font-mono">{c.thermophilic_days}</span></div>
+              <div>Peak temperature: <span className="font-mono">{c.max_temperature_c !== null ? `${c.max_temperature_c}°C` : '—'}</span></div>
+              <div>Consecutive PFRP days: <span className="font-mono">{c.consecutive_pfrp_days}</span></div>
+              <div>Status: <span className="font-mono">{c.status}</span></div>
+            </div>
+          </div>
+
+          <div className="rounded-md border p-3">
+            <p className="mb-2 text-xs font-medium text-muted-foreground">Mass balance</p>
+            <div className="grid grid-cols-2 gap-2 text-sm">
+              <div>Input: <span className="font-mono">{c.input_kg} kg</span></div>
+              <div>Output: <span className="font-mono">{c.output_kg} kg</span></div>
+              <div>Losses: <span className="font-mono">{c.loss_kg} kg</span></div>
+              <div>In-process: <span className="font-mono">{c.in_process_kg} kg</span></div>
+              <div>Yield: <span className="font-mono">{c.yield_pct !== null ? `${c.yield_pct}%` : '—'}</span></div>
+              <div>Unaccounted: <span className="font-mono">{c.unaccounted_kg} kg</span></div>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 rounded-md border p-3 text-sm">
+            <span className="text-xs font-medium text-muted-foreground">Final QA:</span>
+            <Badge variant="secondary">{c.quality_grade ?? '—'}</Badge>
+            <Badge variant="secondary">{c.maturity_level ?? '—'}</Badge>
+            {c.released_at !== null && <span className="ml-auto text-xs text-muted-foreground">Released {fmtUtcToApp(c.released_at)}</span>}
+          </div>
+        </div>
+      )}
+      <DialogFooter>
+        <Button variant="outline" onClick={onClose}>Close</Button>
+      </DialogFooter>
+    </DialogContent>
+  );
+}
+
+/**
+ * BatchHistoryDialog — audit surface (item #7): every finished /
+ * cancelled / released batch across all units (or a single unit),
+ * keyset-paginated. Read-only.
+ */
+function BatchHistoryDialog({ unitId, onClose }: { unitId: number | null; onClose: () => void }) {
+  const [cursor, setCursor] = useState<string | null>(null);
+  const [history, setHistory] = useState<Array<string | null>>([null]);
+  const [statusFilter, setStatusFilter] = useState<string>('all');
+  const status = statusFilter === 'all' ? null : statusFilter;
+  const batches = useBatchHistory(unitId, status, cursor, 25);
+
+  function nextPage() {
+    if (batches.data?.next !== null && batches.data?.next !== undefined) {
+      const n = batches.data.next;
+      setHistory((h) => [...h, n]);
+      setCursor(n);
+    }
+  }
+  function prevPage() {
+    if (history.length < 2) return;
+    const next = history.slice(0, -1);
+    setHistory(next);
+    setCursor(next[next.length - 1] ?? null);
+  }
+
+  return (
+    <DialogContent className="max-w-3xl">
+      <DialogHeader>
+        <DialogTitle className="flex items-center gap-2">
+          <History className="size-4 text-primary" /> Batch history
+          {unitId !== null && <span className="text-sm font-normal text-muted-foreground">— drum #{unitId}</span>}
+        </DialogTitle>
+      </DialogHeader>
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <Select value={statusFilter} onValueChange={(v) => { setStatusFilter(v); setCursor(null); setHistory([null]); }}>
+          <SelectTrigger aria-label="Filter by status" className="w-44"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All statuses</SelectItem>
+            <SelectItem value="released">Released</SelectItem>
+            <SelectItem value="idle">Finished</SelectItem>
+            <SelectItem value="cancelled">Cancelled</SelectItem>
+          </SelectContent>
+        </Select>
+        <span className="text-xs text-muted-foreground">Page {history.length}</span>
+      </div>
+      <div className="max-h-[60vh] overflow-auto rounded-md border">
+        <Table>
+          <TableHeader className="bg-muted/50 sticky top-0">
+            <TableRow>
+              <TableHead className="px-3">Ref</TableHead>
+              <TableHead className="px-3">Drum</TableHead>
+              <TableHead className="px-3">Status</TableHead>
+              <TableHead className="px-3">Input</TableHead>
+              <TableHead className="px-3">Output</TableHead>
+              <TableHead className="px-3">QA</TableHead>
+              <TableHead className="px-3">Started</TableHead>
+              <TableHead className="px-3">Ended</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {batches.isLoading && (
+              <TableRow><TableCell colSpan={8} className="px-3 py-6 text-center"><Loader2 className="mx-auto size-4 animate-spin" /></TableCell></TableRow>
+            )}
+            {!batches.isLoading && (batches.data?.data.length ?? 0) === 0 && (
+              <TableRow><TableCell colSpan={8} className="px-3 py-6 text-center text-muted-foreground">No batches in history.</TableCell></TableRow>
+            )}
+            {batches.data?.data.map((b) => (
+              <TableRow key={b.id}>
+                <TableCell className="px-3 font-mono text-xs">{b.reference_code}</TableCell>
+                <TableCell className="px-3 font-mono text-xs">{b.unit_code}</TableCell>
+                <TableCell className="px-3"><Badge variant={b.status === 'released' ? 'success' : b.status === 'cancelled' ? 'destructive' : 'secondary'}>{b.status}</Badge></TableCell>
+                <TableCell className="px-3 font-mono text-xs">{b.total_input_weight_kg} kg</TableCell>
+                <TableCell className="px-3 font-mono text-xs">{b.output_weight_kg !== null ? `${b.output_weight_kg} kg` : '—'}</TableCell>
+                <TableCell className="px-3 text-xs">
+                  {b.quality_grade !== null && <Badge variant="secondary" className="mr-1">{b.quality_grade}</Badge>}
+                  {b.maturity_level !== null && <Badge variant="secondary">{b.maturity_level}</Badge>}
+                  {b.quality_grade === null && b.maturity_level === null && <span className="text-muted-foreground">—</span>}
+                </TableCell>
+                <TableCell className="px-3 text-xs text-muted-foreground">{fmtUtcToApp(b.started_at)}</TableCell>
+                <TableCell className="px-3 text-xs text-muted-foreground">
+                  {b.released_at !== null ? fmtUtcToApp(b.released_at) : b.finished_at !== null ? fmtUtcToApp(b.finished_at) : b.cancelled_at !== null ? fmtUtcToApp(b.cancelled_at) : '—'}
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </div>
+      <div className="flex items-center justify-between">
+        <Button variant="outline" size="sm" onClick={prevPage} disabled={history.length < 2}><ChevronLeft /> Prev</Button>
+        <Button variant="outline" size="sm" onClick={nextPage} disabled={batches.data?.next === null || batches.data?.next === undefined}>Next <ChevronRight /></Button>
+      </div>
+      <DialogFooter><Button variant="outline" onClick={onClose}>Close</Button></DialogFooter>
+    </DialogContent>
+  );
+}
+
+/**
+ * SopDocumentsDialog — training / SOP register (audit #9). Lists active
+ * documents, lets operators add a new one. Read-mostly operational
+ * compliance surface.
+ */
+function SopDocumentsDialog({ onClose }: { onClose: () => void }) {
+  const create = useCreateSopDocument();
+  const update = useUpdateSopDocument();
+  const [showArchived, setShowArchived] = useState(false);
+  const docs = useSopDocuments(showArchived);
+  const list = docs.data ?? [];
+  const [title, setTitle] = useState('');
+  const [docRef, setDocRef] = useState('');
+  const [category, setCategory] = useState('');
+  const [version, setVersion] = useState('');
+  const [notes, setNotes] = useState('');
+
+  function submit() {
+    const parsed = createSopDocumentSchema.safeParse({ title, document_ref: docRef, category, version, notes });
+    if (!parsed.success) {
+      toast.error(parsed.error.issues[0]?.message ?? 'Invalid input.');
+      return;
+    }
+    create.mutate(parsed.data, {
+      onSuccess: () => { setTitle(''); setDocRef(''); setCategory(''); setVersion(''); setNotes(''); },
+    });
+  }
+
+  return (
+    <DialogContent className="max-w-2xl">
+      <DialogHeader>
+        <DialogTitle className="flex items-center gap-2">
+          <ScrollText className="size-4 text-primary" /> Training & SOP register
+        </DialogTitle>
+      </DialogHeader>
+      <div className="flex items-center justify-between">
+        <p className="text-xs text-muted-foreground">Standard operating procedures &amp; training records.</p>
+        <Button size="sm" variant="outline" onClick={() => setShowArchived((v) => !v)}>
+          {showArchived ? 'Hide archived' : 'Show archived'}
+        </Button>
+      </div>
+      <div className="max-h-64 space-y-2 overflow-auto rounded-md border p-2">
+        {list.length === 0 && <p className="p-2 text-sm text-muted-foreground">No SOP documents yet.</p>}
+        {list.map((d) => (
+          <section key={d.id} className="flex items-center justify-between gap-2 rounded-md border p-2 text-sm">
+            <div className="min-w-0">
+              <p className="flex items-center gap-2 font-medium text-foreground">
+                {d.title}
+                {!d.is_active && <Badge variant="secondary">Archived</Badge>}
+              </p>
+              <p className="text-xs text-muted-foreground">
+                <span className="font-mono">{d.document_ref}</span>
+                {d.version !== null && ` · v${d.version}`}
+                {d.category !== null && ` · ${d.category}`}
+                {d.owner_name !== null && ` · ${d.owner_name}`}
+              </p>
+            </div>
+            {d.is_active && (
+              <Button size="sm" variant="ghost" onClick={() => update.mutate({ docId: d.id, input: { is_active: false } })}>
+                <Archive className="size-3.5" />
+              </Button>
+            )}
+          </section>
+        ))}
+      </div>
+      <div className="space-y-2 rounded-md border p-3">
+        <p className="text-xs font-medium text-muted-foreground">Add a document</p>
+        <div className="grid grid-cols-2 gap-2">
+          <div className="space-y-1">
+            <Label className="text-xs">Title</Label>
+            <Input value={title} onChange={(e) => setTitle(e.target.value)} maxLength={200} />
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs">Document ref</Label>
+            <Input value={docRef} onChange={(e) => setDocRef(e.target.value)} maxLength={64} placeholder="e.g. SOP-BMG-001" />
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs">Category</Label>
+            <Input value={category} onChange={(e) => setCategory(e.target.value)} maxLength={64} />
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs">Version</Label>
+            <Input value={version} onChange={(e) => setVersion(e.target.value)} maxLength={32} />
+          </div>
+        </div>
+        <div className="space-y-1">
+          <Label className="text-xs">Notes</Label>
+          <Textarea rows={2} maxLength={2000} value={notes} onChange={(e) => setNotes(e.target.value)} />
+        </div>
+        <Button size="sm" onClick={submit} disabled={create.isPending}>
+          {create.isPending && <Loader2 className="animate-spin" />}
+          <Plus className="size-3.5" /> Add document
+        </Button>
+      </div>
+      <DialogFooter><Button variant="outline" onClick={onClose}>Close</Button></DialogFooter>
+    </DialogContent>
+  );
+}
+
+/**
+ * OpenAlertsBanner — global "at-risk" surface (audit #3). Shows any
+ * unacknowledged warning/critical alert across live batches so
+ * operators notice process trouble without opening each drum.
+ */
+function OpenAlertsBanner() {
+  const open = useOpenAlerts();
+  const items = (open.data ?? []).filter((a) => a.severity !== 'info');
+  if (items.length === 0) return null;
+  return (
+    <div className="flex items-start gap-2 rounded-xl border border-destructive/30 bg-destructive/5 p-3 text-sm">
+      <TriangleAlert className="mt-0.5 size-4 shrink-0 text-destructive" />
+      <div className="space-y-1">
+        <p className="font-medium text-destructive">{items.length} open BMG alert{items.length > 1 ? 's' : ''} on live batches</p>
+        <ul className="space-y-0.5 text-xs text-muted-foreground">
+          {items.slice(0, 3).map((a) => (
+            <li key={a.alert_id}>
+              <span className="font-mono">{a.reference_code}</span> · <Badge variant={a.severity === 'critical' ? 'destructive' : 'warning'}>{a.severity}</Badge> · {a.message}
+            </li>
+          ))}
+        </ul>
+      </div>
+    </div>
+  );
+}
+
 export default function FacilitiesPage() {
   const [cursor, setCursor] = useState<string | null>(null);
   const [history, setHistory] = useState<Array<string | null>>([null]);
@@ -888,12 +1381,17 @@ export default function FacilitiesPage() {
   const finish = useFinishBatch();
   const cancel = useCancelBatch();
   const moveCuring = useMoveToCuring();
+  const release = useReleaseBatch();
   const maintenance = useSetUnitMaintenance();
   const unarchiveUnit = useUnarchiveUnit();
   const [openStart, setOpenStart] = useState<BmgUnit | null>(null);
   const [openOutput, setOpenOutput] = useState<BmgUnit | null>(null);
   const [openLogs, setOpenLogs] = useState<BmgUnit | null>(null);
   const [openAnalytics, setOpenAnalytics] = useState<BmgUnit | null>(null);
+  const [openRelease, setOpenRelease] = useState<BmgUnit | null>(null);
+  const [openCompliance, setOpenCompliance] = useState<{ unit: BmgUnit; batchId: number } | null>(null);
+  const [openHistory, setOpenHistory] = useState<number | 'all' | null>(null);
+  const [openSop, setOpenSop] = useState(false);
   const [openCreate, setOpenCreate] = useState(false);
   const [openEdit, setOpenEdit] = useState<BmgUnit | null>(null);
   const [openArchive, setOpenArchive] = useState<BmgUnit | null>(null);
@@ -976,12 +1474,25 @@ export default function FacilitiesPage() {
         >
             <Timer /> Move to curing
           </DropdownMenuItem>
+          <DropdownMenuItem
+          className="min-h-11"
+          disabled={(u.status !== 'awaiting_output' && u.status !== 'curing') || activeBatch === null || release.isPending}
+          onSelect={() => activeBatch !== null && setOpenRelease(u)}
+        >
+            <ShieldCheck /> Release batch (final QA)
+          </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem className="min-h-11" disabled={activeBatch === null} onSelect={() => setOpenLogs(u)}>
             <ClipboardList /> Process logs
           </DropdownMenuItem>
           <DropdownMenuItem className="min-h-11" disabled={activeBatch === null} onSelect={() => setOpenAnalytics(u)}>
             <LineChart /> Analytics
+          </DropdownMenuItem>
+          <DropdownMenuItem className="min-h-11" disabled={activeBatch === null} onSelect={() => activeBatch !== null && setOpenCompliance({ unit: u, batchId: activeBatch })}>
+            <FileCheck2 /> Certificate / compliance
+          </DropdownMenuItem>
+          <DropdownMenuItem className="min-h-11" onSelect={() => setOpenHistory(u.id)}>
+            <History /> Batch history
           </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem
@@ -1025,17 +1536,30 @@ export default function FacilitiesPage() {
           >
             <Archive /> {showArchived ? 'Hide archived' : 'Show archived'}
           </Button>
+          <Button variant="outline" onClick={() => setOpenSop(true)}>
+            <ScrollText /> SOP register
+          </Button>
+          <Button variant="outline" onClick={() => setOpenHistory('all')}>
+            <History /> Batch history
+          </Button>
           <Dialog open={openCreate} onOpenChange={setOpenCreate}>
             <Button onClick={() => setOpenCreate(true)}>
               <Plus /> New drum
             </Button>
-            {openCreate && <CreateUnitDialog onClose={() => setOpenCreate(false)} />}
+            {openCreate && (
+              <CreateUnitDialog
+                onClose={() => setOpenCreate(false)}
+                existingCodes={units.data?.data.map((u) => u.code) ?? []}
+              />
+            )}
           </Dialog>
           <Button variant="outline" asChild>
             <Link to="/facilities/waste-categories"><Boxes /> Waste categories</Link>
           </Button>
         </div>
       </header>
+
+      <OpenAlertsBanner />
 
       <ProcessingDrumsCard />
 
@@ -1047,6 +1571,7 @@ export default function FacilitiesPage() {
               <TableHead className="px-3">Name</TableHead>
               <TableHead className="px-3">Status</TableHead>
               <TableHead className="px-3">Active batch</TableHead>
+              <TableHead className="px-3">Utilization</TableHead>
               <TableHead className="px-3">Location</TableHead>
               <TableHead className="px-3">Created</TableHead>
               <TableHead className="px-3 text-right">Actions</TableHead>
@@ -1055,14 +1580,14 @@ export default function FacilitiesPage() {
           <TableBody>
             {units.isLoading && (
               <TableRow>
-                <TableCell colSpan={7} className="px-3 py-6 text-center text-muted-foreground">
+                <TableCell colSpan={8} className="px-3 py-6 text-center text-muted-foreground">
                   <Loader2 className="mx-auto size-4 animate-spin" />
                 </TableCell>
               </TableRow>
             )}
             {!units.isLoading && (units.data?.data.length ?? 0) === 0 && (
               <TableRow>
-                <TableCell colSpan={7} className="px-3 py-6 text-center text-muted-foreground">
+                <TableCell colSpan={8} className="px-3 py-6 text-center text-muted-foreground">
                   No drums yet. Create one to start composting.
                 </TableCell>
               </TableRow>
@@ -1082,6 +1607,21 @@ export default function FacilitiesPage() {
                   <TableCell className="px-3 font-mono text-xs text-muted-foreground">
                     {activeBatch === null ? '—' : `#${activeBatch}`}
                   </TableCell>
+                  <TableCell className="px-3">
+                    {activeBatch === null || u.utilization_pct === undefined ? (
+                      <span className="text-xs text-muted-foreground">—</span>
+                    ) : (
+                      <div className="flex items-center gap-2">
+                        <div className="h-1.5 w-16 overflow-hidden rounded-full bg-muted">
+                          <div
+                            className={`h-full rounded-full ${u.utilization_pct >= 90 ? 'bg-destructive' : u.utilization_pct >= 70 ? 'bg-warning' : 'bg-success'}`}
+                            style={{ width: `${Math.min(u.utilization_pct, 100)}%` }}
+                          />
+                        </div>
+                        <span className="font-mono text-xs text-muted-foreground">{u.utilization_pct}%</span>
+                      </div>
+                    )}
+                  </TableCell>
                   <TableCell className="px-3 text-xs text-muted-foreground">
                     <div className="flex flex-col gap-0.5">
                       <span>{u.location_code ?? '—'}</span>
@@ -1092,7 +1632,7 @@ export default function FacilitiesPage() {
                       )}
                     </div>
                   </TableCell>
-                  <TableCell className="px-3 font-mono text-xs text-muted-foreground">{fmtUtcToApp(u.created_at)}</TableCell>
+                  <TableCell className="px-3 text-xs text-muted-foreground">{fmtUtcToApp(u.created_at)}</TableCell>
                   <TableCell className="px-3 text-right">
                     {unitActions(u)}
                   </TableCell>
@@ -1132,6 +1672,19 @@ export default function FacilitiesPage() {
               <MobileCardField label="Active batch">
                 <span className="font-mono text-xs text-muted-foreground">{activeBatch === null ? '—' : `#${activeBatch}`}</span>
               </MobileCardField>
+              {activeBatch !== null && u.utilization_pct !== undefined && (
+                <MobileCardField label="Utilization">
+                  <div className="flex items-center gap-2">
+                    <div className="h-1.5 w-16 overflow-hidden rounded-full bg-muted">
+                      <div
+                        className={`h-full rounded-full ${u.utilization_pct >= 90 ? 'bg-destructive' : u.utilization_pct >= 70 ? 'bg-warning' : 'bg-success'}`}
+                        style={{ width: `${Math.min(u.utilization_pct, 100)}%` }}
+                      />
+                    </div>
+                    <span className="font-mono text-xs text-muted-foreground">{u.utilization_pct}%</span>
+                  </div>
+                </MobileCardField>
+              )}
               <MobileCardField label="Location">
                 <span className="text-xs text-muted-foreground">{u.location_code ?? '—'}</span>
               </MobileCardField>
@@ -1196,6 +1749,38 @@ export default function FacilitiesPage() {
             batchId={openAnalytics.active_batch_id}
             onClose={() => setOpenAnalytics(null)}
           />
+        </Dialog>
+      )}
+
+      {openRelease !== null && openRelease.active_batch_id !== null && openRelease.active_batch_id !== undefined && (
+        <Dialog open onOpenChange={(o) => !o && setOpenRelease(null)}>
+          <ReleaseBatchDialog
+            unit={openRelease}
+            batchId={openRelease.active_batch_id}
+            onClose={() => setOpenRelease(null)}
+          />
+        </Dialog>
+      )}
+
+      {openCompliance !== null && (
+        <Dialog open onOpenChange={(o) => !o && setOpenCompliance(null)}>
+          <ComplianceDialog
+            unit={openCompliance.unit}
+            batchId={openCompliance.batchId}
+            onClose={() => setOpenCompliance(null)}
+          />
+        </Dialog>
+      )}
+
+      {openHistory !== null && (
+        <Dialog open onOpenChange={(o) => !o && setOpenHistory(null)}>
+          <BatchHistoryDialog unitId={openHistory === 'all' ? null : openHistory} onClose={() => setOpenHistory(null)} />
+        </Dialog>
+      )}
+
+      {openSop && (
+        <Dialog open onOpenChange={(o) => !o && setOpenSop(false)}>
+          <SopDocumentsDialog onClose={() => setOpenSop(false)} />
         </Dialog>
       )}
 

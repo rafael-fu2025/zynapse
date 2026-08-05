@@ -20,17 +20,18 @@ function parseUtc(isoUtc: string): Date {
 }
 
 export function nowInAppTz(): string {
-  return formatInTimeZone(new Date(), useAuthStore.getState().timezone, 'yyyy-MM-dd HH:mm:ss zzz');
+  return formatInTimeZone(new Date(), useAuthStore.getState().timezone, 'MMM d, yyyy · h:mm:ss a zzz');
 }
 
 /**
- * Single display contract (panel revision): dates render as
- * `yyyy-MM-dd`, date-times as `yyyy-MM-dd HH:mm` (24-hour clock,
- * app timezone). The zone suffix was dropped from the default — the
- * panel flagged it as unreadable; pass an explicit pattern for the
- * rare surface that needs the zone.
+ * Single display contract for date-times surfaced to end-users
+ * (panel revision: non-IT staff found `yyyy-MM-dd HH:mm` unreadable).
+ * Default renders in the app's timezone as e.g. `Aug 1, 2026 · 6:37 AM`
+ * (12-hour clock, short month name, middle-dot separator). Pass an
+ * explicit pattern for the rare surface that needs a different shape
+ * (ISO date inputs, compact lists, or surfaces that need the zone).
  */
-export function fmtUtcToApp(isoUtc: string, pattern = 'yyyy-MM-dd HH:mm'): string {
+export function fmtUtcToApp(isoUtc: string, pattern = 'MMM d, yyyy · h:mm a'): string {
   return formatInTimeZone(parseUtc(isoUtc), useAuthStore.getState().timezone ?? DEFAULT_TZ, pattern);
 }
 
@@ -40,6 +41,18 @@ export function fmtRelative(isoUtc: string): string {
 
 export function fmtShort(isoUtc: string): string {
   return format(parseUtc(isoUtc), 'yyyy-MM-dd');
+}
+
+/**
+ * Render a date-only string from a MySQL `DATE` column (e.g. process-log
+ * `log_date` or batch `expected_completion_date`) as a human-readable
+ * date like `Aug 1, 2026` in the app timezone. The bare `YYYY-MM-DD`
+ * is treated as midnight in the app timezone (NOT UTC) so the calendar
+ * day never shifts across tz boundaries.
+ */
+export function fmtHumanDate(ymd: string): string {
+  const tz = useAuthStore.getState().timezone ?? DEFAULT_TZ;
+  return formatInTimeZone(fromZonedTime(`${ymd} 00:00:00`, tz), tz, 'MMM d, yyyy');
 }
 
 /**

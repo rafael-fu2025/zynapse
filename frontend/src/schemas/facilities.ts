@@ -13,11 +13,30 @@ export const BMG_BATCH_STATUSES = [
   'awaiting_output',
   'curing',
   'cancelled',
+  'released',
 ] as const;
 export type BmgBatchStatus = (typeof BMG_BATCH_STATUSES)[number];
 
 export const BMG_ALERT_SEVERITIES = ['info', 'warning', 'critical'] as const;
 export type BmgAlertSeverity = (typeof BMG_ALERT_SEVERITIES)[number];
+
+// ---- Audit fixes (2026-08-05): final QA gate, process events, SOPs ----
+
+export const BMG_QUALITY_GRADES = ['excellent', 'good', 'fair'] as const;
+export type BmgQualityGrade = (typeof BMG_QUALITY_GRADES)[number];
+
+export const BMG_MATURITY_LEVELS = ['mature', 'maturing', 'immature'] as const;
+export type BmgMaturityLevel = (typeof BMG_MATURITY_LEVELS)[number];
+
+/** Process-log event types — records WHAT was done, not just a note. */
+export const BMG_PROCESS_EVENT_TYPES = [
+  'observation',
+  'turning',
+  'aeration',
+  'moisture_adjustment',
+  'other',
+] as const;
+export type BmgProcessEventType = (typeof BMG_PROCESS_EVENT_TYPES)[number];
 
 export const BMG_LOSS_CATEGORIES = [
   'evaporation',
@@ -53,6 +72,9 @@ export const bmgUnitSchema = z.object({
   updated_at: z.string().nullable().optional(),
   archived_at: z.string().nullable().optional(),
   active_batch_id: z.number().int().positive().nullable().optional(),
+  // Audit #8: how full the drum is vs its spec capacity.
+  active_batch_weight_kg: z.number().nullable().optional(),
+  utilization_pct: z.number().int().min(0).optional(),
 });
 export type BmgUnit = z.infer<typeof bmgUnitSchema>;
 
@@ -107,8 +129,25 @@ export const bmgBatchSchema = z.object({
   awaiting_output_at: z.string().nullable(),
   finished_at: z.string().nullable(),
   cancelled_at: z.string().nullable(),
+  // Audit #4: final QA gate fields (set when released).
+  released_at: z.string().nullable().optional(),
+  released_by_user_id: z.number().int().positive().nullable().optional(),
+  quality_grade: z.enum(BMG_QUALITY_GRADES).nullable().optional(),
+  maturity_level: z.enum(BMG_MATURITY_LEVELS).nullable().optional(),
 });
 export type BmgBatch = z.infer<typeof bmgBatchSchema>;
+
+/**
+ * Release a finished/cured batch for use — the final quality/maturity
+ * gate. `quality_grade` + `maturity_level` become the batch's
+ * certificate fields.
+ */
+export const releaseBatchSchema = z.object({
+  quality_grade: z.enum(BMG_QUALITY_GRADES),
+  maturity_level: z.enum(BMG_MATURITY_LEVELS),
+  notes: z.string().max(512).optional().or(z.literal('')),
+});
+export type ReleaseBatchInput = z.infer<typeof releaseBatchSchema>;
 
 /**
  * Start a batch with its segregated waste composition (panel
@@ -166,6 +205,8 @@ export const processLogSchema = z.object({
   id: z.number().int().positive(),
   batch_id: z.number().int().positive(),
   log_date: z.string(),
+  // Audit #6: event_type tells WHAT was done (turning, aeration, …).
+  event_type: z.enum(BMG_PROCESS_EVENT_TYPES).optional(),
   observation_note: z.string().nullable(),
   temperature_celsius: z.number().nullable(),
   moisture_level: z.enum(MOISTURE_LEVELS).nullable(),
@@ -182,6 +223,7 @@ export type ProcessLog = z.infer<typeof processLogSchema>;
 
 export const addProcessLogSchema = z.object({
   observation_note: z.string().max(1000).optional().or(z.literal('')),
+  event_type: z.enum(BMG_PROCESS_EVENT_TYPES).optional(),
   temperature_celsius: z.string().regex(/^-?\d+(\.\d+)?$/, 'Numeric °C.').optional().or(z.literal('')),
   moisture_level: z.enum(MOISTURE_LEVELS).optional(),
   oxygen_pct: z.string().regex(/^-?\d+(\.\d+)?$/, 'Numeric %.').optional().or(z.literal('')),
@@ -347,3 +389,128 @@ export const bmgAlertSchema = z.object({
   acknowledged_by_user_id: z.number().int().positive().nullable(),
 });
 export type BmgAlert = z.infer<typeof bmgAlertSchema>;
+
+// ---- Audit fixes (2026-08-05) ---------------------------------------
+
+/**
+ * PFRP compliance summary — the batch certificate data. `pfrp_met`
+ * reflects whether the process-log timeline shows a pathogen-reduction
+ * window (consecutive days ≥55 °C or a peak ≥65 °C); the mass-balance
+ * block reconciles input against output + losses + in-process.
+ */
+export const batchComplianceSchema = z.object({
+  batch_id: z.number().int().positive(),
+  reference_code: z.string(),
+  status: z.string(),
+  started_at: z.string(),
+  finished_at: z.string().nullable(),
+  released_at: z.string().nullable(),
+  cancelled_at: z.string().nullable(),
+  thermophilic_days: z.number().int().nonnegative(),
+  max_temperature_c: z.number().nullable(),
+  consecutive_pfrp_days: z.number().int().nonnegative(),
+  pfrp_met: z.boolean(),
+  input_kg: z.number(),
+  output_kg: z.number(),
+  loss_kg: z.number(),
+  in_process_kg: z.number(),
+  unaccounted_kg: z.number(),
+  yield_pct: z.number().nullable(),
+  quality_grade: z.enum(BMG_QUALITY_GRADES).nullable(),
+  maturity_level: z.enum(BMG_MATURITY_LEVELS).nullable(),
+});
+export type BatchCompliance = z.infer<typeof batchComplianceSchema>;
+
+/** Weighted feedstock C:N blend for a batch. */
+export const blendCnSchema = z.object({
+  blend_cn: z.number().nullable(),
+  n_inputs: z.number().int().nonnegative(),
+  status: z.enum(['unknown', 'low', 'optimal', 'high']),
+  note: z.string().nullable(),
+});
+export type BlendCn = z.infer<typeof blendCnSchema>;
+
+/** One row in the global open-alert feed (dashboard at-risk widget). */
+export const openAlertSchema = z.object({
+  alert_id: z.number().int().positive(),
+  code: z.string(),
+  severity: z.enum(BMG_ALERT_SEVERITIES),
+  message: z.string(),
+  triggered_at: z.string(),
+  acknowledged_at: z.string().nullable(),
+  batch_id: z.number().int().positive(),
+  reference_code: z.string(),
+  batch_status: z.string(),
+  unit_id: z.number().int().positive().nullable(),
+  unit_code: z.string().nullable(),
+  unit_name: z.string().nullable(),
+});
+export type OpenAlert = z.infer<typeof openAlertSchema>;
+
+/** One row in the batch-history listing (terminal + historical). */
+export const batchHistoryItemSchema = z.object({
+  id: z.number().int().positive(),
+  reference_code: z.string(),
+  status: z.string(),
+  unit_id: z.number().int().positive(),
+  unit_code: z.string(),
+  unit_name: z.string(),
+  category_name: z.string().nullable(),
+  total_input_weight_kg: z.number(),
+  output_weight_kg: z.number().nullable(),
+  total_loss_kg: z.number().nullable(),
+  quality_grade: z.enum(BMG_QUALITY_GRADES).nullable(),
+  maturity_level: z.enum(BMG_MATURITY_LEVELS).nullable(),
+  started_at: z.string(),
+  finished_at: z.string().nullable(),
+  released_at: z.string().nullable(),
+  cancelled_at: z.string().nullable(),
+});
+export type BatchHistoryItem = z.infer<typeof batchHistoryItemSchema>;
+
+export const batchHistoryPageSchema = z.object({
+  data: z.array(batchHistoryItemSchema),
+  next: z.string().nullable().optional(),
+});
+export type BatchHistoryPage = z.infer<typeof batchHistoryPageSchema>;
+
+/** Training / SOP register document. */
+export const sopDocumentSchema = z.object({
+  id: z.number().int().positive(),
+  title: z.string(),
+  document_ref: z.string(),
+  category: z.string().nullable(),
+  version: z.string().nullable(),
+  owner_user_id: z.number().int().positive().nullable(),
+  owner_name: z.string().nullable(),
+  notes: z.string().nullable(),
+  is_active: z.boolean(),
+  created_at: z.string(),
+  updated_at: z.string(),
+});
+export type SopDocument = z.infer<typeof sopDocumentSchema>;
+
+export const createSopDocumentSchema = z.object({
+  title: z.string().min(1, 'Required').max(200),
+  document_ref: z.string().min(1, 'Required').max(64),
+  category: z.string().max(64).optional().or(z.literal('')),
+  version: z.string().max(32).optional().or(z.literal('')),
+  owner_user_id: z.coerce.number().int().positive().optional().or(z.literal('')),
+  notes: z.string().max(2000).optional().or(z.literal('')),
+});
+export type CreateSopDocumentInput = z.infer<typeof createSopDocumentSchema>;
+
+/** Actual vs expected yield/duration per waste category. */
+export const categoryDeviationSchema = z.object({
+  category_id: z.number().int().positive(),
+  code: z.string(),
+  name: z.string(),
+  batch_count: z.number().int().nonnegative(),
+  actual_yield_pct: z.number().nullable(),
+  expected_yield_pct: z.number().nullable(),
+  yield_delta_pp: z.number().nullable(),
+  actual_days: z.number().int().nullable(),
+  expected_days: z.number().int().nullable(),
+  days_delta: z.number().int().nullable(),
+});
+export type CategoryDeviation = z.infer<typeof categoryDeviationSchema>;

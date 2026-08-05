@@ -12,20 +12,23 @@ use CodeIgniter\Database\Seeder;
  * Resets the patient registry (students + employees + departments) to
  * a known, demoable state and inserts a canonical reference dataset.
  *
- *   1. Wipes every registry-related table in FK-safe order:
- *        - patient_allergies       (child of patients_students)
- *        - patient_contacts        (child of patients_students)
- *        - patients_students
- *        - patients_employees
+ *   1. Wipes the child tables + departments in FK-safe order:
+ *        - patient_allergies       (keyed by user_id)
+ *        - patient_contacts        (keyed by user_id)
  *        - clinic_departments
- *      Also drops the matching rows from audit_outbox so the seeder
- *      is re-runnable without piling up orphan audit entries.
+ *      Patient `users` rows are UPSERTED by identifier (never deleted —
+ *      clinical rows FK to patient_user_id). Also drops the matching
+ *      rows from audit_outbox so the seeder is re-runnable without
+ *      piling up orphan audit entries.
  *
  *   2. Seeds the canonical departments (Registrar, Facilities, …).
  *
  *   3. Seeds students with the **8-digit YYYYNNNN ID format**:
  *      first 4 digits = current year (e.g. 2026), last 4 = random.
  *      Same format for employees.
+ *
+ * Identity-consolidated: every patient IS a `users` row with a `kind`
+ * discriminator (student | employee).
  *
  * Refuses to run in production. Idempotent — re-running yields the
  * same end state. Invoke with:
@@ -34,6 +37,13 @@ use CodeIgniter\Database\Seeder;
  */
 final class PatientRegistrySeeder extends Seeder
 {
+    /**
+     * Shared demo password for every seeded account (admin and patients).
+     * Only the admin keeps the `@synapse.dev` email; every patient gets
+     * `firstname.lastname@foundationu.edu.ph`.
+     */
+    private const DEMO_PASSWORD = 'DevPassw0rd!';
+
     /** @var list<array{code:string, name:string, description:?string}> */
     private const DEPARTMENTS = [
         ['code' => 'REG',     'name' => 'Registrar',            'description' => 'Student records, IDs, enrollment.'],
@@ -155,7 +165,8 @@ final class PatientRegistrySeeder extends Seeder
         $this->seedStudents();
         $this->seedEmployees();
 
-        fwrite(STDOUT, "PatientRegistrySeeder: 10 departments + 20 students + 21 employees inserted.\n");
+        fwrite(STDOUT, "PatientRegistrySeeder: 10 departments + 20 students + 21 employees inserted (identity-consolidated `users` rows).\n");
+        fwrite(STDOUT, "  Every patient got an auto-account: <first>.<last>@foundationu.edu.ph / " . self::DEMO_PASSWORD . "\n");
         fwrite(STDOUT, "  6 teaching employees (faculty) — can refer students to counselling.\n");
         fwrite(STDOUT, "  ID format: 8 digits, YYYY#### (year + 4 random).\n");
     }
@@ -164,13 +175,12 @@ final class PatientRegistrySeeder extends Seeder
     {
         $db = $this->db;
 
-        // Children first (FKs to patients_students).
+        // Patients ARE `users` (identity-consolidated). We never delete
+        // user rows here (clinical rows FK to patient_user_id) — the
+        // seed methods upsert by identifier instead. We reset only the
+        // child tables and departments.
         $db->table('patient_allergies')->emptyTable();
         $db->table('patient_contacts')->emptyTable();
-
-        // Then students, then employees, then departments.
-        $db->table('patients_students')->emptyTable();
-        $db->table('patients_employees')->emptyTable();
         $db->table('clinic_departments')->emptyTable();
 
         // Drop the matching audit_outbox rows so re-seeding doesn't
@@ -180,8 +190,7 @@ final class PatientRegistrySeeder extends Seeder
             ->groupStart()
                 ->like('action_code', 'clinic.patient_', 'after')
                 ->orWhereIn('entity_type', [
-                    'patients_students',
-                    'patients_employees',
+                    'users',
                     'patient_allergies',
                     'patient_contacts',
                     'clinic_departments',
@@ -203,48 +212,146 @@ final class PatientRegistrySeeder extends Seeder
     private function seedStudents(): void
     {
         $now = date('Y-m-d H:i:s');
-        $rows = [];
         foreach (self::STUDENTS as [$num, $first, $last, $middle, $gender, $blood, $course, $year, $section]) {
-            $rows[] = [
-                'student_number'         => $num,
-                'first_name'             => $first,
-                'last_name'              => $last,
-                'middle_name'            => $middle,
-                'gender'                 => $gender,
-                'blood_type'             => $blood,
-                'course'                 => $course,
-                'year_level'             => $year,
-                'section'                => $section,
-                'consecutive_no_shows'   => 0,
-                'created_at'             => $now,
-                'updated_at'             => $now,
-            ];
+            $uid = $this->upsertPatient('student_number', $num, [
+                'kind'                 => 'student',
+                'first_name'           => $first,
+                'last_name'            => $last,
+                'middle_name'          => $middle,
+                'gender'               => $gender,
+                'blood_type'           => $blood,
+                'course'               => $course,
+                'year_level'           => $year,
+                'section'              => $section,
+                'consecutive_no_shows' => 0,
+            ], $now);
+            // Auto-account: firstname.lastname@foundationu.edu.ph + demo password.
+            $this->ensurePatientAccount($uid, 'student', $first, $last, $now);
         }
-        $this->db->table('patients_students')->insertBatch($rows);
     }
 
     private function seedEmployees(): void
     {
         $now = date('Y-m-d H:i:s');
-        $rows = [];
         foreach (self::EMPLOYEES as [$num, $first, $last, $middle, $gender, $deptCode, $position, $status, $ecName, $ecPhone, $isTeaching]) {
-            $rows[] = [
-                'employee_number'         => $num,
-                'first_name'              => $first,
-                'last_name'               => $last,
-                'middle_name'             => $middle,
-                'gender'                  => $gender,
-                'department'              => $this->deptName($deptCode),
-                'position'                => $position,
-                'employment_status'       => $status,
-                'emergency_contact_name'  => $ecName,
+            $uid = $this->upsertPatient('employee_number', $num, [
+                'kind'                   => 'employee',
+                'first_name'             => $first,
+                'last_name'              => $last,
+                'middle_name'            => $middle,
+                'gender'                 => $gender,
+                'department'             => $this->deptName($deptCode),
+                'position'               => $position,
+                'employment_status'      => $status,
+                'emergency_contact_name' => $ecName,
                 'emergency_contact_phone' => $ecPhone,
-                'is_teaching'             => $isTeaching ? 1 : 0,
-                'created_at'              => $now,
-                'updated_at'              => $now,
-            ];
+                'is_teaching'            => $isTeaching ? 1 : 0,
+            ], $now);
+            // Auto-account: firstname.lastname@foundationu.edu.ph + demo password.
+            $this->ensurePatientAccount($uid, 'employee', $first, $last, $now);
         }
-        $this->db->table('patients_employees')->insertBatch($rows);
+    }
+
+    /**
+     * Insert or update a patient `users` row keyed by its identifier.
+     * Patients ARE users (identity-consolidated); we upsert so the
+     * seeder is idempotent without deleting rows that clinical
+     * `patient_user_id` FKs may reference.
+     *
+     * @param array<string, mixed> $data
+     */
+    private function upsertPatient(string $identifierCol, string $identifier, array $data, string $now): int
+    {
+        $existing = $this->db->table('users')
+            ->select('id')
+            ->where($identifierCol, $identifier)
+            ->get()->getRowArray();
+
+        if ($existing !== null) {
+            $this->db->table('users')->where('id', (int) $existing['id'])->update($data + ['updated_at' => $now]);
+            return (int) $existing['id'];
+        }
+
+        $this->db->table('users')->insert($data + [
+            $identifierCol => $identifier,
+            'status'       => 'active',
+            'active'       => 1,
+            'created_at'   => $now,
+            'updated_at'   => $now,
+        ]);
+        return (int) $this->db->insertID();
+    }
+
+    /**
+     * Ensure a patient has a usable portal account: an `email_password`
+     * identity at `firstname.lastname@foundationu.edu.ph` with the shared
+     * demo password (force_reset off) and the matching role group
+     * (`student` / `employee`).
+     */
+    private function ensurePatientAccount(int $userId, string $kind, string $first, string $last, string $now): void
+    {
+        $email = $this->slugify($first) . '.' . $this->slugify($last) . '@foundationu.edu.ph';
+
+        // Guard against an email already claimed by a different user.
+        $taken = $this->db->table('auth_identities')
+            ->where('type', 'email_password')
+            ->where('secret', $email)
+            ->where('user_id !=', $userId)
+            ->get()->getRowArray();
+        if ($taken !== null) {
+            return;
+        }
+
+        $identity = $this->db->table('auth_identities')
+            ->where('type', 'email_password')
+            ->where('user_id', $userId)
+            ->get()->getRowArray();
+        if ($identity === null) {
+            $this->db->table('auth_identities')->insert([
+                'user_id'     => $userId,
+                'type'        => 'email_password',
+                'secret'      => $email,
+                'secret2'     => password_hash(self::DEMO_PASSWORD, PASSWORD_DEFAULT),
+                'force_reset' => 0,
+                'created_at'  => $now,
+                'updated_at'  => $now,
+            ]);
+        } else {
+            // Keep the demo password + email format aligned on re-seed.
+            $this->db->table('auth_identities')->where('id', (int) $identity['id'])->update([
+                'secret'      => $email,
+                'secret2'     => password_hash(self::DEMO_PASSWORD, PASSWORD_DEFAULT),
+                'force_reset' => 0,
+                'updated_at'  => $now,
+            ]);
+        }
+
+        $this->assignGroup($userId, $kind === 'student' ? 'student' : 'employee', $now);
+    }
+
+    private function assignGroup(int $userId, string $group, string $now): void
+    {
+        $gid = $this->db->table('auth_groups')->select('id')->where('name', $group)->get()->getRowArray();
+        if ($gid === null) {
+            return;
+        }
+        $member = $this->db->table('auth_groups_users')
+            ->where(['group_id' => (int) $gid['id'], 'user_id' => $userId])
+            ->get()->getRowArray();
+        if ($member === null) {
+            $this->db->table('auth_groups_users')->insert([
+                'group_id'   => (int) $gid['id'],
+                'user_id'    => $userId,
+                'created_at' => $now,
+            ]);
+        }
+    }
+
+    private function slugify(string $value): string
+    {
+        $value = strtolower(trim($value));
+        $value = preg_replace('/[^a-z0-9]+/', '.', (string) $value);
+        return trim((string) $value, '.');
     }
 
     /**

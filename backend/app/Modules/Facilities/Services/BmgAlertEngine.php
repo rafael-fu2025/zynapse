@@ -155,7 +155,11 @@ final class BmgAlertEngine
         }
         $now = new DateTimeImmutable('now', new DateTimeZone('UTC'));
         $then = new DateTimeImmutable((string) $date, new DateTimeZone('UTC'));
-        $diff = $now->diff($then);
-        return (int) $diff->days * ($diff->invert ? -1 : 1);
+        // "Days since last log" is a magnitude: always non-negative.
+        // The caller (evaluate()) compares `$daysSinceLastLog > 14`, which
+        // assumes a non-negative integer; a signed value would suppress
+        // STALLED for past-dated logs and (worse) trigger it for any log
+        // dated in the future.
+        return abs((int) $now->diff($then)->days);
     }
 }

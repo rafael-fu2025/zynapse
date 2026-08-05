@@ -23,6 +23,39 @@ use App\Modules\Shared\BasePolicy;
  */
 final class ReferralPolicy extends BasePolicy
 {
+    /**
+     * The target-module side(s) this user serves as a bridge handler,
+     * derived from the module-level permissions they hold. Returns a
+     * list of `clinic` and/or `counselling`; empty when the user is NOT
+     * a handler (e.g. a faculty referrer). A user holding both sides
+     * (admin wildcard) serves the full board.
+     *
+     * @return array<int, 'clinic'|'counselling'>
+     */
+    public function servingSides(): array
+    {
+        $sides = [];
+        if ($this->can('clinic.encounters.read')) {
+            $sides[] = 'clinic';
+        }
+        if ($this->can('counselling.records.read') || $this->can('counselling.schedule.read')) {
+            $sides[] = 'counselling';
+        }
+        return $sides;
+    }
+
+    /**
+     * Whether the user is a bridge handler at all. The LIST is then
+     * scoped per-side in `ReferralService::list()` (a clinic staff sees
+     * referrals targeting clinic + their own issued; a counsellor sees
+     * referrals targeting counselling + their own issued). Referrers in
+     * the employee group are scoped to their own issued referrals.
+     */
+    public function isHandler(): bool
+    {
+        return $this->servingSides() !== [];
+    }
+
     public function check(string $action, mixed $record = null): void
     {
         $code = match ($action) {

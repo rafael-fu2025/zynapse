@@ -28,6 +28,7 @@ final class Routes implements BaseRoutes
             $r->get('employee-profile',  'EmployeeSelfController::profile');
             $r->post('employee-profile', 'EmployeeSelfController::updateProfile');
             $r->get('clinic-visits',     'EmployeeSelfController::clinicVisits');
+            $r->get('queue-status',      'EmployeeSelfController::queueStatus');
 
             // Student portal (Phase 13) — same shape, separate
             // controller so the staff and student surfaces stay
@@ -35,6 +36,10 @@ final class Routes implements BaseRoutes
             // of the `/me/employee-*` paths, never nested.
             $r->get('student-profile',  'StudentSelfController::profile');
             $r->get('student-clinic-visits', 'StudentSelfController::clinicVisits');
+            $r->get('student-queue-status', 'StudentSelfController::queueStatus');
+            $r->get('student-providers', 'StudentSelfController::providers');
+            $r->get('student-appointments', 'StudentSelfController::appointments');
+            $r->post('student-appointments', 'StudentSelfController::bookAppointment');
         });
 
         $routes->group('api/v1/clinic', ['namespace' => 'Modules\\Clinic\\Controllers', 'filter' => 'api_auth'], static function (RouteCollection $r): void {
@@ -42,6 +47,7 @@ final class Routes implements BaseRoutes
             $r->post('encounters',                           'ClinicController::createEncounter');
             $r->post('encounters/import',                    'ClinicController::importEncounters');
             $r->post('encounters/(:num)/vitals',             'ClinicController::recordVitals/$1');
+            $r->get('encounters/(:num)/vitals',              'ClinicController::listVitals/$1');
             $r->post('encounters/(:num)/close',              'ClinicController::closeEncounter/$1');
             $r->post('encounters/(:num)/assessment',         'ClinicController::setAssessment/$1');
             $r->get('encounters/(:num)/treatments',          'ClinicController::listTreatments/$1');
@@ -71,6 +77,7 @@ final class Routes implements BaseRoutes
             // Patient registry (Phase 11 — recycled from synapse_ag)
             $r->get('students',                              'PatientController::listStudents');
             $r->get('students/search',                       'PatientController::searchStudents');
+            $r->get('patients/lookup',                       'PatientController::lookupForKiosk');
             $r->post('students',                             'PatientController::createStudent');
             $r->get('students/(:num)',                       'PatientController::showStudent/$1');
             $r->post('students/(:num)',                      'PatientController::updateStudent/$1');
@@ -98,6 +105,10 @@ final class Routes implements BaseRoutes
             // segments MUST precede the (:num) catch-alls.
             $r->get('medicines/low-stock',                   'MedicineController::lowStock');
             $r->get('medicines/expiring',                    'MedicineController::expiring');
+            // Inventory-gap fixes: written-off (expired/recalled) lots +
+            // catalogue-wide dispensing usage for the Insights tiles.
+            $r->get('medicines/expired',                     'MedicineController::expired');
+            $r->get('medicines/usage-summary',               'MedicineController::usageSummary');
             $r->get('medicines',                             'MedicineController::list');
             $r->post('medicines',                            'MedicineController::create');
             $r->get('medicines/(:num)',                      'MedicineController::show/$1');
@@ -105,6 +116,8 @@ final class Routes implements BaseRoutes
             $r->post('medicines/(:num)/archive',             'MedicineController::archive/$1');
             $r->post('medicines/(:num)/unarchive',           'MedicineController::unarchive/$1');
             $r->post('medicines/(:num)/batches',             'MedicineController::addBatch/$1');
+            $r->post('medicines/(:num)/batches/(:num)/expire','MedicineController::expireBatch/$1/$2');
+            $r->post('medicines/(:num)/batches/(:num)/recall','MedicineController::recallBatch/$1/$2');
             $r->post('medicines/(:num)/dispense',            'MedicineController::dispense/$1');
             $r->get('medicines/(:num)/transactions',         'MedicineController::transactions/$1');
             $r->post('medicines/(:num)/forecast',            'MedicineController::computeForecast/$1');

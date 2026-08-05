@@ -117,9 +117,10 @@ final class InventoryController extends ApiController
         $payload = $this->request->getJSON(true) ?? [];
 
         $rules = [
-            'qty_delta'   => 'required|integer',
-            'reason_code' => 'required|in_list[dispense,adjustment]',
-            'note'        => 'permit_empty|max_length[255]',
+            'qty_delta'    => 'required|integer',
+            'reason_code'  => 'required|in_list[dispense,adjustment]',
+            'encounter_id' => 'permit_empty|is_natural_no_zero',
+            'note'         => 'permit_empty|max_length[255]',
         ];
         if (! $this->makeValidation($rules)->run($payload)) {
             throw ApiException::validationFailure($this->collectErrors());
@@ -141,6 +142,7 @@ final class InventoryController extends ApiController
             $delta,
             $reason,
             isset($payload['note']) ? (string) $payload['note'] : null,
+            isset($payload['encounter_id']) && $payload['encounter_id'] !== '' ? (int) $payload['encounter_id'] : null,
         );
 
         return $this->ok($dto->toArray());
@@ -148,14 +150,18 @@ final class InventoryController extends ApiController
 
     /**
      * Receive the delivered quantity of a `received` reorder request.
-     * Quantity comes from the request server-side; the payload only
-     * carries an optional note.
+     * Quantity defaults to the request server-side; the payload may
+     * lower it for a partial delivery (with an optional shortage note).
      */
     public function receiveOrdered(int $itemId): ResponseInterface
     {
         $payload = $this->request->getJSON(true) ?? [];
 
-        $rules = ['note' => 'permit_empty|max_length[255]'];
+        $rules = [
+            'note'          => 'permit_empty|max_length[255]',
+            'quantity'      => 'permit_empty|is_natural_no_zero',
+            'shortage_note' => 'permit_empty|max_length[255]',
+        ];
         if (! $this->makeValidation($rules)->run($payload)) {
             throw ApiException::validationFailure($this->collectErrors());
         }
@@ -163,6 +169,8 @@ final class InventoryController extends ApiController
         return $this->ok($this->service->receiveOrdered(
             $itemId,
             isset($payload['note']) ? (string) $payload['note'] : null,
+            isset($payload['quantity']) ? (int) $payload['quantity'] : null,
+            isset($payload['shortage_note']) ? (string) $payload['shortage_note'] : null,
         )->toArray());
     }
 

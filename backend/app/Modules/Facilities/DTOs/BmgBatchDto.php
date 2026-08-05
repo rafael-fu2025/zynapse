@@ -45,6 +45,16 @@ final class BmgBatchDto extends BaseDTO
             'awaiting_output_at'  => $this->row['awaiting_output_at'] !== null ? (string) $this->row['awaiting_output_at'] : null,
             'finished_at'         => $this->row['finished_at'] !== null ? (string) $this->row['finished_at'] : null,
             'cancelled_at'        => $this->row['cancelled_at'] !== null ? (string) $this->row['cancelled_at'] : null,
+            'released_at'         => isset($this->row['released_at']) && $this->row['released_at'] !== null ? (string) $this->row['released_at'] : null,
+            'released_by_user_id' => isset($this->row['released_by_user_id']) && $this->row['released_by_user_id'] !== null
+                ? (int) $this->row['released_by_user_id']
+                : null,
+            'quality_grade'       => isset($this->row['quality_grade']) && $this->row['quality_grade'] !== null
+                ? (string) $this->row['quality_grade']
+                : null,
+            'maturity_level'      => isset($this->row['maturity_level']) && $this->row['maturity_level'] !== null
+                ? (string) $this->row['maturity_level']
+                : null,
         ];
     }
 }

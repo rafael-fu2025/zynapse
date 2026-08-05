@@ -36,8 +36,12 @@ final class AppointmentsSeeder extends Seeder
      */
     private function appointments(): array
     {
-        $patientBase = (int) (getenv('APPT_PATIENT_BASE') ?: '6');
-        $userBase    = (int) (getenv('APPT_USER_BASE')    ?: '1');
+        $patientBase   = (int) (getenv('APPT_PATIENT_BASE') ?: '6');
+        // Providers resolved dynamically (identity-consolidated): admin +
+        // the clinic_staff role demo user. Falls back to admin if the
+        // staff role user is missing.
+        $adminProvider = $this->resolveGroupUser('admin') ?? 1;
+        $staffProvider = $this->resolveGroupUser('clinic_staff') ?? $adminProvider;
 
         // Build "today" at the timezone used by the demo. We work in
         // UTC throughout because clinic_appointments.scheduled_at is
@@ -54,28 +58,28 @@ final class AppointmentsSeeder extends Seeder
             // 4 Scheduled — future, ready to demo the schedule + check-in flow.
             [
                 'patient_school_id' => $this->studentNumber($patientBase + 0),
-                'provider_user_id'  => $userBase + 1, // nurse-jane
+                'provider_user_id'  => $staffProvider,
                 'scheduled_at'      => $at(1, '08:00:00'),
                 'status'            => 'scheduled',
                 'reason'            => 'Routine check-up',
             ],
             [
                 'patient_school_id' => $this->studentNumber($patientBase + 1),
-                'provider_user_id'  => $userBase + 0, // admin
+                'provider_user_id'  => $adminProvider,
                 'scheduled_at'      => $at(1, '09:30:00'),
                 'status'            => 'scheduled',
                 'reason'            => 'Follow-up consultation',
             ],
             [
                 'patient_school_id' => $this->studentNumber($patientBase + 2),
-                'provider_user_id'  => $userBase + 1,
+                'provider_user_id'  => $staffProvider,
                 'scheduled_at'      => $at(2, '10:00:00'),
                 'status'            => 'scheduled',
                 'reason'            => 'Sports physical',
             ],
             [
                 'patient_school_id' => $this->studentNumber($patientBase + 3),
-                'provider_user_id'  => $userBase + 0,
+                'provider_user_id'  => $adminProvider,
                 'scheduled_at'      => $at(5, '14:00:00'),
                 'status'            => 'scheduled',
                 'reason'            => 'Allergy consult',
@@ -84,14 +88,14 @@ final class AppointmentsSeeder extends Seeder
             // 2 CheckedIn — already arrived, awaiting the clinician.
             [
                 'patient_school_id' => $this->studentNumber($patientBase + 4),
-                'provider_user_id'  => $userBase + 1,
+                'provider_user_id'  => $staffProvider,
                 'scheduled_at'      => $at(0, '09:00:00'),
                 'status'            => 'checked_in',
                 'reason'            => 'Walk-in',
             ],
             [
                 'patient_school_id' => $this->studentNumber($patientBase + 5),
-                'provider_user_id'  => $userBase + 0,
+                'provider_user_id'  => $adminProvider,
                 'scheduled_at'      => $at(1, '11:00:00'),
                 'status'            => 'checked_in',
                 'reason'            => 'Lab result follow-up',
@@ -100,21 +104,21 @@ final class AppointmentsSeeder extends Seeder
             // 3 Completed — past, already closed.
             [
                 'patient_school_id' => $this->studentNumber($patientBase + 6),
-                'provider_user_id'  => $userBase + 1,
+                'provider_user_id'  => $staffProvider,
                 'scheduled_at'      => $at(-7, '08:30:00'),
                 'status'            => 'completed',
                 'reason'            => 'First-aid: minor cut',
             ],
             [
                 'patient_school_id' => $this->studentNumber($patientBase + 7),
-                'provider_user_id'  => $userBase + 0,
+                'provider_user_id'  => $adminProvider,
                 'scheduled_at'      => $at(-3, '10:30:00'),
                 'status'            => 'completed',
                 'reason'            => 'Vaccination booster',
             ],
             [
                 'patient_school_id' => $this->studentNumber($patientBase + 8),
-                'provider_user_id'  => $userBase + 1,
+                'provider_user_id'  => $staffProvider,
                 'scheduled_at'      => $at(-1, '13:00:00'),
                 'status'            => 'completed',
                 'reason'            => 'Medication refill',
@@ -123,7 +127,7 @@ final class AppointmentsSeeder extends Seeder
             // 1 Cancelled — same-day cancel.
             [
                 'patient_school_id' => $this->studentNumber($patientBase + 9),
-                'provider_user_id'  => $userBase + 1,
+                'provider_user_id'  => $staffProvider,
                 'scheduled_at'      => $at(0, '14:30:00'),
                 'status'            => 'cancelled',
                 'reason'            => 'Patient travelling',
@@ -132,7 +136,7 @@ final class AppointmentsSeeder extends Seeder
             // 1 NoShow — same-day missed visit.
             [
                 'patient_school_id' => $this->studentNumber($patientBase + 10),
-                'provider_user_id'  => $userBase + 1,
+                'provider_user_id'  => $staffProvider,
                 'scheduled_at'      => $at(0, '15:30:00'),
                 'status'            => 'no_show',
                 'reason'            => 'Health screening',
@@ -141,7 +145,7 @@ final class AppointmentsSeeder extends Seeder
             // 1 historical Completed — yesterday.
             [
                 'patient_school_id' => $this->studentNumber($patientBase + 11),
-                'provider_user_id'  => $userBase + 0,
+                'provider_user_id'  => $adminProvider,
                 'scheduled_at'      => $at(-1, '08:00:00'),
                 'status'            => 'completed',
                 'reason'            => 'BP monitoring',
@@ -165,10 +169,21 @@ final class AppointmentsSeeder extends Seeder
     {
         $db = $this->db;
 
-        // Single DELETE so the FK cascade and CHARSET work the same way
-        // across MySQL/MariaDB versions. TRUNCATE is faster but trips
-        // the FK check the same way it did in FacilitiesSeeder.
-        $db->table('clinic_appointments')->emptyTable();
+        // FK-safe: disable checks so the reseed order doesn't matter
+        // (encounters FK to appointments; queue/vitals/treatments/
+        // checkins/triage FK to encounters).
+        $db->query('SET FOREIGN_KEY_CHECKS = 0');
+        try {
+            $db->table('clinic_checkins')->emptyTable();
+            $db->table('clinic_treatments')->emptyTable();
+            $db->table('clinic_queue_entries')->emptyTable();
+            $db->table('clinic_vitals')->emptyTable();
+            $db->table('clinic_triage_predictions')->emptyTable();
+            $db->table('clinic_encounters')->emptyTable();
+            $db->table('clinic_appointments')->emptyTable();
+        } finally {
+            $db->query('SET FOREIGN_KEY_CHECKS = 1');
+        }
 
         // Drop the matching audit_outbox rows so re-seeding doesn't
         // pile up orphan entries. `audit_events` is append-only.
@@ -194,15 +209,34 @@ final class AppointmentsSeeder extends Seeder
     }
 
     /**
-     * Resolve a student number from the patient registry. We do not
-     * hard-fail if the index is out of range — instead we fall back
-     * to the first student so a freshly-seeded DB never breaks this
-     * seeder. The output still covers every lifecycle status.
+     * Resolve the first active user id in a role group (identity-
+     * consolidated), or null when the group has no members.
+     */
+    private function resolveGroupUser(string $group): ?int
+    {
+        $row = $this->db->table('auth_groups_users gu')
+            ->select('gu.user_id')
+            ->join('auth_groups g', 'g.id = gu.group_id')
+            ->where('g.name', $group)
+            ->orderBy('gu.user_id', 'ASC')
+            ->limit(1)
+            ->get()->getRowArray();
+        return $row !== null ? (int) $row['user_id'] : null;
+    }
+
+    /**
+     * Resolve a student number from the patient registry (`users`).
+     * We do not hard-fail if the index is out of range — instead we
+     * fall back to the first student so a freshly-seeded DB never
+     * breaks this seeder. The output still covers every lifecycle
+     * status.
      */
     private function studentNumber(int $offset): string
     {
-        $row = $this->db->table('patients_students')
+        $row = $this->db->table('users')
             ->select('student_number')
+            ->where('kind', 'student')
+            ->where('student_number IS NOT NULL', null, false)
             ->orderBy('id', 'ASC')
             ->limit(1, max(0, $offset - 1))
             ->get()->getRowArray();

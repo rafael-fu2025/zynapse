@@ -4,32 +4,30 @@ declare(strict_types=1);
 
 namespace Modules\Clinic\Services;
 
+use App\Auth\CurrentUser;
 use App\Exceptions\ApiException;
 use App\Modules\Shared\BaseService;
 use App\Pagination\KeysetPaginator;
 use App\Services\Audit\AuditOutboxService;
 use DateTimeImmutable;
 use DateTimeZone;
-use Modules\Clinic\DTOs\EmployeeDto;
-use Modules\Clinic\DTOs\StudentDto;
+use Modules\Clinic\DTOs\UserDto;
 use Modules\Clinic\Policies\ClinicPolicy;
 
 /**
- * PatientService — patient registry (Phase 11, recycled from synapse_ag).
+ * PatientService — patient registry (identity-consolidated).
  *
- * Ports the legacy StudentModel/EmployeeModel behavior:
- *   - uniqueness of student/employee number, QR and RFID handles;
- *   - LIKE-escaped search (legacy like_escape_helper);
- *   - "primary contact" demotion: marking a contact primary un-marks
- *     the student's other contacts in the same transaction.
+ * Every patient IS a `users` row with a `kind` discriminator
+ * ('student' | 'employee'). There is no separate person/patient table and
+ * no user↔patient linking: creating a student/employee creates the user
+ * AND its portal account (auth_identities + role) in one transaction.
  *
- * Records are soft-archived, never deleted. Every mutation writes an
- * audit outbox row inside the same transaction.
+ * Records are soft-archived via `users.archived_at`, never deleted. Every
+ * mutation writes an audit outbox row inside the same transaction.
  */
 final class PatientService extends BaseService
 {
-    private const STUDENT_COLS = 'id, user_id, student_number, first_name, last_name, middle_name, qr_code, rfid_tag, course, year_level, section, date_of_birth, gender, address, blood_type, persons_id, consecutive_no_shows, archived_at, created_at, updated_at';
-    private const EMPLOYEE_COLS = 'id, user_id, employee_number, first_name, last_name, middle_name, qr_code, rfid_tag, department, position, date_hired, employment_status, hr_synced_at, emergency_contact_name, emergency_contact_phone, date_of_birth, gender, address, is_teaching, archived_at, created_at, updated_at';
+    private const USER_COLS = 'id, kind, first_name, last_name, middle_name, qr_code, rfid_tag, date_of_birth, gender, address, archived_at, student_number, course, year_level, section, blood_type, consecutive_no_shows, employee_number, department, position, date_hired, employment_status, hr_synced_at, emergency_contact_name, emergency_contact_phone, is_teaching, created_at, updated_at';
 
     public function __construct(
         private readonly ClinicPolicy $policy,
@@ -47,8 +45,9 @@ final class PatientService extends BaseService
     {
         $this->policy->check('patientsRead');
 
-        $builder = $this->db->table('patients_students')
-            ->select(self::STUDENT_COLS)
+        $builder = $this->db->table('users')
+            ->select(self::USER_COLS)
+            ->where('kind', 'student')
             ->orderBy('created_at', 'DESC')
             ->orderBy('id', 'DESC');
 
@@ -62,16 +61,15 @@ final class PatientService extends BaseService
         $final = KeysetPaginator::finalize($rows, $limit);
 
         return [
-            'data'  => array_map(static fn (array $r) => StudentDto::fromRow($r)->toArray(), $final['rows']),
+            'data'  => array_map(static fn (array $r) => UserDto::fromRow($r)->toArray(), $final['rows']),
             'next'  => $final['nextCursor'],
             'count' => $limit,
         ];
     }
 
     /**
-     * Legacy `StudentController::search` — bounded LIKE search on
-     * number + names. The pattern is escaped so `%`/`_` in user input
-     * match literally (ported like_escape_helper behavior).
+     * Bounded LIKE search on number + names (escaped so `%`/`_` in user
+     * input match literally).
      *
      * @return array<int, array<string, mixed>>
      */
@@ -81,8 +79,9 @@ final class PatientService extends BaseService
 
         $limit = max(1, min($limit, 50));
 
-        $builder = $this->db->table('patients_students')
-            ->select(self::STUDENT_COLS)
+        $builder = $this->db->table('users')
+            ->select(self::USER_COLS)
+            ->where('kind', 'student')
             ->where('archived_at', null)
             ->groupStart()
                 ->like('student_number', $q)
@@ -94,19 +93,20 @@ final class PatientService extends BaseService
             ->limit($limit);
 
         return array_map(
-            static fn (array $r) => StudentDto::fromRow($r)->toArray(),
+            static fn (array $r) => UserDto::fromRow($r)->toArray(),
             $builder->get()->getResultArray(),
         );
     }
 
     /** Detail view — includes allergies + emergency contacts. */
-    public function getStudent(int $id): StudentDto
+    public function getStudent(int $id): UserDto
     {
         $this->policy->check('patientsRead');
 
-        $row = $this->db->table('patients_students')
-            ->select(self::STUDENT_COLS)
+        $row = $this->db->table('users')
+            ->select(self::USER_COLS)
             ->where('id', $id)
+            ->where('kind', 'student')
             ->get()->getRowArray();
         if ($row === null) {
             throw new ApiException('resource.not_found', 404, [
@@ -116,88 +116,79 @@ final class PatientService extends BaseService
 
         $allergies = $this->db->table('patient_allergies')
             ->select('id, allergen, severity, reaction')
-            ->where('student_id', $id)
+            ->where('user_id', $id)
             ->orderBy('id', 'ASC')
             ->get()->getResultArray();
 
         $contacts = $this->db->table('patient_contacts')
             ->select('id, contact_name, relationship, phone, is_primary')
-            ->where('student_id', $id)
+            ->where('user_id', $id)
             ->orderBy('is_primary', 'DESC')
             ->orderBy('id', 'ASC')
             ->get()->getResultArray();
 
-        return StudentDto::fromRow($row, $allergies, $contacts);
+        return UserDto::fromRow($row, $allergies, $contacts);
     }
 
     /**
-     * Phase 3.5: optionally mints a portal account (users + auth_identities
-     * + persons + patient_identifiers) tied to the newly-created patient
-     * row. Returns the StudentDto and, when create_account=true, a
-     * `portal_account` envelope with the temporary password so the admin
-     * can share it once.
+     * Auto-account: creating a student creates the user (kind=student)
+     * AND its portal account (auth_identities with temporary password +
+     * `student` role) in one transaction. There is no `create_account`
+     * flag — it is always on. Returns the UserDto and the portal-account
+     * envelope so the admin can share the temporary password once.
      *
      * @param array<string, mixed> $input validated payload
-     * @return array{0: StudentDto, 1: ?array{email: string, temporary_password: string, user_id: int, persons_id: int}}
+     * @return array{0: UserDto, 1: array{email: string, temporary_password: string, user_id: int}}
      */
     public function createStudent(array $input): array
     {
         $this->policy->check('patientsWrite');
-        $userId = \App\Auth\CurrentUser::assert();
+        $userId = CurrentUser::assert();
 
         return $this->txn(function () use ($input, $userId): array {
-            $this->assertHandleUnique('patients_students', 'student_number', (string) $input['student_number'], null);
-            $this->assertOptionalHandleUnique('patients_students', 'qr_code', $input['qr_code'] ?? null, null);
-            $this->assertOptionalHandleUnique('patients_students', 'rfid_tag', $input['rfid_tag'] ?? null, null);
+            $this->assertHandleUnique('users', 'student_number', (string) $input['student_number'], null);
+            $this->assertOptionalHandleUnique('users', 'qr_code', $input['qr_code'] ?? null, null);
+            $this->assertOptionalHandleUnique('users', 'rfid_tag', $input['rfid_tag'] ?? null, null);
 
             $now = $this->utcNow();
 
-            $this->db->table('patients_students')->insert([
-                'student_number' => (string) $input['student_number'],
-                'first_name'     => (string) $input['first_name'],
-                'last_name'      => (string) $input['last_name'],
-                'middle_name'    => $this->strOrNull($input, 'middle_name'),
-                'qr_code'        => $this->strOrNull($input, 'qr_code'),
-                'rfid_tag'       => $this->strOrNull($input, 'rfid_tag'),
-                'course'         => $this->strOrNull($input, 'course'),
-                'year_level'     => isset($input['year_level']) && $input['year_level'] !== '' ? (int) $input['year_level'] : null,
-                'section'        => $this->strOrNull($input, 'section'),
-                'date_of_birth'  => $this->strOrNull($input, 'date_of_birth'),
-                'gender'         => $this->strOrNull($input, 'gender'),
-                'address'        => $this->strOrNull($input, 'address'),
-                'blood_type'     => $this->strOrNull($input, 'blood_type'),
+            $this->db->table('users')->insert([
+                'kind'                => 'student',
+                'student_number'      => (string) $input['student_number'],
+                'first_name'          => (string) $input['first_name'],
+                'last_name'           => (string) $input['last_name'],
+                'middle_name'         => $this->strOrNull($input, 'middle_name'),
+                'qr_code'             => $this->strOrNull($input, 'qr_code'),
+                'rfid_tag'            => $this->strOrNull($input, 'rfid_tag'),
+                'course'              => $this->strOrNull($input, 'course'),
+                'year_level'          => isset($input['year_level']) && $input['year_level'] !== '' ? (int) $input['year_level'] : null,
+                'section'             => $this->strOrNull($input, 'section'),
+                'date_of_birth'       => $this->strOrNull($input, 'date_of_birth'),
+                'gender'              => $this->strOrNull($input, 'gender'),
+                'address'             => $this->strOrNull($input, 'address'),
+                'blood_type'          => $this->strOrNull($input, 'blood_type'),
                 'consecutive_no_shows' => 0,
-                'created_at'     => $now,
-                'updated_at'     => $now,
+                'status'              => 'active',
+                'active'              => 1,
+                'created_at'          => $now,
+                'updated_at'          => $now,
             ]);
             $id = (int) $this->db->insertID();
 
             $this->audit->enqueue(
                 'clinic.patient_student_created',
-                'patients_students',
+                'users',
                 $id,
                 $userId,
                 ['resource_code' => 'student#' . (string) $input['student_number']],
             );
 
-            $portalAccount = null;
-            $createAccount = (bool) ($input['create_account'] ?? false);
-            if ($createAccount) {
-                $accountEmail = isset($input['account_email']) && $input['account_email'] !== ''
-                    ? strtolower(trim((string) $input['account_email']))
-                    : strtolower((string) $input['student_number']) . '@synapse.dev';
-                $portalAccount = $this->mintPortalAccount(
-                    $id,
-                    'student',
-                    (string) $input['student_number'],
-                    (string) $input['first_name'],
-                    (string) $input['last_name'],
-                    $accountEmail,
-                    $userId,
-                );
-            }
+            $accountEmail = isset($input['account_email']) && $input['account_email'] !== ''
+                ? strtolower(trim((string) $input['account_email']))
+                : strtolower((string) $input['student_number']) . '@synapse.dev';
+            $portalAccount = $this->createAccount($id, 'student', $accountEmail, $userId);
 
-            return [$this->getStudentRowDto($id), $portalAccount];
+            return [$this->getUserRowDto($id), $portalAccount];
         });
     }
 
@@ -207,21 +198,21 @@ final class PatientService extends BaseService
      *
      * @param array<string, mixed> $input
      */
-    public function updateStudent(int $id, array $input): StudentDto
+    public function updateStudent(int $id, array $input): UserDto
     {
         $this->policy->check('patientsWrite');
-        $userId = \App\Auth\CurrentUser::assert();
+        $userId = CurrentUser::assert();
 
-        return $this->txn(function () use ($id, $input, $userId): StudentDto {
-            $row = $this->selectForUpdate('patients_students', ['id' => $id]);
+        return $this->txn(function () use ($id, $input, $userId): UserDto {
+            $row = $this->selectForUpdate('users', ['id' => $id, 'kind' => 'student']);
             if ($row === null) {
                 throw new ApiException('resource.not_found', 404, [
                     ['code' => 'resource.not_found', 'message' => "Student #{$id} not found."],
                 ]);
             }
 
-            $this->assertOptionalHandleUnique('patients_students', 'qr_code', $input['qr_code'] ?? null, $id);
-            $this->assertOptionalHandleUnique('patients_students', 'rfid_tag', $input['rfid_tag'] ?? null, $id);
+            $this->assertOptionalHandleUnique('users', 'qr_code', $input['qr_code'] ?? null, $id);
+            $this->assertOptionalHandleUnique('users', 'rfid_tag', $input['rfid_tag'] ?? null, $id);
 
             $update = [];
             foreach (['first_name', 'last_name', 'middle_name', 'qr_code', 'rfid_tag', 'course', 'section', 'date_of_birth', 'gender', 'address', 'blood_type'] as $col) {
@@ -235,28 +226,28 @@ final class PatientService extends BaseService
 
             if ($update !== []) {
                 $update['updated_at'] = $this->utcNow();
-                $this->db->table('patients_students')->where('id', $id)->update($update);
+                $this->db->table('users')->where('id', $id)->where('kind', 'student')->update($update);
 
                 $this->audit->enqueue(
                     'clinic.patient_student_updated',
-                    'patients_students',
+                    'users',
                     $id,
                     $userId,
                     ['fields' => implode(',', array_keys($update))],
                 );
             }
 
-            return $this->getStudentRowDto($id);
+            return $this->getUserRowDto($id);
         });
     }
 
-    public function setStudentArchived(int $id, bool $archived): StudentDto
+    public function setStudentArchived(int $id, bool $archived): UserDto
     {
         $this->policy->check('patientsWrite');
-        $userId = \App\Auth\CurrentUser::assert();
+        $userId = CurrentUser::assert();
 
-        return $this->txn(function () use ($id, $archived, $userId): StudentDto {
-            $row = $this->selectForUpdate('patients_students', ['id' => $id]);
+        return $this->txn(function () use ($id, $archived, $userId): UserDto {
+            $row = $this->selectForUpdate('users', ['id' => $id, 'kind' => 'student']);
             if ($row === null) {
                 throw new ApiException('resource.not_found', 404, [
                     ['code' => 'resource.not_found', 'message' => "Student #{$id} not found."],
@@ -264,33 +255,33 @@ final class PatientService extends BaseService
             }
 
             $now = $this->utcNow();
-            $this->db->table('patients_students')->where('id', $id)->update([
+            $this->db->table('users')->where('id', $id)->where('kind', 'student')->update([
                 'archived_at' => $archived ? $now : null,
                 'updated_at'  => $now,
             ]);
 
             $this->audit->enqueue(
                 $archived ? 'clinic.patient_student_archived' : 'clinic.patient_student_restored',
-                'patients_students',
+                'users',
                 $id,
                 $userId,
                 [],
             );
 
-            return $this->getStudentRowDto($id);
+            return $this->getUserRowDto($id);
         });
     }
 
     /**
      * @param array<string, mixed> $input
      */
-    public function addAllergy(int $studentId, array $input): StudentDto
+    public function addAllergy(int $studentId, array $input): UserDto
     {
         $this->policy->check('patientsWrite');
-        $userId = \App\Auth\CurrentUser::assert();
+        $userId = CurrentUser::assert();
 
-        return $this->txn(function () use ($studentId, $input, $userId): StudentDto {
-            $row = $this->selectForUpdate('patients_students', ['id' => $studentId]);
+        return $this->txn(function () use ($studentId, $input, $userId): UserDto {
+            $row = $this->selectForUpdate('users', ['id' => $studentId, 'kind' => 'student']);
             if ($row === null) {
                 throw new ApiException('resource.not_found', 404, [
                     ['code' => 'resource.not_found', 'message' => "Student #{$studentId} not found."],
@@ -298,7 +289,7 @@ final class PatientService extends BaseService
             }
 
             $this->db->table('patient_allergies')->insert([
-                'student_id'       => $studentId,
+                'user_id'          => $studentId,
                 'allergen'         => (string) $input['allergen'],
                 'severity'         => (string) ($input['severity'] ?? 'mild'),
                 'reaction'         => $this->strOrNull($input, 'reaction'),
@@ -324,13 +315,13 @@ final class PatientService extends BaseService
      *
      * @param array<string, mixed> $input
      */
-    public function addContact(int $studentId, array $input): StudentDto
+    public function addContact(int $studentId, array $input): UserDto
     {
         $this->policy->check('patientsWrite');
-        $userId = \App\Auth\CurrentUser::assert();
+        $userId = CurrentUser::assert();
 
-        return $this->txn(function () use ($studentId, $input, $userId): StudentDto {
-            $row = $this->selectForUpdate('patients_students', ['id' => $studentId]);
+        return $this->txn(function () use ($studentId, $input, $userId): UserDto {
+            $row = $this->selectForUpdate('users', ['id' => $studentId, 'kind' => 'student']);
             if ($row === null) {
                 throw new ApiException('resource.not_found', 404, [
                     ['code' => 'resource.not_found', 'message' => "Student #{$studentId} not found."],
@@ -340,12 +331,12 @@ final class PatientService extends BaseService
             $isPrimary = (bool) ($input['is_primary'] ?? false);
             if ($isPrimary) {
                 $this->db->table('patient_contacts')
-                    ->where('student_id', $studentId)
+                    ->where('user_id', $studentId)
                     ->update(['is_primary' => 0]);
             }
 
             $this->db->table('patient_contacts')->insert([
-                'student_id'   => $studentId,
+                'user_id'      => $studentId,
                 'contact_name' => (string) $input['contact_name'],
                 'relationship' => (string) $input['relationship'],
                 'phone'        => (string) $input['phone'],
@@ -370,17 +361,30 @@ final class PatientService extends BaseService
     /**
      * @return array{data: array<int, array<string, mixed>>, next: ?string, count: int}
      */
-    public function listEmployees(?string $cursor, int $limit, bool $includeArchived = false): array
+    public function listEmployees(?string $cursor, int $limit, bool $includeArchived = false, ?string $teaching = null): array
     {
         $this->policy->check('patientsRead');
 
-        $builder = $this->db->table('patients_employees')
-            ->select(self::EMPLOYEE_COLS)
+        $builder = $this->db->table('users')
+            ->select(self::USER_COLS)
+            ->where('kind', 'employee')
             ->orderBy('created_at', 'DESC')
             ->orderBy('id', 'DESC');
 
         if (! $includeArchived) {
             $builder->where('archived_at', null);
+        }
+
+        // Teaching / non-teaching triage. Non-teaching also captures
+        // NULL (HR-synced rows without the flag), which renders as
+        // non-teaching in the UI.
+        if ($teaching === 'teaching') {
+            $builder->where('is_teaching', 1);
+        } elseif ($teaching === 'non_teaching') {
+            $builder->groupStart()
+                ->where('is_teaching', 0)
+                ->orWhere('is_teaching', null)
+                ->groupEnd();
         }
 
         KeysetPaginator::apply($builder, $cursor, $limit);
@@ -389,179 +393,89 @@ final class PatientService extends BaseService
         $final = KeysetPaginator::finalize($rows, $limit);
 
         return [
-            'data'  => array_map(static fn (array $r) => EmployeeDto::fromRow($r)->toArray(), $final['rows']),
+            'data'  => array_map(static fn (array $r) => UserDto::fromRow($r)->toArray(), $final['rows']),
             'next'  => $final['nextCursor'],
             'count' => $limit,
         ];
     }
 
     /**
-     * Phase 3.5: optionally mints a portal account for the new employee.
-     * Returns the EmployeeDto and, when create_account=true, a
-     * `portal_account` envelope with the temporary password.
+     * Auto-account: creating an employee creates the user (kind=employee)
+     * AND its portal account (auth_identities with temporary password +
+     * `employee` role) in one transaction.
      *
      * @param array<string, mixed> $input
-     * @return array{0: EmployeeDto, 1: ?array{email: string, temporary_password: string, user_id: int, persons_id: int}}
+     * @return array{0: UserDto, 1: array{email: string, temporary_password: string, user_id: int}}
      */
     public function createEmployee(array $input): array
     {
         $this->policy->check('patientsWrite');
-        $userId = \App\Auth\CurrentUser::assert();
+        $userId = CurrentUser::assert();
 
         return $this->txn(function () use ($input, $userId): array {
-            $this->assertHandleUnique('patients_employees', 'employee_number', (string) $input['employee_number'], null);
-            $this->assertOptionalHandleUnique('patients_employees', 'qr_code', $input['qr_code'] ?? null, null);
-            $this->assertOptionalHandleUnique('patients_employees', 'rfid_tag', $input['rfid_tag'] ?? null, null);
+            $this->assertHandleUnique('users', 'employee_number', (string) $input['employee_number'], null);
+            $this->assertOptionalHandleUnique('users', 'qr_code', $input['qr_code'] ?? null, null);
+            $this->assertOptionalHandleUnique('users', 'rfid_tag', $input['rfid_tag'] ?? null, null);
 
             $now = $this->utcNow();
 
-            $this->db->table('patients_employees')->insert([
-                'employee_number'         => (string) $input['employee_number'],
-                'first_name'              => (string) $input['first_name'],
-                'last_name'               => (string) $input['last_name'],
-                'middle_name'             => $this->strOrNull($input, 'middle_name'),
-                'qr_code'                 => $this->strOrNull($input, 'qr_code'),
-                'rfid_tag'                => $this->strOrNull($input, 'rfid_tag'),
-                'department'              => $this->strOrNull($input, 'department'),
-                'position'                => $this->strOrNull($input, 'position'),
-                'date_hired'              => $this->strOrNull($input, 'date_hired'),
-                'employment_status'       => (string) ($input['employment_status'] ?? 'active'),
-                'emergency_contact_name'  => $this->strOrNull($input, 'emergency_contact_name'),
-                'emergency_contact_phone' => $this->strOrNull($input, 'emergency_contact_phone'),
-                'date_of_birth'           => $this->strOrNull($input, 'date_of_birth'),
-                'gender'                  => $this->strOrNull($input, 'gender'),
-                'address'                 => $this->strOrNull($input, 'address'),
-                'is_teaching'             => (int) (($input['is_teaching'] ?? false) === true),
-                'created_at'              => $now,
-                'updated_at'              => $now,
+            $this->db->table('users')->insert([
+                'kind'                   => 'employee',
+                'employee_number'        => (string) $input['employee_number'],
+                'first_name'             => (string) $input['first_name'],
+                'last_name'              => (string) $input['last_name'],
+                'middle_name'            => $this->strOrNull($input, 'middle_name'),
+                'qr_code'                => $this->strOrNull($input, 'qr_code'),
+                'rfid_tag'               => $this->strOrNull($input, 'rfid_tag'),
+                'department'             => $this->strOrNull($input, 'department'),
+                'position'               => $this->strOrNull($input, 'position'),
+                'date_hired'             => $this->strOrNull($input, 'date_hired'),
+                'employment_status'      => (string) ($input['employment_status'] ?? 'active'),
+                'emergency_contact_name' => $this->strOrNull($input, 'emergency_contact_name'),
+                'emergency_contact_phone'=> $this->strOrNull($input, 'emergency_contact_phone'),
+                'date_of_birth'          => $this->strOrNull($input, 'date_of_birth'),
+                'gender'                 => $this->strOrNull($input, 'gender'),
+                'address'                => $this->strOrNull($input, 'address'),
+                'is_teaching'            => (int) (($input['is_teaching'] ?? false) === true),
+                'status'                 => 'active',
+                'active'                 => 1,
+                'created_at'             => $now,
+                'updated_at'             => $now,
             ]);
             $id = (int) $this->db->insertID();
 
             $this->audit->enqueue(
                 'clinic.patient_employee_created',
-                'patients_employees',
+                'users',
                 $id,
                 $userId,
                 ['resource_code' => 'employee#' . (string) $input['employee_number']],
             );
 
-            $portalAccount = null;
-            $createAccount = (bool) ($input['create_account'] ?? false);
-            if ($createAccount) {
-                $accountEmail = isset($input['account_email']) && $input['account_email'] !== ''
-                    ? strtolower(trim((string) $input['account_email']))
-                    : strtolower((string) $input['employee_number']) . '@synapse.dev';
-                $portalAccount = $this->mintPortalAccount(
-                    $id,
-                    'employee',
-                    (string) $input['employee_number'],
-                    (string) $input['first_name'],
-                    (string) $input['last_name'],
-                    $accountEmail,
-                    $userId,
-                );
-            }
+            $accountEmail = isset($input['account_email']) && $input['account_email'] !== ''
+                ? strtolower(trim((string) $input['account_email']))
+                : strtolower((string) $input['employee_number']) . '@synapse.dev';
+            $portalAccount = $this->createAccount($id, 'employee', $accountEmail, $userId);
 
-            $row = $this->db->table('patients_employees')->select(self::EMPLOYEE_COLS)->where('id', $id)->get()->getRowArray();
-            if ($row === null) {
-                throw new ApiException('resource.not_found', 404, [
-                    ['code' => 'resource.not_found', 'message' => "Employee #{$id} not found."],
-                ]);
-            }
-            $row = $this->enrichEmployeeRow($row);
-            return [EmployeeDto::fromRow($row), $portalAccount];
+            return [$this->getUserRowDto($id), $portalAccount];
         });
     }
 
     /**
-     * Attach `patient_identifier_id` to a patients_employees row by
-     * looking up the matching patient_identifiers row by persons_id +
-     * kind='employee'.
+     * Create the portal account for a freshly-created patient user: an
+     * `auth_identities` row (email_password, temporary password,
+     * force_reset=1) plus role membership (`student`/`employee` group).
+     * Returns the portal-account envelope for one-time sharing.
      *
-     * @param array<string, mixed> $row
-     * @return array<string, mixed>
+     * @return array{email: string, temporary_password: string, user_id: int}
      */
-    private function enrichEmployeeRow(array $row): array
+    private function createAccount(int $userId, string $kind, string $email, int $actorUserId): array
     {
-        $row['patient_identifier_id'] = null;
-        $personsId = isset($row['persons_id']) ? (int) $row['persons_id'] : 0;
-        if ($personsId <= 0) {
-            return $row;
-        }
-        $piRow = $this->db->table('patient_identifiers')
-            ->select('id')
-            ->where('persons_id', $personsId)
-            ->where('kind', 'employee')
-            ->where('archived_at IS NULL', null, false)
-            ->get()->getRowArray();
-        if ($piRow !== null) {
-            $row['patient_identifier_id'] = (int) $piRow['id'];
-        }
-        return $row;
-    }
-
-    /**
-     * Phase 3.5: shared helper for createStudent / createEmployee to mint
-     * a portal account. Creates persons + patient_identifiers + users +
-     * auth_identities, sets force_reset=1, and returns the temporary
-     * password so the admin can share it once. The legacy `user_id` FK on
-     * patients_students / patients_employees is also populated for the
-     * back-link convenience.
-     *
-     * @return array{email: string, temporary_password: string, user_id: int, persons_id: int}
-     */
-    private function mintPortalAccount(
-        int $patientRowId,
-        string $kind,
-        string $identifier,
-        string $firstName,
-        string $lastName,
-        string $email,
-        int $actorUserId,
-    ): array {
         $now = $this->utcNow();
 
-        // 1. persons row (kind, names).
-        $this->db->table('persons')->insert([
-            'kind'       => $kind,
-            'first_name' => $firstName,
-            'last_name'  => $lastName,
-            'created_at' => $now,
-            'updated_at' => $now,
-        ]);
-        $personsId = (int) $this->db->insertID();
-
-        // 2. patient_identifiers row (canonical link).
-        $this->db->table('patient_identifiers')->insert([
-            'persons_id'      => $personsId,
-            'kind'            => $kind,
-            'identifier'      => $identifier,
-            'archived_at'     => null,
-            'created_at'      => $now,
-            'updated_at'      => $now,
-        ]);
-
-        // 3. users row, tied to the person.
-        $this->db->table('users')->insert([
-            'username'   => null,
-            'status'     => 'active',
-            'active'     => 1,
-            'person_id'  => $personsId,
-            'created_at' => $now,
-            'updated_at' => $now,
-        ]);
-        $newUserId = (int) $this->db->insertID();
-
-        // 4. Set persons.user_id back-link.
-        $this->db->table('persons')->where('id', $personsId)->update([
-            'user_id'    => $newUserId,
-            'updated_at' => $now,
-        ]);
-
-        // 5. auth_identities row with temporary password.
         $temporaryPassword = rtrim(strtr(base64_encode(random_bytes(12)), '+/', '-_'), '=');
         $this->db->table('auth_identities')->insert([
-            'user_id'     => $newUserId,
+            'user_id'     => $userId,
             'type'        => 'email_password',
             'secret'      => $email,
             'secret2'     => password_hash($temporaryPassword, PASSWORD_DEFAULT),
@@ -570,21 +484,15 @@ final class PatientService extends BaseService
             'updated_at'  => $now,
         ]);
 
-        // 6. Back-link the patient row to the new user_id for legacy queries.
-        $patientTable = $kind === 'student' ? 'patients_students' : 'patients_employees';
-        $this->db->table($patientTable)->where('id', $patientRowId)->update([
-            'user_id'    => $newUserId,
-            'persons_id' => $personsId,
-            'updated_at' => $now,
-        ]);
+        $this->assignGroup($userId, $kind === 'student' ? 'student' : 'employee');
 
         $this->audit->enqueue(
             'admin.portal_account_minted',
             'users',
-            $newUserId,
+            $userId,
             $actorUserId,
             [
-                'resource_code' => "patient#{$kind}:{$identifier}",
+                'resource_code' => "patient#{$kind}:{$email}",
                 'next_status'   => 'active',
             ],
         );
@@ -592,21 +500,48 @@ final class PatientService extends BaseService
         return [
             'email'              => $email,
             'temporary_password' => $temporaryPassword,
-            'user_id'            => $newUserId,
-            'persons_id'         => $personsId,
+            'user_id'            => $userId,
         ];
     }
 
-    public function getEmployee(int $id): EmployeeDto
+    /**
+     * Assign a role group to a user (idempotent). The group must exist in
+     * `auth_groups` (seeded from Config\AuthGroups); missing groups are
+     * skipped so a stale config never breaks account creation.
+     */
+    private function assignGroup(int $userId, string $group): void
+    {
+        $gid = $this->db->table('auth_groups')->select('id')->where('name', $group)->get()->getRowArray();
+        if ($gid === null) {
+            return;
+        }
+        $exists = $this->db->table('auth_groups_users')
+            ->where(['group_id' => (int) $gid['id'], 'user_id' => $userId])
+            ->get()->getRowArray();
+        if ($exists !== null) {
+            return;
+        }
+        $this->db->table('auth_groups_users')->insert([
+            'group_id'   => (int) $gid['id'],
+            'user_id'    => $userId,
+            'created_at' => $this->utcNow(),
+        ]);
+    }
+
+    public function getEmployee(int $id): UserDto
     {
         $this->policy->check('patientsRead');
-        $row = $this->db->table('patients_employees')->select(self::EMPLOYEE_COLS)->where('id', $id)->get()->getRowArray();
+        $row = $this->db->table('users')
+            ->select(self::USER_COLS)
+            ->where('id', $id)
+            ->where('kind', 'employee')
+            ->get()->getRowArray();
         if ($row === null) {
             throw new ApiException('resource.not_found', 404, [
                 ['code' => 'resource.not_found', 'message' => "Employee #{$id} not found."],
             ]);
         }
-        return EmployeeDto::fromRow($row);
+        return UserDto::fromRow($row);
     }
 
     /**
@@ -617,8 +552,9 @@ final class PatientService extends BaseService
         $this->policy->check('patientsRead');
         $limit = max(1, min($limit, 50));
 
-        $rows = $this->db->table('patients_employees')
-            ->select(self::EMPLOYEE_COLS)
+        $rows = $this->db->table('users')
+            ->select(self::USER_COLS)
+            ->where('kind', 'employee')
             ->groupStart()
                 ->like('employee_number', $q)
                 ->orLike('first_name', $q)
@@ -629,27 +565,73 @@ final class PatientService extends BaseService
             ->limit($limit)
             ->get()->getResultArray();
 
-        return array_map(static fn (array $r) => EmployeeDto::fromRow($r)->toArray(), $rows);
+        return array_map(static fn (array $r) => UserDto::fromRow($r)->toArray(), $rows);
+    }
+
+    /**
+     * Kiosk station autocomplete — lightweight combined lookup across
+     * BOTH patient kinds (students + employees) by number, last name, or
+     * first name. Returns a minimal shape (id, kind, name, school_id)
+     * sized for a touch dropdown; the kiosk then checks the patient in
+     * by school_id through the normal check-in path.
+     *
+     * @return array<int, array{id: int, kind: string, name: string, school_id: string}>
+     */
+    public function lookupForKiosk(string $q, int $limit = 8): array
+    {
+        $this->policy->check('patientsRead');
+        $limit = max(1, min($limit, 12));
+
+        $rows = $this->db->table('users')
+            ->select('id, kind, first_name, last_name, middle_name, student_number, employee_number')
+            ->whereIn('kind', ['student', 'employee'])
+            ->where('archived_at', null)
+            ->groupStart()
+                ->like('student_number', $q)
+                ->orLike('employee_number', $q)
+                ->orLike('last_name', $q)
+                ->orLike('first_name', $q)
+            ->groupEnd()
+            ->orderBy('last_name', 'ASC')
+            ->orderBy('first_name', 'ASC')
+            ->limit($limit)
+            ->get()->getResultArray();
+
+        $out = [];
+        foreach ($rows as $r) {
+            $schoolId = (string) ($r['kind'] === 'student' ? $r['student_number'] : $r['employee_number']);
+            $middle   = $r['middle_name'] !== null && $r['middle_name'] !== ''
+                ? ' ' . mb_substr((string) $r['middle_name'], 0, 1) . '.'
+                : '';
+            $out[] = [
+                'id'        => (int) $r['id'],
+                'kind'      => (string) $r['kind'],
+                'name'      => trim((string) $r['last_name'] . ', ' . (string) $r['first_name'] . $middle),
+                'school_id' => $schoolId,
+            ];
+        }
+
+        return $out;
     }
 
     /**
      * @param array<string, mixed> $input
      */
-    public function updateEmployee(int $id, array $input): EmployeeDto
+    public function updateEmployee(int $id, array $input): UserDto
     {
         $this->policy->check('patientsWrite');
-        $userId = \App\Auth\CurrentUser::assert();
+        $userId = CurrentUser::assert();
 
-        return $this->txn(function () use ($id, $input, $userId): EmployeeDto {
-            $row = $this->selectForUpdate('patients_employees', ['id' => $id]);
+        return $this->txn(function () use ($id, $input, $userId): UserDto {
+            $row = $this->selectForUpdate('users', ['id' => $id, 'kind' => 'employee']);
             if ($row === null) {
                 throw new ApiException('resource.not_found', 404, [
                     ['code' => 'resource.not_found', 'message' => "Employee #{$id} not found."],
                 ]);
             }
 
-            $this->assertOptionalHandleUnique('patients_employees', 'qr_code', $input['qr_code'] ?? null, $id);
-            $this->assertOptionalHandleUnique('patients_employees', 'rfid_tag', $input['rfid_tag'] ?? null, $id);
+            $this->assertOptionalHandleUnique('users', 'qr_code', $input['qr_code'] ?? null, $id);
+            $this->assertOptionalHandleUnique('users', 'rfid_tag', $input['rfid_tag'] ?? null, $id);
 
             $update = [];
             foreach (['first_name', 'last_name', 'middle_name', 'qr_code', 'rfid_tag', 'department', 'position', 'date_hired', 'employment_status', 'emergency_contact_name', 'emergency_contact_phone', 'date_of_birth', 'gender', 'address'] as $col) {
@@ -669,51 +651,50 @@ final class PatientService extends BaseService
 
             if ($update !== []) {
                 $update['updated_at'] = $this->utcNow();
-                $this->db->table('patients_employees')->where('id', $id)->update($update);
-                $this->audit->enqueue('clinic.patient_employee_updated', 'patients_employees', $id, $userId, [
+                $this->db->table('users')->where('id', $id)->where('kind', 'employee')->update($update);
+                $this->audit->enqueue('clinic.patient_employee_updated', 'users', $id, $userId, [
                     'fields' => implode(',', array_keys($update)),
                 ]);
             }
 
-            $fresh = $this->db->table('patients_employees')->select(self::EMPLOYEE_COLS)->where('id', $id)->get()->getRowArray();
-            return EmployeeDto::fromRow($fresh);
+            return $this->getUserRowDto($id);
         });
     }
 
-    public function setEmployeeArchived(int $id, bool $archived): EmployeeDto
+    public function setEmployeeArchived(int $id, bool $archived): UserDto
     {
         $this->policy->check('patientsWrite');
-        $userId = \App\Auth\CurrentUser::assert();
+        $userId = CurrentUser::assert();
 
-        return $this->txn(function () use ($id, $archived, $userId): EmployeeDto {
-            $row = $this->selectForUpdate('patients_employees', ['id' => $id]);
+        return $this->txn(function () use ($id, $archived, $userId): UserDto {
+            $row = $this->selectForUpdate('users', ['id' => $id, 'kind' => 'employee']);
             if ($row === null) {
                 throw new ApiException('resource.not_found', 404, [
                     ['code' => 'resource.not_found', 'message' => "Employee #{$id} not found."],
                 ]);
             }
             $now = $this->utcNow();
-            $this->db->table('patients_employees')->where('id', $id)->update([
+            $this->db->table('users')->where('id', $id)->where('kind', 'employee')->update([
                 'archived_at' => $archived ? $now : null,
                 'updated_at'  => $now,
             ]);
             $this->audit->enqueue(
                 $archived ? 'clinic.patient_employee_archived' : 'clinic.patient_employee_restored',
-                'patients_employees',
+                'users',
                 $id,
                 $userId,
                 [],
             );
-            $fresh = $this->db->table('patients_employees')->select(self::EMPLOYEE_COLS)->where('id', $id)->get()->getRowArray();
-            return EmployeeDto::fromRow($fresh);
+            return $this->getUserRowDto($id);
         });
     }
 
     /**
-     * Idempotent HR sync: upsert employees by `employee_number` (ports
-     * the legacy `EmployeeController::syncFromHr` shape without the
-     * external HR system). Existing rows are updated + stamped with
-     * `hr_synced_at`; new numbers are inserted.
+     * Idempotent HR sync: upsert employee users by `employee_number`.
+     * Existing rows are updated + stamped with `hr_synced_at`; new numbers
+     * are inserted as identity-only `users` rows (kind=employee, no
+     * credentials — HR sync never issues logins; admins mint accounts
+     * via the admin user flow).
      *
      * @param array<int, array<string, mixed>> $records
      * @return array{created: int, updated: int}
@@ -721,7 +702,7 @@ final class PatientService extends BaseService
     public function syncHrEmployees(array $records): array
     {
         $this->policy->check('patientsWrite');
-        $userId = \App\Auth\CurrentUser::assert();
+        $userId = CurrentUser::assert();
 
         return $this->txn(function () use ($records, $userId): array {
             $now = $this->utcNow();
@@ -733,7 +714,18 @@ final class PatientService extends BaseService
                 if ($number === '') {
                     continue;
                 }
-                $existing = $this->db->table('patients_employees')->where('employee_number', $number)->get()->getRowArray();
+                $existing = $this->db->table('users')
+                    ->where('kind', 'employee')
+                    ->where('employee_number', $number)
+                    ->get()->getRowArray();
+
+                // is_teaching is populated from the HR record when present
+                // (bool / 1 / '1'); otherwise the existing value is kept
+                // (audit fix — previously the flag was never synced, so
+                // HR-imported faculty silently lost the ability to refer).
+                $teachingValue = isset($rec['is_teaching'])
+                    ? (int) ($rec['is_teaching'] === true || $rec['is_teaching'] === 1 || $rec['is_teaching'] === '1' || $rec['is_teaching'] === 'true')
+                    : ($existing['is_teaching'] ?? 0);
 
                 $fields = [
                     'first_name'        => (string) ($rec['first_name'] ?? ($existing['first_name'] ?? '')),
@@ -741,23 +733,27 @@ final class PatientService extends BaseService
                     'department'        => isset($rec['department']) && $rec['department'] !== '' ? (string) $rec['department'] : ($existing['department'] ?? null),
                     'position'          => isset($rec['position']) && $rec['position'] !== '' ? (string) $rec['position'] : ($existing['position'] ?? null),
                     'employment_status' => (string) ($rec['employment_status'] ?? ($existing['employment_status'] ?? 'active')),
+                    'is_teaching'       => $teachingValue,
                     'hr_synced_at'      => $now,
                     'updated_at'        => $now,
                 ];
 
                 if ($existing !== null) {
-                    $this->db->table('patients_employees')->where('id', (int) $existing['id'])->update($fields);
+                    $this->db->table('users')->where('id', (int) $existing['id'])->where('kind', 'employee')->update($fields);
                     $updated++;
                 } else {
-                    $this->db->table('patients_employees')->insert($fields + [
+                    $this->db->table('users')->insert($fields + [
+                        'kind'           => 'employee',
                         'employee_number' => $number,
-                        'created_at'      => $now,
+                        'status'         => 'active',
+                        'active'         => 1,
+                        'created_at'     => $now,
                     ]);
                     $created++;
                 }
             }
 
-            $this->audit->enqueue('clinic.employees_hr_synced', 'patients_employees', 0, $userId, [
+            $this->audit->enqueue('clinic.employees_hr_synced', 'users', 0, $userId, [
                 'resource_code' => 'created#' . $created . '_updated#' . $updated,
             ]);
 
@@ -824,48 +820,18 @@ final class PatientService extends BaseService
 
     // ------------------------------------------------------------ helpers
 
-    private function getStudentRowDto(int $id): StudentDto
+    private function getUserRowDto(int $id): UserDto
     {
-        $row = $this->db->table('patients_students')
-            ->select(self::STUDENT_COLS)
+        $row = $this->db->table('users')
+            ->select(self::USER_COLS)
             ->where('id', $id)
             ->get()->getRowArray();
         if ($row === null) {
             throw new ApiException('resource.not_found', 404, [
-                ['code' => 'resource.not_found', 'message' => "Student #{$id} not found."],
+                ['code' => 'resource.not_found', 'message' => "User #{$id} not found."],
             ]);
         }
-        // Phase 3.5: enrich with patient_identifier_id (the StudentDto
-        // expects the canonical identifier id from patient_identifiers).
-        $row = $this->enrichStudentRow($row);
-        return StudentDto::fromRow($row);
-    }
-
-    /**
-     * Attach `patient_identifier_id` to a patients_students row by
-     * looking up the matching patient_identifiers row by persons_id +
-     * kind='student'.
-     *
-     * @param array<string, mixed> $row
-     * @return array<string, mixed>
-     */
-    private function enrichStudentRow(array $row): array
-    {
-        $row['patient_identifier_id'] = null;
-        $personsId = isset($row['persons_id']) ? (int) $row['persons_id'] : 0;
-        if ($personsId <= 0) {
-            return $row;
-        }
-        $piRow = $this->db->table('patient_identifiers')
-            ->select('id')
-            ->where('persons_id', $personsId)
-            ->where('kind', 'student')
-            ->where('archived_at IS NULL', null, false)
-            ->get()->getRowArray();
-        if ($piRow !== null) {
-            $row['patient_identifier_id'] = (int) $piRow['id'];
-        }
-        return $row;
+        return UserDto::fromRow($row);
     }
 
     private function assertHandleUnique(string $table, string $column, string $value, ?int $exceptId): void

@@ -17,6 +17,7 @@ import {
   Mail,
   UserCircle2,
 } from 'lucide-react';
+import { QRCodeCanvas } from 'qrcode.react';
 import { Link } from 'react-router-dom';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -25,9 +26,13 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { CopyButton } from '@/components/CopyButton';
 import { QueryErrorState } from '@/components/QueryErrorState';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { YourQueueCard } from '@/components/YourQueueCard';
+import { StudentBookingSection } from '@/components/StudentBooking';
 import { useMe } from '@/hooks/useAuth';
 import { useNotifications } from '@/hooks/useNotifications';
 import { useMyStudentClinicVisits, useMyStudentProfile } from '@/hooks/useStudentPortal';
+import { notificationDetail, notificationLabel } from '@/utils/notifications';
 import { fmtUtcToApp } from '@/utils/date';
 import { statusLabel } from '@/utils/status';
 
@@ -74,9 +79,12 @@ export default function StudentPortalPage() {
       <header>
         <h1 className="text-2xl font-semibold tracking-tight">My portal</h1>
         <p className="text-sm text-muted-foreground">
-          Your own clinic history, kiosk identifier, and recent notifications. All read-only.
+          Book clinic appointments, track your queue, and review your history.
         </p>
       </header>
+
+      {/* Live queue status — stays above the tabs so an alert is never missed. */}
+      <YourQueueCard kind="student" />
 
       {profile.isLoading && <ProfileSkeleton />}
 
@@ -86,6 +94,15 @@ export default function StudentPortalPage() {
 
       {profile.data !== undefined && (
         <>
+          <Tabs defaultValue="overview">
+            <TabsList>
+              <TabsTrigger value="overview">Overview</TabsTrigger>
+              <TabsTrigger value="appointments">Appointments</TabsTrigger>
+              <TabsTrigger value="history">History</TabsTrigger>
+              <TabsTrigger value="notifications">Notifications</TabsTrigger>
+            </TabsList>
+
+            <TabsContent value="overview" className="space-y-6 pt-4">
           {/* Phase 3.4: Unified identity card.
               Surfaces the cross-cutting person row (kind, persons_id,
               patient_identifier_id) so the user can verify the unified
@@ -115,18 +132,6 @@ export default function StudentPortalPage() {
                 <dt className="text-muted-foreground">Email</dt>
                 <dd className="text-foreground">
                   {me.data?.email ?? <span className="text-muted-foreground">—</span>}
-                </dd>
-                <dt className="text-muted-foreground">persons_id</dt>
-                <dd className="font-mono text-muted-foreground">
-                  {profile.data.persons_id !== null && profile.data.persons_id !== undefined
-                    ? `#${profile.data.persons_id}`
-                    : <span className="text-muted-foreground">—</span>}
-                </dd>
-                <dt className="text-muted-foreground">patient_identifier_id</dt>
-                <dd className="font-mono text-muted-foreground">
-                  {profile.data.patient_identifier_id !== null && profile.data.patient_identifier_id !== undefined
-                    ? `#${profile.data.patient_identifier_id}`
-                    : <span className="text-muted-foreground">—</span>}
                 </dd>
               </dl>
             </CardContent>
@@ -185,16 +190,33 @@ export default function StudentPortalPage() {
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-3">
-                <div className="flex items-center gap-2">
-                  <p className="flex-1 rounded-md border bg-muted/50 px-3 py-2 font-mono text-sm">
-                    {profile.data.kiosk_identifier}
-                  </p>
-                  <CopyButton value={profile.data.kiosk_identifier} label="Copy kiosk identifier" successMessage="Kiosk identifier copied." />
+                <div className="flex flex-col items-center gap-3 sm:flex-row">
+                  <div className="shrink-0 rounded-xl border bg-white p-2">
+                    <QRCodeCanvas value={profile.data.kiosk_identifier} size={128} includeMargin />
+                  </div>
+                  <div className="min-w-0 flex-1 space-y-2">
+                    <div className="flex items-center gap-2">
+                      <p className="min-w-0 flex-1 truncate rounded-md border bg-muted/50 px-3 py-2 font-mono text-sm">
+                        {profile.data.kiosk_identifier}
+                      </p>
+                      <CopyButton value={profile.data.kiosk_identifier} label="Copy kiosk identifier" successMessage="Kiosk identifier copied." />
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      The kiosk accepts {profile.data.has_qr ? 'QR' : profile.data.has_rfid ? 'RFID' : 'manual entry'}; we send the{' '}
+                      <span className="font-mono">{profile.data.kiosk_identifier.split(':')[0]}</span> variant first.
+                    </p>
+                    {profile.data.has_qr ? (
+                      <p className="flex items-center gap-1.5 text-xs text-emerald-600 dark:text-emerald-400">
+                        <CheckCircle2 className="size-3.5 shrink-0" /> Staff-issued QR on file — scan this at the kiosk.
+                      </p>
+                    ) : (
+                      <p className="text-xs text-muted-foreground">
+                        No staff-issued QR on your account yet — this QR uses your <strong>student number</strong> and still
+                        works at the kiosk. Ask clinic staff to assign a QR in <strong>Patients</strong> for a permanent card.
+                      </p>
+                    )}
+                  </div>
                 </div>
-                <p className="text-xs text-muted-foreground">
-                  The kiosk accepts {profile.data.has_qr ? 'QR' : profile.data.has_rfid ? 'RFID' : 'manual entry'}; we send the{' '}
-                  <span className="font-mono">{profile.data.kiosk_identifier.split(':')[0]}</span> variant first.
-                </p>
                 <div className="flex flex-wrap gap-2 pt-2">
                   <Button asChild size="sm" variant="outline">
                     <Link to="/change-password">
@@ -206,7 +228,13 @@ export default function StudentPortalPage() {
               </CardContent>
             </Card>
           </div>
+          </TabsContent>
 
+          <TabsContent value="appointments" className="space-y-6 pt-4">
+            <StudentBookingSection />
+          </TabsContent>
+
+          <TabsContent value="history" className="space-y-6 pt-4">
           {/* Clinic visits */}
           <Card>
             <CardHeader>
@@ -234,7 +262,7 @@ export default function StudentPortalPage() {
                   <TableBody>
                     {visits.data.map((v) => (
                       <TableRow key={v.id}>
-                        <TableCell className="px-3 font-mono text-xs text-muted-foreground">
+                        <TableCell className="px-3 text-xs text-muted-foreground">
                           {fmtUtcToApp(v.started_at)}
                         </TableCell>
                         <TableCell className="px-3 text-sm">{v.chief_complaint}</TableCell>
@@ -258,12 +286,16 @@ export default function StudentPortalPage() {
               )}
             </CardContent>
           </Card>
+          </TabsContent>
 
+          <TabsContent value="notifications" className="space-y-6 pt-4">
           {/* Recent notifications */}
           <Card>
             <CardHeader>
               <CardTitle>Recent notifications</CardTitle>
-              <CardDescription>5 most recent — see the bell for the full list.</CardDescription>
+              <CardDescription>
+                5 most recent — see the bell or <Link className="underline underline-offset-2" to="/notifications">view all</Link>.
+              </CardDescription>
             </CardHeader>
             <CardContent>
               {notifications.isLoading && <Skeleton className="h-24" />}
@@ -286,7 +318,12 @@ export default function StudentPortalPage() {
                         aria-hidden
                       />
                       <div className="flex-1">
-                        <p className="font-medium">{n.template_code}</p>
+                          <p className="font-medium">{notificationLabel(n.template_code, n.context)}</p>
+                          {notificationDetail(n.template_code, n.context) !== null && (
+                            <p className="font-mono text-[10px] text-muted-foreground">
+                              {notificationDetail(n.template_code, n.context)}
+                            </p>
+                          )}
                         <p className="text-muted-foreground">{fmtUtcToApp(n.created_at)}</p>
                       </div>
                     </li>
@@ -295,6 +332,8 @@ export default function StudentPortalPage() {
               )}
             </CardContent>
           </Card>
+          </TabsContent>
+        </Tabs>
 
           <footer className="flex flex-wrap items-center justify-between gap-3 border-t pt-4 text-xs text-muted-foreground">
             <p className="flex items-center gap-1.5">

@@ -66,6 +66,18 @@ final class EmployeeSelfController extends ApiController
     }
 
     /**
+     * Self-scoped queue status for the caller's own encounter — powers
+     * the portal "Your queue" card. Returns null (not queued today).
+     */
+    public function queueStatus(): ResponseInterface
+    {
+        $this->authorize('employee.portal.read');
+        return $this->ok(
+            \Config\Services::queueService()->myStatus(\App\Auth\CurrentUser::assert()),
+        );
+    }
+
+    /**
      * Phase 14: self-update of the calling employee's own profile
      * fields (name, emergency contact, address, gender, DOB). HR
      * fields (department, position, employment_status, is_teaching,

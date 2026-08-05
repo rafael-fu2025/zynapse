@@ -94,22 +94,22 @@ export function DateRangePicker({
           aria-invalid={ariaInvalid}
           onBlur={onBlur}
           className={cn(
-            'w-full justify-start text-left font-normal',
+            'min-w-0 w-full justify-start gap-2 text-left font-normal',
             from === undefined && to === undefined && 'text-muted-foreground',
             className,
           )}
         >
-          <CalendarIcon className="mr-2 size-4 shrink-0" />
+          <CalendarIcon className="size-4 shrink-0" />
           {from !== undefined ? (
             to !== undefined ? (
-              <>
+              <span className="min-w-0 truncate">
                 {format(from, HUMAN)} to {format(to, HUMAN)}
-              </>
+              </span>
             ) : (
-              format(from, HUMAN)
+              <span className="min-w-0 truncate">{format(from, HUMAN)}</span>
             )
           ) : (
-            <span>{placeholder}</span>
+            <span className="min-w-0 truncate">{placeholder}</span>
           )}
         </Button>
       </PopoverTrigger>

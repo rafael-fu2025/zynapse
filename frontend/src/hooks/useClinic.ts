@@ -19,6 +19,7 @@ import {
   setAssessmentSchema,
   treatmentSchema,
   triagePredictionSchema,
+  vitalsListSchema,
   vitalsSchema,
   type AddTreatmentInput,
   type CreateEncounterInput,
@@ -30,6 +31,7 @@ import {
   type TriagePrediction,
   type TriagePriority,
   type Vitals,
+  type VitalsList,
 } from '@/schemas/clinic';
 
 interface EncounterPage {
@@ -46,6 +48,10 @@ export function useEncounters(
     // Status is part of the cache key so switching tabs refetches the
     // correct server-side slice instead of re-filtering one page.
     queryKey: ['clinic', 'encounters', { cursor, limit, status }],
+    // Multiple nurses share this list — encounters are opened/closed
+    // from other sessions (and by the queue sweep), so poll to stay
+    // current without a manual refresh.
+    refetchInterval: 30_000,
     queryFn: async () => {
       const params = new URLSearchParams();
       if (cursor !== null) params.set('cursor', cursor);
@@ -99,6 +105,21 @@ export function useRecordVitals() {
   });
 }
 
+/**
+ * Read-only vitals history for an encounter — powers the "View" action
+ * on the Closed tab so staff can review a finalized record.
+ */
+export function useEncounterVitals(encounterId: number | null) {
+  return useQuery<VitalsList, ApiEnvelopeError>({
+    queryKey: ['clinic', 'vitals', encounterId],
+    enabled: encounterId !== null,
+    queryFn: async () => {
+      const res = await apiClient.get<unknown[]>(`/clinic/encounters/${encounterId}/vitals`);
+      return vitalsListSchema.parse(res.data);
+    },
+  });
+}
+
 export function useCloseEncounter() {
   const qc = useQueryClient();
   return useMutation<Encounter, ApiEnvelopeError, number>({
@@ -112,6 +133,39 @@ export function useCloseEncounter() {
     },
     onError: (err) => {
       toast.error(err.errors[0]?.message ?? 'Failed to close encounter.');
+    },
+  });
+}
+
+/**
+ * Mark an open encounter as a no-show (panel revision, August 2026).
+ *
+ * Cascades atomically on the server: encounter closes with
+ * `outcome='no_show'`, the linked appointment (if any) advances to
+ * `no_show`, and the linked queue entry (if any) lands on `done` +
+ * `outcome='no_show'`. We invalidate the encounter, queue, and
+ * appointment caches so every staff surface reflects the cascade.
+ *
+ *   POST /clinic/encounters/{id}/no-show
+ */
+export function useEncounterNoShow() {
+  const qc = useQueryClient();
+  return useMutation<Encounter, ApiEnvelopeError, number>({
+    mutationFn: async (encounterId) => {
+      const res = await apiClient.post<Encounter>(`/clinic/encounters/${encounterId}/no-show`);
+      return encounterSchema.parse(res.data);
+    },
+    onSuccess: (data) => {
+      void qc.invalidateQueries({ queryKey: ['clinic'] });
+      void qc.invalidateQueries({ queryKey: ['appointments'] });
+      // `queue` key is owned by `useQueue` and shared with the public
+      // lobby feed; refreshing it keeps the staff queue table and the
+      // kiosk TV in lock-step with the encounter close.
+      void qc.invalidateQueries({ queryKey: ['queue'] });
+      toast.success(`Marked encounter #${data.id} as no-show.`);
+    },
+    onError: (err) => {
+      toast.error(err.errors[0]?.message ?? 'Failed to mark encounter as no-show.');
     },
   });
 }

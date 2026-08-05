@@ -29,6 +29,9 @@ final class AuditOutboxService
     private const CONTEXT_KEYS = [
         'resource_code', 'previous_status', 'next_status', 'reason_code',
         'auth_method', 'outcome', 'family_id',
+        // Network provenance for auth/session events (non-PII, standard
+        // in security audit trails). Populated by AuthController.
+        'ip_address', 'user_agent',
     ];
 
     /**

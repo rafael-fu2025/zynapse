@@ -51,7 +51,7 @@ final class LegacyPersonsIdLink extends Migration
                         'after'      => 'id',
                     ],
                 ]);
-                $this->forge->addKey($legacy, 'persons_id', 'idx_' . $legacy . '_persons');
+                $this->forge->addKey('persons_id', false, false, 'idx_' . $legacy . '_persons');
             }
 
             // 2. Backfill: match on user_id (the most reliable key).

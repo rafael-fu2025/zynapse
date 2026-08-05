@@ -476,6 +476,108 @@ final class MedicineService extends BaseService
         }, $rows);
     }
 
+    /**
+     * Write off a batch's remaining stock (expiry / recall).
+     *
+     * A lot can only be written off while it is `active` with stock
+     * remaining. The batch is set to the target status, its remaining
+     * quantity zeroed, and an `expired`/`recalled` transaction is
+     * appended to the ledger so the running balance reflects the
+     * disposal (previously expired stock silently vanished from
+     * on-hand with no trace — the inventory audit gap).
+     *
+     * @return array<string, mixed> the updated batch row (DTO shape)
+     */
+    public function expireBatch(int $batchId, ?string $note = null): array
+    {
+        return $this->writeOffBatch($batchId, 'expired', 'expired', 'clinic.medicine_batch_expired', $note);
+    }
+
+    /**
+     * Recall a batch (e.g. manufacturer recall). Same write-off path
+     * as expiry but recorded under the `recalled` status/transaction.
+     *
+     * @return array<string, mixed> the updated batch row (DTO shape)
+     */
+    public function recallBatch(int $batchId, ?string $note = null): array
+    {
+        return $this->writeOffBatch($batchId, 'recalled', 'recalled', 'clinic.medicine_batch_recalled', $note);
+    }
+
+    /**
+     * Insight: batches written off as expired/recalled, newest write-off
+     * first, joined to the parent medicine + the ledger's written-off
+     * quantity and timestamp (the batch row itself stores neither, so
+     * the transaction ledger is the source of truth).
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public function listWrittenOff(int $days = 90): array
+    {
+        $this->policy->check('inventoryRead');
+
+        $since = (new DateTimeImmutable('now', new DateTimeZone('UTC')))
+            ->modify('-' . max(1, min($days, 365)) . ' days')->format('Y-m-d H:i:s');
+
+        $rows = $this->db->table('clinic_medicine_batches b')
+            ->select('b.id, b.medicine_id, b.batch_number, b.quantity_received, b.expiration_date, b.received_date, b.supplier, b.status, m.generic_name, m.unit, t.quantity AS written_off, t.created_at AS written_off_at')
+            ->join('clinic_medicines m', 'm.id = b.medicine_id')
+            ->join('clinic_medicine_transactions t', "t.batch_id = b.id AND t.type IN ('expired', 'recalled')", 'left')
+            ->whereIn('b.status', ['expired', 'recalled'])
+            ->where('t.created_at >=', $since)
+            ->orderBy('t.created_at', 'DESC')
+            ->limit(200)
+            ->get()->getResultArray();
+
+        return array_map(static fn (array $r): array => [
+            'id'                => (int)    $r['id'],
+            'medicine_id'       => (int)    $r['medicine_id'],
+            'batch_number'      => (string) $r['batch_number'],
+            'quantity_received' => (int)    $r['quantity_received'],
+            'expiration_date'   => (string) $r['expiration_date'],
+            'supplier'          => $r['supplier'] !== null ? (string) $r['supplier'] : null,
+            'status'            => (string) $r['status'],
+            'written_off'       => $r['written_off'] !== null ? (int) $r['written_off'] : null,
+            'written_off_at'    => $r['written_off_at'] !== null ? (string) $r['written_off_at'] : null,
+            'generic_name'      => (string) $r['generic_name'],
+            'unit'              => (string) $r['unit'],
+        ], $rows);
+    }
+
+    /**
+     * Insight: catalogue-wide dispensing usage over the trailing window
+     * (units dispensed, how many medicines were used, and the daily
+     * average). Powers the Insights "Avg daily use" tile.
+     *
+     * @return array{period_days: int, units_dispensed: int, medicines_with_usage: int, avg_daily_units: float}
+     */
+    public function usageSummary(int $days = 30): array
+    {
+        $this->policy->check('inventoryRead');
+
+        $days = max(1, min($days, 365));
+        $since = (new DateTimeImmutable('now', new DateTimeZone('UTC')))
+            ->modify('-' . $days . ' days')->format('Y-m-d H:i:s');
+
+        // Raw select: CI4's selectCount() would wrap DISTINCT in a
+        // second COUNT() (COUNT(COUNT(...))) — invalid SQL. Use one
+        // explicit aggregate select instead.
+        $row = $this->db->table('clinic_medicine_transactions')
+            ->select('SUM(quantity) AS total, COUNT(DISTINCT medicine_id) AS medicines')
+            ->where('type', 'dispensed')
+            ->where('created_at >=', $since)
+            ->get()->getRowArray();
+
+        $total = (int) ($row['total'] ?? 0);
+
+        return [
+            'period_days'         => $days,
+            'units_dispensed'     => $total,
+            'medicines_with_usage' => (int) ($row['medicines'] ?? 0),
+            'avg_daily_units'     => round($total / $days, 2),
+        ];
+    }
+
     // ------------------------------------------------------------ helpers
 
     /**
@@ -497,10 +599,14 @@ final class MedicineService extends BaseService
         }
 
         // Newest N rows, then flip so the ledger reads oldest → newest.
-        $rows = $this->db->table('clinic_medicine_transactions')
-            ->select('id, batch_id, type, quantity, balance_after, reference_type, reference_id, performed_by_user_id, note, created_at')
-            ->where('medicine_id', $medicineId)
-            ->orderBy('id', 'DESC')
+        // The actor's email/username is joined so the ledger shows WHO
+        // moved the stock (inventory audit gap).
+        $rows = $this->db->table('clinic_medicine_transactions t')
+            ->select('t.id, t.batch_id, t.type, t.quantity, t.balance_after, t.reference_type, t.reference_id, t.performed_by_user_id, t.note, t.created_at, COALESCE(NULLIF(ai.secret, \'\'), u.username) AS user_email')
+            ->join('users u', 'u.id = t.performed_by_user_id', 'left')
+            ->join('auth_identities ai', "ai.user_id = u.id AND ai.type = 'email_password'", 'left')
+            ->where('t.medicine_id', $medicineId)
+            ->orderBy('t.id', 'DESC')
             ->limit(max(1, min($limit, 500)))
             ->get()->getResultArray();
 
@@ -513,6 +619,7 @@ final class MedicineService extends BaseService
             'balance_after'  => $r['balance_after'] !== null ? (int) $r['balance_after'] : null,
             'reference_type' => $r['reference_type'] !== null ? (string) $r['reference_type'] : null,
             'reference_id'   => $r['reference_id'] !== null ? (int) $r['reference_id'] : null,
+            'user_email'     => $r['user_email'] !== null ? (string) $r['user_email'] : null,
             'note'           => $r['note'] !== null ? (string) $r['note'] : null,
             'created_at'     => (string) $r['created_at'],
         ], array_reverse($rows));
@@ -532,6 +639,77 @@ final class MedicineService extends BaseService
         )->getRowArray();
 
         return $row !== null && $row['balance_after'] !== null ? (int) $row['balance_after'] : 0;
+    }
+
+    /**
+     * Shared write-off path for `expireBatch` / `recallBatch` (see
+     * their docblocks). Runs inside the caller's transaction.
+     *
+     * @return array<string, mixed> the updated batch row (DTO shape)
+     */
+    private function writeOffBatch(int $batchId, string $status, string $txnType, string $auditCode, ?string $note): array
+    {
+        $this->policy->check('inventoryWrite');
+        $userId = \App\Auth\CurrentUser::assert();
+
+        return $this->txn(function () use ($batchId, $status, $txnType, $auditCode, $note, $userId): array {
+            $batch = $this->selectForUpdate('clinic_medicine_batches', ['id' => $batchId]);
+            if ($batch === null) {
+                throw new ApiException('resource.not_found', 404, [
+                    ['code' => 'resource.not_found', 'message' => "Batch #{$batchId} not found."],
+                ]);
+            }
+            if ((string) $batch['status'] !== 'active') {
+                throw new ApiException('statemachine.medicine.batch_not_active', 409, [
+                    ['code' => 'statemachine.medicine.batch_not_active', 'message' => "Batch '{$batch['batch_number']}' is not active ({$batch['status']})."],
+                ]);
+            }
+            $remaining = (int) $batch['quantity_remaining'];
+            if ($remaining < 1) {
+                throw new ApiException('statemachine.medicine.batch_empty', 409, [
+                    ['code' => 'statemachine.medicine.batch_empty', 'message' => "Batch '{$batch['batch_number']}' has no stock left to write off."],
+                ]);
+            }
+
+            $medicineId = (int) $batch['medicine_id'];
+            $balance    = $this->lastBalance($medicineId);
+            $now        = $this->utcNow();
+
+            // Zero the batch + flip status. NOTE: this table has no
+            // updated_at column — do not write one.
+            $this->db->table('clinic_medicine_batches')->where('id', $batchId)->update([
+                'quantity_remaining' => 0,
+                'status'             => $status,
+            ]);
+
+            $this->db->table('clinic_medicine_transactions')->insert([
+                'medicine_id'          => $medicineId,
+                'batch_id'             => $batchId,
+                'type'                 => $txnType,
+                'quantity'             => $remaining,
+                'balance_after'        => $balance - $remaining,
+                'performed_by_user_id' => $userId,
+                'note'                 => $note,
+                'created_at'           => $now,
+            ]);
+
+            $this->audit->enqueue(
+                $auditCode,
+                'clinic_medicine_batches',
+                $batchId,
+                $userId,
+                [
+                    'resource_code' => 'batch#' . (string) $batch['batch_number'],
+                    'qty'           => $remaining,
+                ],
+            );
+
+            $row = $this->db->table('clinic_medicine_batches')->where('id', $batchId)->get()->getRowArray();
+            $dto = MedicineBatchDto::fromRow($row)->toArray();
+            $dto['quantity_written_off'] = $remaining;
+
+            return $dto;
+        });
     }
 
     /**

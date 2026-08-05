@@ -8,9 +8,11 @@ use App\Exceptions\ApiException;
 use App\Modules\Shared\BaseService;
 use App\Modules\Shared\StateMachineException;
 use App\Services\Audit\AuditOutboxService;
+use App\Services\Notify\NotificationOutboxService;
 use DateTimeImmutable;
 use DateTimeZone;
 use Modules\Clinic\Policies\ClinicPolicy;
+use Throwable;
 
 /**
  * QueueService — walk-in queue (Phase 14, recycled from synapse_ag
@@ -43,6 +45,9 @@ final class QueueService extends BaseService
     public function __construct(
         private readonly ClinicPolicy $policy,
         private readonly AuditOutboxService $audit,
+        private readonly AppointmentService $appointments,
+        private readonly ClinicService $clinic,
+        private readonly NotificationOutboxService $notify,
     ) {
         parent::__construct();
     }
@@ -50,11 +55,24 @@ final class QueueService extends BaseService
     /**
      * Today's queue — staff view (full school ids).
      *
+     * Side effects (panel revision, August 2026):
+     *   1. Lazy auto-check-in: every `scheduled` appointment whose
+     *      `scheduled_at` falls on today's UTC window is opened +
+     *      queued. Idempotent against kiosk / staff races.
+     *   2. Lazy end-of-day cleanup: stale `open` encounters whose
+     *      `started_at` predates today are auto-closed with
+     *      `outcome='auto_closed'`.
+     *
      * @return array<int, array<string, mixed>>
      */
     public function today(): array
     {
         $this->policy->check('queueRead');
+
+        // Sweep before the fetch so the staff view shows the freshly
+        // opened + queued appointments immediately.
+        $this->appointments->autoCheckInTodaysPending();
+        $this->autoCloseEarlierOpenEncounters();
 
         return array_map(
             fn (array $r): array => $this->row($r, false),
@@ -62,60 +80,41 @@ final class QueueService extends BaseService
         );
     }
 
-    /** Enqueue an OPEN encounter into today's queue. */
-    public function enqueue(int $encounterId): array
+    /**
+     * End-of-day sweep — close every `open` encounter whose
+     * `started_at` predates today (UTC) using the same cascade as
+     * `ClinicService::autoCloseStaleEncounter()`. Best-effort: a
+     * stale row that fails (e.g. encounter vanished mid-sweep) is
+     * logged + skipped so the staff `today()` read still succeeds.
+     */
+    private function autoCloseEarlierOpenEncounters(): int
     {
-        $this->policy->check('queueManage');
-        $userId = \App\Auth\CurrentUser::assert();
+        $dayStart = (new DateTimeImmutable('today', new DateTimeZone('UTC')))
+            ->format('Y-m-d H:i:s');
 
-        return $this->txn(function () use ($encounterId, $userId): array {
-            $encounter = $this->selectForUpdate('clinic_encounters', ['id' => $encounterId, 'archived_at' => null]);
-            if ($encounter === null) {
-                throw new ApiException('resource.not_found', 404, [
-                    ['code' => 'resource.not_found', 'message' => "Encounter #{$encounterId} not found."],
-                ]);
+        $ids = $this->db->table('clinic_encounters')
+            ->select('id')
+            ->where('status', 'open')
+            ->where('archived_at', null)
+            ->where('started_at <', $dayStart)
+            ->orderBy('id', 'ASC')
+            ->get()
+            ->getResultArray();
+
+        $closed = 0;
+        foreach ($ids as $r) {
+            try {
+                $this->clinic->autoCloseStaleEncounter((int) $r['id']);
+                $closed++;
+            } catch (Throwable $t) {
+                log_message('warning', sprintf(
+                    'QueueService::autoCloseEarlierOpenEncounters: id=%d skipped (%s)',
+                    (int) $r['id'],
+                    $t->getMessage(),
+                ));
             }
-            if ((string) $encounter['status'] !== 'open') {
-                throw new ApiException('statemachine.queue.encounter_not_open', 409, [
-                    ['code' => 'statemachine.queue.encounter_not_open', 'message' => 'Only open encounters can be queued.'],
-                ]);
-            }
-
-            $existing = $this->db->table('clinic_queue_entries')
-                ->where('encounter_id', $encounterId)
-                ->get()->getRowArray();
-            if ($existing !== null) {
-                throw new ApiException('resource.conflict', 409, [
-                    ['code' => 'resource.conflict', 'message' => 'Encounter is already queued.'],
-                ]);
-            }
-
-            $today = $this->utcToday();
-
-            // Lock today's entries so the MAX(position) read is stable.
-            $rows = $this->db->query(
-                'SELECT `position` FROM `clinic_queue_entries` WHERE `queue_date` = ? ORDER BY `position` DESC LIMIT 1 FOR UPDATE',
-                [$today],
-            )->getRowArray();
-            $position = ($rows !== null ? (int) $rows['position'] : 0) + 1;
-
-            $now = $this->utcNow();
-            $this->db->table('clinic_queue_entries')->insert([
-                'encounter_id' => $encounterId,
-                'queue_date'   => $today,
-                'position'     => $position,
-                'status'       => 'waiting',
-                'created_at'   => $now,
-                'updated_at'   => $now,
-            ]);
-            $id = (int) $this->db->insertID();
-
-            $this->audit->enqueue('clinic.queue_joined', 'clinic_queue_entries', $id, $userId, [
-                'resource_code' => 'position#' . (string) $position,
-            ]);
-
-            return $this->getRow($id);
-        });
+        }
+        return $closed;
     }
 
     /** Call the next waiting patient (single "now serving" slot). */
@@ -160,8 +159,58 @@ final class QueueService extends BaseService
 
             $this->audit->enqueue('clinic.queue_called', 'clinic_queue_entries', (int) $next['id'], $userId, []);
 
+            // Notify the called patient in-app (portal "Your queue" card
+            // + bell both reflect it) so they know to proceed.
+            $this->notifyPatientCalled((int) $next['id'], $userId);
+
             return $this->getRow((int) $next['id']);
         });
+    }
+
+    /**
+     * SELF-SCOPED queue status for a patient (student/employee portal).
+     * Finds today's queue entry linked to the caller's encounter;
+     * returns null when the caller has no active queue entry today.
+     *
+     * @return array<string, mixed>|null
+     */
+    public function myStatus(int $patientUserId): ?array
+    {
+        $row = $this->db->table('clinic_queue_entries q')
+            ->select('q.id, q.position, q.status, q.called_at, q.started_at, q.finished_at, q.encounter_id')
+            ->join('clinic_encounters e', 'e.id = q.encounter_id')
+            ->where('q.queue_date', $this->utcToday())
+            ->where('e.patient_user_id', $patientUserId)
+            ->where('e.archived_at', null)
+            ->whereIn('q.status', ['waiting', 'called', 'in_session'])
+            ->orderBy('q.position', 'ASC')
+            ->get()->getRowArray();
+
+        if ($row === null) {
+            return null;
+        }
+
+        $status  = (string) $row['status'];
+        $waiting = $status === 'waiting';
+        // People ahead = those in an earlier position still waiting or
+        // being served (mirrors the publicState estimate).
+        $ahead = $waiting ? (int) $this->db->table('clinic_queue_entries')
+            ->where('queue_date', $this->utcToday())
+            ->whereIn('status', ['waiting', 'called', 'in_session'])
+            ->where('position <', (int) $row['position'])
+            ->countAllResults() : 0;
+
+        return [
+            'queue_entry_id'         => (int) $row['id'],
+            'encounter_id'           => (int) $row['encounter_id'],
+            'position'               => (int) $row['position'],
+            'queue_number'           => sprintf('C-%03d', (int) $row['position']),
+            'status'                 => $status,
+            'called_at'              => $row['called_at'] !== null ? (string) $row['called_at'] : null,
+            'started_at'             => $row['started_at'] !== null ? (string) $row['started_at'] : null,
+            'people_ahead'           => $ahead,
+            'estimated_wait_minutes' => $waiting ? (int) round($ahead * $this->avgServiceMinutes()) : null,
+        ];
     }
 
     /** start / skip / complete on a called or in-session entry. */
@@ -208,8 +257,73 @@ final class QueueService extends BaseService
                 ['outcome' => self::RESULT[$action]],
             );
 
+            // Panel revision (August 2026): completing an in-session
+            // queue entry ALSO closes its linked encounter + completes
+            // the linked appointment, so the finished visit shows up in
+            // the Closed tab. Mirrors the markNoShow / autoClose cascade
+            // (encounter closed → appointment completed) — the queue
+            // "Complete" button is the operator's end-of-session action.
+            if ($action === 'complete') {
+                $this->closeLinkedEncounter((int) $row['encounter_id'], $userId, $now);
+            }
+
             return $this->getRow($id);
         });
+    }
+
+    /**
+     * Cascade a queue "complete" onto the linked clinical record:
+     * close the linked encounter (if still open) and complete the
+     * linked appointment (if checked_in). Runs inside the caller's
+     * transaction, so it must not call methods that open their own
+     * nested transactions (the CI4 depth counter is finicky).
+     */
+    private function closeLinkedEncounter(int $encounterId, int $userId, string $now): void
+    {
+        $enc = $this->selectForUpdate('clinic_encounters', ['id' => $encounterId, 'archived_at' => null]);
+        if ($enc === null || (string) $enc['status'] !== 'open') {
+            // Already closed by a parallel close / no-show / auto-close
+            // — nothing left to cascade.
+            return;
+        }
+
+        $this->db->table('clinic_encounters')
+            ->where('id', $encounterId)
+            ->update([
+                'status'     => 'closed',
+                'closed_at'  => $now,
+                'updated_at' => $now,
+            ]);
+
+        // Complete the linked appointment when it was checked in —
+        // scheduling layer follows the encounter (same as
+        // ClinicService::closeEncounter / autoCloseStaleEncounter).
+        if (isset($enc['appointment_id']) && $enc['appointment_id'] !== null) {
+            $appt = $this->selectForUpdate('clinic_appointments', [
+                'id'          => (int) $enc['appointment_id'],
+                'archived_at' => null,
+            ]);
+            if ($appt !== null && (string) $appt['status'] === 'checked_in') {
+                $this->db->table('clinic_appointments')
+                    ->where('id', (int) $appt['id'])
+                    ->update(['status' => 'completed', 'updated_at' => $now]);
+                $this->audit->enqueue(
+                    'clinic.appointment_completed',
+                    'clinic_appointments',
+                    (int) $appt['id'],
+                    $userId,
+                    ['previous_status' => 'checked_in', 'next_status' => 'completed', 'reason_code' => 'queue_complete'],
+                );
+            }
+        }
+
+        $this->audit->enqueue(
+            'clinic.encounter_closed',
+            'clinic_encounters',
+            $encounterId,
+            $userId,
+            ['previous_status' => 'open', 'next_status' => 'closed', 'reason_code' => 'queue_complete'],
+        );
     }
 
     /**
@@ -260,6 +374,33 @@ final class QueueService extends BaseService
         ];
     }
 
+    /**
+     * Same-transaction in-app notification to a called patient. Guests
+     * (no linked user) and the calling staff member themselves skip.
+     */
+    private function notifyPatientCalled(int $queueEntryId, int $actorUserId): void
+    {
+        $row = $this->db->table('clinic_queue_entries q')
+            ->select('q.position, e.patient_user_id')
+            ->join('clinic_encounters e', 'e.id = q.encounter_id')
+            ->where('q.id', $queueEntryId)
+            ->get()->getRowArray();
+
+        $patientId = (int) ($row['patient_user_id'] ?? 0);
+        if ($patientId <= 0 || $patientId === $actorUserId) {
+            return;
+        }
+
+        $this->notify->enqueue(
+            $patientId,
+            'queue.called',
+            [
+                'resource_code' => 'queue#' . $queueEntryId,
+                'position'      => (int) ($row['position'] ?? 0),
+            ],
+        );
+    }
+
     // ------------------------------------------------------------ helpers
 
     /**
@@ -268,15 +409,22 @@ final class QueueService extends BaseService
     private function todayRows(): array
     {
         return $this->db->table('clinic_queue_entries q')
-            ->select('q.id, q.encounter_id, q.position, q.status, q.called_at, q.started_at, q.finished_at, q.created_at, e.patient_school_id, e.chief_complaint, COALESCE(s.first_name, emp.first_name) AS first_name, COALESCE(s.last_name, emp.last_name) AS last_name')
+            ->select('q.id, q.encounter_id, q.position, q.status, q.outcome, q.called_at, q.started_at, q.finished_at, q.created_at, e.status AS encounter_status, e.patient_user_id, e.patient_school_id, e.guest_name, e.chief_complaint, e.outcome AS encounter_outcome, u.first_name, u.last_name')
             ->join('clinic_encounters e', 'e.id = q.encounter_id')
-            ->join('patients_students s', 's.student_number = e.patient_school_id', 'left')
-            // Employee registry is the second half of the unified patient
-            // registry — students and employees both queue at the clinic
-            // kiosk (Phase 17). Without this join, employee rows leave
-            // `first_name` NULL and the public feed falls back to the
-            // masked `EMP…` placeholder, which is unreadable on a lobby TV.
-            ->join('patients_employees emp', 'emp.employee_number = e.patient_school_id', 'left')
+            // Patients are `users` (identity-consolidated) — one join
+            // covers both students and employees queueing at the kiosk.
+            // When the encounter only carries a school id (legacy/demo
+            // rows, patient_user_id NULL) fall back to matching the
+            // registry by student/employee number so the name still
+            // resolves for the Queue-tab tooltip.
+            ->join(
+                'users u',
+                'u.id = e.patient_user_id'
+                . ' OR (e.patient_user_id IS NULL'
+                .   ' AND (u.student_number = e.patient_school_id'
+                .     ' OR u.employee_number = e.patient_school_id))',
+                'left',
+            )
             ->where('q.queue_date', $this->utcToday())
             ->orderBy('q.position', 'ASC')
             ->get()->getResultArray();
@@ -285,10 +433,16 @@ final class QueueService extends BaseService
     private function getRow(int $id): array
     {
         $row = $this->db->table('clinic_queue_entries q')
-            ->select('q.id, q.encounter_id, q.position, q.status, q.called_at, q.started_at, q.finished_at, q.created_at, e.patient_school_id, e.chief_complaint, COALESCE(s.first_name, emp.first_name) AS first_name, COALESCE(s.last_name, emp.last_name) AS last_name')
+            ->select('q.id, q.encounter_id, q.position, q.status, q.outcome, q.called_at, q.started_at, q.finished_at, q.created_at, e.status AS encounter_status, e.patient_user_id, e.patient_school_id, e.guest_name, e.chief_complaint, e.outcome AS encounter_outcome, u.first_name, u.last_name')
             ->join('clinic_encounters e', 'e.id = q.encounter_id')
-            ->join('patients_students s', 's.student_number = e.patient_school_id', 'left')
-            ->join('patients_employees emp', 'emp.employee_number = e.patient_school_id', 'left')
+            ->join(
+                'users u',
+                'u.id = e.patient_user_id'
+                . ' OR (e.patient_user_id IS NULL'
+                .   ' AND (u.student_number = e.patient_school_id'
+                .     ' OR u.employee_number = e.patient_school_id))',
+                'left',
+            )
             ->where('q.id', $id)
             ->get()->getRowArray();
         return $this->row($row, false);
@@ -305,6 +459,7 @@ final class QueueService extends BaseService
             'encounter_id'    => (int) $r['encounter_id'],
             'position'        => (int) $r['position'],
             'status'          => (string) $r['status'],
+            'outcome'         => $r['outcome'] !== null ? (string) $r['outcome'] : null,
             'display_name'    => $this->displayName($r),
             'called_at'       => $r['called_at'] !== null ? (string) $r['called_at'] : null,
             'started_at'      => $r['started_at'] !== null ? (string) $r['started_at'] : null,
@@ -313,6 +468,15 @@ final class QueueService extends BaseService
         if (! $public) {
             $out['patient_school_id'] = (string) $r['patient_school_id'];
             $out['chief_complaint']   = (string) $r['chief_complaint'];
+            // Full registry name (`First Last`) for the Queue-tab id
+            // tooltip; null for guests/orphans. Mirrors EncounterDto.
+            $out['patient_name'] = $this->patientFullName($r);
+            // `encounter_status` lets the staff queue UI gate destructive
+            // actions (Close / Mark no-show) on the linked encounter's
+            // state without a second round-trip — panel revision, August
+            // 2026.
+            $out['encounter_status']  = (string) $r['encounter_status'];
+            $out['encounter_outcome'] = $r['encounter_outcome'] !== null ? (string) $r['encounter_outcome'] : null;
         }
         return $out;
     }
@@ -342,6 +506,10 @@ final class QueueService extends BaseService
                 // by the Foundation University registrar.
                 return trim($last . ($first !== '' ? ', ' . $first : ''));
             }
+            // Guest walk-in (no registry record) — show the typed name.
+            if (isset($r['guest_name']) && $r['guest_name'] !== null && $r['guest_name'] !== '') {
+                return (string) $r['guest_name'];
+            }
             $sid = (string) $r['patient_school_id'];
             return mb_substr($sid, 0, 3) . '…';
         }
@@ -349,8 +517,28 @@ final class QueueService extends BaseService
         if ($first !== '') {
             return $first;
         }
+        if (isset($r['guest_name']) && $r['guest_name'] !== null && $r['guest_name'] !== '') {
+            return (string) $r['guest_name'];
+        }
         $sid = (string) $r['patient_school_id'];
         return mb_substr($sid, 0, 3) . '…';
+    }
+
+    /**
+     * Full registry name (`First Last`) for the Queue-tab id tooltip;
+     * null when the join found no user (guest walk-in / orphaned row).
+     * Mirrors `EncounterDto::patientName()`.
+     *
+     * @param array<string, mixed> $r
+     */
+    private function patientFullName(array $r): ?string
+    {
+        $first = isset($r['first_name']) && $r['first_name'] !== null ? trim((string) $r['first_name']) : '';
+        $last  = isset($r['last_name'])  && $r['last_name']  !== null ? trim((string) $r['last_name'])  : '';
+        if ($first === '' && $last === '') {
+            return null;
+        }
+        return trim($first . ' ' . $last);
     }
 
     /**

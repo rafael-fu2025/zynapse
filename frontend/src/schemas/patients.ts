@@ -1,18 +1,18 @@
 /**
- * Zod schemas — Patient Registry (mirrors backend PatientController rules).
- * Phase 2.2: createStudentSchema and createEmployeeSchema now accept
- * optional `create_account` + `account_email` so admins can create
- * a portal login at the same time as the patient record.
+ * Zod schemas — Patient Registry (identity-consolidated).
+ *
+ * Every patient IS a `users` row with a `kind` discriminator. Creating
+ * a student/employee ALWAYS auto-creates the portal account, so there is
+ * no `create_account` flag and no `persons_id` / `patient_identifier_id`
+ * (those links no longer exist).
  */
 import { z } from 'zod';
 
-// Phase 3.5: portal-account envelope returned by the backend when
-// create_account=true on createStudent/createEmployee.
+// Portal-account envelope returned by the backend on every create.
 export const portalAccountSchema = z.object({
   email: z.string().email(),
   temporary_password: z.string().min(12),
   user_id: z.number().int().positive(),
-  persons_id: z.number().int().positive(),
 });
 export type PortalAccount = z.infer<typeof portalAccountSchema>;
 
@@ -33,62 +33,55 @@ export const contactSchema = z.object({
 });
 export type EmergencyContact = z.infer<typeof contactSchema>;
 
-export const studentSchema = z.object({
-  // Phase 2.2: new top-level fields exposed by the unified PersonDto.
-  // Optional so the schema accepts legacy patient rows during the
-  // transition window.
-  kind: z.enum(['student', 'employee', 'contractor', 'alumni']).optional(),
-  persons_id: z.number().int().positive().optional(),
-  patient_identifier_id: z.number().int().positive().nullable(),
-  identifier: z.string().optional(),
-  user_id: z.number().int().positive().nullable(),
+/**
+ * personSchema — the unified user/person shape returned by every patient
+ * endpoint. `id` IS the `users.id`; student- and employee-specific fields
+ * are nullable and only one side is populated based on `kind`.
+ */
+export const personSchema = z.object({
   id: z.number().int().positive(),
-  student_number: z.string(),
+  kind: z.enum(['student', 'employee', 'contractor', 'alumni']).nullable(),
   first_name: z.string(),
   last_name: z.string(),
   middle_name: z.string().nullable(),
+  date_of_birth: z.string().nullable(),
+  gender: z.string().nullable(),
+  address: z.string().nullable(),
+  has_qr: z.boolean(),
+  has_rfid: z.boolean(),
+  archived: z.boolean(),
+  created_at: z.string(),
+  updated_at: z.string().optional(),
+
+  // Student-specific
+  student_number: z.string().nullable(),
   course: z.string().nullable(),
   year_level: z.number().int().nullable(),
   section: z.string().nullable(),
-  date_of_birth: z.string().nullable(),
-  gender: z.string().nullable(),
   blood_type: z.string().nullable(),
-  has_qr: z.boolean(),
-  has_rfid: z.boolean(),
   consecutive_no_shows: z.number().int().min(0),
-  archived: z.boolean(),
-  created_at: z.string(),
-  allergies: z.array(allergySchema).optional(),
-  contacts: z.array(contactSchema).optional(),
-});
-export type Student = z.infer<typeof studentSchema>;
 
-export const employeeSchema = z.object({
-  // Phase 2.2: see note in studentSchema above.
-  kind: z.enum(['student', 'employee', 'contractor', 'alumni']).optional(),
-  persons_id: z.number().int().positive().optional(),
-  patient_identifier_id: z.number().int().positive().nullable(),
-  identifier: z.string().optional(),
-  user_id: z.number().int().positive().nullable(),
-  id: z.number().int().positive(),
-  employee_number: z.string(),
-  first_name: z.string(),
-  last_name: z.string(),
-  middle_name: z.string().nullable(),
+  // Employee-specific
+  employee_number: z.string().nullable(),
   department: z.string().nullable(),
   position: z.string().nullable(),
   date_hired: z.string().nullable(),
-  employment_status: z.enum(['active', 'inactive', 'on_leave']),
+  employment_status: z.enum(['active', 'inactive', 'on_leave']).nullable(),
   hr_synced_at: z.string().nullable(),
   emergency_contact_name: z.string().nullable(),
   emergency_contact_phone: z.string().nullable(),
-  has_qr: z.boolean(),
-  has_rfid: z.boolean(),
-  is_teaching: z.boolean(),
-  archived: z.boolean(),
-  created_at: z.string(),
+  is_teaching: z.boolean().nullable(),
+
+  allergies: z.array(allergySchema).optional(),
+  contacts: z.array(contactSchema).optional(),
 });
-export type Employee = z.infer<typeof employeeSchema>;
+export type Person = z.infer<typeof personSchema>;
+
+// Legacy names kept so pages compile against one unified type.
+export const studentSchema = personSchema;
+export type Student = Person;
+export const employeeSchema = personSchema;
+export type Employee = Person;
 
 export const createStudentSchema = z.object({
   student_number: z.string().min(1, 'Required').max(50),
@@ -100,10 +93,8 @@ export const createStudentSchema = z.object({
   section: z.string().max(20).optional(),
   gender: z.enum(['male', 'female', 'other']).optional(),
   blood_type: z.string().max(5).optional(),
-  // Phase 2.2: optional portal-login creation (admin-only, requires
-  // rbac.manage on the backend). When true, account_email must be set.
-  create_account: z.boolean().default(false),
-  account_email: z.string().email().optional(),
+  // Account email defaults to `<student_number>@synapse.dev` when omitted.
+  account_email: z.string().email().or(z.literal('')).optional(),
 });
 export type CreateStudentInput = z.infer<typeof createStudentSchema>;
 
@@ -127,9 +118,9 @@ export const createEmployeeSchema = z.object({
   department: z.string().max(100).optional(),
   position: z.string().max(100).optional(),
   employment_status: z.enum(['active', 'inactive', 'on_leave']).default('active'),
-  // Phase 2.2: optional portal-login creation.
-  create_account: z.boolean().default(false),
-  account_email: z.string().email().optional(),
+  is_teaching: z.boolean().optional(),
+  // Account email defaults to `<employee_number>@synapse.dev` when omitted.
+  account_email: z.string().email().or(z.literal('')).optional(),
 });
 export type CreateEmployeeInput = z.infer<typeof createEmployeeSchema>;
 

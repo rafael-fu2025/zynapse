@@ -17,10 +17,15 @@ export const CHECKIN_OUTCOMES = [
 export type CheckinOutcome = (typeof CHECKIN_OUTCOMES)[number];
 
 export const scanInputSchema = z.object({
-  identifier: z.string().min(1, 'Scan or type an ID.').max(255),
+  identifier: z.string().max(255).optional().or(z.literal('')),
+  guest_name: z.string().max(120).optional().or(z.literal('')),
   method: z.enum(SCAN_METHODS),
   station_id: z.string().max(64).optional().or(z.literal('')),
+  purpose: z.string().max(120).optional().or(z.literal('')),
   scanned_at: z.string().optional(),
+}).refine((v) => (v.identifier?.trim() ?? '') !== '' || (v.guest_name?.trim() ?? '') !== '', {
+  message: 'Enter an ID or a name.',
+  path: ['identifier'],
 });
 export type ScanInput = z.infer<typeof scanInputSchema>;
 
@@ -33,7 +38,7 @@ export const scanResultSchema = z.object({
     name: z.string(),
     course: z.string().nullable(),
     year_level: z.number().int().nullable(),
-    kind: z.enum(['student', 'employee']).default('student'),
+    kind: z.enum(['student', 'employee', 'guest']).default('student'),
   }),
   allergy_alert: z.string().nullable(),
   counselling_appointment_id: z.number().int().nullable(),
@@ -49,10 +54,12 @@ export type ScanResult = z.infer<typeof scanResultSchema>;
 
 export const checkinRowSchema = z.object({
   id: z.number().int().positive(),
-  patient_school_id: z.string(),
+  patient_school_id: z.string().nullable(),
+  guest_name: z.string().nullable(),
   method: z.enum(SCAN_METHODS),
   station_id: z.string().nullable(),
   outcome: z.enum(CHECKIN_OUTCOMES),
+  purpose: z.string().nullable(),
   counselling_appointment_id: z.number().int().nullable(),
   encounter_id: z.number().int().nullable(),
   scanned_at: z.string(),
@@ -61,8 +68,10 @@ export type CheckinRow = z.infer<typeof checkinRowSchema>;
 
 /** Offline scan buffered client-side (legacy offline_checkin_buffer, moved to the SPA). */
 export interface BufferedScan {
-  identifier: string;
+  identifier?: string;
+  guest_name?: string;
   method: ScanMethod;
   station_id: string;
+  purpose?: string;
   scanned_at: string;
 }

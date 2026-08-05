@@ -21,7 +21,7 @@ final class ReorderController extends ApiController
 
     public function __construct(?ReorderService $service = null)
     {
-        $this->service = $service ?? new ReorderService(new ClinicPolicy(), Services::auditOutbox());
+        $this->service = $service ?? new ReorderService(new ClinicPolicy(), Services::auditOutbox(), Services::notificationOutbox());
     }
 
     public function list(): ResponseInterface

@@ -19,7 +19,17 @@ final class Routes implements BaseRoutes
             $r->post('units/(:num)/unarchive',        'BmgController::unarchiveUnit/$1');
             $r->post('units/(:num)/start',            'BmgController::startBatch/$1');
             $r->post('units/(:num)/maintenance',      'BmgController::setUnitMaintenance/$1');
+            $r->get('units/suggest',                  'BmgController::suggestUnit');
+            $r->get('batches',                        'BmgController::listBatches');
             $r->get('batches/active',                 'BmgController::listActiveBatches');
+            $r->get('batches/(:num)/compliance',      'BmgController::batchCompliance/$1');
+            $r->get('batches/(:num)/blend-cn',        'BmgController::blendCn/$1');
+            $r->post('batches/(:num)/release',        'BmgController::releaseBatch/$1');
+            $r->get('alerts/open',                    'BmgController::listOpenAlerts');
+            $r->get('waste-categories/deviation',     'BmgController::wasteCategoryDeviation');
+            $r->get('sop-documents',                  'BmgController::listSopDocuments');
+            $r->post('sop-documents',                 'BmgController::createSopDocument');
+            $r->post('sop-documents/(:num)',          'BmgController::updateSopDocument/$1');
             $r->get('waste-categories',               'BmgController::listWasteCategories');
             $r->post('waste-categories',              'BmgController::createWasteCategory');
             $r->post('waste-categories/(:num)',       'BmgController::updateWasteCategory/$1');

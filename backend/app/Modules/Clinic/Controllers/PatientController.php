@@ -56,6 +56,22 @@ final class PatientController extends ApiController
         return $this->ok($this->service->searchStudents($q, (int) ($this->request->getGet('limit') ?? 20)));
     }
 
+    /**
+     * Kiosk station autocomplete — combined student + employee lookup
+     * by number or name. Returns a minimal dropdown-shaped payload.
+     */
+    public function lookupForKiosk(): ResponseInterface
+    {
+        $q = trim((string) ($this->request->getGet('q') ?? ''));
+        if (mb_strlen($q) < 2) {
+            return $this->ok([]);
+        }
+
+        return $this->ok(
+            $this->service->lookupForKiosk($q, (int) ($this->request->getGet('limit') ?? 8)),
+        );
+    }
+
     public function showStudent(int $id): ResponseInterface
     {
         return $this->ok($this->service->getStudent($id)->toArray());
@@ -143,11 +159,16 @@ final class PatientController extends ApiController
         $cursor   = (string) ($this->request->getGet('cursor') ?? '');
         $limit    = (int)    ($this->request->getGet('limit')  ?? 25);
         $archived = (string) ($this->request->getGet('include_archived') ?? '');
+        // teaching = all | teaching | non_teaching (inventory/audit fix:
+        // let staff triage faculty vs support staff, since only teaching
+        // employees can refer students to counselling).
+        $teaching = (string) ($this->request->getGet('teaching') ?? '');
 
         $page = $this->service->listEmployees(
             $cursor !== '' ? $cursor : null,
             $limit,
             $archived === '1' || $archived === 'true',
+            $teaching !== '' ? $teaching : null,
         );
 
         return $this->ok(

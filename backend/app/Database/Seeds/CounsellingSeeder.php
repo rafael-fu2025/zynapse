@@ -80,8 +80,10 @@ final class CounsellingSeeder extends Seeder
      */
     private function collectStudentIds(): array
     {
-        $rows = $this->db->table('patients_students')
+        $rows = $this->db->table('users')
             ->select('student_number')
+            ->where('kind', 'student')
+            ->where('student_number IS NOT NULL', null, false)
             ->orderBy('id', 'ASC')
             ->get()->getResultArray();
         return array_map(static fn (array $r) => (string) $r['student_number'], $rows);

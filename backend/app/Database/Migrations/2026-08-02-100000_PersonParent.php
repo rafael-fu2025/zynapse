@@ -49,9 +49,9 @@ final class PersonParent extends Migration
         $this->forge->addPrimaryKey('id');
         // A single user can be linked to at most one person across all types.
         $this->forge->addUniqueKey('user_id', 'uniq_persons_user_id');
-        $this->forge->addKey('kind', 'idx_persons_kind');
-        $this->forge->addKey(['last_name', 'first_name'], 'idx_persons_name');
-        $this->forge->addKey(['created_at', 'id'], 'idx_persons_created');
+        $this->forge->addKey('kind', false, false, 'idx_persons_kind');
+        $this->forge->addKey(['last_name', 'first_name'], false, false, 'idx_persons_name');
+        $this->forge->addKey(['created_at', 'id'], false, false, 'idx_persons_created');
         $this->forge->createTable('persons');
     }
 

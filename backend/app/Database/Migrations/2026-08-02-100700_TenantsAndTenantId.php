@@ -109,7 +109,7 @@ final class TenantsAndTenantId extends Migration
                         'after'      => 'id',
                     ],
                 ]);
-                $this->forge->addKey($table, 'tenant_id', 'idx_' . $table . '_tenant');
+                $this->forge->addKey('tenant_id', false, false, 'idx_' . $table . '_tenant');
             }
         }
     }

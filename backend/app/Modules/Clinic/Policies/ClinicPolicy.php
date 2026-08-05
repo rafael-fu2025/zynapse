@@ -26,6 +26,7 @@ final class ClinicPolicy extends BasePolicy
             'list'           => 'clinic.encounters.read',
             'create'         => 'clinic.encounters.create',
             'view'           => 'clinic.encounters.read',
+            'vitalsRead'     => 'clinic.encounters.read',
             'recordVitals'   => 'clinic.encounters.write',
             'close'          => 'clinic.encounters.write',
             'addTreatment'   => 'clinic.encounters.write',
@@ -48,6 +49,7 @@ final class ClinicPolicy extends BasePolicy
             'queueManage'       => 'clinic.queue.manage',
             'checkinRecord'     => 'clinic.checkin.record',
             'checkinRead'       => 'clinic.checkin.read',
+            'markNoShow'        => 'clinic.encounters.write',
             default          => null,
         };
         if ($code === null) {

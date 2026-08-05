@@ -20,6 +20,7 @@ import {
   Stethoscope,
   UserCircle2,
 } from 'lucide-react';
+import { QRCodeCanvas } from 'qrcode.react';
 import { Link } from 'react-router-dom';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -28,9 +29,11 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { CopyButton } from '@/components/CopyButton';
 import { QueryErrorState } from '@/components/QueryErrorState';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { YourQueueCard } from '@/components/YourQueueCard';
 import { useMe } from '@/hooks/useAuth';
 import { useMyClinicVisits, useMyEmployeeProfile } from '@/hooks/useEmployeePortal';
 import { useNotifications } from '@/hooks/useNotifications';
+import { notificationDetail, notificationLabel } from '@/utils/notifications';
 import { fmtUtcToApp } from '@/utils/date';
 import { statusLabel } from '@/utils/status';
 
@@ -81,6 +84,9 @@ export default function EmployeePortalPage() {
         </p>
       </header>
 
+      {/* Live queue status — only appears while you're actually queued. */}
+      <YourQueueCard kind="employee" />
+
       {profile.isLoading && <ProfileSkeleton />}
 
       {profile.isError && profile.error?.httpStatus !== 404 && (
@@ -118,18 +124,6 @@ export default function EmployeePortalPage() {
                 <dd className="text-foreground">
                   {me.data?.email ?? <span className="text-muted-foreground">—</span>}
                 </dd>
-                <dt className="text-muted-foreground">persons_id</dt>
-                <dd className="font-mono text-muted-foreground">
-                  {profile.data.persons_id !== null && profile.data.persons_id !== undefined
-                    ? `#${profile.data.persons_id}`
-                    : <span className="text-muted-foreground">—</span>}
-                </dd>
-                <dt className="text-muted-foreground">patient_identifier_id</dt>
-                <dd className="font-mono text-muted-foreground">
-                  {profile.data.patient_identifier_id !== null && profile.data.patient_identifier_id !== undefined
-                    ? `#${profile.data.patient_identifier_id}`
-                    : <span className="text-muted-foreground">—</span>}
-                </dd>
               </dl>
             </CardContent>
           </Card>
@@ -158,7 +152,7 @@ export default function EmployeePortalPage() {
                   <dt className="text-muted-foreground">Position</dt>
                   <dd>{profile.data.position ?? '—'}</dd>
                   <dt className="text-muted-foreground">Status</dt>
-                  <dd className="capitalize">{profile.data.employment_status.replace('_', ' ')}</dd>
+                  <dd className="capitalize">{(profile.data.employment_status ?? 'active').replace('_', ' ')}</dd>
                   <dt className="text-muted-foreground">Type</dt>
                   <dd>
                     {profile.data.is_teaching ? (
@@ -181,16 +175,33 @@ export default function EmployeePortalPage() {
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-3">
-                <div className="flex items-center gap-2">
-                  <p className="flex-1 rounded-md border bg-muted/50 px-3 py-2 font-mono text-sm">
-                    {profile.data.kiosk_identifier}
-                  </p>
-                  <CopyButton value={profile.data.kiosk_identifier} label="Copy kiosk identifier" successMessage="Kiosk identifier copied." />
+                <div className="flex flex-col items-center gap-3 sm:flex-row">
+                  <div className="shrink-0 rounded-xl border bg-white p-2">
+                    <QRCodeCanvas value={profile.data.kiosk_identifier} size={128} includeMargin />
+                  </div>
+                  <div className="min-w-0 flex-1 space-y-2">
+                    <div className="flex items-center gap-2">
+                      <p className="min-w-0 flex-1 truncate rounded-md border bg-muted/50 px-3 py-2 font-mono text-sm">
+                        {profile.data.kiosk_identifier}
+                      </p>
+                      <CopyButton value={profile.data.kiosk_identifier} label="Copy kiosk identifier" successMessage="Kiosk identifier copied." />
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      The kiosk accepts {profile.data.has_qr ? 'QR' : profile.data.has_rfid ? 'RFID' : 'manual entry'}; we send the{' '}
+                      <span className="font-mono">{profile.data.kiosk_identifier.split(':')[0]}</span> variant first.
+                    </p>
+                    {profile.data.has_qr ? (
+                      <p className="flex items-center gap-1.5 text-xs text-emerald-600 dark:text-emerald-400">
+                        <CheckCircle2 className="size-3.5 shrink-0" /> Staff-issued QR on file — scan this at the kiosk.
+                      </p>
+                    ) : (
+                      <p className="text-xs text-muted-foreground">
+                        No staff-issued QR on your account yet — this QR uses your <strong>employee number</strong> and still
+                        works at the kiosk. Ask clinic staff to assign a QR in <strong>Patients</strong> for a permanent card.
+                      </p>
+                    )}
+                  </div>
                 </div>
-                <p className="text-xs text-muted-foreground">
-                  The kiosk accepts {profile.data.has_qr ? 'QR' : profile.data.has_rfid ? 'RFID' : 'manual entry'}; we send the{' '}
-                  <span className="font-mono">{profile.data.kiosk_identifier.split(':')[0]}</span> variant first.
-                </p>
                 <div className="flex flex-wrap gap-2 pt-2">
                   <Button asChild size="sm" variant="outline">
                     <Link to="/change-password">
@@ -257,7 +268,7 @@ export default function EmployeePortalPage() {
                   <TableBody>
                     {visits.data.map((v) => (
                       <TableRow key={v.id}>
-                        <TableCell className="px-3 font-mono text-xs text-muted-foreground">
+                        <TableCell className="px-3 text-xs text-muted-foreground">
                           {fmtUtcToApp(v.started_at)}
                         </TableCell>
                         <TableCell className="px-3 text-sm">{v.chief_complaint}</TableCell>
@@ -330,7 +341,12 @@ export default function EmployeePortalPage() {
                           aria-hidden
                         />
                         <div className="flex-1">
-                          <p className="font-medium">{n.template_code}</p>
+                          <p className="font-medium">{notificationLabel(n.template_code, n.context)}</p>
+                          {notificationDetail(n.template_code, n.context) !== null && (
+                            <p className="font-mono text-[10px] text-muted-foreground">
+                              {notificationDetail(n.template_code, n.context)}
+                            </p>
+                          )}
                           <p className="text-muted-foreground">{fmtUtcToApp(n.created_at)}</p>
                         </div>
                       </li>

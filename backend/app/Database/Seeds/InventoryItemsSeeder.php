@@ -78,8 +78,16 @@ final class InventoryItemsSeeder extends Seeder
 
     private function wipe(): void
     {
-        $this->db->table('clinic_inventory_movements')->emptyTable();
-        $this->db->table('clinic_inventory_items')->emptyTable();
+        // FK-safe: disable checks so reorder_requests (FK to items) and
+        // movements are cleared in any order.
+        $this->db->query('SET FOREIGN_KEY_CHECKS = 0');
+        try {
+            $this->db->table('clinic_reorder_requests')->emptyTable();
+            $this->db->table('clinic_inventory_movements')->emptyTable();
+            $this->db->table('clinic_inventory_items')->emptyTable();
+        } finally {
+            $this->db->query('SET FOREIGN_KEY_CHECKS = 1');
+        }
         $this->db->table('audit_outbox')
             ->groupStart()
                 ->like('action_code', 'clinic.inventory_', 'after')

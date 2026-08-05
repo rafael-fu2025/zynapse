@@ -29,15 +29,20 @@ class AuthGroups extends ShieldAuthGroups
         // any clinical or operational write permission.
         'report_viewer'    => 'Report Viewer',
         // RBAC_SECURITY_REVIEW R4: clinical oversight / break-glass role.
-        // Holds counselling.records.* EXPLICITLY so it satisfies the R1
-        // wildcard exclusion (which a bare admin cannot); every note read
-        // it performs is captured by the R2 read-audit.
+        // Holds counselling.records.* EXPLICITLY (redundant with the admin
+        // wildcard since the R1 exclusion was lifted) so oversight roles
+        // keep a deliberate, audited grant.
         'clinical_supervisor' => 'Clinical Supervisor',
         // Phase 13: student self-service placeholder. The student
         // portal proper (login + book + QR) is still deferred; the
         // group exists today so the canonical demo account can log
         // in and see the surfaces it is allowed to touch.
         'student'          => 'Student',
+        // Identity-consolidation: default role for auto-created
+        // employee patient accounts. Mirrors `student` — self-scoped
+        // portal read + notifications, no write perms (staff handles
+        // mutations on the employee's behalf).
+        'employee'         => 'Employee',
     ];
 
     /** @var array<string, string> role => group */
@@ -73,6 +78,9 @@ class AuthGroups extends ShieldAuthGroups
             'clinic.treatments.read',
             'clinic.triage.use',
             'clinic.inventory.forecast',
+            // Staff schedules are the clinic's own recurring roster —
+            // clinic staff manage their shifts (audit 2026-08-05).
+            'clinic.schedules.manage',
             'reports.read',
             'referrals.create',
             'referrals.read',
@@ -165,6 +173,19 @@ class AuthGroups extends ShieldAuthGroups
             // mutation on the student's behalf.
             'notifications.read',
             'student.portal.read',
+        ],
+        'employee' => [
+            // Identity-consolidation: default role for auto-created
+            // employee patient accounts. Self-scoped portal read only.
+            // referrals.read/create let TEACHING employees (faculty)
+            // refer students to counselling; the service-level gate
+            // still requires `is_teaching = 1` for clinic-originated
+            // referrals, so non-teaching staff see the page but cannot
+            // create one (friendly hint in the UI).
+            'notifications.read',
+            'employee.portal.read',
+            'referrals.create',
+            'referrals.read',
         ],
     ];
 

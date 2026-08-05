@@ -25,21 +25,18 @@ final class PermissionService
     
     /**
      * Permission codes the admin wildcard does NOT satisfy on its own.
-     * They MUST be granted explicitly (via a group or a per-user grant),
-     * so a bare "system administrator" cannot read or write clinical
-     * counselling records without a deliberate, separate grant.
      *
-     * Segregation of duties (RBAC_SECURITY_REVIEW R1): mental-health notes
-     * are the most sensitive data in the system; standing wildcard access
-     * violates least privilege.
+     * Kept as a mechanism (consulted by `grants()`) even though it is
+     * currently empty. `counselling.records.*` were previously excluded
+     * for segregation of duties (RBAC_SECURITY_REVIEW R1) — mental-health
+     * notes are the most sensitive data in the system. Per product
+     * decision the admin restriction under counselling has been lifted,
+     * so a bare administrator's wildcard now grants those codes too.
+     * Re-add codes here if a future permission must be wildcard-exempt.
      *
      * @var array<int, string>
      */
-    public const WILDCARD_EXCLUSIONS = [
-        'counselling.records.create',
-        'counselling.records.read',
-        'counselling.records.write',
-    ];
+    public const WILDCARD_EXCLUSIONS = [];
     
     public function userHas(int $userId, string $code): bool
     {
@@ -56,9 +53,8 @@ final class PermissionService
      *
      * A code in WILDCARD_EXCLUSIONS is granted ONLY when it appears
      * explicitly in `$effective`; the wildcard alone never satisfies it.
-     * Because `allForUser()` collapses a wildcard holder's list to
-     * `['*']`, an admin (even one carrying legacy per-user grants) is
-     * denied excluded codes — a dedicated non-admin role must hold them.
+     * The list is currently empty (the counselling records R1 exclusion
+     * was lifted), so every code is satisfiable by the wildcard today.
      *
      * @param array<int, string> $effective
      */
@@ -115,6 +111,57 @@ final class PermissionService
         }
 
         return $this->userCache[$userId] = $list;
+    }
+
+    /**
+     * Resolve every user id whose effective grants include `$code`.
+     *
+     * Permission-driven notification fan-out ("notify everyone who can
+     * acknowledge counselling-bound referrals"): group memberships are
+     * resolved from `Config\AuthGroups::$groupPermissions` (the source
+     * of truth), the admin group always qualifies via the wildcard, and
+     * explicit per-user grants in `user_permissions` are folded in.
+     *
+     * @return array<int, int>
+     */
+    public function userIdsWithPermission(string $code): array
+    {
+        /** @var AuthGroups $groups */
+        $groups = config(AuthGroups::class);
+
+        $wantedGroups = [];
+        foreach ($groups->groupPermissions as $groupName => $perms) {
+            if ($groupName === 'admin' || $this->grants($perms, $code, $groups->adminWildcard)) {
+                $wantedGroups[] = $groupName;
+            }
+        }
+
+        $db = Services::database();
+        $ids = [];
+
+        if ($wantedGroups !== []) {
+            $rows = $db->table('auth_groups_users AS gu')
+                ->select('gu.user_id')
+                ->join('auth_groups AS g', 'g.id = gu.group_id')
+                ->whereIn('g.name', $wantedGroups)
+                ->get()
+                ->getResultArray();
+            foreach ($rows as $r) {
+                $ids[] = (int) $r['user_id'];
+            }
+        }
+
+        // Explicit per-user grants also satisfy the code.
+        $direct = $db->table('user_permissions')
+            ->select('user_id')
+            ->where('permission_code', $code)
+            ->get()
+            ->getResultArray();
+        foreach ($direct as $r) {
+            $ids[] = (int) $r['user_id'];
+        }
+
+        return array_values(array_unique($ids));
     }
 
     /**

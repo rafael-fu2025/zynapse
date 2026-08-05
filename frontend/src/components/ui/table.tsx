@@ -48,7 +48,7 @@ const TableRow = React.forwardRef<HTMLTableRowElement, React.HTMLAttributes<HTML
     <tr
       ref={ref}
       className={cn(
-        'border-b transition-colors hover:bg-muted/50 data-[state=selected]:bg-muted',
+        'border-b transition-colors hover:bg-muted/50 hover:outline-1 hover:outline-primary data-[state=selected]:bg-muted',
         className,
       )}
       {...props}
@@ -62,6 +62,8 @@ const TableHead = React.forwardRef<HTMLTableCellElement, React.ThHTMLAttributes<
     <th
       ref={ref}
       className={cn(
+        // Header cells intentionally carry NO hover outline — only the
+        // row gets the maroon highlight.
         'h-10 px-2 text-left align-middle font-medium text-muted-foreground [&:has([role=checkbox])]:pr-0',
         className,
       )}
@@ -75,7 +77,12 @@ const TableCell = React.forwardRef<HTMLTableCellElement, React.TdHTMLAttributes<
   ({ className, ...props }, ref) => (
     <td
       ref={ref}
-      className={cn('p-2 align-middle [&:has([role=checkbox])]:pr-0', className)}
+      className={cn(
+        // Cells carry no hover outline — the ROW provides the maroon
+        // highlight (see TableRow).
+        'p-2 align-middle [&:has([role=checkbox])]:pr-0',
+        className,
+      )}
       {...props}
     />
   ),

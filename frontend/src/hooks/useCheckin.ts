@@ -25,10 +25,12 @@ export function useScan() {
     mutationFn: async (input) => {
       const valid = scanInputSchema.parse(input);
       const payload: Record<string, unknown> = {
-        identifier: valid.identifier,
         method: valid.method,
       };
+      if (valid.identifier !== undefined && valid.identifier !== '') payload['identifier'] = valid.identifier;
+      if (valid.guest_name !== undefined && valid.guest_name !== '') payload['guest_name'] = valid.guest_name;
       if (valid.station_id !== undefined && valid.station_id !== '') payload['station_id'] = valid.station_id;
+      if (valid.purpose !== undefined && valid.purpose !== '') payload['purpose'] = valid.purpose;
       if (valid.scanned_at !== undefined && valid.scanned_at !== '') payload['scanned_at'] = valid.scanned_at;
       const res = await apiClient.post<unknown>('/clinic/checkins', payload);
       return scanResultSchema.parse(res.data);
@@ -36,6 +38,11 @@ export function useScan() {
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['checkins'] });
       void qc.invalidateQueries({ queryKey: ['queue'] });
+      // A kiosk check-in can transition a clinic appointment to
+      // checked_in and open its linked encounter — refresh those
+      // caches too so staff views are never stale.
+      void qc.invalidateQueries({ queryKey: ['appointments'] });
+      void qc.invalidateQueries({ queryKey: ['clinic'] });
     },
     // Toasting is left to the page: outcomes (including duplicate) are
     // rendered on the kiosk result card, and network failures feed the

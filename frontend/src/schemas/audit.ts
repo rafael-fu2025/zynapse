@@ -18,6 +18,7 @@ export const auditEventSchema = z.object({
   entity_id: z.number().int().nullable(),
   actor: auditActorSchema.nullable(),
   request_id: z.string().nullable(),
+  occurred_at: z.string().nullable(),
   committed_at: z.string(),
   commit_hash: z.string(),
 });

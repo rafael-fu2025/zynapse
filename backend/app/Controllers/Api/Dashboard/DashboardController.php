@@ -42,6 +42,14 @@ final class DashboardController extends ApiController
                 'units_idle'      => (int) $db->table('facilities_bmg_units')->where('status', 'idle')->where('archived_at', null)->countAllResults(),
                 'units_processing'=> (int) $db->table('facilities_bmg_units')->where('status', 'processing')->where('archived_at', null)->countAllResults(),
                 'units_awaiting'  => (int) $db->table('facilities_bmg_units')->where('status', 'awaiting_output')->where('archived_at', null)->countAllResults(),
+                // Audit #3: global at-risk count — unacknowledged alerts on
+                // live batches (dashboard "at-risk batches" widget).
+                'at_risk'         => (int) $db->table('facilities_bmg_alerts AS a')
+                    ->join('facilities_bmg_batches AS b', 'b.id = a.batch_id')
+                    ->where('a.tenant_id', \App\Services\CurrentTenant::id())
+                    ->where('a.acknowledged_at', null)
+                    ->whereIn('b.status', ['processing', 'awaiting_output', 'curing'])
+                    ->countAllResults(),
             ];
         }
 
@@ -62,14 +70,14 @@ final class DashboardController extends ApiController
             ];
         }
 
-        // Phase 3.6: identity coverage — how many of the active users are
-        // linked to a patient record (users.person_id NOT NULL). Gated by
-        // rbac.read so any admin can see the rollout status.
+        // Identity-consolidated coverage — how many active users carry a
+        // patient identity (`kind` IS NOT NULL). Gated by rbac.read so
+        // any admin can see the rollout status.
         if ($this->permissions->userHas(\App\Auth\CurrentUser::assert(), 'rbac.read')) {
             $totalUsers = (int) $db->table('users')->where('deleted_at', null)->countAllResults();
             $linkedUsers = (int) $db->table('users')
                 ->where('deleted_at', null)
-                ->where('person_id IS NOT NULL', null, false)
+                ->where('kind IS NOT NULL', null, false)
                 ->countAllResults();
             $out['identity_coverage'] = [
                 'linked_users' => $linkedUsers,

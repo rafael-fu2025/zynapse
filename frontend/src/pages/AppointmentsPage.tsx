@@ -2,8 +2,15 @@
  * AppointmentsPage — clinic scheduling grid (Phase 9, extended).
  *
  * Keyset-paginated appointment table (shadcn Table) with status
- * badges, lifecycle actions (Check in / Complete / Cancel / No-show),
- * and a CRUD dialog (Schedule / Edit / View).
+ * badges, lifecycle actions (Complete / Cancel), and a CRUD dialog
+ * (Schedule / Edit / View).
+ *
+ * Panel revision (August 2026): today's `scheduled` appointments
+ * auto-check-in on the first staff read of the queue / appointment
+ * list, so the inline "Check in" button was removed. "Mark no-show"
+ * moved off the appointment dropdown and onto the encounter action
+ * menu inside the clinic queue tab, where it cascades the encounter
+ * + queue + appointment atomically.
  *
  * Filters: All / Upcoming / Past tabs + a status dropdown for finer
  * filtering. The status filter pushes a `?status=` query param to
@@ -28,9 +35,7 @@ import {
   ChevronRight,
   Eye,
   Loader2,
-  LogIn,
   Pencil,
-  Search,
   Stethoscope,
   X,
 } from 'lucide-react';
@@ -42,7 +47,7 @@ import { Button } from '@/components/ui/button';
 import { ConfirmDialog, type ConfirmAction } from '@/components/ConfirmDialog';
 import { QueryErrorRow } from '@/components/QueryErrorState';
 import { MobileCardList, MobileCard, MobileCardField, MobileCardActions } from '@/components/MobileCardList';
-import { useDebouncedValue } from '@/hooks/useDebouncedValue';
+import { PatientIdCell } from '@/components/PatientIdCell';
 import { DatePicker } from '@/components/ui/date-picker';
 import { TimePicker } from '@/components/ui/time-picker';
 import {
@@ -56,11 +61,11 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { PatientPicker } from '@/components/PatientPicker';
 import {
   Select,
   SelectContent,
@@ -84,7 +89,7 @@ import {
   useTransitionAppointment,
   useUpdateAppointment,
 } from '@/hooks/useAppointments';
-import { useEmployees, useStudentSearch } from '@/hooks/usePatients';
+import { useEmployees } from '@/hooks/usePatients';
 import {
   scheduleAppointmentSchema,
   updateAppointmentSchema,
@@ -114,64 +119,10 @@ const STATUS_OPTIONS: ReadonlyArray<{ value: Appointment['status'] | 'all'; labe
 ];
 
 /**
- * PatientPicker — debounced student search. The user types a school
- * id or a name (>= 2 chars) and the dropdown lists matches from the
- * backend's `/clinic/students/search`. Picking a row fills the
- * patient_school_id field on the parent form.
+ * PatientPicker — see `@/components/PatientPicker`. The shared
+ * component is reused by both the schedule dialog (this file) and the
+ * new-encounter dialog in `ClinicPage.tsx`.
  */
-function PatientPicker({
-  value,
-  onChange,
-}: {
-  value: string;
-  onChange: (next: string) => void;
-}) {
-  const [q, setQ] = useState(value);
-  const debouncedQ = useDebouncedValue(q, 300);
-  const search = useStudentSearch(debouncedQ);
-  // Show the results list while the user is typing a query (>= 2 chars)
-  // and hide it once they pick a concrete student. Tracking a `picked`
-  // flag (rather than comparing q to the committed value, which the
-  // keystroke handler keeps in sync) is what makes the list actually
-  // appear during typing.
-  const [picked, setPicked] = useState(false);
-  const showList = q.trim().length >= 2 && !picked;
-
-  return (
-    <div className="space-y-1.5">
-      <Label htmlFor="patient_school_id">Patient school ID</Label>
-      <div className="relative">
-        <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-        <Input
-          id="patient_school_id"
-          className="pl-9"
-          value={q}
-          onChange={(e) => { setPicked(false); setQ(e.target.value); onChange(e.target.value); }}
-          placeholder="Type school id or name (min 2 chars)…"
-        />
-      </div>
-      {showList && (
-        <div className="max-h-40 space-y-1 overflow-auto rounded-md border bg-card p-1.5 text-xs">
-          {search.isLoading && <Loader2 className="mx-auto size-3.5 animate-spin text-muted-foreground" />}
-          {!search.isLoading && (search.data?.length ?? 0) === 0 && (
-            <p className="px-2 py-1 text-muted-foreground">No matches.</p>
-          )}
-          {(search.data ?? []).slice(0, 8).map((s) => (
-            <button
-              type="button"
-              key={s.id}
-              className="flex w-full items-center justify-between rounded px-2 py-1 text-left hover:bg-muted/50"
-              onClick={() => { setPicked(true); onChange(s.student_number); setQ(s.student_number); }}
-            >
-              <span className="font-mono">{s.student_number}</span>
-              <span className="text-muted-foreground">{s.last_name}, {s.first_name}</span>
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
 
 /**
  * ProviderPicker — Select bound to the cached employees list. The
@@ -300,6 +251,7 @@ function ScheduleDialog({
       <form noValidate onSubmit={(e) => void onSubmit(e)} className="space-y-3">
         <PatientPicker
           value={patientId}
+          invalid={errors.patient_school_id !== undefined}
           onChange={(v) => setValue('patient_school_id', v, { shouldValidate: true })}
         />
         {errors.patient_school_id !== undefined && (
@@ -424,7 +376,7 @@ function AppointmentDetailDialog({ appointmentId, onClose }: { appointmentId: nu
           </div>
           <div className="col-span-2">
             <dt className="text-xs text-muted-foreground">Scheduled at</dt>
-            <dd className="font-mono text-xs">{fmtUtcToApp(a.scheduled_at)}</dd>
+            <dd className="text-xs">{fmtUtcToApp(a.scheduled_at)}</dd>
           </div>
           <div className="col-span-2">
             <dt className="text-xs text-muted-foreground">Reason</dt>
@@ -469,11 +421,12 @@ interface AppointmentActionProps {
 function AppointmentActions({ a, onView, onEdit, transition, onConfirm, transitionPending, canEdit }: AppointmentActionProps) {
   return (
     <>
-      {a.status === 'scheduled' && (
-        <Button className="min-h-11" size="sm" variant="secondary" disabled={transitionPending} onClick={() => transition({ id: a.id, status: 'checked_in' })}>
-          <LogIn /> Check in
-        </Button>
-      )}
+      {/* Panel revision (August 2026): today's `scheduled` appointments
+          are auto-checked-in on the first staff read of the queue /
+          appointment list, so the inline "Check in" button is gone.
+          For `checked_in`, the only meaningful single-click advance
+          is to "Complete" — that's where staff land after they wrap
+          up the encounter. */}
       {a.status === 'checked_in' && (
         <Button className="min-h-11" size="sm" variant="secondary" disabled={transitionPending} onClick={() => transition({ id: a.id, status: 'completed' })}>
           <Check /> Complete
@@ -494,21 +447,9 @@ function AppointmentActions({ a, onView, onEdit, transition, onConfirm, transiti
               <Pencil /> Edit appointment
             </DropdownMenuItem>
           )}
-          {(a.status === 'scheduled' || a.status === 'checked_in') && <DropdownMenuSeparator />}
-          {a.status === 'scheduled' && (
-            <DropdownMenuItem
-              className="min-h-11"
-              disabled={transitionPending}
-              onSelect={() => onConfirm({
-                title: `Mark appointment #${a.id} as no-show?`,
-                description: 'This records a no-show, which counts toward the patient’s three-strike counter.',
-                confirmLabel: 'Mark no-show',
-                run: () => transition({ id: a.id, status: 'no_show' }),
-              })}
-            >
-              <X /> Mark no-show
-            </DropdownMenuItem>
-          )}
+          {/* Panel revision (August 2026): "Mark no-show" moved off
+              the appointment surface and onto the encounter row in
+              the queue tab. From here it's only ever a cancel. */}
           {(a.status === 'scheduled' || a.status === 'checked_in') && (
             <DropdownMenuItem
               className="min-h-11 text-destructive focus:text-destructive"
@@ -532,6 +473,11 @@ function AppointmentActions({ a, onView, onEdit, transition, onConfirm, transiti
 /** Mobile card for one appointment — same data + actions as the row. */
 function AppointmentCard(props: AppointmentActionProps & { providerName: string }) {
   const { a, providerName } = props;
+  // Local employee lookup misses clinic staff — prefer the API name.
+  const displayProvider = providerName.startsWith('#')
+    ? (a.provider_name ?? providerName)
+    : providerName;
+
   return (
     <MobileCard aria-label={`Appointment ${a.id}`}>
       <div className="mb-1 flex items-center justify-between gap-2">
@@ -543,11 +489,20 @@ function AppointmentCard(props: AppointmentActionProps & { providerName: string 
       </p>
       {a.patient_name !== undefined && a.patient_name !== null && (
         <p className="font-mono text-[10px] text-muted-foreground">
-          {a.patient_school_id}{a.patient_kind !== undefined && a.patient_kind !== null ? ` · ${a.patient_kind}` : ''}
+          <PatientIdCell id={a.patient_school_id} name={a.patient_name} />
+          {a.patient_kind !== undefined && a.patient_kind !== null ? ` · ${a.patient_kind}` : ''}
         </p>
       )}
-      <MobileCardField label="Provider">{providerName}</MobileCardField>
-      <MobileCardField label="When"><span className="font-mono text-xs text-muted-foreground">{fmtUtcToApp(a.scheduled_at)}</span></MobileCardField>
+      <MobileCardField label="Provider">
+        <span className="flex items-center gap-1.5">
+          <span>{displayProvider}</span>
+          <PatientIdCell
+            id={`#${a.provider_user_id}`}
+            name={displayProvider.startsWith('#') ? null : displayProvider}
+          />
+        </span>
+      </MobileCardField>
+      <MobileCardField label="When"><span className="text-xs text-muted-foreground">{fmtUtcToApp(a.scheduled_at)}</span></MobileCardField>
       <MobileCardField label="Reason">
         <span>
           {a.reason ?? '—'}
@@ -584,6 +539,12 @@ function AppointmentRow({
   transitionPending: boolean;
   canEdit: boolean;
 }) {
+  // The local employee lookup may miss clinic staff (they aren't in
+  // the employee roster) — prefer the API-provided provider name then.
+  const displayProvider = providerName.startsWith('#')
+    ? (a.provider_name ?? providerName)
+    : providerName;
+
   return (
     <TableRow>
       <TableCell className="px-3 font-mono text-xs">#{a.id}</TableCell>
@@ -592,16 +553,25 @@ function AppointmentRow({
           <div className="leading-tight">
             <p className="text-sm font-medium">{a.patient_name}</p>
             <p className="font-mono text-[10px] text-muted-foreground">
-              {a.patient_school_id}
+              <PatientIdCell id={a.patient_school_id} name={a.patient_name} />
               {a.patient_kind !== undefined && a.patient_kind !== null ? ` · ${a.patient_kind}` : ''}
             </p>
           </div>
         ) : (
-          <span className="font-mono text-xs">{a.patient_school_id}</span>
+          <PatientIdCell id={a.patient_school_id} name={null} />
         )}
       </TableCell>
-      <TableCell className="px-3 text-xs">{providerName}</TableCell>
-      <TableCell className="px-3 font-mono text-xs text-muted-foreground">{fmtUtcToApp(a.scheduled_at)}</TableCell>
+      <TableCell className="px-3 text-xs">
+        {displayProvider}
+        <span className="ml-1.5">
+          <PatientIdCell
+            id={`#${a.provider_user_id}`}
+            name={displayProvider.startsWith('#') ? null : displayProvider}
+          />
+        </span>
+      </TableCell>
+
+      <TableCell className="px-3 text-xs text-muted-foreground">{fmtUtcToApp(a.scheduled_at)}</TableCell>
       <TableCell className="px-3"><Badge variant={STATUS_VARIANT[a.status]}>{statusLabel(a.status)}</Badge></TableCell>
       <TableCell className="px-3 text-xs">
         {a.reason ?? '—'}

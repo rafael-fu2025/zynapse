@@ -297,8 +297,8 @@ function SessionsTab() {
                 >
                   <TableCell className="px-3 font-mono text-xs">{s.id}</TableCell>
                   <TableCell className="px-3 font-mono text-xs">{s.patient_school_id}</TableCell>
-                  <TableCell className="px-3 font-mono text-xs text-muted-foreground">{fmtUtcToApp(s.started_at)}</TableCell>
-                  <TableCell className="px-3 font-mono text-xs text-muted-foreground">
+                  <TableCell className="px-3 text-xs text-muted-foreground">{fmtUtcToApp(s.started_at)}</TableCell>
+                  <TableCell className="px-3 text-xs text-muted-foreground">
                     {s.ended_at === null ? <Badge variant="info">Open</Badge> : fmtUtcToApp(s.ended_at)}
                   </TableCell>
                   <TableCell className="px-3 text-right">
@@ -361,7 +361,7 @@ function SessionsTab() {
             {selected !== null && notes.data?.map((n) => (
               <section key={n.created_at} className="rounded-md border p-3">
                 <header className="flex items-center justify-between">
-                  <p className="font-mono text-[10px] text-muted-foreground">{fmtUtcToApp(n.created_at)}</p>
+                  <p className="text-[10px] text-muted-foreground">{fmtUtcToApp(n.created_at)}</p>
                   <Badge variant="info">kv={n.key_version}</Badge>
                 </header>
                 <p className="mt-2 whitespace-pre-wrap text-sm text-foreground">{n.plaintext}</p>

@@ -35,11 +35,11 @@ final class AuditEventController extends ApiController
         $builder = $this->eventBuilder(false);
         $this->applyFilters($builder, $filters);
         $builder
-            ->orderBy('ae.commited_at', 'DESC')
+            ->orderBy('ae.occurred_at', 'DESC')
             ->orderBy('ae.id', 'DESC');
 
-        KeysetPaginator::apply($builder, $cursor !== '' ? $cursor : null, $limit, 'ae.commited_at', 'ae.id');
-        $final = KeysetPaginator::finalize($builder->get()->getResultArray(), $limit, 'commited_at');
+        KeysetPaginator::apply($builder, $cursor !== '' ? $cursor : null, $limit, 'ae.occurred_at', 'ae.id');
+        $final = KeysetPaginator::finalize($builder->get()->getResultArray(), $limit, 'occurred_at');
 
         return $this->ok(
             array_map(fn (array $row): array => $this->mapEvent($row), $final['rows']),
@@ -118,16 +118,16 @@ final class AuditEventController extends ApiController
         $builder = $this->eventBuilder(true);
         $this->applyFilters($builder, $filters);
         $builder
-            ->orderBy('ae.commited_at', 'DESC')
+            ->orderBy('ae.occurred_at', 'DESC')
             ->orderBy('ae.id', 'DESC');
-        KeysetPaginator::apply($builder, $cursor !== '' ? $cursor : null, $limit, 'ae.commited_at', 'ae.id', 5_000);
-        $final = KeysetPaginator::finalize($builder->get()->getResultArray(), $limit, 'commited_at');
+        KeysetPaginator::apply($builder, $cursor !== '' ? $cursor : null, $limit, 'ae.occurred_at', 'ae.id', 5_000);
+        $final = KeysetPaginator::finalize($builder->get()->getResultArray(), $limit, 'occurred_at');
 
         $writer = new CsvWriter($this->response, 'synapse-audit');
         $writer->writeHeader([
             'id', 'prev_id', 'action_code', 'entity_type', 'entity_id',
             'actor_user_id', 'actor_email', 'actor_display_name', 'request_id',
-            'committed_at', 'commit_hash', 'payload_json_redacted',
+            'occurred_at', 'commit_hash', 'payload_json_redacted',
         ]);
 
         foreach ($final['rows'] as $row) {
@@ -142,7 +142,7 @@ final class AuditEventController extends ApiController
                 $row['actor_email'] ?? '',
                 $row['actor_display_name'] ?? '',
                 $row['request_id'] ?? '',
-                $row['commited_at'],
+                $row['occurred_at'],
                 $row['commit_hash'],
             ], is_array($payload) ? $payload : null);
         }
@@ -175,7 +175,7 @@ final class AuditEventController extends ApiController
     private function eventBuilder(bool $withPayload): BaseBuilder
     {
         $columns = 'ae.id, ae.prev_id, ae.action_code, ae.entity_type, ae.entity_id, '
-            . 'ae.actor_user_id, ae.request_id, ae.commited_at, ae.commit_hash, '
+            . 'ae.actor_user_id, ae.request_id, ae.occurred_at, ae.commited_at, ae.commit_hash, '
             . 'u.username AS actor_display_name, ai.secret AS actor_email';
         if ($withPayload) {
             $columns .= ', ae.payload_json';
@@ -244,11 +244,11 @@ final class AuditEventController extends ApiController
             $builder->where('ae.request_id', $filters['request_id']);
         }
         if ($filters['from'] !== null) {
-            $builder->where('ae.commited_at >=', $filters['from'] . ' 00:00:00');
+            $builder->where('ae.occurred_at >=', $filters['from'] . ' 00:00:00');
         }
         if ($filters['to'] !== null) {
             $exclusiveEnd = (new DateTimeImmutable($filters['to']))->modify('+1 day')->format('Y-m-d');
-            $builder->where('ae.commited_at <', $exclusiveEnd . ' 00:00:00');
+            $builder->where('ae.occurred_at <', $exclusiveEnd . ' 00:00:00');
         }
         if ($filters['q'] !== null) {
             $builder->like('ae.payload_json', $filters['q']);
@@ -271,6 +271,7 @@ final class AuditEventController extends ApiController
                 'display_name' => $row['actor_display_name'] !== null ? (string) $row['actor_display_name'] : null,
             ],
             'request_id'    => $row['request_id'] !== null ? (string) $row['request_id'] : null,
+            'occurred_at'   => $row['occurred_at'] !== null ? (string) $row['occurred_at'] : null,
             'committed_at'  => (string) $row['commited_at'],
             'commit_hash'   => (string) $row['commit_hash'],
         ];

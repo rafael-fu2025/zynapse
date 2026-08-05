@@ -33,6 +33,9 @@ export function useInventoryItems(
 ) {
   return useQuery<ItemPage, ApiEnvelopeError>({
     queryKey: ['inventory', 'items', { cursor, limit, q, includeArchived, lowStockOnly }],
+    // Stock moves from reorder receipts handled in other sessions; poll
+    // so balances stay current without a manual refresh.
+    refetchInterval: 60_000,
     queryFn: async () => {
       const params = new URLSearchParams();
       if (cursor !== null) params.set('cursor', cursor);
@@ -107,17 +110,24 @@ export function useInventoryMovements(itemId: number | null) {
 
 /**
  * Receive the delivered quantity of a supply item's `received` reorder
- * request. The quantity comes from that request server-side; the
- * reorder is marked completed in the same transaction.
+ * request. The quantity defaults to that request server-side; a lower
+ * `quantity` records a PARTIAL delivery (reorder stays `received`, the
+ * shortage is surfaced in the ledger). The reorder is marked completed
+ * only on a full delivery, in the same transaction.
  */
 export function useReceiveSupply() {
   const qc = useQueryClient();
-  return useMutation<InventoryItem, ApiEnvelopeError, { itemId: number; note?: string }>({
-    mutationFn: async ({ itemId, note }) => {
-      const res = await apiClient.post<InventoryItem>(
-        `/clinic/inventory/${itemId}/receive`,
-        note !== undefined && note !== '' ? { note } : {},
-      );
+  return useMutation<
+    InventoryItem,
+    ApiEnvelopeError,
+    { itemId: number; note?: string; quantity?: number; shortage_note?: string }
+  >({
+    mutationFn: async ({ itemId, note, quantity, shortage_note }) => {
+      const payload: Record<string, unknown> = {};
+      if (note !== undefined && note !== '') payload['note'] = note;
+      if (quantity !== undefined) payload['quantity'] = quantity;
+      if (shortage_note !== undefined && shortage_note !== '') payload['shortage_note'] = shortage_note;
+      const res = await apiClient.post<InventoryItem>(`/clinic/inventory/${itemId}/receive`, payload);
       return inventoryItemSchema.parse(res.data);
     },
     onSuccess: (item) => {

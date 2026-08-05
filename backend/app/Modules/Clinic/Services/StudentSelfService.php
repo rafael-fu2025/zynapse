@@ -1,7 +1,10 @@
 <?php
 /**
- * Phase 1.2: StudentSelfService — return persons_id and patient_identifier_id
- * alongside the legacy patients_students row.
+ * StudentSelfService — identity-consolidated.
+ *
+ * The caller IS the student: the profile is read straight from `users`
+ * (kind=student) by CurrentUser::id(). No patients_students link, no
+ * person/identifier join.
  */
 declare(strict_types=1);
 
@@ -10,34 +13,31 @@ namespace Modules\Clinic\Services;
 use App\Auth\CurrentUser;
 use App\Exceptions\ApiException;
 use App\Modules\Shared\BaseService;
-use Modules\Clinic\DTOs\StudentDto;
+use Modules\Clinic\DTOs\UserDto;
 
 /**
  * StudentSelfService — Phase 13.
  *
- * Mirror of `EmployeeSelfService` for the student side. Resolves
- * the caller's `users.id` to a `patients_students` row by the
- * UNIQUE `user_id` link added in `StudentUserLink`. Returns 404
- * when the user has no linked student record.
+ * Resolves the caller's profile directly from `users` (kind=student).
+ * Returns 404 when the user is not a student.
  */
 final class StudentSelfService extends BaseService
 {
+    private const USER_COLS = 'id, kind, first_name, last_name, middle_name, qr_code, rfid_tag, date_of_birth, gender, address, archived_at, student_number, course, year_level, section, blood_type, consecutive_no_shows, employee_number, department, position, date_hired, employment_status, hr_synced_at, emergency_contact_name, emergency_contact_phone, is_teaching, created_at, updated_at';
+
     /**
-     * Return the calling user's student record, or throw 404.
-     * Now also returns persons_id and patient_identifier_id (Phase 1.2).
+     * Return the calling user's student profile, or throw 404.
      */
-    public function getMyProfile(): StudentDto
+    public function getMyProfile(): UserDto
     {
         $userId = CurrentUser::assert();
-        $row = $this->findStudentRowForUserId($userId);
+        $row = $this->findStudentUser($userId);
         if ($row === null) {
             throw new ApiException('resource.not_found', 404, [
                 ['code' => 'student.not_registered', 'message' => 'No student record is linked to your account.'],
             ]);
         }
-        // Phase 1.2: enrich with unified-identity fields.
-        $row = $this->enrichWithUnifiedFields($row);
-        return StudentDto::fromRow($row);
+        return UserDto::fromRow($row);
     }
 
     /**
@@ -46,17 +46,16 @@ final class StudentSelfService extends BaseService
     public function listMyClinicVisits(int $limit = 50): array
     {
         $userId = CurrentUser::assert();
-        $stu = $this->findStudentRowForUserId($userId);
+        $stu = $this->findStudentUser($userId);
         if ($stu === null) {
             throw new ApiException('resource.not_found', 404, [
                 ['code' => 'student.not_registered', 'message' => 'No student record is linked to your account.'],
             ]);
         }
-        $studentNumber = (string) $stu['student_number'];
 
         $rows = $this->db->table('clinic_encounters')
-            ->select('id, patient_school_id, chief_complaint, triage_priority, status, attending_user_id, started_at, closed_at, created_at')
-            ->where('patient_school_id', $studentNumber)
+            ->select('id, patient_user_id, chief_complaint, triage_priority, status, attending_user_id, started_at, closed_at, created_at')
+            ->where('patient_user_id', $userId)
             ->where('archived_at', null)
             ->orderBy('started_at', 'DESC')
             ->orderBy('id', 'DESC')
@@ -99,39 +98,14 @@ final class StudentSelfService extends BaseService
     /**
      * @return array<string, mixed>|null
      */
-    private function findStudentRowForUserId(int $userId): ?array
+    private function findStudentUser(int $userId): ?array
     {
-        $row = $this->db->table('patients_students')
-            ->select('id, user_id, student_number, first_name, last_name, middle_name, qr_code, rfid_tag, course, year_level, section, date_of_birth, gender, address, blood_type, consecutive_no_shows, archived_at, created_at, updated_at, persons_id')
-            ->where('user_id', $userId)
+        $row = $this->db->table('users')
+            ->select(self::USER_COLS)
+            ->where('id', $userId)
+            ->where('kind', 'student')
             ->where('archived_at', null)
             ->get()->getRowArray();
-        return $row;
-    }
-
-    /**
-     * Phase 1.2: enrich a patients_students row with persons_id and
-     * patient_identifier_id (both from the new unified-identity
-     * tables). persons_id is already on the legacy table; the patient
-     * identifier id comes from patient_identifiers.
-     */
-    private function enrichWithUnifiedFields(array $row): array
-    {
-        $personsId = isset($row['persons_id']) ? (int) $row['persons_id'] : null;
-        $patientIdentifierId = null;
-        if ($personsId !== null) {
-            $piRow = $this->db->table('patient_identifiers')
-                ->select('id')
-                ->where('persons_id', $personsId)
-                ->where('kind', 'student')
-                ->where('archived_at IS NULL', null, false)
-                ->get()->getRowArray();
-            if ($piRow !== null) {
-                $patientIdentifierId = (int) $piRow['id'];
-            }
-        }
-        $row['persons_id'] = $personsId;
-        $row['patient_identifier_id'] = $patientIdentifierId;
         return $row;
     }
 }

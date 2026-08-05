@@ -72,7 +72,10 @@ final class BmgLossCategoriesContractTest extends TestCase
         // The controller's rule string is the only place we can hook
         // into the validator. We assert the literal string so a typo
         // here (e.g. swapped case, missing entry) fails the build.
-        $expected = 'in_list[' . implode(',', self::expectedCategories()) . ']';
+        // The rule is `required|in_list[...]` — the prefix enforces
+        // presence at the validator boundary so a missing `category_code`
+        // doesn't silently bypass the whitelist.
+        $expected = 'required|in_list[' . implode(',', self::expectedCategories()) . ']';
         $this->assertSame(
             'required|in_list[evaporation,off_gas,sampling,spill,cleaning,mechanical_holdup,other]',
             $expected,

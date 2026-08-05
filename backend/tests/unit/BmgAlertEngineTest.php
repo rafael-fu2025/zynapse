@@ -244,12 +244,27 @@ final class BmgAlertEngineTest extends TestCase
 
     public function testStalledDoesNotFireForCuringBatch(): void
     {
+        // Curing batches are still monitored for SPC breaches — only the
+        // STALLED rule is suppressed (lower monitoring frequency is
+        // expected during cure). The 30 °C reading below the PFRP window
+        // must STILL fire TEMP_PFRP_LOW: that's the whole point of having
+        // a separate STALLED rule.
         $result = $this->engine->evaluate(
             ['id' => 1, 'status' => BMG_STATE_CURING, 'started_at' => '2026-01-01', 'archived_at' => null],
             ['temperature_celsius' => 30.0, 'moisture_level' => 'low', 'oxygen_pct' => 10.0, 'log_date' => '2026-01-02', 'calibration_status' => 'ok'],
             30,
         );
-        $this->assertSame([], $result, 'curing batches have lower monitoring frequency; STALLED is suppressed');
+        $codes = array_column($result, 'code');
+        $this->assertNotContains(
+            BmgAlertEngine::CODE_STALLED,
+            $codes,
+            'curing batches have lower monitoring frequency; STALLED is suppressed'
+        );
+        $this->assertContains(
+            BmgAlertEngine::CODE_TEMP_PFRP_LOW,
+            $codes,
+            'PFRP temperature rule still applies during cure — only STALLED is suppressed'
+        );
     }
 
     public function testStalledDoesNotFireWhenLastLogNull(): void

@@ -9,6 +9,7 @@ use App\Modules\Shared\BaseService;
 use App\Pagination\KeysetPaginator;
 use App\Services\Audit\AuditOutboxService;
 use App\Services\Crypto\EncryptionService;
+use App\Services\Notify\NotificationOutboxService;
 use DateTimeImmutable;
 use DateTimeZone;
 use Modules\Referrals\DTOs\ReferralDto;
@@ -20,8 +21,22 @@ final class ReferralService extends BaseService
         private readonly ReferralPolicy $policy,
         private readonly AuditOutboxService $audit,
         private readonly EncryptionService $crypto,
+        private readonly NotificationOutboxService $notify,
     ) {
         parent::__construct();
+    }
+
+    /**
+     * Receiving-side permission codes that should see a new referral.
+     * Mirrors ReferralPolicy::checkReceivingSide.
+     *
+     * @return array<int, string>
+     */
+    private function targetSidePermissions(string $targetModule): array
+    {
+        return $targetModule === 'counselling'
+            ? ['counselling.records.read', 'counselling.schedule.read']
+            : ['clinic.encounters.read'];
     }
 
     /**
@@ -32,10 +47,28 @@ final class ReferralService extends BaseService
         $this->policy->check('list');
 
         $builder = $this->db->table('referral_referrals AS r')
-            ->select('r.id, r.patient_school_id, r.source_module, r.target_module, r.artifact_type, r.status, r.reason_code, r.provider_user_id, r.created_at, r.updated_at, r.qr_expires_at, u.username AS provider_name')
+            ->select('r.id, r.patient_school_id, r.source_module, r.target_module, r.artifact_type, r.status, r.reason_code, r.provider_user_id, r.created_at, r.updated_at, r.qr_expires_at, r.qr_revoked_at, u.username AS provider_name')
             ->join('users AS u', 'u.id = r.provider_user_id', 'left')
-            ->where('r.archived_at', null)
-            ->orderBy('r.created_at', 'DESC')
+            ->where('r.archived_at', null);
+
+        // Side-aware board scoping (2026-08-05): a bridge handler sees
+        // referrals TARGETING their module (clinic staff →
+        // counselling→clinic; a counsellor → clinic→counselling) PLUS
+        // referrals they issued, so outgoing referrals stay visible.
+        // Users serving both sides (admin wildcard) see the full board.
+        // Non-handler referrers (faculty) see only what they issued.
+        $me    = \App\Auth\CurrentUser::assert();
+        $sides = $this->policy->servingSides();
+        if ($sides !== []) {
+            $builder->groupStart()
+                ->whereIn('r.target_module', $sides)
+                ->orWhere('r.issuer_user_id', $me)
+                ->groupEnd();
+        } else {
+            $builder->where('r.issuer_user_id', $me);
+        }
+
+        $builder->orderBy('r.created_at', 'DESC')
             ->orderBy('r.id', 'DESC');
 
         if ($status !== null) {
@@ -100,6 +133,7 @@ final class ReferralService extends BaseService
             $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
 
             $row = [
+                'patient_user_id'   => $this->resolvePatientUserId($patientSchoolId),
                 'patient_school_id' => $patientSchoolId,
                 'source_module'     => $sourceModule,
                 'target_module'     => $targetModule,
@@ -130,9 +164,72 @@ final class ReferralService extends BaseService
                 ['next_status' => REFERRAL_STATUS_SUBMITTED],
             );
 
+            // Notify the receiving side so staff pick the referral up
+            // promptly (permission-driven fan-out, same transaction).
+            $this->notify->enqueueToPermissions(
+                $this->targetSidePermissions($targetModule),
+                'referral.created',
+                [
+                    'resource_code' => 'referral#' . $id,
+                    'next_status'   => REFERRAL_STATUS_SUBMITTED,
+                    'source_module' => $sourceModule,
+                    'target_module' => $targetModule,
+                ],
+            );
+
             $fresh = $this->db->table('referral_referrals')->where('id', $id)->get()->getRowArray();
             return ReferralDto::fromRow($fresh);
         });
+    }
+
+    /**
+     * Minimal patient lookup for the referral form (audit fix): the kiosk
+     * lookup requires `clinic.patients.read`, which teaching employees —
+     * the primary referrers — do NOT have. This is a narrow, referrals-
+     * scoped search (same query, no PII beyond id/name/school_id) gated
+     * by `referrals.create`.
+     *
+     * @return array<int, array{id: int, kind: string, name: string, school_id: string}>
+     */
+    public function lookupPatient(string $q, int $limit = 8): array
+    {
+        $this->policy->check('create');
+        $limit = max(1, min($limit, 12));
+        $qTrim = trim($q);
+        if ($qTrim === '') {
+            return [];
+        }
+
+        $rows = $this->db->table('users')
+            ->select('id, kind, first_name, last_name, middle_name, student_number, employee_number')
+            ->whereIn('kind', ['student', 'employee'])
+            ->where('archived_at', null)
+            ->groupStart()
+                ->like('student_number', $qTrim)
+                ->orLike('employee_number', $qTrim)
+                ->orLike('last_name', $qTrim)
+                ->orLike('first_name', $qTrim)
+            ->groupEnd()
+            ->orderBy('last_name', 'ASC')
+            ->orderBy('first_name', 'ASC')
+            ->limit($limit)
+            ->get()->getResultArray();
+
+        $out = [];
+        foreach ($rows as $r) {
+            $schoolId = (string) ($r['kind'] === 'student' ? $r['student_number'] : $r['employee_number']);
+            $middle   = $r['middle_name'] !== null && $r['middle_name'] !== ''
+                ? ' ' . mb_substr((string) $r['middle_name'], 0, 1) . '.'
+                : '';
+            $out[] = [
+                'id'        => (int) $r['id'],
+                'kind'      => (string) $r['kind'],
+                'name'      => trim((string) $r['last_name'] . ', ' . (string) $r['first_name'] . $middle),
+                'school_id' => $schoolId,
+            ];
+        }
+
+        return $out;
     }
 
     public function acknowledge(int $id, ?int $providerUserId = null): ReferralDto
@@ -203,6 +300,21 @@ final class ReferralService extends BaseService
                 ['previous_status' => (string) $row['status'], 'next_status' => $nextStatus],
             );
 
+            // Progress notices to the ISSUER (teacher / referring party):
+            // they care when their referral is picked up or closed.
+            $issuerId = (int) ($row['issuer_user_id'] ?? 0);
+            if ($issuerId > 0 && $issuerId !== $userId && in_array($nextStatus, [REFERRAL_STATUS_ACKNOWLEDGED, REFERRAL_STATUS_CLOSED], true)) {
+                $this->notify->enqueue(
+                    $issuerId,
+                    'referral.' . $nextStatus,
+                    [
+                        'resource_code' => 'referral#' . $id,
+                        'next_status'   => $nextStatus,
+                        'target_module' => (string) $row['target_module'],
+                    ],
+                );
+            }
+
             $fresh = $this->db->table('referral_referrals')->where('id', $id)->get()->getRowArray();
             return ReferralDto::fromRow($fresh);
         });
@@ -256,6 +368,55 @@ final class ReferralService extends BaseService
                 'expires_at'  => $expires,
                 'artifact_type' => (string) $row['artifact_type'],
             ];
+        });
+    }
+
+    /**
+     * Revokes the currently issued QR token for a referral. A revoked
+     * token reports `status=revoked` on the PUBLIC verify endpoint —
+     * useful when a printed token was misplaced or a hand-off fell
+     * through. Gated by the same `referrals.issue_qr` permission as
+     * issuing; re-issuing later resets the revocation.
+     */
+    public function revokeQr(int $id): ReferralDto
+    {
+        $this->policy->check('issueQr');
+        $userId = \App\Auth\CurrentUser::assert();
+
+        return $this->txn(function () use ($id, $userId): ReferralDto {
+            $row = $this->selectForUpdate('referral_referrals', ['id' => $id, 'archived_at' => null]);
+
+            if ($row === null) {
+                throw new ApiException('resource.not_found', 404, [
+                    ['code' => 'resource.not_found', 'message' => "Referral #{$id} not found."],
+                ]);
+            }
+            if (($row['qr_token_hash'] ?? null) === null) {
+                throw new ApiException('referral.qr_not_issued', 409, [
+                    ['code' => 'referral.qr_not_issued', 'message' => 'No QR token has been issued for this referral.'],
+                ]);
+            }
+            if (($row['qr_revoked_at'] ?? null) !== null) {
+                throw new ApiException('referral.qr_already_revoked', 409, [
+                    ['code' => 'referral.qr_already_revoked', 'message' => 'The QR token has already been revoked.'],
+                ]);
+            }
+
+            $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
+            $this->db->table('referral_referrals')
+                ->where('id', $id)
+                ->update(['qr_revoked_at' => $now, 'updated_at' => $now]);
+
+            $this->audit->enqueue(
+                'referral.qr_revoked',
+                'referral_referrals',
+                $id,
+                $userId,
+                ['resource_code' => 'referral#' . $id],
+            );
+
+            $fresh = $this->db->table('referral_referrals')->where('id', $id)->get()->getRowArray();
+            return ReferralDto::fromRow($fresh);
         });
     }
 
@@ -325,15 +486,28 @@ final class ReferralService extends BaseService
     }
 
     /**
-     * Resolve the issuer's employee row by the
-     * `patients_employees.user_id` UNIQUE link. Returns TRUE only
-     * when the issuer is on the registry AND is flagged as a
-     * teaching employee. Returns FALSE in three cases:
+     * Resolve a patient identifier (student/employee number) to a
+     * consolidated `users.id`, or null when unknown.
+     */
+    private function resolvePatientUserId(string $identifier): ?int
+    {
+        if ($identifier === '') {
+            return null;
+        }
+        [, $patient] = (new \Modules\Clinic\Services\PatientLookupService())->findByIdentifier($identifier);
+        return $patient !== null ? (int) $patient['id'] : null;
+    }
+
+    /**
+     * Resolve the issuer's employee profile directly from `users`
+     * (identity-consolidated — the employee IS the user). Returns TRUE
+     * only when the issuer is a non-archived employee flagged as
+     * teaching. Returns FALSE in three cases:
      *
-     *   1. The issuer has no employee link (admin / external user).
+     *   1. The issuer has no employee profile (admin / external user).
      *      The teaching gate is a no-op for them.
-     *   2. The employee link is archived.
-     *   3. The employee link is active but `is_teaching = 0`
+     *   2. The employee profile is archived.
+     *   3. The employee profile is active but `is_teaching = 0`
      *      (e.g. School Nurse, IT, facilities).
      *
      * Used by `create()` to enforce the clinic-origin teaching-only
@@ -341,9 +515,10 @@ final class ReferralService extends BaseService
      */
     private function issuerIsTeachingEmployee(int $userId): bool
     {
-        $row = $this->db->table('patients_employees')
+        $row = $this->db->table('users')
             ->select('is_teaching, archived_at')
-            ->where('user_id', $userId)
+            ->where('id', $userId)
+            ->where('kind', 'employee')
             ->get()->getRowArray();
 
         if ($row === null) {

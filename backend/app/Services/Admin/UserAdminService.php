@@ -14,9 +14,10 @@ use DateTimeImmutable;
 use DateTimeZone;
 
 /**
- * Phase 1.4 + 1.5: UserAdminService now accepts an optional person_id
- * at create time and exposes the linked patient (person_id, person_kind,
- * person_name) at list time.
+ * UserAdminService — identity-consolidated admin user management.
+ *
+ * Users ARE the person: list/create read `users.kind`, `users.first_name`
+ * and `users.last_name` directly (no `persons` join, no `person_id` link).
  */
 final class UserAdminService extends BaseService
 {
@@ -37,9 +38,8 @@ final class UserAdminService extends BaseService
         string $sort = 'newest',
     ): array {
         $builder = $this->db->table('users u')
-            ->select("u.id, u.username, u.status, u.active, u.created_at, u.updated_at, u.last_active, u.person_id, i.secret AS email, COALESCE(i.force_reset, 0) AS force_reset, p.kind AS person_kind, p.first_name AS person_first_name, p.last_name AS person_last_name", false)
+            ->select("u.id, u.username, u.status, u.active, u.created_at, u.updated_at, u.last_active, i.secret AS email, COALESCE(i.force_reset, 0) AS force_reset, u.kind AS person_kind, u.first_name AS person_first_name, u.last_name AS person_last_name", false)
             ->join("auth_identities i", "i.user_id = u.id AND i.type = 'email_password'", 'left')
-            ->join("persons p", "p.id = u.person_id AND p.archived_at IS NULL", 'left')
             ->where('u.deleted_at', null);
 
         if ($search !== '') {
@@ -86,7 +86,6 @@ final class UserAdminService extends BaseService
                 'active'         => (bool)   $r['active'],
                 'status'         => (string) $r['status'],
                 'groups'         => $groupsByUser[(int) $r['id']] ?? [],
-                'person_id'      => $r['person_id'] !== null ? (int) $r['person_id'] : null,
                 'person_kind'    => $r['person_kind'] !== null ? (string) $r['person_kind'] : null,
                 'person_name'    => self::composePersonName($r),
                 'created_at'     => (string) $r['created_at'],
@@ -100,14 +99,10 @@ final class UserAdminService extends BaseService
     }
 
     /**
-     * Phase 1.4: create() accepts an optional $personId. When provided,
-     * the new user's `users.person_id` is set so the unified-identity
-     * link is established at creation time.
-     *
      * @param list<string> $groups
-     * @return array{id:int, email:string, username:?string, groups:list<string>, temporary_password:string, force_reset:true, person_id:?int}
+     * @return array{id:int, email:string, username:?string, groups:list<string>, temporary_password:string, force_reset:true}
      */
-    public function create(string $email, ?string $password, ?string $username, array $groups, ?int $personId = null): array
+    public function create(string $email, ?string $password, ?string $username, array $groups): array
     {
         $actorId = \App\Auth\CurrentUser::assert();
         $this->assertAtLeastOneGroup($groups);
@@ -117,19 +112,7 @@ final class UserAdminService extends BaseService
             ? $password
             : rtrim(strtr(base64_encode(random_bytes(12)), '+/', '-_'), '=');
 
-        if ($personId !== null) {
-            $exists = (int) $this->db->table('persons')
-                ->where('id', $personId)
-                ->where('archived_at IS NULL', null, false)
-                ->countAllResults();
-            if ($exists === 0) {
-                throw new ApiException('request.validation_failed', 422, [
-                    ['code' => 'validation.field', 'message' => "Person {$personId} not found.", 'field' => 'person_id'],
-                ]);
-            }
-        }
-
-        return $this->txn(function () use ($email, $temporaryPassword, $username, $groups, $actorId, $personId): array {
+        return $this->txn(function () use ($email, $temporaryPassword, $username, $groups, $actorId): array {
             $exists = $this->db->table('auth_identities')
                 ->where('type', 'email_password')
                 ->where('secret', $email)
@@ -142,17 +125,13 @@ final class UserAdminService extends BaseService
 
             $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
 
-            $userInsert = [
+            $this->db->table('users')->insert([
                 'username'   => $username,
                 'status'     => 'active',
                 'active'     => 1,
                 'created_at' => $now,
                 'updated_at' => $now,
-            ];
-            if ($personId !== null) {
-                $userInsert['person_id'] = $personId;
-            }
-            $this->db->table('users')->insert($userInsert);
+            ]);
             $userId = (int) $this->db->insertID();
 
             try {
@@ -188,7 +167,6 @@ final class UserAdminService extends BaseService
                 'groups'             => array_values($groups),
                 'temporary_password' => $temporaryPassword,
                 'force_reset'        => true,
-                'person_id'          => $personId,
             ];
         });
     }

@@ -83,7 +83,6 @@ final class UserController extends ApiController
             'password' => 'permit_empty|min_length[12]|max_length[256]',
             'username' => 'permit_empty|alpha_dash|max_length[64]',
             'groups'   => 'permit_empty',
-            'person_id' => 'permit_empty|is_natural_no_zero',
         ];
         if (! $this->makeValidation($rules)->run($payload)) {
             throw ApiException::validationFailure($this->collectErrors());
@@ -98,7 +97,6 @@ final class UserController extends ApiController
             isset($payload['password']) && $payload['password'] !== '' ? (string) $payload['password'] : null,
             isset($payload['username']) && $payload['username'] !== '' ? (string) $payload['username'] : null,
             $groups,
-            isset($payload['person_id']) && $payload['person_id'] !== '' ? (int) $payload['person_id'] : null,
         );
         return $this->ok($out, null, 201);
     }

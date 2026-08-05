@@ -25,6 +25,9 @@ interface SessionPage {
 export function useSessions(cursor: string | null, limit = 25) {
   return useQuery<SessionPage, ApiEnvelopeError>({
     queryKey: ['counselling', 'sessions', { cursor, limit }],
+    // Other counsellors open/close sessions; poll so the list reflects
+    // their actions without a manual refresh.
+    refetchInterval: 30_000,
     queryFn: async () => {
       const params = new URLSearchParams();
       if (cursor !== null) params.set('cursor', cursor);

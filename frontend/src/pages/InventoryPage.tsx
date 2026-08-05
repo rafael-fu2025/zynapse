@@ -15,6 +15,7 @@ import {
   ArchiveRestore,
   BarChart3,
   CalendarClock,
+  CalendarX2,
   Check,
   ChevronDown,
   ChevronLeft,
@@ -28,6 +29,7 @@ import {
   Plus,
   RefreshCw,
   ScrollText,
+  ShieldAlert,
   Syringe,
   TrendingDown,
   TrendingUp,
@@ -98,13 +100,18 @@ import {
   useComputeForecast,
   useCreateMedicine,
   useDispense,
+  useExpireBatch,
   useExpiringMedicines,
   useLowStockMedicines,
   useMedicine,
+  useMedicineForecast,
   useMedicineTransactions,
+  useMedicineUsageSummary,
   useMedicines,
+  useRecallBatch,
   useUnarchiveMedicine,
   useUpdateMedicine,
+  useWrittenOffMedicines,
 } from '@/hooks/useMedicines';
 import {
   useCreateReorder,
@@ -119,6 +126,7 @@ import {
   updateItemSchema,
   type CreateItemInput,
   type InventoryItem,
+  type InventoryItemLastMovement,
   type MoveStockInput,
   type UpdateItemInput,
 } from '@/schemas/inventory';
@@ -132,6 +140,7 @@ import {
   type CreateMedicineInput,
   type DispenseInput,
   type Medicine,
+  type MedicineBatch,
   type MedicineLastMovement,
   type UpdateMedicineInput,
 } from '@/schemas/medicines';
@@ -228,8 +237,11 @@ function LastMovementHint({
   unit: string;
 }): JSX.Element | null {
   if (movement === null) return null;
-  const sign     = movement.type === 'dispensed' ? '−' : '+';
-  const tone     = movement.type === 'dispensed' ? 'text-rose-600 dark:text-rose-400'
+  // Write-offs (expired/recalled) are neither in nor out — render as a
+  // muted ✕ so the row doesn't read as a stock increase.
+  const isWriteOff = movement.type === 'expired' || movement.type === 'recalled';
+  const sign       = movement.type === 'dispensed' ? '−' : isWriteOff ? '✕' : '+';
+  const tone       = movement.type === 'dispensed' ? 'text-rose-600 dark:text-rose-400'
               : movement.type === 'received'  ? 'text-emerald-600 dark:text-emerald-400'
               : 'text-muted-foreground';
   const agoText  = fmtRelativeFromNow(movement.created_at);
@@ -238,8 +250,39 @@ function LastMovementHint({
     : '';
   return (
     <p className={cn('mt-0.5 text-[11px] font-mono', tone)}>
-      {movement.type === 'received' ? '↑ ' : movement.type === 'dispensed' ? '↓ ' : '· '}
+      {movement.type === 'received' ? '↑ ' : movement.type === 'dispensed' ? '↓ ' : isWriteOff ? '· ' : '· '}
       {sign}{movement.quantity} {unit}
+      {userText !== '' && <> · {userText}</>}
+      {agoText !== '' && <> · {agoText}</>}
+    </p>
+  );
+}
+
+/**
+ * SupplyLastMovementHint — the Supplies-tab twin of LastMovementHint.
+ * The supply movement payload differs (reason_code/qty_delta instead of
+ * type/quantity) so it needs its own formatter.
+ */
+function SupplyLastMovementHint({
+  movement,
+  unit,
+}: {
+  movement: InventoryItemLastMovement | null;
+  unit: string;
+}): JSX.Element | null {
+  if (movement === null) return null;
+  const sign   = movement.qty_delta < 0 ? '−' : '+';
+  const tone   = movement.qty_delta < 0 ? 'text-rose-600 dark:text-rose-400'
+              : movement.reason_code === 'receive' ? 'text-emerald-600 dark:text-emerald-400'
+              : 'text-muted-foreground';
+  const agoText  = fmtRelativeFromNow(movement.created_at);
+  const userText = movement.user_email !== null && movement.user_email !== ''
+    ? `by ${initialsFromEmail(movement.user_email)}`
+    : '';
+  return (
+    <p className={cn('mt-0.5 text-[11px] font-mono', tone)}>
+      {movement.qty_delta < 0 ? '↓ ' : movement.reason_code === 'receive' ? '↑ ' : '· '}
+      {sign}{Math.abs(movement.qty_delta)} {unit}
       {userText !== '' && <> · {userText}</>}
       {agoText !== '' && <> · {agoText}</>}
     </p>
@@ -732,7 +775,7 @@ function LedgerBody({
   isError,
   emptyLabel,
 }: {
-  rows: Array<{ id: number; label: string; qty_in: number | null; qty_out: number | null; balance_after: number | null; note: string | null; created_at: string }>;
+  rows: Array<{ id: number; label: string; by: string | null; qty_in: number | null; qty_out: number | null; balance_after: number | null; note: string | null; created_at: string }>;
   isLoading: boolean;
   isError: boolean;
   emptyLabel: string;
@@ -761,9 +804,12 @@ function LedgerBody({
           )}
           {rows.map((r) => (
             <TableRow key={r.id}>
-              <TableCell className="px-3 font-mono text-xs text-muted-foreground">{fmtUtcToApp(r.created_at)}</TableCell>
+              <TableCell className="px-3 text-xs text-muted-foreground">{fmtUtcToApp(r.created_at)}</TableCell>
               <TableCell className="px-3 text-xs">
                 {r.label}
+                {r.by !== null && r.by !== '' && (
+                  <span className="ml-1 text-muted-foreground">· by {initialsFromEmail(r.by)}</span>
+                )}
                 {r.note !== null && r.note !== '' ? <span className="ml-1 text-muted-foreground">· {r.note}</span> : ''}
               </TableCell>
               <TableCell className="px-3 text-right font-mono text-xs text-emerald-600">{r.qty_in !== null ? `+${r.qty_in}` : ''}</TableCell>
@@ -782,6 +828,7 @@ function MedicineLedgerDialog({ medicine, onClose }: { medicine: Medicine; onClo
   const rows = (txns.data ?? []).map((t) => ({
     id: t.id,
     label: t.reference_type !== null ? `${t.type} · ${t.reference_type}#${t.reference_id ?? '?'}` : t.type,
+    by: t.user_email ?? null,
     qty_in: t.qty_in,
     qty_out: t.qty_out,
     balance_after: t.balance_after,
@@ -804,7 +851,8 @@ function SupplyLedgerDialog({ item, onClose }: { item: InventoryItem; onClose: (
   const moves = useInventoryMovements(item.id);
   const rows = (moves.data ?? []).map((m) => ({
     id: m.id,
-    label: m.reason_code,
+    label: m.reference_type !== null ? `${m.reason_code} · ${m.reference_type}#${m.reference_id ?? '?'}` : m.reason_code,
+    by: m.user_email ?? null,
     qty_in: m.qty_in,
     qty_out: m.qty_out,
     balance_after: m.balance_after,
@@ -826,6 +874,7 @@ function SupplyLedgerDialog({ item, onClose }: { item: InventoryItem; onClose: (
 function BatchesDialog({ medicineId, onClose }: { medicineId: number; onClose: () => void }) {
   const detail = useMedicine(medicineId);
   const m = detail.data;
+  const [writeOff, setWriteOff] = useState<{ batch: MedicineBatch; reason: 'expire' | 'recall' } | null>(null);
 
   return (
     <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-2xl">
@@ -846,18 +895,20 @@ function BatchesDialog({ medicineId, onClose }: { medicineId: number; onClose: (
               <TableHead>Expires</TableHead>
               <TableHead>Supplier</TableHead>
               <TableHead>Status</TableHead>
+              <TableHead className="text-right">Actions</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {(m.batches ?? []).length === 0 && (
               <TableRow>
-                <TableCell colSpan={5} className="py-6 text-center text-muted-foreground">
+                <TableCell colSpan={6} className="py-6 text-center text-muted-foreground">
                   No batches received yet.
                 </TableCell>
               </TableRow>
             )}
             {(m.batches ?? []).map((b) => {
               const days = daysUntil(b.expiration_date);
+              const writable = b.status === 'active' && b.quantity_remaining > 0;
               return (
                 <TableRow key={b.id}>
                   <TableCell className="font-mono text-xs">{b.batch_number}</TableCell>
@@ -876,11 +927,27 @@ function BatchesDialog({ medicineId, onClose }: { medicineId: number; onClose: (
                   <TableCell>
                     <Badge variant={BATCH_STATUS_VARIANT[b.status]}>{b.status}</Badge>
                   </TableCell>
+                  <TableCell className="text-right">
+                    {writable && (
+                      <div className="flex justify-end gap-1">
+                        <Button size="sm" variant="outline" aria-label={`Expire batch ${b.batch_number}`} onClick={() => setWriteOff({ batch: b, reason: 'expire' })}>
+                          <CalendarX2 /> Expire
+                        </Button>
+                        <Button size="sm" variant="outline" aria-label={`Recall batch ${b.batch_number}`} onClick={() => setWriteOff({ batch: b, reason: 'recall' })}>
+                          <ShieldAlert /> Recall
+                        </Button>
+                      </div>
+                    )}
+                  </TableCell>
                 </TableRow>
               );
             })}
           </TableBody>
         </Table>
+      )}
+
+      {writeOff !== null && (
+        <WriteOffBatchDialog medicine={m!} batch={writeOff.batch} reason={writeOff.reason} onClose={() => setWriteOff(null)} />
       )}
 
       <DialogFooter>
@@ -1042,6 +1109,131 @@ function EditItemDialog({ item, onClose }: { item: InventoryItem; onClose: () =>
   );
 }
 
+/**
+ * ForecastDialog — read-only forecast view for one medicine with a
+ * "Recompute" button (inventory audit fix: the forecast previously
+ * only surfaced as a transient toast; the persisted forecast is now
+ * viewable here).
+ */
+function ForecastDialog({ medicine, onClose }: { medicine: Medicine; onClose: () => void }) {
+  const compute = useComputeForecast();
+  const forecast = useMedicineForecast(medicine.id);
+  const f = forecast.data;
+
+  return (
+    <DialogContent className="max-w-md">
+      <DialogHeader>
+        <DialogTitle className="flex items-center gap-2">
+          <TrendingUp className="size-4" /> Forecast — {medicine.generic_name}
+        </DialogTitle>
+      </DialogHeader>
+
+      {forecast.isLoading && <Loader2 className="mx-auto size-5 animate-spin text-muted-foreground" />}
+
+      {!forecast.isLoading && (f === null || f === undefined) && (
+        <p className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">
+          No forecast yet. Compute one to see predicted daily use and stockout / reorder dates.
+        </p>
+      )}
+
+      {f !== null && f !== undefined && (
+        <dl className="grid grid-cols-2 gap-3 text-sm">
+          <div className="rounded-md bg-muted/50 p-3">
+            <dt className="text-xs text-muted-foreground">Predicted daily use</dt>
+            <dd className="mt-1 text-lg font-semibold">{f.predicted_daily_usage}/day</dd>
+          </div>
+          <div className="rounded-md bg-muted/50 p-3">
+            <dt className="text-xs text-muted-foreground">Model</dt>
+            <dd className="mt-1 capitalize">{f.model_type.replace(/_/g, ' ')}</dd>
+          </div>
+          <div className="rounded-md bg-muted/50 p-3">
+            <dt className="text-xs text-muted-foreground">Stockout date</dt>
+            <dd className="mt-1 font-semibold">{f.predicted_stockout_date ?? '—'}</dd>
+          </div>
+          <div className="rounded-md bg-muted/50 p-3">
+            <dt className="text-xs text-muted-foreground">Reorder by</dt>
+            <dd className="mt-1 font-semibold">{f.predicted_reorder_date ?? '—'}</dd>
+          </div>
+        </dl>
+      )}
+
+      <DialogFooter>
+        <Button variant="outline" onClick={onClose}>Close</Button>
+        <Button disabled={compute.isPending} onClick={() => compute.mutate(medicine.id)}>
+          {compute.isPending && <Loader2 className="animate-spin" />}
+          <RefreshCw /> Recompute
+        </Button>
+      </DialogFooter>
+    </DialogContent>
+  );
+}
+
+/**
+ * WriteOffBatchDialog — confirm + note for writing an active batch off
+ * as expired / recalled (inventory audit fix). The remaining stock is
+ * zeroed and a typed ledger transaction is recorded server-side.
+ */
+function WriteOffBatchDialog({
+  medicine,
+  batch,
+  reason,
+  onClose,
+}: {
+  medicine: Medicine;
+  batch: MedicineBatch;
+  reason: 'expire' | 'recall';
+  onClose: () => void;
+}) {
+  const expire = useExpireBatch();
+  const recall = useRecallBatch();
+  const mutation = reason === 'expire' ? expire : recall;
+  const [note, setNote] = useState('');
+
+  return (
+    <DialogContent className="max-w-md">
+      <DialogHeader>
+        <DialogTitle className="flex items-center gap-2">
+          {reason === 'expire' ? <CalendarX2 className="size-4" /> : <ShieldAlert className="size-4" />}
+          {reason === 'expire' ? 'Write off as expired' : 'Recall batch'} — {batch.batch_number}
+        </DialogTitle>
+      </DialogHeader>
+      <div className="space-y-3">
+        <p className="rounded-md bg-muted/50 p-3 text-xs text-muted-foreground">
+          {medicine.generic_name} · {batch.quantity_remaining}/{batch.quantity_received} {medicine.unit} remaining ·
+          expires {batch.expiration_date}.
+          {reason === 'expire'
+            ? ' The remaining stock will be zeroed and recorded as an expired write-off.'
+            : ' The remaining stock will be zeroed and recorded as a recalled write-off.'}
+        </p>
+        <div className="space-y-1.5">
+          <Label htmlFor="writeoff_note">Note (optional)</Label>
+          <Input
+            id="writeoff_note"
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            maxLength={255}
+            placeholder={reason === 'expire' ? 'e.g. expired on shelf' : 'e.g. manufacturer recall'}
+          />
+        </div>
+      </div>
+      <DialogFooter>
+        <Button variant="outline" onClick={onClose}>Cancel</Button>
+        <Button
+          variant={reason === 'expire' ? 'destructive' : 'secondary'}
+          disabled={mutation.isPending}
+          onClick={() => mutation.mutate(
+            { medicineId: medicine.id, batchId: batch.id, ...(note !== '' ? { note } : {}) },
+            { onSuccess: onClose },
+          )}
+        >
+          {mutation.isPending && <Loader2 className="animate-spin" />}
+          {reason === 'expire' ? 'Expire batch' : 'Recall batch'}
+        </Button>
+      </DialogFooter>
+    </DialogContent>
+  );
+}
+
 function MedicinesTab() {
   const [cursor, setCursor] = useState<string | null>(null);
   const [history, setHistory] = useState<Array<string | null>>([null]);
@@ -1052,11 +1244,11 @@ function MedicinesTab() {
   const [batchesFor, setBatchesFor] = useState<number | null>(null);
   const [editFor, setEditFor] = useState<Medicine | null>(null);
   const [archiveFor, setArchiveFor] = useState<Medicine | null>(null);
+  const [forecastFor, setForecastFor] = useState<Medicine | null>(null);
   const [showArchived, setShowArchived] = useState(false);
   const [q, setQ] = useState('');
   const debouncedQ = useDebouncedValue(q, 300);
   const list = useMedicines(cursor, 25, debouncedQ === '' ? null : debouncedQ, showArchived);
-  const forecast = useComputeForecast();
   const archive = useArchiveMedicine();
   const unarchive = useUnarchiveMedicine();
 
@@ -1157,11 +1349,8 @@ function MedicinesTab() {
             <DropdownMenuItem onSelect={() => setLedgerFor(m)}>
               <ScrollText /> Ledger
             </DropdownMenuItem>
-            <DropdownMenuItem
-              disabled={forecast.isPending}
-              onSelect={() => forecast.mutate(m.id)}
-            >
-              <TrendingUp /> {forecast.isPending ? 'Computing…' : 'Forecast'}
+            <DropdownMenuItem onSelect={() => setForecastFor(m)}>
+              <TrendingUp /> Forecast
             </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem onSelect={() => setEditFor(m)}>
@@ -1398,6 +1587,11 @@ function MedicinesTab() {
       {editFor !== null && (
         <Dialog open onOpenChange={(o) => !o && setEditFor(null)}>
           <EditMedicineDialog medicine={editFor} onClose={() => setEditFor(null)} />
+        </Dialog>
+      )}
+      {forecastFor !== null && (
+        <Dialog open onOpenChange={(o) => !o && setForecastFor(null)}>
+          <ForecastDialog medicine={forecastFor} onClose={() => setForecastFor(null)} />
         </Dialog>
       )}
       <ConfirmDialog
@@ -2032,14 +2226,10 @@ function MoveStockDialog({ item, onClose }: { item: InventoryItem; onClose: () =
     handleSubmit,
     formState: { errors },
     reset,
-    setValue,
-    watch,
   } = useForm<MoveStockInput>({
     resolver: zodResolver(moveStockSchema),
     defaultValues: { reason_code: 'adjustment' },
   });
-
-  const reasonCode = watch('reason_code');
 
   const onSubmit = handleSubmit((values) => {
     move.mutate(
@@ -2061,8 +2251,8 @@ function MoveStockDialog({ item, onClose }: { item: InventoryItem; onClose: () =
       <form onSubmit={(e) => void onSubmit(e)} className="space-y-3" noValidate>
         <p className="text-xs text-muted-foreground">
           On hand: <span className="font-mono">{item.quantity_on_hand} {item.unit}</span>.
-          Dispenses are negative; adjustments may go either way. Deliveries are
-          entered with the Receive button (procurement workflow).
+          Adjustments may go either way. Dispensing is a separate action
+          (tied to an open visit) and deliveries use the Receive button.
         </p>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <div className="space-y-1.5">
@@ -2074,18 +2264,7 @@ function MoveStockDialog({ item, onClose }: { item: InventoryItem; onClose: () =
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="reason_code">Reason</Label>
-            <Select
-              value={reasonCode}
-              onValueChange={(v) => setValue('reason_code', v as MoveStockInput['reason_code'], { shouldValidate: true })}
-            >
-              <SelectTrigger id="reason_code" aria-label="Reason">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="dispense">Dispense</SelectItem>
-                <SelectItem value="adjustment">Adjustment</SelectItem>
-              </SelectContent>
-            </Select>
+            <Input id="reason_code" value="Adjustment" readOnly disabled aria-label="Reason" />
           </div>
         </div>
         <div className="space-y-1.5">
@@ -2113,8 +2292,20 @@ function ReceiveSupplyDialog({ item, onClose }: { item: InventoryItem; onClose: 
   const receive = useReceiveSupply();
   const receivable = useReceivableReorder('supply', item.id);
   const [note, setNote] = useState('');
+  const [qty, setQty] = useState('');
+  const [shortage, setShortage] = useState('');
 
   const order = receivable.data ?? null;
+  const ordered = order?.requested_quantity ?? 0;
+  const parsed = qty === '' ? Number.NaN : Number(qty);
+  const validQty = Number.isInteger(parsed) && parsed >= 1 && parsed <= ordered;
+  const isPartial = order !== null && validQty && parsed < ordered;
+
+  // Prefill the quantity once the receivable order is known (partial
+  // delivery support — inventory audit fix).
+  useEffect(() => {
+    if (order !== null && qty === '') setQty(String(order.requested_quantity));
+  }, [order, qty]);
 
   return (
     <DialogContent>
@@ -2136,9 +2327,41 @@ function ReceiveSupplyDialog({ item, onClose }: { item: InventoryItem; onClose: 
         <div className="space-y-3">
           <p className="rounded-md bg-muted/50 p-2 text-xs text-muted-foreground">
             Receiving reorder <span className="font-mono">#{order.id}</span> —{' '}
-            <span className="font-medium text-foreground">{order.requested_quantity} {item.unit}</span>{' '}
-            (quantity is taken from the order and cannot be edited).
+            <span className="font-medium text-foreground">{ordered} {item.unit}</span>{' '}
+            ordered. Lower the quantity below for a partial delivery.
           </p>
+          <div className="space-y-1.5">
+            <Label htmlFor="receive_supply_qty">Quantity received</Label>
+            <Input
+              id="receive_supply_qty"
+              type="number"
+              min={1}
+              max={ordered}
+              value={qty}
+              aria-invalid={qty !== '' && !validQty}
+              onChange={(e) => setQty(e.target.value)}
+            />
+            {qty !== '' && !validQty && (
+              <p role="alert" className="text-xs text-destructive">Enter 1–{ordered}.</p>
+            )}
+          </div>
+          {isPartial && (
+            <div className="space-y-1.5">
+              <Label htmlFor="receive_supply_shortage">Shortage reason</Label>
+              <Textarea
+                id="receive_supply_shortage"
+                rows={2}
+                maxLength={255}
+                value={shortage}
+                onChange={(e) => setShortage(e.target.value)}
+                placeholder="e.g. supplier short-shipped 5, expected next week."
+              />
+              <p className="text-xs text-muted-foreground">
+                Short by {ordered - parsed} {item.unit}. The reorder will stay open so you can
+                chase the supplier or raise a follow-up.
+              </p>
+            </div>
+          )}
           <div className="space-y-1.5">
             <Label htmlFor="receive_supply_note">Note (optional)</Label>
             <Input id="receive_supply_note" value={note} onChange={(e) => setNote(e.target.value)} maxLength={255} />
@@ -2149,8 +2372,15 @@ function ReceiveSupplyDialog({ item, onClose }: { item: InventoryItem; onClose: 
       <DialogFooter>
         <Button variant="outline" onClick={onClose}>Cancel</Button>
         <Button
-          disabled={order === null || receive.isPending}
-          onClick={() => receive.mutate({ itemId: item.id, note }, { onSuccess: onClose })}
+          disabled={order === null || !validQty || receive.isPending}
+          onClick={() => receive.mutate(
+            {
+              itemId: item.id,
+              ...(note !== '' ? { note } : {}),
+              ...(isPartial ? { quantity: parsed, ...(shortage !== '' ? { shortage_note: shortage } : {}) } : {}),
+            },
+            { onSuccess: onClose },
+          )}
         >
           {receive.isPending && <Loader2 className="animate-spin" />}
           <PackagePlus /> Receive
@@ -2162,16 +2392,23 @@ function ReceiveSupplyDialog({ item, onClose }: { item: InventoryItem; onClose: 
 
 /**
  * DispenseSupplyDialog — supply-side twin of the medicine dispense:
- * a positive quantity is turned into a negative `dispense` movement
- * on the ledger.
+ * a positive quantity is turned into a negative `dispense` movement on
+ * the ledger. Like medicines, the dispense is anchored to an OPEN
+ * encounter so the ledger records which visit consumed the stock
+ * (inventory audit fix).
  */
 function DispenseSupplyDialog({ item, onClose }: { item: InventoryItem; onClose: () => void }) {
   const move = useMoveStock();
+  const encounters = useEncounters(null, 50, 'open');
   const [qty, setQty] = useState('');
+  const [encounterId, setEncounterId] = useState('');
   const [note, setNote] = useState('');
 
   const parsed = Number(qty);
   const valid = Number.isInteger(parsed) && parsed >= 1 && parsed <= item.quantity_on_hand;
+  const openEncounters = encounters.data?.data ?? [];
+  const encId = encounterId === '' ? Number.NaN : Number(encounterId);
+  const hasEncounter = Number.isInteger(encId) && encId > 0;
 
   return (
     <DialogContent>
@@ -2180,8 +2417,27 @@ function DispenseSupplyDialog({ item, onClose }: { item: InventoryItem; onClose:
       </DialogHeader>
       <div className="space-y-3">
         <p className="text-xs text-muted-foreground">
-          On hand: <span className="font-mono">{item.quantity_on_hand} {item.unit}</span>.
+          On hand: <span className="font-mono">{item.quantity_on_hand} {item.unit}</span>. Stock is tied to
+          an open clinic visit.
         </p>
+        <div className="space-y-1.5">
+          <Label id="dispense_supply_encounter-label">Open encounter</Label>
+          <Select value={encounterId} onValueChange={setEncounterId}>
+            <SelectTrigger aria-labelledby="dispense_supply_encounter-label" aria-invalid={!hasEncounter && encounterId !== ''}>
+              <SelectValue placeholder={openEncounters.length === 0 ? 'No open encounters' : 'Select the visit…'} />
+            </SelectTrigger>
+            <SelectContent>
+              {openEncounters.map((e) => (
+                <SelectItem key={e.id} value={String(e.id)}>
+                  #{e.id} · {e.patient_school_id} · {e.chief_complaint.slice(0, 40)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          {openEncounters.length === 0 && !encounters.isLoading && (
+            <p className="text-[10px] text-muted-foreground">Open an encounter in Clinic first — dispensing must be tied to a visit.</p>
+          )}
+        </div>
         <div className="space-y-1.5">
           <Label htmlFor="dispense_supply_qty">Quantity</Label>
           <Input
@@ -2205,9 +2461,17 @@ function DispenseSupplyDialog({ item, onClose }: { item: InventoryItem; onClose:
       <DialogFooter>
         <Button variant="outline" onClick={onClose}>Cancel</Button>
         <Button
-          disabled={!valid || move.isPending}
+          disabled={!valid || !hasEncounter || move.isPending}
           onClick={() => move.mutate(
-            { itemId: item.id, input: { qty_delta: -parsed, reason_code: 'dispense', ...(note !== '' ? { note } : {}) } },
+            {
+              itemId: item.id,
+              input: {
+                qty_delta: -parsed,
+                reason_code: 'dispense',
+                encounter_id: encId,
+                ...(note !== '' ? { note } : {}),
+              },
+            },
             { onSuccess: onClose },
           )}
         >
@@ -2231,6 +2495,8 @@ function DispenseSupplyDialog({ item, onClose }: { item: InventoryItem; onClose:
 function InsightsTab({ onJumpToTab }: { onJumpToTab: (tab: 'medicines' | 'supplies' | 'reorders') => void }) {
   const lowStock = useLowStockMedicines();
   const expiring = useExpiringMedicines(30);
+  const writtenOff = useWrittenOffMedicines(90);
+  const usage = useMedicineUsageSummary(30);
   // Fetch a small page of reorders just for the "in flight" count — we
   // only need the number, not the rows (the Reorders tab has the full
   // list with ETAs + actions from Gap 9).
@@ -2238,6 +2504,8 @@ function InsightsTab({ onJumpToTab }: { onJumpToTab: (tab: 'medicines' | 'suppli
 
   const lowStockCount  = lowStock.data?.length ?? 0;
   const expiringCount  = expiring.data?.length ?? 0;
+  const writtenOffCount = writtenOff.data?.length ?? 0;
+  const usageAvg = usage.data?.avg_daily_units;
   const pendingReorderCount = (reorders.data?.data ?? []).filter((r) =>
     r.status === 'pending' || r.status === 'approved' || r.status === 'ordered',
   ).length;
@@ -2245,12 +2513,13 @@ function InsightsTab({ onJumpToTab }: { onJumpToTab: (tab: 'medicines' | 'suppli
   // Top-of-list slices — full data lives on the source tab.
   const lowStockTop = (lowStock.data ?? []).slice(0, 5);
   const expiringTop = (expiring.data ?? []).slice(0, 5);
+  const writtenOffTop = (writtenOff.data ?? []).slice(0, 5);
 
   return (
     <div className="space-y-4">
       {/* Stat tiles — the morning stock-check dashboard. Color shifts
           from neutral → warning → destructive as the count grows. */}
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
         <StatTile
           icon={<Pill className="size-4" />}
           label="Low stock"
@@ -2268,6 +2537,14 @@ function InsightsTab({ onJumpToTab }: { onJumpToTab: (tab: 'medicines' | 'suppli
           onClick={() => onJumpToTab('medicines')}
         />
         <StatTile
+          icon={<CalendarX2 className="size-4" />}
+          label="Expired (90d)"
+          value={writtenOffCount}
+          tone={writtenOffCount === 0 ? 'success' : 'destructive'}
+          loading={writtenOff.isLoading}
+          onClick={() => onJumpToTab('medicines')}
+        />
+        <StatTile
           icon={<Truck className="size-4" />}
           label="Reorders in flight"
           value={pendingReorderCount}
@@ -2278,9 +2555,9 @@ function InsightsTab({ onJumpToTab }: { onJumpToTab: (tab: 'medicines' | 'suppli
         <StatTile
           icon={<TrendingUp className="size-4" />}
           label="Avg daily use (30d)"
-          value="—"
-          tone="muted"
-          loading={false}
+          value={usageAvg !== undefined ? `${usageAvg}/day` : '—'}
+          tone={usageAvg !== undefined && usageAvg > 0 ? 'info' : 'muted'}
+          loading={usage.isLoading}
         />
       </div>
 
@@ -2362,6 +2639,43 @@ function InsightsTab({ onJumpToTab }: { onJumpToTab: (tab: 'medicines' | 'suppli
           </CardContent>
         </Card>
       </div>
+
+      {/* Written-off panel — lots expired/recalled in the window. Each
+          shows what was written off and when; the write-off happens on
+          the Medicines tab's Batches dialog. */}
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-3">
+          <div>
+            <CardTitle className="text-base">Written off (expired / recalled)</CardTitle>
+            <CardDescription>Lots zeroed in the last 90 days</CardDescription>
+          </div>
+          <Button variant="ghost" size="sm" onClick={() => onJumpToTab('medicines')}>
+            View all →
+          </Button>
+        </CardHeader>
+        <CardContent>
+          {writtenOff.isLoading && <Loader2 className="mx-auto size-4 animate-spin text-muted-foreground" />}
+          {!writtenOff.isLoading && writtenOffCount === 0 && (
+            <p className="text-sm text-muted-foreground">No batches written off in the last 90 days.</p>
+          )}
+          {!writtenOff.isLoading && writtenOffCount > 0 && (
+            <ul className="divide-y">
+              {writtenOffTop.map((b) => (
+                <li key={b.id} className="flex items-center justify-between gap-2 py-2 text-sm">
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate font-medium">{b.generic_name}</div>
+                    <div className="truncate text-xs text-muted-foreground">
+                      batch {b.batch_number} · wrote off {b.written_off ?? '?'} {b.unit}
+                      {b.written_off_at !== null ? ` · ${fmtUtcToApp(b.written_off_at)}` : ''}
+                    </div>
+                  </div>
+                  <Badge variant={BATCH_STATUS_VARIANT[b.status]}>{b.status}</Badge>
+                </li>
+              ))}
+            </ul>
+          )}
+        </CardContent>
+      </Card>
     </div>
   );
 }
@@ -2600,7 +2914,10 @@ function SuppliesTab() {
             {rows.map((it, idx) => (
               <TableRow key={it.id} {...supplyRowNav.getRowProps(idx)}>
                 <TableCell className="px-3 font-mono text-xs">{highlightMatch(it.sku, debouncedQ)}</TableCell>
-                <TableCell className="px-3">{highlightMatch(it.name, debouncedQ)}</TableCell>
+                <TableCell className="px-3">
+                  {highlightMatch(it.name, debouncedQ)}
+                  <SupplyLastMovementHint movement={it.last_movement ?? null} unit={it.unit} />
+                </TableCell>
                 <TableCell className="px-3 font-mono text-xs">{it.quantity_on_hand} {it.unit}</TableCell>
                 <TableCell className="px-3 font-mono text-xs text-muted-foreground">{it.reorder_level}</TableCell>
                 <TableCell className="px-3">
@@ -2651,6 +2968,7 @@ function SuppliesTab() {
                 archived={it.archived ?? false}
               />
             </div>
+            <SupplyLastMovementHint movement={it.last_movement ?? null} unit={it.unit} />
             <MobileCardField label="SKU"><span className="font-mono text-xs">{highlightMatch(it.sku, debouncedQ)}</span></MobileCardField>
             <MobileCardField label="On hand"><span className="font-mono text-xs">{it.quantity_on_hand} {it.unit}</span></MobileCardField>
             <MobileCardField label="Reorder level"><span className="font-mono text-xs text-muted-foreground">{it.reorder_level}</span></MobileCardField>

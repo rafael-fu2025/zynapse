@@ -23,7 +23,8 @@ export type MedicineBatch = z.infer<typeof medicineBatchSchema>;
  * (just-created).
  */
 export const medicineLastMovementSchema = z.object({
-  type: z.enum(['received', 'dispensed', 'expired', 'adjusted', 'returned']),
+  // `recalled` was added with the inventory write-off lifecycle fix.
+  type: z.enum(['received', 'dispensed', 'expired', 'adjusted', 'returned', 'recalled']),
   quantity: z.number().int(),
   created_at: z.string(),
   user_email: z.string().nullable(),
@@ -118,10 +119,43 @@ export const medicineTxnSchema = z.object({
   balance_after: z.number().int().nullable(),
   reference_type: z.string().nullable(),
   reference_id: z.number().int().nullable(),
+  user_email: z.string().nullable(),
   note: z.string().nullable(),
   created_at: z.string(),
 });
 export type MedicineTxn = z.infer<typeof medicineTxnSchema>;
+
+/**
+ * A batch written off as expired/recalled, joined with the parent
+ * medicine + the ledger's written-off quantity/timestamp. Returned by
+ * `GET /clinic/medicines/expired?days=N`.
+ */
+export const writtenOffBatchSchema = z.object({
+  id: z.number().int().positive(),
+  medicine_id: z.number().int().positive(),
+  batch_number: z.string(),
+  quantity_received: z.number().int().min(0),
+  expiration_date: z.string(),
+  supplier: z.string().nullable(),
+  status: z.enum(['active', 'depleted', 'expired', 'recalled']),
+  written_off: z.number().int().nullable(),
+  written_off_at: z.string().nullable(),
+  generic_name: z.string(),
+  unit: z.string(),
+});
+export type WrittenOffBatch = z.infer<typeof writtenOffBatchSchema>;
+
+/**
+ * Catalogue-wide dispensing usage over the trailing window. Returned
+ * by `GET /clinic/medicines/usage-summary?days=N`.
+ */
+export const medicineUsageSummarySchema = z.object({
+  period_days: z.number().int(),
+  units_dispensed: z.number().int(),
+  medicines_with_usage: z.number().int(),
+  avg_daily_units: z.number(),
+});
+export type MedicineUsageSummary = z.infer<typeof medicineUsageSummarySchema>;
 
 /**
  * Expiring-batch insight shape — a batch row joined with the parent

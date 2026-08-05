@@ -9,7 +9,7 @@ use App\Modules\Shared\BaseDTO;
 final class BmgUnitDto extends BaseDTO
 {
     /**
-     * @param array{id:int,code:string,display_name:string,status:string,location_code:?string,spec_capacity_kg:?float,default_category_id?:?int,default_category_name?:?string,notes?:?string,created_at:string,updated_at?:string,archived_at?:?string,active_batch_id?:?int} $row
+     * @param array{id:int,code:string,display_name:string,status:string,location_code:?string,spec_capacity_kg:?float,default_category_id?:?int,default_category_name?:?string,notes?:?string,created_at:string,updated_at?:string,archived_at?:?string,active_batch_id?:?int,active_batch_weight_kg?:?float} $row
      */
     public function __construct(private readonly array $row) {}
 
@@ -20,6 +20,10 @@ final class BmgUnitDto extends BaseDTO
 
     public function jsonSerialize(): array
     {
+        $capacity = $this->row['spec_capacity_kg'] !== null ? (float) $this->row['spec_capacity_kg'] : 0.0;
+        $loaded   = isset($this->row['active_batch_weight_kg']) && $this->row['active_batch_weight_kg'] !== null
+            ? (float) $this->row['active_batch_weight_kg'] : 0.0;
+
         return [
             'id'                     => (int)    $this->row['id'],
             'code'                   => (string) $this->row['code'],
@@ -41,6 +45,9 @@ final class BmgUnitDto extends BaseDTO
             'active_batch_id'        => isset($this->row['active_batch_id']) && $this->row['active_batch_id'] !== null
                 ? (int) $this->row['active_batch_id']
                 : null,
+            'active_batch_weight_kg' => $loaded > 0 ? $loaded : null,
+            // Tier 2.8: how much of the drum's capacity is in use.
+            'utilization_pct'        => $capacity > 0 ? (int) round(($loaded / $capacity) * 100) : 0,
         ];
     }
 }

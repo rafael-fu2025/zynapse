@@ -42,14 +42,16 @@ import {
 } from '@/hooks/useFacilities';
 import {
   BMG_LOSS_CATEGORIES,
+  BMG_PROCESS_EVENT_TYPES,
   MOISTURE_LEVELS,
   type ActiveBatch,
   type BmgAlert,
   type BmgAlertSeverity,
   type BmgLossCategory,
+  type BmgProcessEventType,
   type MoistureLevel,
 } from '@/schemas/facilities';
-import { fmtShort, fmtUtcToApp } from '@/utils/date';
+import { fmtHumanDate, fmtShort, fmtUtcToApp } from '@/utils/date';
 
 /** Process-log timeline + inline observation form for the batch. */
 function ProcessLogSection({ batchId }: { batchId: number }) {
@@ -58,6 +60,8 @@ function ProcessLogSection({ batchId }: { batchId: number }) {
   const [note, setNote] = useState('');
   const [temp, setTemp] = useState('');
   const [moisture, setMoisture] = useState<MoistureLevel | 'unset'>('unset');
+  // Audit #6: event_type records WHAT was done (turning, aeration…).
+  const [eventType, setEventType] = useState<BmgProcessEventType | 'unset'>('unset');
   // Tier 2.2 observability fields — kept separate from the basic
   // observation block (they require a sensor/scanner at hand) and
   // submitted only when populated so the simple "note only" path
@@ -75,6 +79,7 @@ function ProcessLogSection({ batchId }: { batchId: number }) {
     setNote('');
     setTemp('');
     setMoisture('unset');
+    setEventType('unset');
     setOxygen('');
     setDeviceId('');
     setCalibration('unset');
@@ -85,6 +90,7 @@ function ProcessLogSection({ batchId }: { batchId: number }) {
       note.trim() === '' &&
       temp.trim() === '' &&
       moisture === 'unset' &&
+      eventType === 'unset' &&
       oxygen.trim() === '' &&
       deviceId.trim() === '' &&
       calibration === 'unset'
@@ -99,6 +105,7 @@ function ProcessLogSection({ batchId }: { batchId: number }) {
           observation_note: note.trim(),
           temperature_celsius: temp.trim(),
           ...(moisture !== 'unset' ? { moisture_level: moisture } : {}),
+          ...(eventType !== 'unset' ? { event_type: eventType } : {}),
           ...(oxygen.trim() !== '' ? { oxygen_pct: oxygen.trim() } : {}),
           ...(deviceId.trim() !== '' ? { device_id: deviceId.trim() } : {}),
           ...(calibration !== 'unset' ? { calibration_status: calibration } : {}),
@@ -126,8 +133,11 @@ function ProcessLogSection({ batchId }: { batchId: number }) {
           {logs.data?.map((l) => (
             <section key={l.id} className="rounded-md border p-2">
               <header className="flex items-center justify-between">
-                <p className="font-mono text-[10px] text-muted-foreground">{l.log_date}</p>
+                <p className="text-[10px] text-muted-foreground">{fmtHumanDate(l.log_date)}</p>
                 <div className="flex flex-wrap gap-1">
+                  {l.event_type !== undefined && l.event_type !== 'observation' && (
+                    <Badge variant="secondary">{l.event_type.replace('_', ' ')}</Badge>
+                  )}
                   {l.temperature_celsius !== null && <Badge variant="info">{l.temperature_celsius}°C</Badge>}
                   {l.moisture_level !== null && (
                     <Badge variant={l.moisture_level === 'normal' ? 'success' : 'warning'}>{l.moisture_level}</Badge>
@@ -160,6 +170,18 @@ function ProcessLogSection({ batchId }: { batchId: number }) {
           ))}
         </div>
         <div className="space-y-3">
+          <div className="space-y-1.5">
+            <Label id="drum-event-type-label">Event type</Label>
+            <Select value={eventType} onValueChange={(v) => setEventType(v as BmgProcessEventType | 'unset')}>
+              <SelectTrigger aria-labelledby="drum-event-type-label"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="unset">Observation (default)</SelectItem>
+                {BMG_PROCESS_EVENT_TYPES.filter((t) => t !== 'observation').map((t) => (
+                  <SelectItem key={t} value={t}>{t.replace('_', ' ')}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
           <div className="space-y-1.5">
             <Label htmlFor={noteId}>Observation note</Label>
             <Textarea id={noteId} rows={2} maxLength={1000} value={note} onChange={(e) => setNote(e.target.value)} />
@@ -352,7 +374,7 @@ function AlertRow({ alert, disabled, onAck }: { alert: BmgAlert; disabled: boole
             {alert.severity}
           </Badge>
           <span className="font-mono text-xs text-muted-foreground">{alert.code}</span>
-          <span className="font-mono text-[10px] text-muted-foreground">{fmtUtcToApp(alert.triggered_at)}</span>
+          <span className="text-[10px] text-muted-foreground">{fmtUtcToApp(alert.triggered_at)}</span>
         </div>
         <p className="text-sm text-foreground">{alert.message}</p>
       </div>
@@ -508,7 +530,7 @@ function DrumDetail({ batch }: { batch: ActiveBatch }) {
               <dt className="flex items-center gap-1 text-xs text-muted-foreground">
                 <Calendar className="size-3" /> Started
               </dt>
-              <dd className="font-mono text-xs font-semibold">{fmtUtcToApp(batch.started_at)}</dd>
+              <dd className="text-xs font-semibold">{fmtUtcToApp(batch.started_at)}</dd>
             </div>
           </dl>
 

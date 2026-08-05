@@ -1,7 +1,7 @@
 /**
  * Phase 8 live E2E — login → dashboard → clinic → audit, with
  * screenshot evidence. Skipped unless SYNAPSE_E2E=1 (needs backend
- * on :8080 and the DevUserSeeder account).
+ * on :8090 and the DevUserSeeder account).
  */
 import { expect, test } from '@playwright/test';
 

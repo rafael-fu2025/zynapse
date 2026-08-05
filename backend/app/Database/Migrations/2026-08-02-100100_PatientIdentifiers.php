@@ -40,9 +40,9 @@ final class PatientIdentifiers extends Migration
             'updated_at'   => ['type' => 'DATETIME', 'null' => false],
         ]);
         $this->forge->addPrimaryKey('id');
-        $this->forge->addKey('persons_id', 'idx_pi_persons');
-        $this->forge->addKey('kind', 'idx_pi_kind');
-        $this->forge->addKey(['kind', 'identifier'], 'idx_pi_kind_identifier');
+        $this->forge->addKey('persons_id', false, false, 'idx_pi_persons');
+        $this->forge->addKey('kind', false, false, 'idx_pi_kind');
+        $this->forge->addKey(['kind', 'identifier'], false, false, 'idx_pi_kind_identifier');
         // Full UNIQUE on (kind, identifier) plus a generated column trick
         // to make the UNIQUE apply only to non-archived rows in MySQL 8+:
         //   archived_marker = IFNULL(archived_at, '1970-01-01 00:00:00')

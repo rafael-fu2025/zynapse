@@ -106,6 +106,37 @@ import {
 
 const SEVERITY_VARIANT = { mild: 'info', moderate: 'warning', severe: 'destructive' } as const;
 
+/**
+ * Human label for an employee's employment status. The API stores
+ * lowercase snake-case values (`active`, `on_leave`, `inactive`); the
+ * UI shows them sentence-cased ("Active", "On leave", "Inactive").
+ */
+function employmentStatusLabel(status: string | null | undefined): string {
+  switch (status) {
+    case 'active':
+      return 'Active';
+    case 'inactive':
+      return 'Inactive';
+    case 'on_leave':
+      return 'On leave';
+    default:
+      return status !== null && status !== undefined && status.length > 0
+        ? status.charAt(0).toUpperCase() + status.slice(1)
+        : '—';
+  }
+}
+
+/**
+ * Explicit Teaching / Non-teaching / unclassified badge (audit fix).
+ * Previously only Teaching was shown, so a NULL flag (e.g. an HR-
+ * synced row) looked identical to a non-teaching employee.
+ */
+function TeachingBadge({ isTeaching }: { isTeaching: boolean | null | undefined }): JSX.Element {
+  if (isTeaching === true) return <Badge variant="warning">Teaching</Badge>;
+  if (isTeaching === false) return <Badge variant="secondary">Non-teaching</Badge>;
+  return <Badge variant="outline">Not classified</Badge>;
+}
+
 function PortalCredentialModal({
   kind,
   identifier,
@@ -143,10 +174,6 @@ function PortalCredentialModal({
               {account.temporary_password}
             </dd>
           </div>
-          <div className="space-y-0.5 text-xs text-muted-foreground">
-            <dt>Persons ID</dt>
-            <dd className="font-mono">#{account.persons_id}</dd>
-          </div>
         </dl>
         <DialogFooter>
           <Button onClick={onClose}>Done</Button>
@@ -163,13 +190,12 @@ function CreateStudentDialog({ onClose }: { onClose: () => void }) {
     useForm<CreateStudentInput>({ resolver: zodResolver(createStudentSchema) });
 
   const gender = watch('gender');
-  const createAccount = watch('create_account');
 
   const onSubmit = handleSubmit((values) => {
     create.mutate(values, {
       onSuccess: (result) => {
         if (result.portal_account !== undefined) {
-          setCreatedAccount({ identifier: result.student_number, account: result.portal_account });
+          setCreatedAccount({ identifier: result.student_number ?? '', account: result.portal_account });
         } else {
           reset();
           onClose();
@@ -243,33 +269,25 @@ function CreateStudentDialog({ onClose }: { onClose: () => void }) {
           <Label htmlFor="blood_type">Blood type</Label>
           <Input id="blood_type" placeholder="O+" {...register('blood_type')} />
         </div>
-        {/* Phase 3.5: optional portal-login creation. */}
+        {/* Identity-consolidated: a portal account is ALWAYS created. */}
         <div className="col-span-2 rounded-lg border bg-muted/30 p-3">
-          <div className="flex items-start gap-2">
-            <Checkbox
-              id="student-create-account"
-              checked={createAccount === true}
-              onCheckedChange={(c) => setValue('create_account', c === true, { shouldValidate: true })}
+          <p className="text-xs text-muted-foreground">
+            A portal login is created automatically for this student. Account email defaults to{' '}
+            <code>{`<student_number>@synapse.dev`}</code>.
+          </p>
+          <div className="mt-3 space-y-1.5">
+            <Label htmlFor="student-account-email">Account email (optional)</Label>
+            <Input
+              id="student-account-email"
+              type="email"
+              placeholder="patient@synapse.dev"
+              aria-invalid={errors.account_email !== undefined}
+              {...register('account_email')}
             />
-            <Label htmlFor="student-create-account" className="font-normal">
-              Create portal login for this patient
-            </Label>
+            {errors.account_email !== undefined && (
+              <p role="alert" className="text-xs text-destructive">{errors.account_email.message}</p>
+            )}
           </div>
-          {createAccount === true && (
-            <div className="mt-3 space-y-1.5">
-              <Label htmlFor="student-account-email">Account email <span className="text-muted-foreground">(defaults to <code>{`<student_number>@synapse.dev`}</code>)</span></Label>
-              <Input
-                id="student-account-email"
-                type="email"
-                placeholder="patient@synapse.dev"
-                aria-invalid={errors.account_email !== undefined}
-                {...register('account_email')}
-              />
-              {errors.account_email !== undefined && (
-                <p role="alert" className="text-xs text-destructive">{errors.account_email.message}</p>
-              )}
-            </div>
-          )}
         </div>
         <DialogFooter className="col-span-2">
           <Button type="button" variant="outline" onClick={handleClose}>Cancel</Button>
@@ -540,13 +558,12 @@ function CreateEmployeeDialog({ onClose }: { onClose: () => void }) {
       defaultValues: { employment_status: 'active' },
     });
   const department = watch('department');
-  const createAccount = watch('create_account');
 
   const onSubmit = handleSubmit((values) => {
     create.mutate(values, {
       onSuccess: (result) => {
         if (result.portal_account !== undefined) {
-          setCreatedAccount({ identifier: result.employee_number, account: result.portal_account });
+          setCreatedAccount({ identifier: result.employee_number ?? '', account: result.portal_account });
         } else {
           reset();
           onClose();
@@ -611,33 +628,25 @@ function CreateEmployeeDialog({ onClose }: { onClose: () => void }) {
           <Label htmlFor="position">Position</Label>
           <Input id="position" {...register('position')} />
         </div>
-        {/* Phase 3.5: optional portal-login creation. */}
+        {/* Identity-consolidated: a portal account is ALWAYS created. */}
         <div className="col-span-2 rounded-lg border bg-muted/30 p-3">
-          <div className="flex items-start gap-2">
-            <Checkbox
-              id="employee-create-account"
-              checked={createAccount === true}
-              onCheckedChange={(c) => setValue('create_account', c === true, { shouldValidate: true })}
+          <p className="text-xs text-muted-foreground">
+            A portal login is created automatically for this employee. Account email defaults to{' '}
+            <code>{`<employee_number>@synapse.dev`}</code>.
+          </p>
+          <div className="mt-3 space-y-1.5">
+            <Label htmlFor="employee-account-email">Account email (optional)</Label>
+            <Input
+              id="employee-account-email"
+              type="email"
+              placeholder="employee@synapse.dev"
+              aria-invalid={errors.account_email !== undefined}
+              {...register('account_email')}
             />
-            <Label htmlFor="employee-create-account" className="font-normal">
-              Create portal login for this employee
-            </Label>
+            {errors.account_email !== undefined && (
+              <p role="alert" className="text-xs text-destructive">{errors.account_email.message}</p>
+            )}
           </div>
-          {createAccount === true && (
-            <div className="mt-3 space-y-1.5">
-              <Label htmlFor="employee-account-email">Account email <span className="text-muted-foreground">(defaults to <code>{`<employee_number>@synapse.dev`}</code>)</span></Label>
-              <Input
-                id="employee-account-email"
-                type="email"
-                placeholder="employee@synapse.dev"
-                aria-invalid={errors.account_email !== undefined}
-                {...register('account_email')}
-              />
-              {errors.account_email !== undefined && (
-                <p role="alert" className="text-xs text-destructive">{errors.account_email.message}</p>
-              )}
-            </div>
-          )}
         </div>
         <DialogFooter className="col-span-2">
           <Button type="button" variant="outline" onClick={handleClose}>Cancel</Button>
@@ -669,8 +678,8 @@ function EditEmployeeDialog({ employee, onClose }: { employee: Employee; onClose
         last_name: employee.last_name,
         department: employee.department ?? '',
         position: employee.position ?? '',
-        employment_status: employee.employment_status,
-        is_teaching: employee.is_teaching,
+        employment_status: employee.employment_status ?? 'active',
+        is_teaching: employee.is_teaching ?? false,
       },
     });
   const status = watch('employment_status');
@@ -722,9 +731,9 @@ function EditEmployeeDialog({ employee, onClose }: { employee: Employee; onClose
           <Select {...(status !== undefined ? { value: status } : {})} onValueChange={(v) => setValue('employment_status', v as UpdateEmployeeInput['employment_status'])}>
             <SelectTrigger aria-labelledby="emp-status-label"><SelectValue /></SelectTrigger>
             <SelectContent>
-              <SelectItem value="active">active</SelectItem>
-              <SelectItem value="on_leave">on_leave</SelectItem>
-              <SelectItem value="inactive">inactive</SelectItem>
+              <SelectItem value="active">Active</SelectItem>
+              <SelectItem value="on_leave">On leave</SelectItem>
+              <SelectItem value="inactive">Inactive</SelectItem>
             </SelectContent>
           </Select>
         </div>
@@ -789,7 +798,7 @@ function EmployeeDetailDialog({ employeeId, onClose }: { employeeId: number; onC
             <dt className="text-xs text-muted-foreground">Status</dt>
             <dd>
               <Badge variant={e.employment_status === 'active' ? 'success' : e.employment_status === 'on_leave' ? 'warning' : 'secondary'}>
-                {e.employment_status}
+                {employmentStatusLabel(e.employment_status)}
               </Badge>
             </dd>
           </div>
@@ -821,14 +830,12 @@ function EmployeeDetailDialog({ employeeId, onClose }: { employeeId: number; onC
               {e.has_rfid
                 ? <Badge variant="info">RFID</Badge>
                 : <Badge variant="secondary">no RFID</Badge>}
-              {e.is_teaching
-                ? <Badge variant="warning">teaching</Badge>
-                : <Badge variant="secondary">non-teaching</Badge>}
+              <TeachingBadge isTeaching={e.is_teaching} />
             </dd>
           </div>
           {e.archived && (
             <div className="col-span-2">
-              <Badge variant="secondary">archived</Badge>
+              <Badge variant="secondary">Archived</Badge>
             </div>
           )}
         </dl>
@@ -895,6 +902,9 @@ export default function PatientsPage() {
   const [confirm, setConfirm] = useState<ConfirmAction | null>(null);
   const [showArchived, setShowArchived] = useState(false);
   const [showArchivedEmp, setShowArchivedEmp] = useState(false);
+  // Teaching / non-teaching triage (audit fix) — only teaching
+  // employees (faculty) can refer students to counselling.
+  const [empTeaching, setEmpTeaching] = useState<'all' | 'teaching' | 'non_teaching'>('all');
   const archiveEmp = useSetEmployeeArchived();
 
   // Debounce the search text so a request fires only after the user
@@ -905,7 +915,7 @@ export default function PatientsPage() {
   const empSearching = debouncedEmpQuery.trim().length >= 2;
   const list = useStudents(cursor, 25, showArchived);
   const search = useStudentSearch(debouncedQuery);
-  const employees = useEmployees(empCursor, 25, showArchivedEmp);
+  const employees = useEmployees(empCursor, 25, showArchivedEmp, empTeaching);
   const empSearch = useEmployeeSearch(debouncedEmpQuery);
   const setArchived = useSetStudentArchived();
 
@@ -1191,6 +1201,19 @@ export default function PatientsPage() {
               />
             </div>
             <div className="flex flex-wrap items-center gap-2">
+              <Select
+                value={empTeaching}
+                onValueChange={(v) => { setEmpTeaching(v as typeof empTeaching); setEmpCursor(null); setEmpHistory([null]); }}
+              >
+                <SelectTrigger aria-label="Filter by teaching type" className="h-10 w-44 md:h-9">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All employees</SelectItem>
+                  <SelectItem value="teaching">Teaching (faculty)</SelectItem>
+                  <SelectItem value="non_teaching">Non-teaching</SelectItem>
+                </SelectContent>
+              </Select>
               <Button
                 variant={showArchivedEmp ? 'secondary' : 'outline'}
                 aria-pressed={showArchivedEmp}
@@ -1261,10 +1284,10 @@ export default function PatientsPage() {
                       <TableCell className="px-3">
                         <div className="flex flex-wrap items-center gap-1">
                           <Badge variant={e.employment_status === 'active' ? 'success' : e.employment_status === 'on_leave' ? 'warning' : 'secondary'}>
-                            {e.employment_status}
+                            {employmentStatusLabel(e.employment_status)}
                           </Badge>
-                          {e.is_teaching && <Badge variant="warning">teaching</Badge>}
-                          {e.archived && <Badge variant="secondary">archived</Badge>}
+                          <TeachingBadge isTeaching={e.is_teaching} />
+                          {e.archived && <Badge variant="secondary">Archived</Badge>}
                         </div>
                       </TableCell>
                       <TableCell className="px-3 text-right">
@@ -1306,12 +1329,12 @@ export default function PatientsPage() {
                       <div className="mb-1 flex items-center justify-between gap-2">
                         <span className="text-sm font-medium text-foreground">{e.last_name}, {e.first_name}</span>
                         <Badge variant={e.employment_status === 'active' ? 'success' : e.employment_status === 'on_leave' ? 'warning' : 'secondary'}>
-                          {e.employment_status}
+                          {employmentStatusLabel(e.employment_status)}
                         </Badge>
                       </div>
                       <div className="mb-1 flex flex-wrap gap-1.5">
-                        {e.is_teaching && <Badge variant="warning">teaching</Badge>}
-                        {e.archived && <Badge variant="secondary">archived</Badge>}
+                        <TeachingBadge isTeaching={e.is_teaching} />
+                        {e.archived && <Badge variant="secondary">Archived</Badge>}
                       </div>
                       <MobileCardField label="Number"><span className="font-mono text-xs">{e.employee_number}</span></MobileCardField>
                       <MobileCardField label="Department"><span className="text-xs">{e.department ?? '—'}</span></MobileCardField>

@@ -60,7 +60,7 @@ php spark synapse:audit-drain
 php spark synapse:audit-verify
 php spark synapse:reports-drain --limit=10
 composer test
-php spark serve --port 8080
+php spark serve --port 8090
 
 # Frontend
 cd ../frontend

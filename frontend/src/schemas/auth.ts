@@ -1,8 +1,8 @@
 /**
  * Zod schemas — mirror the backend's CI4 validation rules and DTOs.
  *
- * Phase 2.1: sessionSchema now exposes the unified-identity fields
- * returned by /auth/me (persons_id, person_kind, patient_identifier_id).
+ * Identity-consolidated: /auth/me exposes `person_kind` + `person_name`
+ * read straight from `users` (there is no separate person record).
  */
 import { z } from 'zod';
 
@@ -19,10 +19,11 @@ export const sessionSchema = z.object({
   username: z.string(),
   is_active: z.boolean(),
   force_reset: z.boolean().default(false),
-  persons_id: z.number().int().positive().nullable().optional(),
   person_kind: z.enum(['student', 'employee', 'contractor', 'alumni']).nullable().optional(),
   person_name: z.string().nullable().optional(),
-  patient_identifier_id: z.number().int().positive().nullable().optional(),
+  // Teaching flag for employee accounts — drives the "can I refer?"
+  // hint on the Referrals page (server enforces it regardless).
+  is_teaching: z.boolean().nullable().optional(),
   permissions: z.array(z.string()),
 });
 

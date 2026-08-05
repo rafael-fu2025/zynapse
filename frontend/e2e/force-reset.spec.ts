@@ -14,13 +14,13 @@ test.setTimeout(90_000);
 
 test('admin reset forces nurse into change-password, rotation unlocks', async ({ page, request }) => {
   // --- API setup: admin login + reset nurse (#2) password.
-  const login = await request.post('http://localhost:8080/api/v1/auth/login', {
+  const login = await request.post('http://localhost:8090/api/v1/auth/login', {
     data: { email: 'admin@synapse.dev', password: 'DevPassw0rd!' },
   });
   expect(login.ok()).toBeTruthy();
   const adminTok = (await login.json()).data.access_token as string;
 
-  const reset = await request.post('http://localhost:8080/api/v1/admin/users/2/reset-password', {
+  const reset = await request.post('http://localhost:8090/api/v1/admin/users/2/reset-password', {
     headers: { Authorization: `Bearer ${adminTok}` },
   });
   expect(reset.ok()).toBeTruthy();
@@ -45,7 +45,7 @@ test('admin reset forces nurse into change-password, rotation unlocks', async ({
   await page.waitForURL(/\/change-password$/, { timeout: 15_000 });
   await expect(page.getByText(/reset by an administrator/i)).toBeVisible();
   // A direct API client is restricted too; this is not merely a SPA redirect.
-  const blockedApi = await request.get('http://localhost:8080/api/v1/dashboard/counters', {
+  const blockedApi = await request.get('http://localhost:8090/api/v1/dashboard/counters', {
     headers: { Authorization: `Bearer ${forcedToken}` },
   });
   expect(blockedApi.status()).toBe(403);

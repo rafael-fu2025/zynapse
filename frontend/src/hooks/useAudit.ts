@@ -45,6 +45,10 @@ export function appendAuditFilters(params: URLSearchParams, filters: AuditFilter
 export function useAuditEvents(cursor: string | null, limit: number, filters: AuditFilters) {
   return useQuery<AuditPage, ApiEnvelopeError>({
     queryKey: ['audit', 'events', { cursor, limit, filters }],
+    // The audit trail is an oversight console: new events stream in
+    // continuously (logins, other users' actions, the auto-drain), so
+    // poll so the reader never has to refresh to see them.
+    refetchInterval: 15_000,
     queryFn: async () => {
       const params = new URLSearchParams({ limit: String(limit) });
       if (cursor !== null) params.set('cursor', cursor);

@@ -88,7 +88,12 @@ defined('BMG_STATE_PROCESSING')      || define('BMG_STATE_PROCESSING',      'pro
 defined('BMG_STATE_AWAITING_OUTPUT') || define('BMG_STATE_AWAITING_OUTPUT', 'awaiting_output');
 defined('BMG_STATE_CURING')          || define('BMG_STATE_CURING',          'curing');
 defined('BMG_STATE_CANCELLED')       || define('BMG_STATE_CANCELLED',       'cancelled');
+defined('BMG_STATE_RELEASED')        || define('BMG_STATE_RELEASED',        'released');
 defined('BMG_STATE_MAINTENANCE')     || define('BMG_STATE_MAINTENANCE',     'maintenance');
+
+// Maturity/quality grades for the final release gate (audit 2026-08-05).
+defined('BMG_QUALITY_GRADES')        || define('BMG_QUALITY_GRADES',        ['excellent', 'good', 'fair']);
+defined('BMG_MATURITY_LEVELS')       || define('BMG_MATURITY_LEVELS',       ['mature', 'maturing', 'immature']);
 
 /** Referral lifecycle states. */
 defined('REFERRAL_STATUS_SUBMITTED')   || define('REFERRAL_STATUS_SUBMITTED',   'submitted');

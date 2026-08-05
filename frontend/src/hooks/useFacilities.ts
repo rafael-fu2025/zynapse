@@ -26,14 +26,22 @@ import {
   addProcessLogSchema,
   activeBatchSchema,
   batchAnalyticsSchema,
+  batchComplianceSchema,
+  batchHistoryItemSchema,
+  blendCnSchema,
   bmgAlertSchema,
   bmgBatchSchema,
   bmgUnitSchema,
   cancelBatchSchema,
+  categoryDeviationSchema,
+  createSopDocumentSchema,
   createUnitSchema,
   createWasteCategorySchema,
   moveToCuringSchema,
+  openAlertSchema,
   processLogSchema,
+  releaseBatchSchema,
+  sopDocumentSchema,
   updateUnitSchema,
   updateWasteCategorySchema,
   wasteCategorySchema,
@@ -42,15 +50,23 @@ import {
   type AddBatchLossInput,
   type AddProcessLogInput,
   type BatchAnalytics,
+  type BatchCompliance,
+  type BatchHistoryItem,
+  type BlendCn,
   type BmgAlert,
   type BmgBatch,
   type BmgUnit,
   type CancelBatchInput,
+  type CategoryDeviation,
+  type CreateSopDocumentInput,
   type CreateUnitInput,
   type CreateWasteCategoryInput,
   type MoveToCuringInput,
+  type OpenAlert,
   type ProcessLog,
   type RecordOutputInput,
+  type ReleaseBatchInput,
+  type SopDocument,
   type StartBatchInput,
   type UpdateUnitInput,
   type UpdateWasteCategoryInput,
@@ -881,6 +897,200 @@ export function useAcknowledgeAlert() {
     },
     onError: (err) => {
       toast.error(err.errors[0]?.message ?? 'Failed to acknowledge alert.');
+    },
+  });
+}
+
+// ------------------------------------------------------ Audit fixes
+
+export interface UseReleaseBatchVars {
+  unitId: number;
+  batchId: number;
+  input: ReleaseBatchInput;
+}
+
+/**
+ * Release a finished/cured batch — the final QA gate (audit #4).
+ * Terminal state; the unit returns to Idle.
+ */
+export function useReleaseBatch() {
+  const qc = useQueryClient();
+  return useMutation<BmgBatch, ApiEnvelopeError, UseReleaseBatchVars, UnitsMutationCtx>({
+    mutationFn: async ({ batchId, input }) => {
+      const valid = releaseBatchSchema.parse(input);
+      const payload: Record<string, unknown> = {
+        quality_grade: valid.quality_grade,
+        maturity_level: valid.maturity_level,
+      };
+      if (valid.notes !== undefined && valid.notes !== '') payload['notes'] = valid.notes;
+      const res = await apiClient.post<BmgBatch>(`/facilities/batches/${batchId}/release`, payload);
+      return bmgBatchSchema.parse(res.data);
+    },
+    onMutate: async ({ unitId }) => {
+      await qc.cancelQueries({ queryKey: UNITS_KEY });
+      const snapshots = snapshotUnits(qc);
+      patchUnitInCache(qc, unitId, { status: 'idle', active_batch_id: null });
+      return { snapshots };
+    },
+    onError: (err, _vars, ctx) => {
+      for (const [key, snap] of ctx?.snapshots ?? []) {
+        qc.setQueryData(key, snap);
+      }
+      toast.error(err.errors[0]?.message ?? 'Failed to release batch.');
+    },
+    onSettled: (_d, _e, vars) => {
+      invalidateFacilities(qc, vars.batchId);
+    },
+    onSuccess: () => {
+      toast.success('Batch released.');
+    },
+  });
+}
+
+/** PFRP compliance / certificate data for a batch (audit #2). */
+export function useBatchCompliance(batchId: number | null) {
+  return useQuery<BatchCompliance, ApiEnvelopeError>({
+    queryKey: ['facilities', 'compliance', batchId],
+    queryFn: async () => {
+      const res = await apiClient.get<unknown>(`/facilities/batches/${batchId}/compliance`);
+      return batchComplianceSchema.parse(res.data);
+    },
+    enabled: batchId !== null && batchId > 0,
+  });
+}
+
+/** Weighted feedstock C:N blend for a batch (audit #5). */
+export function useBlendCn(batchId: number | null) {
+  return useQuery<BlendCn, ApiEnvelopeError>({
+    queryKey: ['facilities', 'blend-cn', batchId],
+    queryFn: async () => {
+      const res = await apiClient.get<unknown>(`/facilities/batches/${batchId}/blend-cn`);
+      return blendCnSchema.parse(res.data);
+    },
+    enabled: batchId !== null && batchId > 0,
+  });
+}
+
+/** Global open-alert feed — unacknowledged alerts across all batches. */
+export function useOpenAlerts() {
+  return useQuery<OpenAlert[], ApiEnvelopeError>({
+    queryKey: ['facilities', 'alerts', 'open'],
+    queryFn: async () => {
+      const res = await apiClient.get<unknown[]>('/facilities/alerts/open');
+      return z.array(openAlertSchema).parse(res.data);
+    },
+  });
+}
+
+/** Batch-history listing (terminal + historical batches). */
+export function useBatchHistory(
+  unitId: number | null,
+  status: string | null,
+  cursor: string | null,
+  limit = 25,
+) {
+  return useQuery<{ data: BatchHistoryItem[]; next: string | null }, ApiEnvelopeError>({
+    queryKey: ['facilities', 'batches', 'history', { unitId, status, cursor, limit }],
+    queryFn: async () => {
+      const params = new URLSearchParams();
+      if (unitId !== null) params.set('unit_id', String(unitId));
+      if (status !== null) params.set('status', status);
+      if (cursor !== null) params.set('cursor', cursor);
+      params.set('limit', String(limit));
+      const res = await apiClient.get<{ data: BatchHistoryItem[]; next: string | null }>(
+        `/facilities/batches?${params.toString()}`,
+      );
+      return {
+        data: z.array(batchHistoryItemSchema).parse(res.data),
+        next: res.data?.next ?? null,
+      };
+    },
+  });
+}
+
+/** Suggested idle drum for a batch (audit #8). */
+export function useSuggestUnit(categoryId: number | null) {
+  return useQuery<BmgUnit | null, ApiEnvelopeError>({
+    queryKey: ['facilities', 'units', 'suggest', categoryId],
+    queryFn: async () => {
+      if (categoryId === null || categoryId <= 0) return null;
+      const params = new URLSearchParams({ category_id: String(categoryId) });
+      const res = await apiClient.get<BmgUnit | null>(`/facilities/units/suggest?${params.toString()}`);
+      if (res.data === null) return null;
+      return bmgUnitSchema.parse(res.data);
+    },
+    enabled: categoryId !== null && categoryId > 0,
+  });
+}
+
+// ------------------------------------------------------ SOP register
+
+export function useSopDocuments(includeArchived = false) {
+  return useQuery<SopDocument[], ApiEnvelopeError>({
+    queryKey: ['facilities', 'sop-documents', { includeArchived }],
+    queryFn: async () => {
+      const res = await apiClient.get<unknown[]>(
+        `/facilities/sop-documents${includeArchived ? '?include_archived=1' : ''}`,
+      );
+      return z.array(sopDocumentSchema).parse(res.data);
+    },
+  });
+}
+
+export function useCreateSopDocument() {
+  const qc = useQueryClient();
+  return useMutation<SopDocument, ApiEnvelopeError, CreateSopDocumentInput>({
+    mutationFn: async (input) => {
+      const valid = createSopDocumentSchema.parse(input);
+      const payload: Record<string, unknown> = {
+        title: valid.title,
+        document_ref: valid.document_ref,
+      };
+      if (valid.category !== undefined && valid.category !== '') payload['category'] = valid.category;
+      if (valid.version !== undefined && valid.version !== '') payload['version'] = valid.version;
+      if (valid.owner_user_id !== undefined && valid.owner_user_id !== '') {
+        payload['owner_user_id'] = Number(valid.owner_user_id);
+      }
+      if (valid.notes !== undefined && valid.notes !== '') payload['notes'] = valid.notes;
+      const res = await apiClient.post<SopDocument>('/facilities/sop-documents', payload);
+      return sopDocumentSchema.parse(res.data);
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['facilities', 'sop-documents'] });
+      toast.success('SOP document saved.');
+    },
+    onError: (err) => {
+      toast.error(err.errors[0]?.message ?? 'Failed to save SOP document.');
+    },
+  });
+}
+
+export function useUpdateSopDocument() {
+  const qc = useQueryClient();
+  return useMutation<SopDocument, ApiEnvelopeError, { docId: number; input: Record<string, unknown> }>({
+    mutationFn: async ({ docId, input }) => {
+      const res = await apiClient.post<SopDocument>(`/facilities/sop-documents/${docId}`, input);
+      return sopDocumentSchema.parse(res.data);
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['facilities', 'sop-documents'] });
+      toast.success('SOP document updated.');
+    },
+    onError: (err) => {
+      toast.error(err.errors[0]?.message ?? 'Failed to update SOP document.');
+    },
+  });
+}
+
+// ------------------------------------------------------ Deviations
+
+/** Actual vs expected yield/duration per waste category (audit #10). */
+export function useWasteCategoryDeviation() {
+  return useQuery<CategoryDeviation[], ApiEnvelopeError>({
+    queryKey: ['facilities', 'waste-categories', 'deviation'],
+    queryFn: async () => {
+      const res = await apiClient.get<unknown[]>('/facilities/waste-categories/deviation');
+      return z.array(categoryDeviationSchema).parse(res.data);
     },
   });
 }

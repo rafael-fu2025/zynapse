@@ -6,7 +6,7 @@
  * `WasteCategoriesDialog`: an add form on top and a list of rows with
  * inline edit / archive / restore / delete actions.
  */
-import { Archive, ArchiveRestore, ArrowLeft, Boxes, Check, ChevronDown, Loader2, Pencil, Plus, Save, Trash2 as TrashIcon, X } from 'lucide-react';
+import { Archive, ArchiveRestore, ArrowLeft, Boxes, Check, ChevronDown, LineChart, Loader2, Pencil, Plus, Save, Trash2 as TrashIcon, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { toast } from 'sonner';
@@ -29,6 +29,7 @@ import {
   useUnarchiveWasteCategory,
   useUpdateWasteCategory,
   useWasteCategories,
+  useWasteCategoryDeviation,
 } from '@/hooks/useFacilities';
 import type { WasteCategory } from '@/schemas/facilities';
 
@@ -328,6 +329,83 @@ export default function WasteCategoriesPage() {
           )}
         </CardContent>
       </Card>
+
+      {/* Audit #10: actual vs expected yield/duration per category */}
+      <DeviationReport />
     </main>
+  );
+}
+
+/**
+ * DeviationReport — audit #10. Compares finished/released batches
+ * against each category's reference yield + duration to surface
+ * chronic under- or over-performance. Read-only.
+ */
+function DeviationReport() {
+  const { data, isLoading } = useWasteCategoryDeviation();
+  const rows = (data ?? []).filter((r) => r.batch_count > 0);
+  if (!isLoading && rows.length === 0) return null;
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <CardTitle className="flex items-center gap-2 text-base">
+          <LineChart className="size-4 text-primary" /> Yield &amp; duration deviation
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        {isLoading && (
+          <div className="flex items-center justify-center py-4 text-muted-foreground">
+            <Loader2 className="size-4 animate-spin" />
+          </div>
+        )}
+        {!isLoading && rows.length === 0 && (
+          <p className="text-sm text-muted-foreground">No finished/released batches yet — deviations appear once batches complete.</p>
+        )}
+        {!isLoading && rows.length > 0 && (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b text-left text-xs text-muted-foreground">
+                  <th className="py-1.5 pr-3 font-medium">Category</th>
+                  <th className="py-1.5 pr-3 font-medium">Batches</th>
+                  <th className="py-1.5 pr-3 font-medium">Yield (actual / exp)</th>
+                  <th className="py-1.5 pr-3 font-medium">Δ yield</th>
+                  <th className="py-1.5 font-medium">Duration (actual / exp)</th>
+                  <th className="py-1.5 pl-3 font-medium">Δ days</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r) => (
+                  <tr key={r.category_id} className="border-b last:border-0">
+                    <td className="py-1.5 pr-3">{r.name}</td>
+                    <td className="py-1.5 pr-3 font-mono text-xs">{r.batch_count}</td>
+                    <td className="py-1.5 pr-3 font-mono text-xs">
+                      {r.actual_yield_pct !== null ? `${r.actual_yield_pct}%` : '—'} / {r.expected_yield_pct !== null ? `${r.expected_yield_pct}%` : '—'}
+                    </td>
+                    <td className="py-1.5 pr-3">
+                      {r.yield_delta_pp !== null && (
+                        <Badge variant={r.yield_delta_pp >= 0 ? 'success' : 'warning'} className="font-mono">
+                          {r.yield_delta_pp >= 0 ? '+' : ''}{r.yield_delta_pp} pp
+                        </Badge>
+                      )}
+                    </td>
+                    <td className="py-1.5 pr-3 font-mono text-xs">
+                      {r.actual_days !== null ? `${r.actual_days}d` : '—'} / {r.expected_days !== null ? `${r.expected_days}d` : '—'}
+                    </td>
+                    <td className="py-1.5">
+                      {r.days_delta !== null && (
+                        <Badge variant={r.days_delta <= 0 ? 'success' : 'warning'} className="font-mono">
+                          {r.days_delta > 0 ? '+' : ''}{r.days_delta}d
+                        </Badge>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }

@@ -38,16 +38,19 @@ final class StaffScheduleService extends BaseService
     {
         $this->policy->check('schedulesManage');
 
-        $builder = $this->db->table('clinic_staff_schedules')
-            ->select('id, user_id, day_of_week, shift_start, shift_end, schedule_type, effective_from, effective_to, is_active')
-            ->orderBy('user_id', 'ASC')
-            ->orderBy('day_of_week', 'ASC')
-            ->orderBy('shift_start', 'ASC');
+        $builder = $this->db->table('clinic_staff_schedules s')
+            ->select("s.id, s.user_id, s.day_of_week, s.shift_start, s.shift_end, s.schedule_type, s.effective_from, s.effective_to, s.is_active, u.first_name, u.last_name")
+            // Staff display name for the roster — the schedule UI shows
+            // the person's name (id tooltip), not just a bare user id.
+            ->join('users u', 'u.id = s.user_id', 'left')
+            ->orderBy('s.user_id', 'ASC')
+            ->orderBy('s.day_of_week', 'ASC')
+            ->orderBy('s.shift_start', 'ASC');
         if (! $includeArchived) {
-            $builder->where('is_active', 1);
+            $builder->where('s.is_active', 1);
         }
         if ($userId !== null) {
-            $builder->where('user_id', $userId);
+            $builder->where('s.user_id', $userId);
         }
 
         return array_map(fn (array $r): array => $this->row($r), $builder->get()->getResultArray());
@@ -63,9 +66,14 @@ final class StaffScheduleService extends BaseService
         $actor = \App\Auth\CurrentUser::assert();
 
         return $this->txn(function () use ($input, $actor): array {
-            $start = (string) $input['shift_start'];
-            $end   = (string) $input['shift_end'];
+            $start   = (string) $input['shift_start'];
+            $end     = (string) $input['shift_end'];
+            $userId  = (int) $input['user_id'];
+            $dow     = (int) $input['day_of_week'];
             $this->assertShiftOrder($start, $end);
+            $this->assertUserExists($userId);
+            $this->assertNoOverlap($userId, $dow, $start, $end);
+            $this->assertEffectiveOrder($this->dateOrNull($input, 'effective_from'), $this->dateOrNull($input, 'effective_to'));
 
             $now = $this->utcNow();
             $this->db->table('clinic_staff_schedules')->insert([
@@ -107,17 +115,32 @@ final class StaffScheduleService extends BaseService
                 ]);
             }
 
-            $start = isset($input['shift_start']) ? (string) $input['shift_start'] : (string) $row['shift_start'];
-            $end   = isset($input['shift_end'])   ? (string) $input['shift_end']   : (string) $row['shift_end'];
+            $start   = isset($input['shift_start']) ? (string) $input['shift_start'] : (string) $row['shift_start'];
+            $end     = isset($input['shift_end'])   ? (string) $input['shift_end']   : (string) $row['shift_end'];
+            $userId  = isset($input['user_id'])     ? (int) $input['user_id']        : (int) $row['user_id'];
+            $dow     = isset($input['day_of_week']) ? (int) $input['day_of_week']    : (int) $row['day_of_week'];
             $this->assertShiftOrder($start, $end);
+            $this->assertUserExists($userId);
+            // Exclude this row when scanning so an update that keeps the
+            // same slot (or only touches type/dates) doesn't self-conflict.
+            $this->assertNoOverlap($userId, $dow, $start, $end, $id);
+
+            $effFrom = array_key_exists('effective_from', $input)
+                ? $this->dateOrNull($input, 'effective_from')
+                : ($row['effective_from'] !== null ? (string) $row['effective_from'] : null);
+            $effTo   = array_key_exists('effective_to', $input)
+                ? $this->dateOrNull($input, 'effective_to')
+                : ($row['effective_to'] !== null ? (string) $row['effective_to'] : null);
+            $this->assertEffectiveOrder($effFrom, $effTo);
 
             $this->db->table('clinic_staff_schedules')->where('id', $id)->update([
-                'day_of_week'    => isset($input['day_of_week']) ? (int) $input['day_of_week'] : (int) $row['day_of_week'],
+                'user_id'        => $userId,
+                'day_of_week'    => $dow,
                 'shift_start'    => $start,
                 'shift_end'      => $end,
                 'schedule_type'  => isset($input['schedule_type']) ? $this->normalizeType($input['schedule_type']) : (string) $row['schedule_type'],
-                'effective_from' => array_key_exists('effective_from', $input) ? $this->dateOrNull($input, 'effective_from') : $row['effective_from'],
-                'effective_to'   => array_key_exists('effective_to', $input) ? $this->dateOrNull($input, 'effective_to') : $row['effective_to'],
+                'effective_from' => $effFrom,
+                'effective_to'   => $effTo,
                 'updated_at'     => $this->utcNow(),
             ]);
 
@@ -191,6 +214,58 @@ final class StaffScheduleService extends BaseService
         }
     }
 
+    /**
+     * The roster only references registered auth users; a bogus id
+     * would otherwise surface as a raw DB FK error (500).
+     */
+    private function assertUserExists(int $userId): void
+    {
+        $exists = $this->db->table('users')
+            ->where('id', $userId)
+            ->countAllResults() > 0;
+        if (! $exists) {
+            throw ApiException::validationFailure([
+                ['code' => 'validation.field', 'message' => 'User #' . $userId . ' does not exist.', 'field' => 'user_id'],
+            ]);
+        }
+    }
+
+    /**
+     * No two ACTIVE shifts may overlap for the same staff member on the
+     * same weekday. `$excludeId` skips the row being updated (the
+     * overlap scan is `start < other_end AND end > other_start`).
+     */
+    private function assertNoOverlap(int $userId, int $dow, string $start, string $end, ?int $excludeId = null): void
+    {
+        $builder = $this->db->table('clinic_staff_schedules')
+            ->where('user_id', $userId)
+            ->where('day_of_week', $dow)
+            ->where('is_active', 1)
+            ->where('shift_start <', $end)
+            ->where('shift_end >', $start);
+        if ($excludeId !== null) {
+            $builder->where('id !=', $excludeId);
+        }
+        if ($builder->countAllResults() > 0) {
+            throw ApiException::validationFailure([
+                ['code' => 'validation.conflict', 'message' => 'Shift overlaps an existing active shift for this staff member on that day.', 'field' => 'shift_start'],
+            ]);
+        }
+    }
+
+    /**
+     * When both effective dates are set, `effective_to` must not
+     * precede `effective_from` (ISO dates compare correctly as strings).
+     */
+    private function assertEffectiveOrder(?string $from, ?string $to): void
+    {
+        if ($from !== null && $to !== null && $to < $from) {
+            throw ApiException::validationFailure([
+                ['code' => 'validation.field', 'message' => 'effective_to must not precede effective_from.', 'field' => 'effective_to'],
+            ]);
+        }
+    }
+
     private function normalizeType(mixed $type): string
     {
         $t = is_string($type) ? $type : '';
@@ -208,9 +283,10 @@ final class StaffScheduleService extends BaseService
 
     private function getRow(int $id): array
     {
-        $r = $this->db->table('clinic_staff_schedules')
-            ->select('id, user_id, day_of_week, shift_start, shift_end, schedule_type, effective_from, effective_to, is_active')
-            ->where('id', $id)->get()->getRowArray();
+        $r = $this->db->table('clinic_staff_schedules s')
+            ->select("s.id, s.user_id, s.day_of_week, s.shift_start, s.shift_end, s.schedule_type, s.effective_from, s.effective_to, s.is_active, u.first_name, u.last_name")
+            ->join('users u', 'u.id = s.user_id', 'left')
+            ->where('s.id', $id)->get()->getRowArray();
         return $this->row($r);
     }
 
@@ -223,6 +299,9 @@ final class StaffScheduleService extends BaseService
         return [
             'id'             => (int) $r['id'],
             'user_id'        => (int) $r['user_id'],
+            // Staff display name from the unified registry; null when
+            // the referenced user no longer exists.
+            'user_name'      => $this->userFullName($r),
             'day_of_week'    => (int) $r['day_of_week'],
             'shift_start'    => (string) $r['shift_start'],
             'shift_end'      => (string) $r['shift_end'],
@@ -231,6 +310,19 @@ final class StaffScheduleService extends BaseService
             'effective_to'   => $r['effective_to'] !== null ? (string) $r['effective_to'] : null,
             'is_active'      => (bool) $r['is_active'],
         ];
+    }
+
+    /**
+     * @param array<string, mixed> $r
+     */
+    private function userFullName(array $r): ?string
+    {
+        $first = isset($r['first_name']) && $r['first_name'] !== null ? trim((string) $r['first_name']) : '';
+        $last  = isset($r['last_name'])  && $r['last_name']  !== null ? trim((string) $r['last_name'])  : '';
+        if ($first === '' && $last === '') {
+            return null;
+        }
+        return trim($first . ' ' . $last);
     }
 
     private function utcNow(): string

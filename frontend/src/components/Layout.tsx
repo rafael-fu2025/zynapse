@@ -37,14 +37,10 @@ export default function Layout() {
     return <Navigate to="/change-password" replace />;
   }
 
-  // Phase 3.2: surface a one-time banner when a user has a person_kind
-  // (so we know what role they are) but their canonical
-  // patient_identifier row is missing or archived — the patient
-  // record is effectively inactive even though the user is signed in.
-  const showInactivePatientBanner =
-    me.data?.person_kind !== null &&
-    me.data?.person_kind !== undefined &&
-    (me.data?.patient_identifier_id === null || me.data?.patient_identifier_id === undefined);
+  // Identity-consolidated: every patient IS a `users` row, so the legacy
+  // "patient_identifier missing" banner (re-link your account) no longer
+  // applies.
+  const showInactivePatientBanner = false;
 
   return (
     <SidebarProvider>
@@ -81,6 +77,22 @@ export default function Layout() {
           }
         >
           <SidebarTrigger className="-ml-1" />
+          {/* Palette launcher — sits right after the collapse button so
+              it stays anchored to the left edge of the topbar instead
+              of floating in the middle. Hidden on mobile so the page
+              title gets the full row. */}
+          <button
+            type="button"
+            onClick={() => window.dispatchEvent(new Event('synapse:command-palette:open'))}
+            aria-label="Open command palette"
+            className="hidden h-9 w-72 shrink-0 items-center gap-2 rounded-md border bg-background/60 px-3 py-0 text-xs text-muted-foreground transition-colors hover:bg-accent/40 hover:text-foreground sm:inline-flex sm:w-80"
+          >
+            <span className="flex items-center gap-2">
+              <Search className="size-3.5" />
+              <span>Search…</span>
+            </span>
+            <kbd className="ml-auto rounded border bg-muted px-1 font-mono text-[10px]">⌘K</kbd>
+          </button>
           {/*
             Page title — mirrors the page H1 as a location cue. On web
             (desktop) the in-page H1 already provides this context, so
@@ -95,27 +107,6 @@ export default function Layout() {
               </p>
             </div>
           )}
-          {/* Centered palette launcher — absolutely positioned so the
-              trigger (left) and the action group (right) keep their
-              natural flex flow while the search lands in the middle.
-              The wrapper is `pointer-events-none` so it never blocks
-              clicks on the header chrome behind it; only the button
-              itself receives pointer events via `pointer-events-auto`.
-              Hidden on mobile so the page title gets the full row. */}
-          <div className="pointer-events-none absolute inset-y-0 left-1/2 hidden -translate-x-1/2 items-center sm:flex">
-            <button
-              type="button"
-              onClick={() => window.dispatchEvent(new Event('synapse:command-palette:open'))}
-              aria-label="Open command palette"
-              className="pointer-events-auto inline-flex h-9 w-72 items-center gap-2 rounded-md border bg-background/60 px-3 py-0 text-xs text-muted-foreground transition-colors hover:bg-accent/40 hover:text-foreground sm:w-80"
-            >
-              <span className="flex items-center gap-2">
-                <Search className="size-3.5" />
-                <span>Search…</span>
-              </span>
-              <kbd className="ml-auto rounded border bg-muted px-1 font-mono text-[10px]">⌘K</kbd>
-            </button>
-          </div>
           <div className="ml-auto flex items-center gap-2 sm:gap-3">
             <NotificationBell />
             <UserMenu />

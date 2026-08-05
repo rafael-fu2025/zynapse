@@ -76,7 +76,12 @@ final class BmgCompositionSumCheck extends Migration
 
                 SET v_post_sum = v_running_sum + NEW.weight_kg;
 
-                IF ABS(v_post_sum - v_batch_total) > {$this->tolerance()} THEN
+                -- Defense-in-depth: reject OVER-allocation only. Multi-row
+                -- compositions are assembled one row at a time, so each
+                -- intermediate row is legitimately BELOW the total; the
+                -- application layer enforces the exact ±0.01 match at the
+                -- end of `startBatch`.
+                IF v_post_sum > v_batch_total + {$this->tolerance()} THEN
                     SIGNAL SQLSTATE '45000'
                         SET MESSAGE_TEXT = 'BMG composition sum exceeds batch total_input_weight_kg (tolerance 0.01 kg)';
                 END IF;
@@ -114,7 +119,8 @@ final class BmgCompositionSumCheck extends Migration
 
                 SET v_post_sum = v_running_sum - OLD.weight_kg + NEW.weight_kg;
 
-                IF ABS(v_post_sum - v_batch_total) > {$this->tolerance()} THEN
+                -- Same over-allocation guard as the INSERT trigger.
+                IF v_post_sum > v_batch_total + {$this->tolerance()} THEN
                     SIGNAL SQLSTATE '45000'
                         SET MESSAGE_TEXT = 'BMG composition sum exceeds batch total_input_weight_kg (tolerance 0.01 kg)';
                 END IF;

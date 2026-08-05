@@ -17,6 +17,12 @@ use App\Modules\Shared\BaseDTO;
  *
  * `appointment_id` links back to the scheduling layer when the visit
  * was opened by an appointment check-in; NULL for walk-ins.
+ *
+ * `outcome` (panel revision, August 2026): set when the encounter
+ *   closes via a non-staff path. `no_show` = patient was on the queue
+ *   but never seen; `auto_closed` = leftover from a prior day, swept
+ *   by `ClinicService::autoCloseStaleEncounter`. NULL for normal
+ *   close / referral outcomes.
  */
 final class EncounterDto extends BaseDTO
 {
@@ -32,15 +38,33 @@ final class EncounterDto extends BaseDTO
         return [
             'id'                => (int)    $this->row['id'],
             'patient_school_id' => (string) $this->row['patient_school_id'],
+            // Patient display name from the unified registry — null for
+            // guests / unmatched rows. Powers the Closed-tab tooltip.
+            'patient_name'      => $this->patientName(),
             'appointment_id'    => ($this->row['appointment_id'] ?? null) !== null ? (int) $this->row['appointment_id'] : null,
             'chief_complaint'   => (string) $this->row['chief_complaint'],
             'triage_priority'   => ($this->row['triage_priority'] ?? null) !== null ? (string) $this->row['triage_priority'] : null,
             'triage_override'   => (bool) ($this->row['triage_override'] ?? false),
             'diagnosis'         => ($this->row['diagnosis'] ?? null) !== null ? (string) $this->row['diagnosis'] : null,
             'status'            => (string) $this->row['status'],
+            'outcome'           => ($this->row['outcome'] ?? null) !== null ? (string) $this->row['outcome'] : null,
             'attending_user_id' => (int)    $this->row['attending_user_id'],
             'started_at'        => (string) $this->row['started_at'],
             'closed_at'         => $this->row['closed_at'] !== null ? (string) $this->row['closed_at'] : null,
         ];
+    }
+
+    /**
+     * `First Last` display name, or null when the join found no user
+     * (guest walk-in / orphaned row).
+     */
+    private function patientName(): ?string
+    {
+        $first = trim((string) ($this->row['first_name'] ?? ''));
+        $last  = trim((string) ($this->row['last_name'] ?? ''));
+        if ($first === '' && $last === '') {
+            return null;
+        }
+        return trim($first . ' ' . $last);
     }
 }

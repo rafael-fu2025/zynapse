@@ -40,6 +40,7 @@ const InventoryPage = lazyWithRetry(() => import('@/pages/InventoryPage'));
 const KioskPage = lazyWithRetry(() => import('@/pages/KioskPage'));
 const KioskStationPage = lazyWithRetry(() => import('@/pages/KioskStationPage'));
 const LoginPage = lazyWithRetry(() => import('@/pages/LoginPage'));
+const NotificationsPage = lazyWithRetry(() => import('@/pages/NotificationsPage'));
 const PatientsPage = lazyWithRetry(() => import('@/pages/PatientsPage'));
 const QueueDisplayPage = lazyWithRetry(() => import('@/pages/QueueDisplayPage'));
 const ReferralsPage = lazyWithRetry(() => import('@/pages/ReferralsPage'));
@@ -132,6 +133,13 @@ function ProtectedShell({ children }: { children: React.ReactNode }) {
  */
 function MyPortalDispatcher() {
   const state = useAuthStore();
+  // Admin (the `*` wildcard) is not a patient — it has no student or
+  // employee record, so the portal is empty for it. The wildcard also
+  // makes the student/employee perm checks below BOTH true, which would
+  // otherwise route admin to the (empty) student portal.
+  if (hasPermission(state, '*')) {
+    return <Navigate to="/" replace />;
+  }
   if (hasPermission(state, 'student.portal.read')) {
     return <StudentPortalPage />;
   }
@@ -141,6 +149,24 @@ function MyPortalDispatcher() {
   // ProtectedRoute above already gates on either perm; this is
   // defensive and should never run in practice.
   return <Navigate to="/" replace />;
+}
+
+/**
+ * Home (`/`) dispatcher — the Dashboard is a staff/ops launchpad and is
+ * EMPTY for a pure student (they have no staff module permissions), so
+ * students are sent straight to their portal instead. "Pure student" =
+ * has student.portal.read AND NOT employee.portal.read — this keeps the
+ * admin wildcard and every staff role on the Dashboard (they also hold
+ * employee.portal.read).
+ */
+function HomeDispatcher() {
+  const state = useAuthStore();
+  const isPureStudent =
+    hasPermission(state, 'student.portal.read') && !hasPermission(state, 'employee.portal.read');
+  if (isPureStudent) {
+    return <Navigate to="/me" replace />;
+  }
+  return <DashboardPage />;
 }
 
 const router = createBrowserRouter([
@@ -169,7 +195,7 @@ const router = createBrowserRouter([
       </ProtectedShell>
     ),
     children: [
-      { path: '/', element: <DashboardPage /> },
+      { path: '/', element: <HomeDispatcher /> },
       { path: '/change-password', element: <ChangePasswordPage /> },
       {
         path: '/me',
@@ -264,6 +290,14 @@ const router = createBrowserRouter([
         element: (
           <ProtectedRoute anyOf={['referrals.read']}>
             <ReferralsPage />
+          </ProtectedRoute>
+        ),
+      },
+      {
+        path: '/notifications',
+        element: (
+          <ProtectedRoute anyOf={['notifications.read']}>
+            <NotificationsPage />
           </ProtectedRoute>
         ),
       },

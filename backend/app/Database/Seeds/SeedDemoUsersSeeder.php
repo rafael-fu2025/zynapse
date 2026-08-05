@@ -9,34 +9,39 @@ use CodeIgniter\Database\Seeder;
 /**
  * SeedDemoUsersSeeder — DEV/STAGING ONLY.
  *
- * Creates one pre-hashed login per non-admin role so demos, browser
- * walkthroughs, and integration tests have realistic RBAC fixtures
- * without round-tripping through /admin/users.
+ * Creates one named demo login per OPERATIONAL STAFF role so demos,
+ * browser walkthroughs, and integration tests have realistic RBAC
+ * fixtures without round-tripping through /admin/users.
  *
- *   clinic_staff@synapse.dev   DevPassw0rd!  → group: clinic_staff
- *   counsellor@synapse.dev     DevPassw0rd!  → group: counsellor
- *   facilities_op@synapse.dev  DevPassw0rd!  → group: facilities_op
- *   audit_reader@synapse.dev   DevPassw0rd!  → group: audit_reader
- *   report_viewer@synapse.dev  DevPassw0rd!  → group: report_viewer
+ * Every non-admin account uses the canonical personal email format
+ * `firstname.lastname@foundationu.edu.ph` and the shared demo password
+ * `DevPassw0rd!` — the same convention PatientRegistrySeeder applies to
+ * patient accounts. Only the admin keeps `admin@synapse.dev`
+ * (DevUserSeeder).
  *
- * Refuses to run in production. Idempotent — re-running is safe (skips
- * users whose email-password identity already exists).
+ * Patients (students/employees) get their accounts from
+ * PatientRegistrySeeder; this seeder covers the staff roles that are
+ * not patient profiles.
  *
- * Companion to DevUserSeeder (admin). Run AFTER
- * PermissionsAndGroupsSeeder so the groups exist.
+ * Refuses to run in production. Idempotent — re-running is safe (upserts
+ * by email). Run AFTER PermissionsAndGroupsSeeder so the groups exist.
  */
 final class SeedDemoUsersSeeder extends Seeder
 {
-    /** @var array<int, array{email: string, username: string, group: string}> */
+    private const DEMO_PASSWORD = 'DevPassw0rd!';
+
+    /**
+     * @var array<int, array{first: string, last: string, username: string, group: string}>
+     */
     private const USERS = [
-        ['email' => 'clinic_staff@synapse.dev',  'username' => 'synapse-clinic-staff',  'group' => 'clinic_staff'],
-        ['email' => 'counsellor@synapse.dev',    'username' => 'synapse-counsellor',    'group' => 'counsellor'],
-        ['email' => 'facilities_op@synapse.dev', 'username' => 'synapse-facilities-op', 'group' => 'facilities_op'],
-        ['email' => 'audit_reader@synapse.dev',  'username' => 'synapse-audit-reader',  'group' => 'audit_reader'],
+        ['first' => 'Nina',  'last' => 'Reyes',      'username' => 'synapse-clinic-staff',        'group' => 'clinic_staff'],
+        ['first' => 'Liza',  'last' => 'Santos',     'username' => 'synapse-counsellor',          'group' => 'counsellor'],
+        ['first' => 'Mark',  'last' => 'Villanueva', 'username' => 'synapse-facilities-op',       'group' => 'facilities_op'],
+        ['first' => 'Tina',  'last' => 'Aquino',     'username' => 'synapse-audit-reader',        'group' => 'audit_reader'],
         // Phase 19 (ACTOR_ACCESS_ANALYSIS): read-only analytics role.
-        ['email' => 'report_viewer@synapse.dev', 'username' => 'synapse-report-viewer', 'group' => 'report_viewer'],
+        ['first' => 'Paul',  'last' => 'Mendoza',    'username' => 'synapse-report-viewer',       'group' => 'report_viewer'],
         // RBAC_SECURITY_REVIEW R4: clinical oversight / break-glass role.
-        ['email' => 'clinical_supervisor@synapse.dev', 'username' => 'synapse-clinical-supervisor', 'group' => 'clinical_supervisor'],
+        ['first' => 'Ana',   'last' => 'Garcia',     'username' => 'synapse-clinical-supervisor', 'group' => 'clinical_supervisor'],
     ];
 
     public function run(): void
@@ -46,14 +51,14 @@ final class SeedDemoUsersSeeder extends Seeder
         }
 
         $now    = date('Y-m-d H:i:s');
-        $hash   = password_hash('DevPassw0rd!', PASSWORD_DEFAULT);
+        $hash   = password_hash(self::DEMO_PASSWORD, PASSWORD_DEFAULT);
         $groups = [];
         foreach ($this->db->table('auth_groups')->get()->getResultArray() as $g) {
             $groups[(string) $g['name']] = (int) $g['id'];
         }
 
         foreach (self::USERS as $u) {
-            $email = $u['email'];
+            $email = strtolower($u['first']) . '.' . strtolower($u['last']) . '@foundationu.edu.ph';
             $group = $u['group'];
 
             // Reuse an existing user row if the identity already exists.
@@ -64,12 +69,11 @@ final class SeedDemoUsersSeeder extends Seeder
 
             if ($identity !== null) {
                 $userId = (int) $identity['user_id'];
-                // Keep the password aligned with the documented dev fixture
-                // in case it was rotated or reset out-of-band.
+                // Keep the password aligned with the documented dev fixture.
                 $this->db->table('auth_identities')
                     ->where('user_id', $userId)
                     ->where('type', 'email_password')
-                    ->update(['secret2' => $hash, 'updated_at' => $now]);
+                    ->update(['secret2' => $hash, 'force_reset' => 0, 'updated_at' => $now]);
                 // Reactivate the user (smoke tests deactivate probe users).
                 $this->db->table('users')->where('id', $userId)->update([
                     'status'     => 'active',
@@ -79,6 +83,8 @@ final class SeedDemoUsersSeeder extends Seeder
             } else {
                 $this->db->table('users')->insert([
                     'username'   => $u['username'],
+                    'first_name' => $u['first'],
+                    'last_name'  => $u['last'],
                     'status'     => 'active',
                     'active'     => 1,
                     'created_at' => $now,
@@ -87,12 +93,13 @@ final class SeedDemoUsersSeeder extends Seeder
                 $userId = (int) $this->db->insertID();
 
                 $this->db->table('auth_identities')->insert([
-                    'user_id'    => $userId,
-                    'type'       => 'email_password',
-                    'secret'     => $email,
-                    'secret2'    => $hash,
-                    'created_at' => $now,
-                    'updated_at' => $now,
+                    'user_id'     => $userId,
+                    'type'        => 'email_password',
+                    'secret'      => $email,
+                    'secret2'     => $hash,
+                    'force_reset' => 0,
+                    'created_at'  => $now,
+                    'updated_at'  => $now,
                 ]);
             }
 

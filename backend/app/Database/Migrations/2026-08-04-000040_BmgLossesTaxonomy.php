@@ -49,7 +49,7 @@ final class BmgLossesTaxonomy extends Migration
                 'category_code'       => ['type' => 'VARCHAR', 'constraint' => 32, 'null' => false],
                 'weight_kg'           => ['type' => 'DECIMAL', 'constraint' => '10,2', 'null' => false],
                 'note'                => ['type' => 'VARCHAR', 'constraint' => 255, 'null' => true],
-                'recorded_by_user_id' => ['type' => 'INT', 'unsigned' => true, 'null' => false],
+                'recorded_by_user_id' => ['type' => 'BIGINT', 'unsigned' => true, 'null' => false],
                 'recorded_at'         => ['type' => 'DATETIME', 'null' => false],
                 'created_at'          => ['type' => 'DATETIME', 'null' => false],
             ]);
@@ -61,9 +61,13 @@ final class BmgLossesTaxonomy extends Migration
             $this->forge->createTable('facilities_bmg_losses');
         }
 
-        // Range / enum guards. Idempotent: drop first, then re-add.
-        $this->db->query('ALTER TABLE `facilities_bmg_losses` DROP CHECK `chk_fbl_weight`');
-        $this->db->query('ALTER TABLE `facilities_bmg_losses` DROP CHECK `chk_fbl_category`');
+        // Range / enum guards. Idempotent: drop-if-present, then add.
+        // First run: constraints don't exist yet (table was just created
+        // above) so the DROP is skipped; re-run: DROP wipes them so the
+        // ADD can re-create cleanly. Both MySQL 8 and MariaDB 10.4 accept
+        // `DROP CONSTRAINT` (the latter doesn't support `DROP CHECK`).
+        $this->dropConstraintIfExists('facilities_bmg_losses', 'chk_fbl_weight');
+        $this->dropConstraintIfExists('facilities_bmg_losses', 'chk_fbl_category');
         $this->db->query(<<<'SQL'
             ALTER TABLE `facilities_bmg_losses`
                 ADD CONSTRAINT `chk_fbl_weight`
@@ -105,13 +109,13 @@ final class BmgLossesTaxonomy extends Migration
 
             // Loss-total guard: must be ≥ 0 when set. NULL is allowed
             // (legacy / not yet computed).
-            $this->db->query('ALTER TABLE `facilities_bmg_batches` DROP CHECK `chk_fbb_loss_nonneg`');
+            $this->dropConstraintIfExists('facilities_bmg_batches', 'chk_fbb_loss_nonneg');
             $this->db->query(<<<'SQL'
                 ALTER TABLE `facilities_bmg_batches`
                     ADD CONSTRAINT `chk_fbb_loss_nonneg`
                     CHECK (`total_loss_kg` IS NULL OR `total_loss_kg` >= 0)
             SQL);
-            $this->db->query('ALTER TABLE `facilities_bmg_batches` DROP CHECK `chk_fbb_aip_nonneg`');
+            $this->dropConstraintIfExists('facilities_bmg_batches', 'chk_fbb_aip_nonneg');
             $this->db->query(<<<'SQL'
                 ALTER TABLE `facilities_bmg_batches`
                     ADD CONSTRAINT `chk_fbb_aip_nonneg`
@@ -123,8 +127,8 @@ final class BmgLossesTaxonomy extends Migration
     public function down(): void
     {
         if ($this->db->tableExists('facilities_bmg_batches')) {
-            $this->db->query('ALTER TABLE `facilities_bmg_batches` DROP CHECK `chk_fbb_loss_nonneg`');
-            $this->db->query('ALTER TABLE `facilities_bmg_batches` DROP CHECK `chk_fbb_aip_nonneg`');
+            $this->dropConstraintIfExists('facilities_bmg_batches', 'chk_fbb_loss_nonneg');
+            $this->dropConstraintIfExists('facilities_bmg_batches', 'chk_fbb_aip_nonneg');
             $drop = [];
             foreach (['total_loss_kg', 'accumulated_in_process_kg'] as $col) {
                 if ($this->db->fieldExists($col, 'facilities_bmg_batches')) {
@@ -137,9 +141,31 @@ final class BmgLossesTaxonomy extends Migration
         }
 
         if ($this->db->tableExists('facilities_bmg_losses')) {
-            $this->db->query('ALTER TABLE `facilities_bmg_losses` DROP CHECK `chk_fbl_weight`');
-            $this->db->query('ALTER TABLE `facilities_bmg_losses` DROP CHECK `chk_fbl_category`');
+            $this->dropConstraintIfExists('facilities_bmg_losses', 'chk_fbl_weight');
+            $this->dropConstraintIfExists('facilities_bmg_losses', 'chk_fbl_category');
             $this->forge->dropTable('facilities_bmg_losses', true);
+        }
+    }
+
+    /**
+     * Drop a CHECK constraint only if it exists. Portable across MySQL 8
+     * and MariaDB 10.4 (the latter doesn't support `DROP CHECK`).
+     * Required because on first run the table was just created in this
+     * same migration, so the constraints don't exist yet; on re-run they
+     * do and must be cleared before re-adding.
+     */
+    private function dropConstraintIfExists(string $table, string $constraint): void
+    {
+        $r = $this->db->query(
+            "SELECT CONSTRAINT_NAME FROM information_schema.TABLE_CONSTRAINTS"
+            . " WHERE CONSTRAINT_SCHEMA = DATABASE()"
+            . "   AND TABLE_NAME = " . $this->db->escape($table)
+            . "   AND CONSTRAINT_NAME = " . $this->db->escape($constraint)
+        );
+        if ($r->getNumRows() > 0) {
+            $this->db->query(
+                "ALTER TABLE `{$table}` DROP CONSTRAINT `{$constraint}`"
+            );
         }
     }
 }

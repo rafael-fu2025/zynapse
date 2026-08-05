@@ -14,7 +14,9 @@ import {
   medicineForecastSchema,
   medicineSchema,
   medicineTxnSchema,
+  medicineUsageSummarySchema,
   updateMedicineSchema,
+  writtenOffBatchSchema,
   type AddBatchInput,
   type CreateMedicineInput,
   type DispenseInput,
@@ -22,8 +24,11 @@ import {
   type Medicine,
   type MedicineForecast,
   type MedicineTxn,
+  type MedicineUsageSummary,
   type UpdateMedicineInput,
+  type WrittenOffBatch,
 } from '@/schemas/medicines';
+import { fmtHumanDate } from '@/utils/date';
 
 interface MedicinePage {
   data: Medicine[];
@@ -33,6 +38,9 @@ interface MedicinePage {
 export function useMedicines(cursor: string | null, limit = 25, q: string | null = null, includeArchived = false) {
   return useQuery<MedicinePage, ApiEnvelopeError>({
     queryKey: ['medicines', 'list', { cursor, limit, q, includeArchived }],
+    // Stock is consumed by clinic dispensing in other sessions; poll so
+    // the pharmacy sees current balances without a manual refresh.
+    refetchInterval: 30_000,
     queryFn: async () => {
       const params = new URLSearchParams();
       if (cursor !== null) params.set('cursor', cursor);
@@ -246,7 +254,8 @@ export function useComputeForecast() {
     },
     onSuccess: (f) => {
       void qc.invalidateQueries({ queryKey: ['medicines', 'forecast', f.medicine_id] });
-      toast.success(`Forecast: ~${f.predicted_daily_usage}/day, stockout ${f.predicted_stockout_date ?? 'n/a'}.`);
+      const stockout = f.predicted_stockout_date === null ? 'n/a' : fmtHumanDate(f.predicted_stockout_date);
+      toast.success(`Forecast: ~${f.predicted_daily_usage}/day, stockout ${stockout}.`);
     },
     onError: (err) => {
       toast.error(err.errors[0]?.message ?? 'Forecast failed.');
@@ -262,5 +271,68 @@ export function useMedicineForecast(medicineId: number | null) {
       return res.data.forecast === null ? null : medicineForecastSchema.parse(res.data.forecast);
     },
     enabled: medicineId !== null && medicineId > 0,
+  });
+}
+
+/**
+ * Write a batch off as expired (remaining stock zeroed + ledgered).
+ * NOTE: batch write-offs change the medicine's stock, so the whole
+ * `medicines` cache is invalidated.
+ */
+function useBatchWriteOff(action: 'expire' | 'recall') {
+  const qc = useQueryClient();
+  return useMutation<{ batch_number: string }, ApiEnvelopeError, { medicineId: number; batchId: number; note?: string }>({
+    mutationFn: async ({ medicineId, batchId, note }) => {
+      const payload = note !== undefined && note !== '' ? { note } : {};
+      const res = await apiClient.post<unknown>(`/clinic/medicines/${medicineId}/batches/${batchId}/${action}`, payload);
+      return res.data as { batch_number: string };
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['medicines'] });
+      toast.success(action === 'expire' ? 'Batch written off as expired.' : 'Batch recalled.');
+    },
+    onError: (err) => {
+      toast.error(err.errors[0]?.message ?? `Failed to ${action} batch.`);
+    },
+  });
+}
+
+export function useExpireBatch() {
+  return useBatchWriteOff('expire');
+}
+
+export function useRecallBatch() {
+  return useBatchWriteOff('recall');
+}
+
+/**
+ * Insight: batches written off as expired/recalled in the trailing
+ * window (pairs with the "Expiring" insight).
+ */
+export function useWrittenOffMedicines(days = 90) {
+  return useQuery<WrittenOffBatch[], ApiEnvelopeError>({
+    queryKey: ['medicines', 'insights', 'written-off', days],
+    queryFn: async () => {
+      const params = new URLSearchParams({ days: String(days) });
+      const res = await apiClient.get<unknown[]>(`/clinic/medicines/expired?${params.toString()}`);
+      return z.array(writtenOffBatchSchema).parse(res.data);
+    },
+    staleTime: 60_000,
+  });
+}
+
+/**
+ * Insight: catalogue-wide dispensing usage over the trailing window
+ * (powers the Insights "Avg daily use" tile).
+ */
+export function useMedicineUsageSummary(days = 30) {
+  return useQuery<MedicineUsageSummary, ApiEnvelopeError>({
+    queryKey: ['medicines', 'insights', 'usage', days],
+    queryFn: async () => {
+      const params = new URLSearchParams({ days: String(days) });
+      const res = await apiClient.get<unknown>(`/clinic/medicines/usage-summary?${params.toString()}`);
+      return medicineUsageSummarySchema.parse(res.data);
+    },
+    staleTime: 60_000,
   });
 }

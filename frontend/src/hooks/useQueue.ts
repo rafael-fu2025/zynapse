@@ -1,6 +1,12 @@
 /**
  * Queue hooks — walk-in queue (Phase 14).
  *
+ * Panel revision (August 2026): manual enqueue is gone. Today's
+ * scheduled appointments auto-queue themselves via the lazy
+ * auto-check-in sweep, and walk-in encounters are queued atomically
+ * inside `useCreateEncounter`. The `useEnqueue()` mutation was
+ * removed; the `POST /clinic/queue` endpoint no longer exists.
+ *
  * `usePublicQueueState` uses a RAW fetch (no auth, no interceptors):
  * the endpoint is public by design and the display board must work
  * on a logged-out lobby TV.
@@ -31,23 +37,6 @@ export function useQueueToday() {
   });
 }
 
-export function useEnqueue() {
-  const qc = useQueryClient();
-  return useMutation<QueueEntry, ApiEnvelopeError, number>({
-    mutationFn: async (encounterId) => {
-      const res = await apiClient.post<unknown>('/clinic/queue', { encounter_id: encounterId });
-      return queueEntrySchema.parse(res.data);
-    },
-    onSuccess: (e) => {
-      void qc.invalidateQueries({ queryKey: ['queue'] });
-      toast.success(`Queued at position ${e.position}.`);
-    },
-    onError: (err) => {
-      toast.error(err.errors[0]?.message ?? 'Failed to queue encounter.');
-    },
-  });
-}
-
 export function useCallNext() {
   const qc = useQueryClient();
   return useMutation<QueueEntry, ApiEnvelopeError, void>({
@@ -57,6 +46,10 @@ export function useCallNext() {
     },
     onSuccess: (e) => {
       void qc.invalidateQueries({ queryKey: ['queue'] });
+      // Calling next flips the linked encounter into session — keep the
+      // clinic + appointments views in step without a manual refresh.
+      void qc.invalidateQueries({ queryKey: ['clinic'] });
+      void qc.invalidateQueries({ queryKey: ['appointments'] });
       toast.success(`Now serving #${e.position} — ${e.display_name}.`);
     },
     onError: (err) => {
@@ -74,6 +67,10 @@ export function useQueueTransition() {
     },
     onSuccess: (e) => {
       void qc.invalidateQueries({ queryKey: ['queue'] });
+      // Queue transitions (called / finished / cancelled) mutate the
+      // linked encounter + appointment — refresh those views too.
+      void qc.invalidateQueries({ queryKey: ['clinic'] });
+      void qc.invalidateQueries({ queryKey: ['appointments'] });
       toast.success(`#${e.position} → ${e.status}.`);
     },
     onError: (err) => {

@@ -202,6 +202,58 @@ final class MedicineController extends ApiController
         return $this->ok($this->service->listExpiring($days));
     }
 
+    /**
+     * Write a batch off as expired (remaining stock zeroed + ledgered).
+     */
+    public function expireBatch(int $medicineId, int $batchId): ResponseInterface
+    {
+        $this->authorize('clinic.inventory.write');
+        $payload = $this->request->getJSON(true) ?? [];
+        $rules   = ['note' => 'permit_empty|max_length[255]'];
+        if (! $this->makeValidation($rules)->run($payload)) {
+            throw ApiException::validationFailure($this->collectErrors());
+        }
+        return $this->ok($this->service->expireBatch(
+            $batchId,
+            isset($payload['note']) ? (string) $payload['note'] : null,
+        ));
+    }
+
+    /**
+     * Write a batch off as recalled (manufacturer recall).
+     */
+    public function recallBatch(int $medicineId, int $batchId): ResponseInterface
+    {
+        $this->authorize('clinic.inventory.write');
+        $payload = $this->request->getJSON(true) ?? [];
+        $rules   = ['note' => 'permit_empty|max_length[255]'];
+        if (! $this->makeValidation($rules)->run($payload)) {
+            throw ApiException::validationFailure($this->collectErrors());
+        }
+        return $this->ok($this->service->recallBatch(
+            $batchId,
+            isset($payload['note']) ? (string) $payload['note'] : null,
+        ));
+    }
+
+    /**
+     * Written-off (expired/recalled) batches insight.
+     */
+    public function expired(): ResponseInterface
+    {
+        $days = (int) ($this->request->getGet('days') ?? 90);
+        return $this->ok($this->service->listWrittenOff($days));
+    }
+
+    /**
+     * Catalogue-wide dispensing usage over the trailing window.
+     */
+    public function usageSummary(): ResponseInterface
+    {
+        $days = (int) ($this->request->getGet('days') ?? 30);
+        return $this->ok($this->service->usageSummary($days));
+    }
+
     private function collectErrors(): array
     {
         $errs = [];

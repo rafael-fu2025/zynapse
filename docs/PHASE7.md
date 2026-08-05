@@ -57,7 +57,7 @@ php spark migrate -n App
 php spark db:seed App\\Database\\Seeds\\PermissionsAndGroupsSeeder
 php spark db:seed App\\Database\\Seeds\\DevUserSeeder   # dev only
 php spark synapse:smoke
-php spark serve --port 8080
+php spark serve --port 8090
 composer test
 ```
 

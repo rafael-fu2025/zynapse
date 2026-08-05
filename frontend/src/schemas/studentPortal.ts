@@ -2,21 +2,15 @@
  * Zod schemas — Student Portal (mirrors backend
  * `App\Modules\Clinic\Controllers\StudentSelfController`).
  *
- * The portal is strictly self-scoped: every endpoint resolves the
- * caller's `users.id` to a `patients_students` row by the
- * `patients_students.user_id` UNIQUE link (added in Phase 13).
+ * Identity-consolidated: the portal reads the caller's profile straight
+ * from `users` (kind=student) — `id` IS the `users.id`, no link fields.
  */
 import { z } from 'zod';
 
 export const studentPortalProfileSchema = z.object({
-  // Phase 3.4: unified-identity fields surfaced via StudentSelfService.
-  kind: z.enum(['student', 'employee', 'contractor', 'alumni']).optional(),
-  persons_id: z.number().int().positive().nullable().optional(),
-  patient_identifier_id: z.number().int().positive().nullable().optional(),
-  identifier: z.string().optional(),
   id: z.number().int().positive(),
-  user_id: z.number().int().positive().nullable(),
-  student_number: z.string(),
+  kind: z.enum(['student', 'employee', 'contractor', 'alumni']).nullable(),
+  student_number: z.string().nullable(),
   first_name: z.string(),
   last_name: z.string(),
   middle_name: z.string().nullable(),
@@ -49,3 +43,31 @@ export const studentPortalClinicVisitSchema = z.object({
   created_at: z.string(),
 });
 export type StudentPortalClinicVisit = z.infer<typeof studentPortalClinicVisitSchema>;
+
+/** A clinic appointment the student booked for themselves (or had booked). */
+export const studentAppointmentSchema = z.object({
+  id: z.number().int().positive(),
+  patient_school_id: z.string(),
+  provider_user_id: z.number().int().positive(),
+  provider_name: z.string().nullable(),
+  scheduled_at: z.string(),
+  status: z.string(),
+  reason: z.string().nullable(),
+  created_at: z.string(),
+});
+export type StudentAppointment = z.infer<typeof studentAppointmentSchema>;
+
+/** Minimal clinic-provider option for the booking picker (name + id). */
+export const studentProviderSchema = z.object({
+  id: z.number().int().positive(),
+  name: z.string(),
+});
+export type StudentProvider = z.infer<typeof studentProviderSchema>;
+
+/** Self-booking input — `scheduled_at` is UTC `YYYY-MM-DD HH:mm:ss`. */
+export const bookStudentAppointmentSchema = z.object({
+  provider_user_id: z.number({ message: 'Pick a provider.' }).int().positive('Pick a provider.'),
+  scheduled_at: z.string().regex(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/, 'Pick a date and time.'),
+  reason: z.string().max(500).optional(),
+});
+export type BookStudentAppointmentInput = z.infer<typeof bookStudentAppointmentSchema>;

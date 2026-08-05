@@ -1,7 +1,7 @@
 /**
  * Phase 4 smoke — extended.
  *
- * Skipped unless `SYNAPSE_E2E=1`. Requires both backend (8080) and
+ * Skipped unless `SYNAPSE_E2E=1`. Requires both backend (8090) and
  * frontend (5173) running locally with at least one BMG unit seeded.
  *
  * Steps:

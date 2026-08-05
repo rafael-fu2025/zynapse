@@ -3,32 +3,41 @@
  *
  * shadcn Popover (Radix) for accessible focus management. Notifications
  * are strictly self-scoped (the API filters by the token's user);
- * clicking an unread row marks it read.
+ * clicking an unread row marks it read. A "View all" link opens the
+ * full history page.
  */
-import { Bell, Loader2 } from 'lucide-react';
+import { useState } from 'react';
+import { Bell, ChevronRight, Loader2 } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { useMarkAllNotificationsRead, useMarkNotificationRead, useNotifications } from '@/hooks/useNotifications';
+import { notificationLabel } from '@/utils/notifications';
 import { fmtRelative } from '@/utils/date';
-
-function label(templateCode: string, context: Record<string, unknown> | null): string {
-  if (templateCode === 'appointment.assigned') {
-    const res = typeof context?.['resource_code'] === 'string' ? (context['resource_code']) : '';
-    return `New appointment assigned ${res !== '' ? `(${res})` : ''}`.trim();
-  }
-  return templateCode;
-}
+import { hasPermission, useAuthStore } from '@/store/auth';
 
 export function NotificationBell() {
+  // Hide the bell entirely when the user can't read notifications —
+  // e.g. a custom account created via /admin/users that was never
+  // assigned to a group containing `notifications.read`. Without this
+  // guard the bell polls `/api/v1/notifications` every 60 s and the
+  // browser fills up with 403 noise.
+  const authState = useAuthStore();
+  const canRead = hasPermission(authState, 'notifications.read');
   const list = useNotifications(10);
   const markRead = useMarkNotificationRead();
   const markAll = useMarkAllNotificationsRead();
+  const [open, setOpen] = useState(false);
+
+  if (!canRead) {
+    return null;
+  }
 
   const items = list.data ?? [];
   const unread = items.filter((n) => n.read_at === null).length;
 
   return (
-    <Popover>
+    <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <Button
           variant="ghost"
@@ -91,7 +100,7 @@ export function NotificationBell() {
                 }`}
               >
                 <span className="block font-medium text-foreground">
-                  {label(n.template_code, n.context)}
+                  {notificationLabel(n.template_code, n.context)}
                 </span>
                 <span className="mt-0.5 block text-[10px] text-muted-foreground">
                   {fmtRelative(n.created_at)}
@@ -101,6 +110,13 @@ export function NotificationBell() {
             </li>
           ))}
         </ul>
+        <div className="mt-1 border-t pt-1">
+          <Button asChild size="sm" variant="ghost" className="h-8 w-full justify-between px-2 text-[11px]">
+            <Link to="/notifications" onClick={() => setOpen(false)}>
+              View all notifications <ChevronRight className="size-3.5" aria-hidden />
+            </Link>
+          </Button>
+        </div>
       </PopoverContent>
     </Popover>
   );

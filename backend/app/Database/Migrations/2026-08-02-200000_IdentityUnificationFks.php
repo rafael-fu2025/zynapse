@@ -83,8 +83,8 @@ final class IdentityUnificationFks extends Migration
                   AND INDEX_NAME <> 'PRIMARY'
             ");
             $uniqueIndexes = [];
-            while ($row = $r->fetch_array(MYSQLI_NUM)) {
-                $uniqueIndexes[] = $row[0];
+            foreach ($r->getResultArray() as $row) {
+                $uniqueIndexes[] = $row['INDEX_NAME'];
             }
             foreach ($uniqueIndexes as $idx) {
                 // Don't drop the FK constraint if it shows up.
@@ -94,7 +94,7 @@ final class IdentityUnificationFks extends Migration
                       AND TABLE_NAME = '{$legacy}'
                       AND CONSTRAINT_NAME = '{$idx}'
                 ");
-                if ($r2->num_rows === 0) {
+                if ($r2->getNumRows() === 0) {
                     // Standalone unique index, safe to drop.
                     $this->db->query("ALTER TABLE `{$legacy}` DROP INDEX `{$idx}`");
                 }

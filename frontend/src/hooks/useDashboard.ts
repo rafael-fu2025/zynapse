@@ -8,7 +8,7 @@ import type { ApiEnvelopeError } from '@/api/envelope';
 export interface DashboardCounters {
   clinic?: { open_encounters: number; closed_encounters: number };
   counselling?: { open_sessions: number; closed_sessions: number };
-  facilities?: { units_idle: number; units_processing: number; units_awaiting: number };
+  facilities?: { units_idle: number; units_processing: number; units_awaiting: number; at_risk: number };
   referrals?: {
     submitted: number;
     acknowledged: number;

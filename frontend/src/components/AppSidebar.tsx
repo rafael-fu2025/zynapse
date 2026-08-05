@@ -8,6 +8,7 @@
  */
 import {
   BarChart3,
+  Bell,
   Boxes,
   CalendarClock,
   ContactRound,
@@ -52,6 +53,12 @@ interface NavItem {
    *   - `string[]`    : any-of the listed perms
    */
   permission: string | string[] | null;
+  /**
+   * Hide this item from admin (the `*` wildcard holder). Used for
+   * patient-facing surfaces (e.g. "My portal") that are empty for
+   * admin since admin has no student/employee record.
+   */
+  hideForAdmin?: boolean;
 }
 
 function hasAnyPermission(state: ReturnType<typeof useAuthStore.getState>, perm: string | string[] | null): boolean {
@@ -64,20 +71,25 @@ const NAV_SECTIONS: ReadonlyArray<{ title: string; items: ReadonlyArray<NavItem>
   {
     title: 'Overview',
     items: [
-      { label: 'Dashboard', href: '/', icon: LayoutDashboard, permission: null },
+      // Dashboard is a staff/ops launchpad — pure students (no
+      // employee.portal.read) get their portal instead, so the empty
+      // Dashboard nav entry is hidden for them.
+      { label: 'Dashboard', href: '/', icon: LayoutDashboard, permission: 'employee.portal.read' },
       // My portal — both staff and students can open `/me`; the
       // router dispatches to the right surface based on the
       // caller's permissions. Phase 13 extends the sidebar to
-      // accept anyOf permission predicates.
-      { label: 'My portal', href: '/me', icon: IdCard, permission: ['employee.portal.read', 'student.portal.read'] },
+      // accept anyOf permission predicates. Hidden for admin: the
+      // wildcard would route them to the (empty) student portal.
+      { label: 'My portal', href: '/me', icon: IdCard, permission: ['employee.portal.read', 'student.portal.read'], hideForAdmin: true },
+      { label: 'Notifications', href: '/notifications', icon: Bell, permission: 'notifications.read' },
     ],
   },
   {
     title: 'Clinic',
     items: [
       { label: 'Encounters', href: '/clinic', icon: HeartPulse, permission: 'clinic.encounters.read' },
-      { label: 'Patients', href: '/patients', icon: ContactRound, permission: 'clinic.patients.read' },
       { label: 'Appointments', href: '/appointments', icon: CalendarClock, permission: 'clinic.appointments.read' },
+      { label: 'Patients', href: '/patients', icon: ContactRound, permission: 'clinic.patients.read' },
       { label: 'Inventory', href: '/inventory', icon: Boxes, permission: 'clinic.inventory.read' },
       { label: 'Check-in Kiosk', href: '/kiosk', icon: ScanLine, permission: 'clinic.checkin.record' },
     ],
@@ -112,6 +124,7 @@ const NAV_SECTIONS: ReadonlyArray<{ title: string; items: ReadonlyArray<NavItem>
 
 export function AppSidebar() {
   const state = useAuthStore();
+  const isAdmin = hasPermission(state, '*');
   const { pathname } = useLocation();
   const { setOpenMobile } = useSidebar();
 
@@ -143,7 +156,7 @@ export function AppSidebar() {
                   aria-hidden
                   className="size-8 shrink-0 scale-150 object-contain"
                 />
-                <span className="truncate font-semibold tracking-wide group-data-[collapsible=icon]:hidden">
+                <span className="ml-3 truncate font-semibold tracking-wide group-data-[collapsible=icon]:hidden">
                   SYNAPSE
                 </span>
               </NavLink>
@@ -155,7 +168,7 @@ export function AppSidebar() {
       <SidebarContent>
         {NAV_SECTIONS.map((section) => {
           const items = section.items.filter(
-            (i) => hasAnyPermission(state, i.permission),
+            (i) => !(i.hideForAdmin && isAdmin) && hasAnyPermission(state, i.permission),
           );
           if (items.length === 0) return null;
 

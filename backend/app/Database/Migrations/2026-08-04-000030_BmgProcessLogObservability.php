@@ -71,17 +71,35 @@ final class BmgProcessLogObservability extends Migration
             $this->forge->addColumn('facilities_bmg_process_logs', $fields);
         }
 
-        $this->db->query(<<<'SQL'
-            ALTER TABLE `facilities_bmg_process_logs`
-                ADD CONSTRAINT `chk_pl_oxygen`
-                CHECK (`oxygen_pct` IS NULL OR (`oxygen_pct` >= 0 AND `oxygen_pct` <= 25))
-        SQL);
-        $this->db->query(<<<'SQL'
-            ALTER TABLE `facilities_bmg_process_logs`
-                ADD CONSTRAINT `chk_pl_calibration`
-                CHECK (`calibration_status` IS NULL
-                       OR `calibration_status` IN ('ok','due','overdue'))
-        SQL);
+        // Idempotent: only add CHECK constraints if they don't
+        // already exist (a re-applied migration must not throw on
+        // duplicate constraint names).
+        if ($this->constraintDoesNotExist('facilities_bmg_process_logs', 'chk_pl_oxygen')) {
+            $this->db->query(<<<'SQL'
+                ALTER TABLE `facilities_bmg_process_logs`
+                    ADD CONSTRAINT `chk_pl_oxygen`
+                    CHECK (`oxygen_pct` IS NULL OR (`oxygen_pct` >= 0 AND `oxygen_pct` <= 25))
+            SQL);
+        }
+        if ($this->constraintDoesNotExist('facilities_bmg_process_logs', 'chk_pl_calibration')) {
+            $this->db->query(<<<'SQL'
+                ALTER TABLE `facilities_bmg_process_logs`
+                    ADD CONSTRAINT `chk_pl_calibration`
+                    CHECK (`calibration_status` IS NULL
+                           OR `calibration_status` IN ('ok','due','overdue'))
+            SQL);
+        }
+    }
+
+    private function constraintDoesNotExist(string $table, string $constraint): bool
+    {
+        $r = $this->db->query(
+            "SELECT CONSTRAINT_NAME FROM information_schema.TABLE_CONSTRAINTS"
+            . " WHERE CONSTRAINT_SCHEMA = DATABASE()"
+            . "   AND TABLE_NAME = " . $this->db->escape($table)
+            . "   AND CONSTRAINT_NAME = " . $this->db->escape($constraint)
+        );
+        return $r->getNumRows() === 0;
     }
 
     public function down(): void
@@ -89,8 +107,8 @@ final class BmgProcessLogObservability extends Migration
         if (! $this->db->tableExists('facilities_bmg_process_logs')) {
             return;
         }
-        $this->db->query('ALTER TABLE `facilities_bmg_process_logs` DROP CHECK `chk_pl_oxygen`');
-        $this->db->query('ALTER TABLE `facilities_bmg_process_logs` DROP CHECK `chk_pl_calibration`');
+        $this->dropConstraintIfExists('facilities_bmg_process_logs', 'chk_pl_oxygen');
+        $this->dropConstraintIfExists('facilities_bmg_process_logs', 'chk_pl_calibration');
         $drop = [];
         foreach (['oxygen_pct', 'device_id', 'calibration_status'] as $col) {
             if ($this->db->fieldExists($col, 'facilities_bmg_process_logs')) {
@@ -99,6 +117,27 @@ final class BmgProcessLogObservability extends Migration
         }
         if ($drop !== []) {
             $this->forge->dropColumn('facilities_bmg_process_logs', $drop);
+        }
+    }
+
+    /**
+     * Drop a CHECK constraint only if it exists. Required because
+     * MariaDB 10.4 doesn't support `DROP CHECK` and bare `DROP
+     * CONSTRAINT chk_*` throws "check that it exists" when the
+     * constraint was already removed by a prior run.
+     */
+    private function dropConstraintIfExists(string $table, string $constraint): void
+    {
+        $r = $this->db->query(
+            "SELECT CONSTRAINT_NAME FROM information_schema.TABLE_CONSTRAINTS"
+            . " WHERE CONSTRAINT_SCHEMA = DATABASE()"
+            . "   AND TABLE_NAME = " . $this->db->escape($table)
+            . "   AND CONSTRAINT_NAME = " . $this->db->escape($constraint)
+        );
+        if ($r->getNumRows() > 0) {
+            $this->db->query(
+                "ALTER TABLE `{$table}` DROP CONSTRAINT `{$constraint}`"
+            );
         }
     }
 }

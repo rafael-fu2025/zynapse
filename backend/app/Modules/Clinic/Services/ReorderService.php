@@ -9,6 +9,7 @@ use App\Modules\Shared\BaseService;
 use App\Modules\Shared\StateMachineException;
 use App\Pagination\KeysetPaginator;
 use App\Services\Audit\AuditOutboxService;
+use App\Services\Notify\NotificationOutboxService;
 use DateTimeImmutable;
 use DateTimeZone;
 use Modules\Clinic\DTOs\ReorderDto;
@@ -56,6 +57,7 @@ final class ReorderService extends BaseService
     public function __construct(
         private readonly ClinicPolicy $policy,
         private readonly AuditOutboxService $audit,
+        private readonly NotificationOutboxService $notify,
     ) {
         parent::__construct();
     }
@@ -167,6 +169,10 @@ final class ReorderService extends BaseService
                 $medicineId = (int) $med['id'];
                 $threshold  = (int) $med['reorder_threshold'];
 
+                // Lock the item row so two concurrent auto-checks cannot
+                // both pass the open-request probe and file duplicates.
+                $this->selectForUpdate('clinic_medicines', ['id' => $medicineId]);
+
                 $onHand = $this->onHand($medicineId);
                 if ($onHand > $threshold || $this->hasOpenRequest('medicine', $medicineId)) {
                     continue;
@@ -180,6 +186,7 @@ final class ReorderService extends BaseService
 
                 $id        = $this->insertRequest('medicine', $medicineId, $qty, $onHand, $threshold, $urgency, true, $userId, 'Auto-triggered by low-stock check.');
                 $created[] = $this->getDto($id)->toArray();
+                $this->notifyReorderCreated($id, $urgency);
             }
 
             // Supply items: same heuristic against the ledger counter.
@@ -192,7 +199,10 @@ final class ReorderService extends BaseService
             foreach ($items as $item) {
                 $itemId    = (int) $item['id'];
                 $threshold = (int) $item['reorder_level'];
-                $onHand    = (int) $item['quantity_on_hand'];
+
+                // Lock the item row (see medicine loop above).
+                $this->selectForUpdate('clinic_inventory_items', ['id' => $itemId]);
+                $onHand = (int) $item['quantity_on_hand'];
 
                 if ($onHand > $threshold || $this->hasOpenRequest('supply', $itemId)) {
                     continue;
@@ -203,6 +213,7 @@ final class ReorderService extends BaseService
 
                 $id        = $this->insertRequest('supply', $itemId, $qty, $onHand, $threshold, $urgency, true, $userId, 'Auto-triggered by low-stock check.');
                 $created[] = $this->getDto($id)->toArray();
+                $this->notifyReorderCreated($id, $urgency);
             }
 
             return $created;
@@ -269,6 +280,19 @@ final class ReorderService extends BaseService
     }
 
     // ------------------------------------------------------------ helpers
+
+    private function notifyReorderCreated(int $reorderId, string $urgency): void
+    {
+        $this->notify->enqueueToPermissions(
+            ['clinic.reorders.read'],
+            'reorder.created',
+            [
+                'resource_code' => 'reorder#' . $reorderId,
+                'next_status'   => 'pending',
+                'urgency'       => $urgency,
+            ],
+        );
+    }
 
     private function insertRequest(string $itemType, int $itemId, int $qty, int $onHand, int $threshold, string $urgency, bool $auto, int $userId, ?string $note): int
     {
