@@ -42,7 +42,10 @@
   --sidebar-foreground: oklch(0.985 0 0);
   --sidebar-primary: oklch(0.985 0 0);
   --sidebar-primary-foreground: #800000;
-  --sidebar-accent: #800000;
+  /* Accent is a LIGHTER maroon than the #800000 rail so hover and
+     active nav items visibly highlight (previously it matched the
+     background exactly, so hover/active had no visible effect). */
+  --sidebar-accent: #9a1f1f;
   --sidebar-accent-foreground: oklch(0.985 0 0);
   --sidebar-border: oklch(1 0 0 / 12%);
   --sidebar-ring: oklch(0.985 0 0);
@@ -77,7 +80,10 @@
   --sidebar-foreground: oklch(0.985 0 0);
   --sidebar-primary: oklch(0.985 0 0);
   --sidebar-primary-foreground: #800000;
-  --sidebar-accent: #800000;
+  /* Accent is a LIGHTER maroon than the #800000 rail so hover and
+     active nav items visibly highlight (previously it matched the
+     background exactly, so hover/active had no visible effect). */
+  --sidebar-accent: #9a1f1f;
   --sidebar-accent-foreground: oklch(0.985 0 0);
   --sidebar-border: oklch(1 0 0 / 14%);
   --sidebar-ring: oklch(0.985 0 0);

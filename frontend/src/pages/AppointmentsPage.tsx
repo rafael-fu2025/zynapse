@@ -36,6 +36,7 @@ import {
   Eye,
   Loader2,
   Pencil,
+  Search,
   Stethoscope,
   X,
 } from 'lucide-react';
@@ -82,9 +83,11 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import {
   useAppointment,
   useAppointments,
+  useAppointmentSearch,
   useScheduleAppointment,
   useTransitionAppointment,
   useUpdateAppointment,
@@ -607,12 +610,19 @@ export default function AppointmentsPage() {
   const [editing, setEditing] = useState<Appointment | null>(null);
   const [viewing, setViewing] = useState<Appointment | null>(null);
   const [confirm, setConfirm] = useState<ConfirmAction | null>(null);
+  // Live search (2026-08-05) — mirrors the Patients page: `search` is
+  // the raw input, debounced 300ms, and only terms >= 2 chars trigger a
+  // dedicated search query which REPLACES the paged list while active.
+  const [search, setSearch] = useState('');
+  const debouncedSearch = useDebouncedValue(search, 300);
+  const searching = debouncedSearch.trim().length >= 2;
 
   // Status filter pushes a `?status=` query param to the backend;
   // the tabs are client-side over the loaded rows. This keeps the
   // list stable as the user clicks between Upcoming / Past without
   // a refetch, while a status change does refetch the canonical list.
   const list = useAppointments(cursor, 25, statusFilter === 'all' ? null : statusFilter);
+  const searchQuery = useAppointmentSearch(debouncedSearch, statusFilter);
   const transition = useTransitionAppointment();
   const providerName = useProviderNameLookup();
 
@@ -633,9 +643,14 @@ export default function AppointmentsPage() {
   // Derive tab buckets client-side. Tabs do NOT refetch.
   const now = Date.now();
   const rows = useMemo<Appointment[]>(
-    () => list.data?.data ?? [],
-    [list.data],
+    () => (searching ? (searchQuery.data ?? []) : (list.data?.data ?? [])),
+    [searching, searchQuery.data, list.data],
   );
+  // While a search is active the results come from the dedicated search
+  // query; otherwise from the paged list — same split as PatientsPage.
+  const loading = searching ? searchQuery.isLoading : list.isLoading;
+  const errored = searching ? searchQuery.isError : list.isError;
+  const retry = () => void (searching ? searchQuery.refetch() : list.refetch());
   const counts = useMemo(() => {
     let upcoming = 0;
     let past = 0;
@@ -662,6 +677,31 @@ export default function AppointmentsPage() {
           <h1 className="text-xl font-semibold text-foreground">Appointments</h1>
           <p className="text-sm text-muted-foreground">Times shown in Asia/Manila; stored in UTC.</p>
         </div>
+      </header>
+
+      {/* Live-search toolbar — same layout as the Patients page: a
+          bordered card with the magnifier icon INSIDE the input on the
+          left and the actions on the right. Typing >= 2 chars searches
+          as you type (debounced); clearing restores the paged list. */}
+      <section className="flex flex-wrap items-end justify-between gap-3 rounded-xl border bg-card p-3">
+        <div className="w-full space-y-1 sm:w-72">
+          <Label htmlFor="appt-search" className="text-xs">Search</Label>
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              id="appt-search"
+              aria-label="Search appointments"
+              placeholder="Search number, name, ID, provider, date…"
+              className="pl-9"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+          </div>
+        </div>
+        {/* items-end keeps the unlabeled Schedule button bottom-aligned
+            with the Status select field (whose label makes it taller) —
+            items-center would float the button against the block's
+            middle instead of lining it up with the field. */}
         <div className="flex flex-wrap items-end gap-2">
           <div className="space-y-1">
             <Label id="appt-status-label" className="text-xs">Status</Label>
@@ -686,7 +726,7 @@ export default function AppointmentsPage() {
             {openSchedule && <ScheduleDialog mode="create" onClose={() => setOpenSchedule(false)} />}
           </Dialog>
         </div>
-      </header>
+      </section>
 
       <Tabs value={tab} onValueChange={(v) => setTab(v as FilterTab)}>
         <TabsList>
@@ -710,22 +750,22 @@ export default function AppointmentsPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {list.isLoading && (
+                {loading && (
                   <TableRow>
                     <TableCell colSpan={7} className="px-3 py-6 text-center text-muted-foreground">
                       <Loader2 className="mx-auto size-4 animate-spin" />
                     </TableCell>
                   </TableRow>
                 )}
-                {!list.isLoading && !list.isError && visibleRows.length === 0 && (
+                {!loading && !errored && visibleRows.length === 0 && (
                   <TableRow>
                     <TableCell colSpan={7} className="px-3 py-6 text-center text-muted-foreground">
-                      No appointments in this view.
+                      {searching ? 'No matches.' : 'No appointments in this view.'}
                     </TableCell>
                   </TableRow>
                 )}
-                {list.isError && !list.isLoading && (
-                  <QueryErrorRow colSpan={7} message="Failed to load appointments." onRetry={() => void list.refetch()} pending={list.isFetching} />
+                {errored && !loading && (
+                  <QueryErrorRow colSpan={7} message="Failed to load appointments." onRetry={retry} pending={searching ? searchQuery.isFetching : list.isFetching} />
                 )}
                 {visibleRows.map((a) => (
                   <AppointmentRow
@@ -745,19 +785,19 @@ export default function AppointmentsPage() {
           </section>
 
           {/* Mobile: stacked cards from the same visible rows. */}
-          {list.isLoading && (
+          {loading && (
             <p className="py-6 text-center text-sm text-muted-foreground md:hidden" role="status">
               <Loader2 className="mx-auto size-4 animate-spin" />
             </p>
           )}
-          {list.isError && !list.isLoading && (
+          {errored && !loading && (
             <div className="rounded-xl border border-destructive/30 bg-destructive/5 p-4 text-center text-sm text-destructive md:hidden">
               <p>Failed to load appointments.</p>
-              <Button variant="outline" size="sm" className="mt-2" onClick={() => void list.refetch()} disabled={list.isFetching}>Retry</Button>
+              <Button variant="outline" size="sm" className="mt-2" onClick={retry} disabled={searching ? searchQuery.isFetching : list.isFetching}>Retry</Button>
             </div>
           )}
-          {!list.isLoading && !list.isError && visibleRows.length === 0 && (
-            <p className="rounded-xl border border-dashed p-6 text-center text-sm text-muted-foreground md:hidden">No appointments in this view.</p>
+          {!loading && !errored && visibleRows.length === 0 && (
+            <p className="rounded-xl border border-dashed p-6 text-center text-sm text-muted-foreground md:hidden">{searching ? 'No matches.' : 'No appointments in this view.'}</p>
           )}
           <MobileCardList>
             {visibleRows.map((a) => (
@@ -775,22 +815,24 @@ export default function AppointmentsPage() {
             ))}
           </MobileCardList>
 
-          <nav className="flex items-center justify-between" aria-label="pagination">
-            <p className="text-xs text-muted-foreground">Page {history.length}</p>
-            <div className="flex gap-2">
-              <Button variant="outline" size="sm" onClick={prevPage} disabled={history.length < 2}>
-                <ChevronLeft /> Prev
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={nextPage}
-                disabled={list.data?.next === null || list.data?.next === undefined}
-              >
-                Next <ChevronRight />
-              </Button>
-            </div>
-          </nav>
+          {!searching && (
+            <nav className="flex items-center justify-between" aria-label="pagination">
+              <p className="text-xs text-muted-foreground">Page {history.length}</p>
+              <div className="flex gap-2">
+                <Button variant="outline" size="sm" onClick={prevPage} disabled={history.length < 2}>
+                  <ChevronLeft /> Prev
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={nextPage}
+                  disabled={list.data?.next === null || list.data?.next === undefined}
+                >
+                  Next <ChevronRight />
+                </Button>
+              </div>
+            </nav>
+          )}
         </TabsContent>
       </Tabs>
 

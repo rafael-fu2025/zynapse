@@ -1430,7 +1430,11 @@ export default function FacilitiesPage() {
             Actions <ChevronDown className="size-3.5" aria-hidden />
           </Button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="w-52">
+        {/* The BMG unit menu grew to ~15 actions (Start / Finish /
+            Release / logs / analytics / compliance / history / …), taller
+            than most viewports. Bound it and let it scroll instead of
+            cropping at the screen edge. */}
+        <DropdownMenuContent align="end" className="max-h-[min(24rem,60vh)] w-52 overflow-y-auto">
           <DropdownMenuItem className="min-h-11" onSelect={() => setOpenEdit(u)}>
             <Pencil /> Edit drum
           </DropdownMenuItem>
@@ -1542,6 +1546,11 @@ export default function FacilitiesPage() {
           <Button variant="outline" onClick={() => setOpenHistory('all')}>
             <History /> Batch history
           </Button>
+          {/* The primary "New drum" action sits ALONE at the far right,
+              visually separated from the utility buttons by a divider,
+              so the prominent CTA reads as its own group. (Waste
+              categories was removed — it's already in the sidebar.) */}
+          <div className="mx-1 hidden h-6 w-px bg-border sm:block" aria-hidden />
           <Dialog open={openCreate} onOpenChange={setOpenCreate}>
             <Button onClick={() => setOpenCreate(true)}>
               <Plus /> New drum
@@ -1553,9 +1562,6 @@ export default function FacilitiesPage() {
               />
             )}
           </Dialog>
-          <Button variant="outline" asChild>
-            <Link to="/facilities/waste-categories"><Boxes /> Waste categories</Link>
-          </Button>
         </div>
       </header>
 

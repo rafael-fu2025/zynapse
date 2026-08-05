@@ -1248,6 +1248,45 @@ final class BmgService extends BaseService
     }
 
     /**
+     * Full decorated DTO for a single waste category — the SAME shape
+     * `listWasteCategories` returns (including the derived historical
+     * trial stats `historical_avg_days` / `sample_count` / `expected_days`).
+     *
+     * Every mutating endpoint (update/archive/unarchive) returns this so
+     * the frontend `wasteCategorySchema` parse succeeds. Previously these
+     * returned a PARTIAL row, which made the edit/archive form surface a
+     * spurious `Required` ZodError (toast "Required", form never closed)
+     * even though the write itself had succeeded.
+     *
+     * @return array<string, mixed>
+     */
+    private function wasteCategoryDto(int $categoryId): array
+    {
+        $row = $this->db->table('facilities_waste_categories')
+            ->where('id', $categoryId)
+            ->where('tenant_id', CurrentTenant::id())
+            ->get()
+            ->getRowArray();
+
+        $stats = $this->categoryDurationStats([$categoryId]);
+        $hist  = $stats[$categoryId] ?? null;
+        $ref   = $row !== null && $row['reference_duration_days'] !== null ? (int) $row['reference_duration_days'] : null;
+
+        return [
+            'id'                      => (int) $row['id'],
+            'code'                    => (string) $row['code'],
+            'name'                    => (string) $row['name'],
+            'description'             => $row['description'] !== null ? (string) $row['description'] : null,
+            'expected_yield_pct'      => $row['expected_yield_pct'] !== null ? (float) $row['expected_yield_pct'] : null,
+            'reference_duration_days' => $ref,
+            'historical_avg_days'     => $hist !== null ? round($hist['avg_days'], 1) : null,
+            'sample_count'            => $hist !== null ? $hist['samples'] : 0,
+            'expected_days'           => $hist !== null ? (int) round($hist['avg_days']) : $ref,
+            'is_active'               => (bool) $row['is_active'],
+        ];
+    }
+
+    /**
      * Update a waste category. `code` is immutable (matches the legacy
      * rule and the `UNIQUE` index that backs it). All other fields are
      * optional so the form can PATCH only the changed values. Soft
@@ -1301,16 +1340,7 @@ final class BmgService extends BaseService
                 'resource_code' => (string) $cat['code'],
             ]);
 
-            $fresh = $this->db->table('facilities_waste_categories')->where('id', $categoryId)->get()->getRowArray();
-            return [
-                'id'                      => (int) $fresh['id'],
-                'code'                    => (string) $fresh['code'],
-                'name'                    => (string) $fresh['name'],
-                'description'             => $fresh['description'] !== null ? (string) $fresh['description'] : null,
-                'expected_yield_pct'      => $fresh['expected_yield_pct'] !== null ? (float) $fresh['expected_yield_pct'] : null,
-                'reference_duration_days' => $fresh['reference_duration_days'] !== null ? (int) $fresh['reference_duration_days'] : null,
-                'is_active'               => (bool) $fresh['is_active'],
-            ];
+            return $this->wasteCategoryDto($categoryId);
         });
     }
 
@@ -1361,12 +1391,7 @@ final class BmgService extends BaseService
                 'resource_code' => (string) $cat['code'],
             ]);
 
-            return [
-                'id'        => (int) $cat['id'],
-                'code'      => (string) $cat['code'],
-                'name'      => (string) $cat['name'],
-                'is_active' => false,
-            ];
+            return $this->wasteCategoryDto($categoryId);
         });
     }
 
@@ -1403,12 +1428,7 @@ final class BmgService extends BaseService
                 'resource_code' => (string) $cat['code'],
             ]);
 
-            return [
-                'id'        => (int) $cat['id'],
-                'code'      => (string) $cat['code'],
-                'name'      => (string) $cat['name'],
-                'is_active' => true,
-            ];
+            return $this->wasteCategoryDto($categoryId);
         });
     }
 

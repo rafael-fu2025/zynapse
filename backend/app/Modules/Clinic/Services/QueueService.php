@@ -409,7 +409,7 @@ final class QueueService extends BaseService
     private function todayRows(): array
     {
         return $this->db->table('clinic_queue_entries q')
-            ->select('q.id, q.encounter_id, q.position, q.status, q.outcome, q.called_at, q.started_at, q.finished_at, q.created_at, e.status AS encounter_status, e.patient_user_id, e.patient_school_id, e.guest_name, e.chief_complaint, e.outcome AS encounter_outcome, u.first_name, u.last_name')
+            ->select('q.id, q.encounter_id, q.position, q.status, q.outcome, q.called_at, q.started_at, q.finished_at, q.created_at, e.status AS encounter_status, e.patient_user_id, e.patient_school_id, e.guest_name, e.chief_complaint, e.outcome AS encounter_outcome, e.station_id, u.first_name, u.last_name')
             ->join('clinic_encounters e', 'e.id = q.encounter_id')
             // Patients are `users` (identity-consolidated) — one join
             // covers both students and employees queueing at the kiosk.
@@ -433,7 +433,7 @@ final class QueueService extends BaseService
     private function getRow(int $id): array
     {
         $row = $this->db->table('clinic_queue_entries q')
-            ->select('q.id, q.encounter_id, q.position, q.status, q.outcome, q.called_at, q.started_at, q.finished_at, q.created_at, e.status AS encounter_status, e.patient_user_id, e.patient_school_id, e.guest_name, e.chief_complaint, e.outcome AS encounter_outcome, u.first_name, u.last_name')
+            ->select('q.id, q.encounter_id, q.position, q.status, q.outcome, q.called_at, q.started_at, q.finished_at, q.created_at, e.status AS encounter_status, e.patient_user_id, e.patient_school_id, e.guest_name, e.chief_complaint, e.outcome AS encounter_outcome, e.station_id, u.first_name, u.last_name')
             ->join('clinic_encounters e', 'e.id = q.encounter_id')
             ->join(
                 'users u',
@@ -468,6 +468,9 @@ final class QueueService extends BaseService
         if (! $public) {
             $out['patient_school_id'] = (string) $r['patient_school_id'];
             $out['chief_complaint']   = (string) $r['chief_complaint'];
+            // Kiosk station that opened the visit — null for
+            // appointments / desk-created encounters.
+            $out['station_id'] = $r['station_id'] !== null ? (string) $r['station_id'] : null;
             // Full registry name (`First Last`) for the Queue-tab id
             // tooltip; null for guests/orphans. Mirrors EncounterDto.
             $out['patient_name'] = $this->patientFullName($r);

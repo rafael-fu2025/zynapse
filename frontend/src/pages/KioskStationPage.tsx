@@ -50,6 +50,15 @@ const PURPOSE_OPTIONS = [
   'Injury',
 ] as const;
 
+// The three physical check-in stations. The selected value is persisted
+// (localStorage via the controller) and sent as `station_id` on every
+// check-in; it lands on both the checkin row and the opened encounter.
+const STATION_OPTIONS = [
+  { value: 'Kiosk-01', label: 'Kiosk 1' },
+  { value: 'Kiosk-02', label: 'Kiosk 2' },
+  { value: 'Kiosk-03', label: 'Kiosk 3' },
+] as const;
+
 function useDebounced<T>(value: T, ms: number): T {
   const [v, setV] = useState(value);
   useEffect(() => {
@@ -210,6 +219,29 @@ export default function KioskStationPage() {
         </header>
 
         <section className="space-y-4 rounded-2xl border bg-card p-6 shadow-sm">
+          {/* Which station this device is — Kiosk 1 / 2 / 3. The choice
+              persists and flows into every check-in + encounter. */}
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="text-xs font-medium text-muted-foreground">Check-in station</span>
+            <div className="flex gap-1 rounded-xl border bg-muted/40 p-1">
+              {STATION_OPTIONS.map((s) => (
+                <button
+                  key={s.value}
+                  type="button"
+                  onClick={() => k.setStation(s.value)}
+                  aria-pressed={k.station === s.value}
+                  className={cn(
+                    'rounded-lg px-4 py-1.5 text-sm font-medium transition-colors',
+                    k.station === s.value
+                      ? 'bg-primary text-primary-foreground shadow-sm'
+                      : 'text-muted-foreground hover:bg-muted',
+                  )}
+                >
+                  {s.label}
+                </button>
+              ))}
+            </div>
+          </div>
           {/* ID + Name in one row — ID keeps a maroon outline; the name
               field is underline-only (no container). Both normal size. */}
           {/* ID (combobox) + Name (guest) in one row — the autocomplete

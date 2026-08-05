@@ -34,7 +34,7 @@ final class ClinicService extends BaseService
         $this->policy->check('list');
 
         $builder = $this->db->table('clinic_encounters e')
-            ->select("e.id, e.patient_user_id, e.patient_school_id, e.appointment_id, e.chief_complaint, e.triage_priority, e.triage_override, e.diagnosis, e.status, e.attending_user_id, e.started_at, e.closed_at, e.created_at, u.first_name, u.last_name")
+            ->select("e.id, e.patient_user_id, e.patient_school_id, e.appointment_id, e.chief_complaint, e.triage_priority, e.triage_override, e.diagnosis, e.status, e.attending_user_id, e.station_id, e.started_at, e.closed_at, e.created_at, u.first_name, u.last_name")
             // Patients are `users` (identity-consolidated) — the join
             // powers the patient-name tooltip in the Closed tab. When
             // the encounter only carries a school id (legacy/demo

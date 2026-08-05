@@ -20,10 +20,14 @@ interface AppointmentPage {
   next: string | null;
 }
 
-export function useAppointments(cursor: string | null, limit = 25, status: Appointment['status'] | null = null) {
+export function useAppointments(
+  cursor: string | null,
+  limit = 25,
+  status: Appointment['status'] | null = null,
+) {
   return useQuery<AppointmentPage, ApiEnvelopeError>({
     // The status filter is part of the cache key so toggling it
-    // triggers a fresh fetch (and so a future "All" query does not
+    // triggers a fresh fetch (and a future "All" query does not
     // accidentally render the previously-filtered list).
     queryKey: ['appointments', { cursor, limit, status }],
     // Appointments are auto-checked-in server-side (the queue sweep +
@@ -40,6 +44,31 @@ export function useAppointments(cursor: string | null, limit = 25, status: Appoi
       );
       const data = z.array(appointmentSchema).parse(res.data);
       return { data, next: res.data?.next ?? null };
+    },
+  });
+}
+
+/**
+ * Live free-text search over appointments — mirrors the Patients
+ * page's `useStudentSearch`: a SEPARATE query from the paged list,
+ * enabled only once the debounced term is >= 2 chars, returning a
+ * flat (first-page) array. Case-insensitivity comes from the DB
+ * collation; the backend also matches formatted month/date/time
+ * (e.g. `aug`, `August`, `08/05`, `2:00 pm`).
+ */
+export function useAppointmentSearch(q: string, status: Appointment['status'] | 'all' = 'all') {
+  return useQuery<Appointment[], ApiEnvelopeError>({
+    queryKey: ['appointments', 'search', { q, status }],
+    enabled: q.trim().length >= 2,
+    queryFn: async () => {
+      const params = new URLSearchParams();
+      params.set('limit', '25');
+      if (status !== 'all') params.set('status', status);
+      params.set('q', q.trim());
+      const res = await apiClient.get<{ data: unknown[]; next: string | null }>(
+        `/clinic/appointments?${params.toString()}`,
+      );
+      return z.array(appointmentSchema).parse(res.data);
     },
   });
 }

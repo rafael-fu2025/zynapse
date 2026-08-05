@@ -10,6 +10,7 @@ use App\Modules\Shared\StateMachineException;
 use App\Pagination\KeysetPaginator;
 use App\Services\Audit\AuditOutboxService;
 use App\Services\Notify\NotificationOutboxService;
+use CodeIgniter\Database\RawSql;
 use DateTimeImmutable;
 use DateTimeZone;
 use Modules\Clinic\DTOs\AppointmentDto;
@@ -50,21 +51,81 @@ final class AppointmentService extends BaseService
     /**
      * @return array{data: array<int, array<string, mixed>>, next: ?string, count: int}
      */
-    public function list(?string $cursor, int $limit, ?string $status): array
+    public function list(?string $cursor, int $limit, ?string $status, ?string $q = null): array
     {
         $this->policy->check('appointmentsRead');
 
-        $builder = $this->db->table('clinic_appointments')
-            ->select('id, patient_user_id, patient_school_id, provider_user_id, scheduled_at, status, reason, created_at')
-            ->where('archived_at', null)
-            ->orderBy('created_at', 'DESC')
-            ->orderBy('id', 'DESC');
+        $builder = $this->db->table('clinic_appointments AS a')
+            ->select('a.id, a.patient_user_id, a.patient_school_id, a.provider_user_id, a.scheduled_at, a.status, a.reason, a.created_at')
+            ->where('a.archived_at', null)
+            ->orderBy('a.created_at', 'DESC')
+            ->orderBy('a.id', 'DESC');
 
         if ($status !== null && $status !== '') {
-            $builder->where('status', $status);
+            $builder->where('a.status', $status);
         }
 
-        KeysetPaginator::apply($builder, $cursor, $limit);
+        // Free-text search (2026-08-05): matches the appointment #,
+        // the patient school id, the patient's name, the provider's
+        // name, or the schedule window (e.g. `2026-08-05` or `14:00`).
+        // Users are joined ONLY when a term is present so the default
+        // list stays lean — names are decorated post-query by
+        // `decorate()`. The patient join mirrors the encounter/queue
+        // fallback so legacy rows (patient_user_id NULL) still match
+        // by registry number.
+        if ($q !== null && $q !== '') {
+            // The UI placeholder hints "# · name · ID · provider · date",
+            // so users naturally type `#67`. A leading '#' is just the
+            // appointment-number hint — strip it before searching (IDs
+            // are numeric, names/numbers never legitimately start with
+            // '#', so removing every leading '#' is safe).
+            if (str_starts_with($q, '#')) {
+                $q = ltrim($q, '#');
+            }
+
+            $builder
+                ->join(
+                    'users AS pa',
+                    'pa.id = a.patient_user_id'
+                    . ' OR (a.patient_user_id IS NULL'
+                    .   ' AND (pa.student_number = a.patient_school_id'
+                    .     ' OR pa.employee_number = a.patient_school_id))',
+                    'left',
+                )
+                ->join('users AS pr', 'pr.id = a.provider_user_id', 'left')
+                ->groupStart()
+                    ->like('a.id', $q)
+                    ->orLike('a.patient_school_id', $q)
+                    ->orLike('pa.first_name', $q)
+                    ->orLike('pa.middle_name', $q)
+                    ->orLike('pa.last_name', $q)
+                    ->orLike('pr.first_name', $q)
+                    ->orLike('pr.last_name', $q)
+                    ->orLike('a.scheduled_at', $q)
+                    // Month/date/time matching (2026-08-05). The raw
+                    // `a.scheduled_at` LIKE above only matches the stored
+                    // `YYYY-MM-DD HH:MM:SS` (and its left-prefixes). Users
+                    // think in the DISPLAY format, so also match against
+                    // the formatted month name ("Aug" / "August"), the
+                    // `M/D` date, and the `M/D/YYYY` + 12h clock. The
+                    // scheduled_at is stored in UTC but rendered in
+                    // Asia/Manila (UTC+8, no DST), so CONVERT_TZ first —
+                    // otherwise a 14:00 UTC row (shown "10:00 PM") would
+                    // only match "2:00 pm", not what the user sees. All of
+                    // these are case-insensitive via the utf8mb4_unicode_ci
+                    // collation — same as the Patients live search.
+                    // NOTE: the field must be a RawSql expression — CI4
+                    // would otherwise quote the DATE_FORMAT(...) call and
+                    // the whole LIKE would silently match nothing.
+                    ->orLike(new RawSql("DATE_FORMAT(CONVERT_TZ(a.scheduled_at, '+00:00', '+08:00'), '%b %e, %Y %l:%i %p')"), $q)
+                    ->orLike(new RawSql("DATE_FORMAT(CONVERT_TZ(a.scheduled_at, '+00:00', '+08:00'), '%M %e, %Y %l:%i %p')"), $q)
+                    ->orLike(new RawSql("DATE_FORMAT(CONVERT_TZ(a.scheduled_at, '+00:00', '+08:00'), '%m/%d/%Y')"), $q)
+                    ->orLike(new RawSql("DATE_FORMAT(CONVERT_TZ(a.scheduled_at, '+00:00', '+08:00'), '%m/%d')"), $q)
+                    ->orLike(new RawSql("DATE_FORMAT(CONVERT_TZ(a.scheduled_at, '+00:00', '+08:00'), '%l:%i %p')"), $q)
+                ->groupEnd();
+        }
+
+        KeysetPaginator::apply($builder, $cursor, $limit, 'a.created_at', 'a.id');
 
         $rows = $builder->get()->getResultArray();
         $final = KeysetPaginator::finalize($rows, $limit);

@@ -22,6 +22,8 @@ export const queueEntrySchema = z.object({
   // Queue tab's Patient column; null for guests/orphans.
   patient_name: z.string().nullable().optional(),
   chief_complaint: z.string(),
+  // Kiosk station that opened the visit — mirrors Encounter.station_id.
+  station_id: z.string().nullable().optional(),
   called_at: z.string().nullable(),
   started_at: z.string().nullable(),
   finished_at: z.string().nullable(),

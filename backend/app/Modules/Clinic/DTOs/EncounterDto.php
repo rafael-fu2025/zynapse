@@ -49,6 +49,9 @@ final class EncounterDto extends BaseDTO
             'status'            => (string) $this->row['status'],
             'outcome'           => ($this->row['outcome'] ?? null) !== null ? (string) $this->row['outcome'] : null,
             'attending_user_id' => (int)    $this->row['attending_user_id'],
+            // Which kiosk opened this visit; null for appointments and
+            // desk-created encounters.
+            'station_id'        => ($this->row['station_id'] ?? null) !== null ? (string) $this->row['station_id'] : null,
             'started_at'        => (string) $this->row['started_at'],
             'closed_at'         => $this->row['closed_at'] !== null ? (string) $this->row['closed_at'] : null,
         ];

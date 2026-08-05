@@ -32,11 +32,13 @@ final class AppointmentController extends ApiController
         $cursor = (string) ($this->request->getGet('cursor') ?? '');
         $limit  = (int)    ($this->request->getGet('limit')  ?? 25);
         $status = $this->request->getGet('status');
+        $q      = $this->request->getGet('q');
 
         $page = $this->service->list(
             $cursor !== '' ? $cursor : null,
             $limit,
             is_string($status) ? $status : null,
+            is_string($q) ? $q : null,
         );
 
         return $this->ok(

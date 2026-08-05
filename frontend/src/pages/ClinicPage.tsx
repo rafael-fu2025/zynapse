@@ -25,6 +25,7 @@ import {
   ClipboardPlus,
   Loader2,
   Megaphone,
+  MonitorSmartphone,
   Pencil,
   Play,
   Plus,
@@ -143,6 +144,24 @@ const TREATMENT_LABEL: Record<TreatmentType, string> = {
   referral: 'Referral',
   other: 'Other',
 };
+
+/** Friendly station label: `Kiosk-01` → `Kiosk 1`; passes others through. */
+function stationLabel(station: string | null | undefined): string {
+  if (station === null || station === undefined || station === '') return '';
+  const m = /^Kiosk[-_]?0*(\d+)$/i.exec(station);
+  return m !== null ? `Kiosk ${m[1]}` : station;
+}
+
+/** Compact "Kiosk N" badge — shown when an encounter carries a station. */
+function StationBadge({ station, className }: { station?: string | null | undefined; className?: string }) {
+  const label = stationLabel(station);
+  if (label === '') return null;
+  return (
+    <Badge variant="outline" className={`gap-1 ${className ?? ''}`}>
+      <MonitorSmartphone className="size-3" /> {label}
+    </Badge>
+  );
+}
 
 function CreateEncounterDialog({ onClose }: { onClose: () => void }) {
   const create = useCreateEncounter();
@@ -622,6 +641,7 @@ function EncounterViewDialog({ encounter, onClose }: { encounter: Encounter; onC
               <CalendarClock className="size-3" /> From appointment #{encounter.appointment_id}
             </Badge>
           )}
+          <StationBadge station={encounter.station_id} />
         </div>
         <div className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
           <div>
@@ -763,6 +783,7 @@ function QueueTab({ onOpenCare, onOpenVitals }: QueueTabProps) {
       attending_user_id: 0,
       started_at: '',
       closed_at: null,
+      station_id: q.station_id,
     };
   }
 
@@ -828,7 +849,10 @@ function QueueTab({ onOpenCare, onOpenVitals }: QueueTabProps) {
                       <PatientIdCell id={q.patient_school_id} name={q.patient_name} />
                     </span>
                   </TableCell>
-                  <TableCell className="px-3 text-xs">{q.chief_complaint}</TableCell>
+                  <TableCell className="px-3 text-xs">
+                    {q.chief_complaint}
+                    <StationBadge station={q.station_id} className="ml-1.5" />
+                  </TableCell>
                   <TableCell className="px-3">
                     <Badge variant={QUEUE_STATUS_VARIANT[q.status]}>{q.status.replace('_', ' ')}</Badge>
                     {q.encounter_outcome !== undefined && q.encounter_outcome !== null && (
@@ -945,6 +969,7 @@ function QueueTab({ onOpenCare, onOpenVitals }: QueueTabProps) {
               <p className="text-sm font-medium text-foreground">{q.display_name}</p>
               <p className="font-mono text-[10px] text-muted-foreground"><PatientIdCell id={q.patient_school_id} name={q.patient_name} /></p>
               <MobileCardField label="Complaint"><span className="text-xs">{q.chief_complaint}</span></MobileCardField>
+              <MobileCardField label="Station"><StationBadge station={q.station_id} /></MobileCardField>
               <MobileCardActions>
                 {q.status === 'called' && (
                   <>
@@ -1629,6 +1654,7 @@ function EncounterTable(props: EncounterTableProps) {
                       <CalendarClock className="size-3" /> From appointment #{e.appointment_id}
                     </Badge>
                   )}
+                  <StationBadge station={e.station_id} className="ml-2" />
                 </TableCell>
                 <TableCell className="px-3 text-xs text-muted-foreground">{fmtUtcToApp(e.started_at)}</TableCell>
                 <TableCell className="px-3 text-xs text-muted-foreground">
@@ -1677,6 +1703,7 @@ function EncounterTable(props: EncounterTableProps) {
               {(e.appointment_id ?? null) !== null && (
                 <Badge variant="secondary" className="gap-1"><CalendarClock className="size-3" /> Appt #{e.appointment_id}</Badge>
               )}
+              <StationBadge station={e.station_id} />
             </div>
             <MobileCardField label="Patient"><PatientIdCell id={e.patient_school_id} name={e.patient_name} /></MobileCardField>
             <MobileCardField label="Started"><span className="text-xs text-muted-foreground">{fmtUtcToApp(e.started_at)}</span></MobileCardField>

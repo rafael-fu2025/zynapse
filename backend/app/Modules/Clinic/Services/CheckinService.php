@@ -270,6 +270,9 @@ final class CheckinService extends BaseService
                 'chief_complaint'   => "Kiosk check-in (pending triage) — station {$stationId}",
                 'status'            => 'open',
                 'attending_user_id' => $userId,
+                // Which kiosk the patient checked in at — mirrored onto
+                // the encounter so the clinic surface shows the source.
+                'station_id'        => $stationId,
                 'started_at'        => $now,
                 'created_at'        => $now,
                 'updated_at'        => $now,
@@ -344,6 +347,7 @@ final class CheckinService extends BaseService
             'chief_complaint'   => "Guest walk-in (pending triage) — station {$stationId}",
             'status'            => 'open',
             'attending_user_id' => $userId,
+            'station_id'        => $stationId,
             'started_at'        => $now,
             'created_at'        => $now,
             'updated_at'        => $now,

@@ -33,6 +33,9 @@ export const encounterSchema = z.object({
   // Scheduling-layer link — set when the visit was auto-opened by an
   // appointment check-in; null for walk-ins.
   appointment_id: z.number().int().positive().nullable().optional(),
+  // Kiosk station that opened the visit (e.g. Kiosk-01); null for
+  // appointments and desk-created encounters.
+  station_id: z.string().nullable().optional(),
   chief_complaint: z.string(),
   triage_priority: z.enum(TRIAGE_PRIORITIES).nullable().optional(),
   triage_override: z.boolean().optional(),
