@@ -42,6 +42,9 @@ final class BmgBatchDto extends BaseDTO
                 ? json_decode((string) $this->row['output_items'], true)
                 : $this->row['output_items'],
             'started_at'          => (string) $this->row['started_at'],
+            'expected_completion_date' => isset($this->row['expected_completion_date']) && $this->row['expected_completion_date'] !== null
+                ? (string) $this->row['expected_completion_date']
+                : null,
             'awaiting_output_at'  => $this->row['awaiting_output_at'] !== null ? (string) $this->row['awaiting_output_at'] : null,
             'finished_at'         => $this->row['finished_at'] !== null ? (string) $this->row['finished_at'] : null,
             'cancelled_at'        => $this->row['cancelled_at'] !== null ? (string) $this->row['cancelled_at'] : null,

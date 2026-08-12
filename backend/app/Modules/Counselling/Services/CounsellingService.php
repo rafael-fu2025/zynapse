@@ -50,6 +50,57 @@ final class CounsellingService extends BaseService
         ];
     }
 
+    /**
+     * Minimal patient lookup for the counselling forms (open session /
+     * book appointment). The kiosk lookup requires `clinic.patients.read`,
+     * which counsellors and clinical supervisors do NOT have. This is a
+     * narrow, counselling-scoped search (same query, no PII beyond
+     * id/kind/name/school_id) gated by `counselling.records.create` —
+     * mirrors the referrals `lookupPatient` audit fix.
+     *
+     * @return array<int, array{id: int, kind: string, name: string, school_id: string}>
+     */
+    public function lookupPatient(string $q, int $limit = 8): array
+    {
+        $this->policy->check('open');
+        $limit = max(1, min($limit, 12));
+        $qTrim = trim($q);
+        if ($qTrim === '') {
+            return [];
+        }
+
+        $rows = $this->db->table('users')
+            ->select('id, kind, first_name, last_name, middle_name, student_number, employee_number')
+            ->whereIn('kind', ['student', 'employee'])
+            ->where('archived_at', null)
+            ->groupStart()
+                ->like('student_number', $qTrim)
+                ->orLike('employee_number', $qTrim)
+                ->orLike('last_name', $qTrim)
+                ->orLike('first_name', $qTrim)
+            ->groupEnd()
+            ->orderBy('last_name', 'ASC')
+            ->orderBy('first_name', 'ASC')
+            ->limit($limit)
+            ->get()->getResultArray();
+
+        $out = [];
+        foreach ($rows as $r) {
+            $schoolId = (string) ($r['kind'] === 'student' ? $r['student_number'] : $r['employee_number']);
+            $middle   = $r['middle_name'] !== null && $r['middle_name'] !== ''
+                ? ' ' . mb_substr((string) $r['middle_name'], 0, 1) . '.'
+                : '';
+            $out[] = [
+                'id'        => (int) $r['id'],
+                'kind'      => (string) $r['kind'],
+                'name'      => trim((string) $r['last_name'] . ', ' . (string) $r['first_name'] . $middle),
+                'school_id' => $schoolId,
+            ];
+        }
+
+        return $out;
+    }
+
     public function openSession(string $patientSchoolId): SessionDto
     {
         $this->policy->check('open');

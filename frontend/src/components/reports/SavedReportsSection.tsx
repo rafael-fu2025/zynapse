@@ -46,6 +46,7 @@ import {
   type ReportModule,
 } from '@/schemas/reports';
 import { fmtUtcToApp } from '@/utils/date';
+import { titleCase } from '@/lib/utils';
 
 interface Props {
   start: string;
@@ -396,7 +397,7 @@ export function SavedReportsSection({ start, end, canConfigure, canExport }: Pro
                       <div>
                         <div className="flex flex-wrap items-center gap-2">
                           <span className="text-sm font-medium">{moduleLabel(item.module)}</span>
-                          <Badge variant={statusVariant(item.status)}>{item.status}</Badge>
+                          <Badge variant={statusVariant(item.status)}>{titleCase(item.status)}</Badge>
                         </div>
                         <p className="mt-1 text-xs text-muted-foreground">{range.start} to {range.end} · requested {fmtUtcToApp(item.generated_at)}</p>
                         <p className="text-xs text-muted-foreground">

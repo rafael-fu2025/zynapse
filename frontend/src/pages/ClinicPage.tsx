@@ -33,7 +33,6 @@ import {
   Sparkles,
   Stethoscope,
   Trash2,
-  Upload,
   UserX,
   X,
 } from 'lucide-react';
@@ -47,7 +46,7 @@ import { ConfirmDialog, type ConfirmAction } from '@/components/ConfirmDialog';
 import { QueryErrorRow } from '@/components/QueryErrorState';
 import { MobileCardList, MobileCard, MobileCardField, MobileCardActions } from '@/components/MobileCardList';
 import { PatientIdCell } from '@/components/PatientIdCell';
-import { PatientPicker } from '@/components/PatientPicker';
+import { formatQueueNumber } from '@/components/KioskCheckin';
 import { useTabParam } from '@/hooks/useTabParam';
 import { DatePicker } from '@/components/ui/date-picker';
 import { TimePicker } from '@/components/ui/time-picker';
@@ -87,12 +86,10 @@ import { Textarea } from '@/components/ui/textarea';
 import {
   useAddTreatment,
   useCloseEncounter,
-  useCreateEncounter,
   useDecideTriage,
   useEncounterNoShow,
   useEncounters,
   useEncounterVitals,
-  useImportEncounters,
   useRecordVitals,
   useSetAssessment,
   useSuggestTriage,
@@ -108,11 +105,9 @@ import {
   useUpdateStaffSchedule,
 } from '@/hooks/useStaffSchedules';
 import {
-  createEncounterSchema,
   recordVitalsSchema,
   TREATMENT_TYPES,
   TRIAGE_PRIORITIES,
-  type CreateEncounterInput,
   type Encounter,
   type RecordVitalsInput,
   type TreatmentType,
@@ -129,6 +124,7 @@ import {
 } from '@/schemas/staffSchedule';
 import { fmtUtcToApp } from '@/utils/date';
 import { statusLabel } from '@/utils/status';
+import { titleCase } from '@/lib/utils';
 
 const TRIAGE_VARIANT: Record<TriagePriority, 'secondary' | 'info' | 'warning' | 'destructive'> = {
   low: 'secondary',
@@ -163,173 +159,9 @@ function StationBadge({ station, className }: { station?: string | null | undefi
   );
 }
 
-function CreateEncounterDialog({ onClose }: { onClose: () => void }) {
-  const create = useCreateEncounter();
-  const {
-    register,
-    handleSubmit,
-    setValue,
-    watch,
-    formState: { errors },
-    reset,
-  } = useForm<CreateEncounterInput>({ resolver: zodResolver(createEncounterSchema) });
 
-  const patientId = watch('patient_school_id') ?? '';
 
-  const onSubmit = handleSubmit((values) => {
-    create.mutate(values, {
-      onSuccess: () => {
-        reset();
-        onClose();
-      },
-    });
-  });
 
-  return (
-    <DialogContent>
-      <DialogHeader>
-        <DialogTitle>New encounter</DialogTitle>
-      </DialogHeader>
-      <form onSubmit={(e) => void onSubmit(e)} className="space-y-3" noValidate>
-        <PatientPicker
-          value={patientId}
-          invalid={errors.patient_school_id !== undefined}
-          onChange={(v) => setValue('patient_school_id', v, { shouldValidate: true })}
-        />
-        {errors.patient_school_id !== undefined && (
-          <p role="alert" className="text-xs text-destructive">{errors.patient_school_id.message}</p>
-        )}
-        <div className="space-y-1.5">
-          <Label htmlFor="chief_complaint">Chief complaint</Label>
-          <Input id="chief_complaint" aria-invalid={errors.chief_complaint !== undefined} {...register('chief_complaint')} />
-          {errors.chief_complaint !== undefined && (
-            <p role="alert" className="text-xs text-destructive">{errors.chief_complaint.message}</p>
-          )}
-        </div>
-        <DialogFooter>
-          <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
-          <Button type="submit" disabled={create.isPending}>
-            {create.isPending && <Loader2 className="animate-spin" />} Create
-          </Button>
-        </DialogFooter>
-      </form>
-    </DialogContent>
-  );
-}
-
-/**
- * ImportEncountersDialog — bulk CSV upload. Mirrors the legacy
- * `ClinicController::importEncounters` endpoint:
- *   POST /clinic/encounters/import
- *   Content-Type: text/csv
- *   Body: patient_school_id,chief_complaint\n...
- * Cap is 500 rows per request; the backend is all-or-nothing and
- * returns the per-row error list in the envelope on any failure.
- *
- * The dialog lets the user either paste CSV text or pick a `.csv`
- * file. The first 5 lines are previewed so they can sanity-check
- * the header before sending.
- */
-function ImportEncountersDialog({ onClose }: { onClose: () => void }) {
-  const importEncounters = useImportEncounters();
-  const [csv, setCsv] = useState<string>(
-    'patient_school_id,chief_complaint\n2021-11111,Fever and cough\n',
-  );
-  const [fileName, setFileName] = useState<string | null>(null);
-  const [errors, setErrors] = useState<string[]>([]);
-
-  async function onPickFile(file: File) {
-    setFileName(file.name);
-    setErrors([]);
-    setCsv(await file.text());
-  }
-
-  const previewLines = csv.split(/\r\n|\r|\n/).filter((l) => l.trim() !== '').slice(0, 5);
-  const dataRowCount = Math.max(0, csv.split(/\r\n|\r|\n/).filter((l) => l.trim() !== '').length - 1);
-
-  function submit() {
-    setErrors([]);
-    importEncounters.mutate(
-      { csv },
-      {
-        onSuccess: () => onClose(),
-        onError: (err) => {
-          setErrors(err.errors.map((e) => e.message));
-        },
-      },
-    );
-  }
-
-  return (
-    <DialogContent className="max-w-2xl">
-      <DialogHeader>
-        <DialogTitle>Bulk import — encounters</DialogTitle>
-      </DialogHeader>
-      <div className="space-y-3">
-        <p className="text-xs text-muted-foreground">
-          CSV with header <code className="font-mono">patient_school_id,chief_complaint</code>.
-          All-or-nothing: any invalid row rejects the entire batch (capped at 500 rows).
-        </p>
-
-        <div className="flex items-center gap-2">
-          <label className="flex items-center gap-1.5 rounded-md border border-dashed px-3 py-1.5 text-xs cursor-pointer hover:bg-muted/50">
-            <Upload className="size-3.5" />
-            {fileName ?? 'Choose .csv file'}
-            <input
-              type="file"
-              accept=".csv,text/csv"
-              className="hidden"
-              onChange={(e) => {
-                const f = e.target.files?.[0];
-                if (f !== undefined) void onPickFile(f);
-              }}
-            />
-          </label>
-          <span className="text-xs text-muted-foreground">{dataRowCount} data row(s)</span>
-        </div>
-
-        <div className="space-y-1.5">
-          <Label htmlFor="csv" className="text-xs">CSV body (editable)</Label>
-          <Textarea
-            id="csv"
-            rows={6}
-            className="font-mono text-xs"
-            value={csv}
-            onChange={(e) => { setCsv(e.target.value); setFileName(null); setErrors([]); }}
-          />
-        </div>
-
-        {previewLines.length > 0 && (
-          <div className="space-y-1">
-            <p className="text-xs text-muted-foreground">Preview (first {previewLines.length} lines)</p>
-            <pre className="overflow-auto rounded-md border bg-muted/30 p-2 text-[11px] font-mono leading-snug">
-              {previewLines.join('\n')}
-            </pre>
-          </div>
-        )}
-
-        {errors.length > 0 && (
-          <div className="space-y-1 rounded-md border border-destructive/30 bg-destructive/5 p-2">
-            <p className="text-xs font-semibold text-destructive">
-              {errors.length} validation error{errors.length === 1 ? '' : 's'} — fix the CSV and retry:
-            </p>
-            <ul className="list-disc pl-5 text-xs text-destructive">
-              {errors.slice(0, 10).map((m, i) => (<li key={i}>{m}</li>))}
-              {errors.length > 10 && (<li>…and {errors.length - 10} more</li>)}
-            </ul>
-          </div>
-        )}
-      </div>
-      <DialogFooter>
-        <Button variant="outline" onClick={onClose}>Cancel</Button>
-        <Button onClick={submit} disabled={importEncounters.isPending || dataRowCount === 0}>
-          {importEncounters.isPending && <Loader2 className="animate-spin" />}
-          <Upload /> Import {dataRowCount > 0 ? `(${dataRowCount})` : ''}
-        </Button>
-      </DialogFooter>
-    </DialogContent>
-  );
-}
 
 function VitalsDialog({ encounter, onClose }: { encounter: Encounter; onClose: () => void }) {
   const record = useRecordVitals();
@@ -480,7 +312,7 @@ function CareDialog({ encounter, onClose }: { encounter: Encounter; onClose: () 
           <div className="flex items-center justify-between rounded-md border border-dashed p-2 text-sm">
             <span className="flex items-center gap-2">
               Suggested:
-              <Badge variant={TRIAGE_VARIANT[suggestion.predicted_priority]}>{suggestion.predicted_priority}</Badge>
+              <Badge variant={TRIAGE_VARIANT[suggestion.predicted_priority]}>{titleCase(suggestion.predicted_priority)}</Badge>
               <span className="text-xs text-muted-foreground">{Math.round(suggestion.confidence_score * 100)}% confidence</span>
             </span>
             <span className="flex gap-1">
@@ -631,10 +463,10 @@ function EncounterViewDialog({ encounter, onClose }: { encounter: Encounter; onC
         <div className="flex flex-wrap items-center gap-2">
           <Badge variant="secondary">{statusLabel(encounter.status)}</Badge>
           {encounter.outcome !== null && encounter.outcome !== undefined && (
-            <Badge variant="secondary">{encounter.outcome.replace('_', ' ')}</Badge>
+            <Badge variant="secondary">{titleCase(encounter.outcome)}</Badge>
           )}
           {encounter.triage_priority !== null && encounter.triage_priority !== undefined && (
-            <Badge variant={TRIAGE_VARIANT[encounter.triage_priority]}>{encounter.triage_priority}</Badge>
+            <Badge variant={TRIAGE_VARIANT[encounter.triage_priority]}>{titleCase(encounter.triage_priority)}</Badge>
           )}
           {(encounter.appointment_id ?? null) !== null && (
             <Badge variant="secondary" className="gap-1">
@@ -842,7 +674,7 @@ function QueueTab({ onOpenCare, onOpenVitals }: QueueTabProps) {
               const enc = rowEncounter(q);
               return (
                 <TableRow key={q.id}>
-                  <TableCell className="px-3 font-mono text-sm font-semibold">{q.position}</TableCell>
+                  <TableCell className="px-3 font-mono text-sm font-semibold">{formatQueueNumber(q.position)}</TableCell>
                   <TableCell className="px-3">
                     {q.display_name}
                     <span className="ml-1.5">
@@ -854,9 +686,9 @@ function QueueTab({ onOpenCare, onOpenVitals }: QueueTabProps) {
                     <StationBadge station={q.station_id} className="ml-1.5" />
                   </TableCell>
                   <TableCell className="px-3">
-                    <Badge variant={QUEUE_STATUS_VARIANT[q.status]}>{q.status.replace('_', ' ')}</Badge>
+                    <Badge variant={QUEUE_STATUS_VARIANT[q.status]}>{titleCase(q.status)}</Badge>
                     {q.encounter_outcome !== undefined && q.encounter_outcome !== null && (
-                      <Badge variant="secondary" className="ml-1.5">{q.encounter_outcome.replace('_', ' ')}</Badge>
+                      <Badge variant="secondary" className="ml-1.5">{titleCase(q.encounter_outcome)}</Badge>
                     )}
                   </TableCell>
                   <TableCell className="px-3 text-right">
@@ -869,7 +701,7 @@ function QueueTab({ onOpenCare, onOpenVitals }: QueueTabProps) {
                           </Button>
                           <Button size="sm" variant="outline" disabled={transition.isPending}
                             onClick={() => setConfirm({
-                              title: `Skip #${q.position} in the queue?`,
+                              title: `Skip ${formatQueueNumber(q.position)} in the queue?`,
                               description: 'Skipped entries are removed from the active queue and cannot be recovered from here.',
                               confirmLabel: 'Skip',
                               run: () => transition.mutate({ id: q.id, action: 'skip' }),
@@ -886,7 +718,7 @@ function QueueTab({ onOpenCare, onOpenVitals }: QueueTabProps) {
                       )}
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>
-                          <Button className="min-h-11" size="sm" variant="outline" aria-label={`Encounter actions for queue #${q.position}`}>
+                          <Button className="min-h-11" size="sm" variant="outline" aria-label={`Encounter actions for queue ${formatQueueNumber(q.position)}`}>
                             Actions <ChevronDown className="size-3.5" aria-hidden />
                           </Button>
                         </DropdownMenuTrigger>
@@ -956,13 +788,13 @@ function QueueTab({ onOpenCare, onOpenVitals }: QueueTabProps) {
           const canNoShow = q.encounter_status === 'open';
           const enc = rowEncounter(q);
           return (
-            <MobileCard key={q.id} aria-label={`Queue position ${q.position}`}>
+            <MobileCard key={q.id} aria-label={`Queue ${formatQueueNumber(q.position)}`}>
               <div className="mb-1 flex items-center justify-between gap-2">
-                <span className="font-mono text-sm font-semibold text-foreground">#{q.position}</span>
+                <span className="font-mono text-sm font-semibold text-foreground">{formatQueueNumber(q.position)}</span>
                 <div className="flex flex-wrap justify-end gap-1.5">
-                  <Badge variant={QUEUE_STATUS_VARIANT[q.status]}>{q.status.replace('_', ' ')}</Badge>
+                  <Badge variant={QUEUE_STATUS_VARIANT[q.status]}>{titleCase(q.status)}</Badge>
                   {q.encounter_outcome !== undefined && q.encounter_outcome !== null && (
-                    <Badge variant="secondary">{q.encounter_outcome.replace('_', ' ')}</Badge>
+                    <Badge variant="secondary">{titleCase(q.encounter_outcome)}</Badge>
                   )}
                 </div>
               </div>
@@ -979,7 +811,7 @@ function QueueTab({ onOpenCare, onOpenVitals }: QueueTabProps) {
                     </Button>
                     <Button size="sm" variant="outline" disabled={transition.isPending}
                       onClick={() => setConfirm({
-                        title: `Skip #${q.position} in the queue?`,
+                        title: `Skip ${formatQueueNumber(q.position)} in the queue?`,
                         description: 'Skipped entries are removed from the active queue and cannot be recovered from here.',
                         confirmLabel: 'Skip',
                         run: () => transition.mutate({ id: q.id, action: 'skip' }),
@@ -996,7 +828,7 @@ function QueueTab({ onOpenCare, onOpenVitals }: QueueTabProps) {
                 )}
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
-                    <Button className="min-h-11" size="sm" variant="outline" aria-label={`Encounter actions for queue #${q.position}`}>
+                    <Button className="min-h-11" size="sm" variant="outline" aria-label={`Encounter actions for queue ${formatQueueNumber(q.position)}`}>
                       Actions <ChevronDown className="size-3.5" aria-hidden />
                     </Button>
                   </DropdownMenuTrigger>
@@ -1119,7 +951,7 @@ function StaffSchedulesTab({
                 <TableCell className="px-3 font-mono text-xs">{s.shift_start.slice(0, 5)}–{s.shift_end.slice(0, 5)}</TableCell>
                 <TableCell className="px-3">
                   <Badge variant={s.schedule_type === 'leave' ? 'warning' : s.schedule_type === 'on_call' ? 'info' : 'secondary'}>
-                    {s.schedule_type}
+                    {titleCase(s.schedule_type)}
                   </Badge>
                   {!s.is_active && <Badge variant="secondary" className="ml-1.5">Archived</Badge>}
                   {s.effective_from !== null && (
@@ -1196,7 +1028,7 @@ function StaffSchedulesTab({
             <div className="mb-1 flex items-center justify-between gap-2">
               <span className="text-sm font-medium text-foreground">{s.user_name ?? `#${s.user_id}`}</span>
               <div className="flex flex-wrap justify-end gap-1.5">
-                <Badge variant={s.schedule_type === 'leave' ? 'warning' : s.schedule_type === 'on_call' ? 'info' : 'secondary'}>{s.schedule_type}</Badge>
+                <Badge variant={s.schedule_type === 'leave' ? 'warning' : s.schedule_type === 'on_call' ? 'info' : 'secondary'}>{titleCase(s.schedule_type)}</Badge>
                 {!s.is_active && <Badge variant="secondary">Archived</Badge>}
               </div>
             </div>
@@ -1328,7 +1160,7 @@ function AddShiftDialog({ onClose }: { onClose: () => void }) {
           <Label id="ss-type-label" className="text-xs">Type</Label>
           <Select value={type} onValueChange={(v) => setType(v as ScheduleType)}>
             <SelectTrigger aria-labelledby="ss-type-label" className="h-8 w-full"><SelectValue /></SelectTrigger>
-            <SelectContent>{SCHEDULE_TYPES.map((t) => <SelectItem key={t} value={t}>{t}</SelectItem>)}</SelectContent>
+            <SelectContent>{SCHEDULE_TYPES.map((t) => <SelectItem key={t} value={t}>{titleCase(t)}</SelectItem>)}</SelectContent>
           </Select>
         </div>
         <div className="space-y-1.5">
@@ -1396,7 +1228,7 @@ function EditShiftDialog({ schedule, onClose }: { schedule: StaffSchedule; onClo
           <Label id="ed-type-label" className="text-xs">Type</Label>
           <Select value={type} onValueChange={(v) => setType(v as ScheduleType)}>
             <SelectTrigger aria-labelledby="ed-type-label" className="h-8 w-full"><SelectValue /></SelectTrigger>
-            <SelectContent>{SCHEDULE_TYPES.map((t) => <SelectItem key={t} value={t}>{t}</SelectItem>)}</SelectContent>
+            <SelectContent>{SCHEDULE_TYPES.map((t) => <SelectItem key={t} value={t}>{titleCase(t)}</SelectItem>)}</SelectContent>
           </Select>
         </div>
         <div className="space-y-1.5">
@@ -1436,8 +1268,6 @@ export default function ClinicPage() {
   // drives from the encounter list.
   const [tabParam, setTab] = useTabParam('queue');
   const tab = tabParam as 'queue' | 'closed' | 'staff';
-  const [openCreate, setOpenCreate] = useState(false);
-  const [openImport, setOpenImport] = useState(false);
   const [openVitals, setOpenVitals] = useState<Encounter | null>(null);
   const [openCare, setOpenCare] = useState<Encounter | null>(null);
   const [openView, setOpenView] = useState<Encounter | null>(null);
@@ -1489,20 +1319,6 @@ export default function ClinicPage() {
         <div>
           <h1 className="text-xl font-semibold text-foreground">Clinic</h1>
           <p className="text-sm text-muted-foreground">Encounters are the anchor for clinic actions — isolated from counselling.</p>
-        </div>
-        <div className="flex items-center gap-2">
-          <Dialog open={openImport} onOpenChange={setOpenImport}>
-            <Button variant="outline" onClick={() => setOpenImport(true)}>
-              <Upload /> Bulk import
-            </Button>
-            {openImport && <ImportEncountersDialog onClose={() => setOpenImport(false)} />}
-          </Dialog>
-          <Dialog open={openCreate} onOpenChange={setOpenCreate}>
-            <Button onClick={() => setOpenCreate(true)}>
-              <Plus /> New encounter
-            </Button>
-            {openCreate && <CreateEncounterDialog onClose={() => setOpenCreate(false)} />}
-          </Dialog>
         </div>
       </header>
 
@@ -1646,7 +1462,7 @@ function EncounterTable(props: EncounterTableProps) {
                   {e.chief_complaint}
                   {(e.triage_priority ?? null) !== null && (
                     <Badge variant={TRIAGE_VARIANT[e.triage_priority as TriagePriority]} className="ml-2">
-                      {e.triage_priority}
+                      {titleCase(e.triage_priority ?? '')}
                     </Badge>
                   )}
                   {(e.appointment_id ?? null) !== null && (
@@ -1698,7 +1514,7 @@ function EncounterTable(props: EncounterTableProps) {
             <p className="text-sm font-medium text-foreground">{e.chief_complaint}</p>
             <div className="mt-1 flex flex-wrap gap-1.5">
               {(e.triage_priority ?? null) !== null && (
-                <Badge variant={TRIAGE_VARIANT[e.triage_priority as TriagePriority]}>{e.triage_priority}</Badge>
+                <Badge variant={TRIAGE_VARIANT[e.triage_priority as TriagePriority]}>{titleCase(e.triage_priority ?? '')}</Badge>
               )}
               {(e.appointment_id ?? null) !== null && (
                 <Badge variant="secondary" className="gap-1"><CalendarClock className="size-3" /> Appt #{e.appointment_id}</Badge>

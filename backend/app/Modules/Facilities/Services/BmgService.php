@@ -49,7 +49,7 @@ final class BmgService extends BaseService
         $this->policy->check('list');
 
         $builder = $this->db->table('facilities_bmg_units AS u')
-            ->select('u.id, u.code, u.display_name, u.status, u.location_code, u.spec_capacity_kg, u.default_category_id, u.notes, u.created_at, u.updated_at, u.archived_at, c.name AS default_category_name, b.id AS active_batch_id, b.total_input_weight_kg AS active_batch_weight_kg')
+            ->select('u.id, u.code, u.display_name, u.status, u.location_code, u.spec_capacity_kg, u.default_category_id, u.notes, u.created_at, u.updated_at, u.archived_at, c.name AS default_category_name, b.id AS active_batch_id, b.total_input_weight_kg AS active_batch_weight_kg, b.started_at AS active_batch_started_at, b.expected_completion_date AS active_batch_expected_completion_date')
             ->where('u.tenant_id', CurrentTenant::id())
             ->join(
                 'facilities_bmg_batches AS b',
@@ -69,6 +69,25 @@ final class BmgService extends BaseService
 
         $rows = $builder->get()->getResultArray();
         $final = KeysetPaginator::finalize($rows, $limit, 'u.created_at');
+
+        // Attach expected completion + progress for any active batch
+        // (mirrors the `listActiveBatches` computation, so the drum card
+        // can show an ETA and progress bar on Start / while In Use).
+        $today = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d');
+        $a     = new \App\Services\Analytics\BmgAnalytics();
+        foreach ($final['rows'] as &$r) {
+            if ($r['active_batch_started_at'] === null) {
+                $r['active_batch_expected_completion_date'] = null;
+                $r['active_batch_progress_pct']             = null;
+                continue;
+            }
+            $startDate = substr((string) $r['active_batch_started_at'], 0, 10);
+            $expected  = $r['active_batch_expected_completion_date'] !== null
+                ? substr((string) $r['active_batch_expected_completion_date'], 0, 10)
+                : $a->expectedCompletionDate($startDate, 45);
+            $r['active_batch_progress_pct'] = $a->progressPercent($startDate, $expected, $today);
+        }
+        unset($r);
 
         return [
             'data'  => array_map(static fn (array $r) => BmgUnitDto::fromRow($r)->toArray(), $final['rows']),
@@ -105,6 +124,17 @@ final class BmgService extends BaseService
             if ($unit === null) {
                 throw new ApiException('resource.not_found', 404, [
                     ['code' => 'resource.not_found', 'message' => "BMG unit #{$unitId} not found."],
+                ]);
+            }
+
+            // A batch's total input can never exceed the drum's rated
+            // capacity — a drum can't hold more than it was built for.
+            if ($unit['spec_capacity_kg'] !== null
+                && (float) $unit['spec_capacity_kg'] > 0
+                && $totalInputKg > (float) $unit['spec_capacity_kg']) {
+                throw new ApiException('validation.invalid', 422, [
+                    ['code' => 'validation.invalid', 'message' => 'Total input weight ' . $totalInputKg
+                        . ' kg exceeds this drum\'s capacity (' . $unit['spec_capacity_kg'] . ' kg).', 'field' => 'total_input_weight_kg'],
                 ]);
             }
 
@@ -159,6 +189,20 @@ final class BmgService extends BaseService
                 $categoryId = (int) $unit['default_category_id'];
             }
 
+            // Expected completion = started_at + the waste category's
+            // reference duration. For a mixed composition, the expected
+            // days are the weight-weighted average of each category's
+            // reference_duration_days (the longest-running component
+            // governs the cure). Drives the "expected completion" +
+            // progress indicator surfaced on Start.
+            $expectedDays = $this->expectedDurationDays($composition, $categoryId);
+            $expectedAt  = null;
+            if ($expectedDays !== null) {
+                $expectedAt = (new DateTimeImmutable($now, new DateTimeZone('UTC')))
+                    ->modify("+{$expectedDays} days")
+                    ->format('Y-m-d H:i:s');
+            }
+
             $this->db->table('facilities_bmg_batches')->insert([
                 'unit_id'               => $unitId,
                 'tenant_id'             => CurrentTenant::id(),
@@ -169,6 +213,7 @@ final class BmgService extends BaseService
                 'input_items'           => json_encode($inputItems, JSON_THROW_ON_ERROR),
                 'started_by_user_id'    => $userId,
                 'started_at'            => $now,
+                'expected_completion_date' => $expectedAt,
                 'created_at'            => $now,
                 'updated_at'            => $now,
             ]);
@@ -205,6 +250,334 @@ final class BmgService extends BaseService
             $batch = $this->db->table('facilities_bmg_batches')->where('id', $batchId)->get()->getRowArray();
             return BmgBatchDto::fromRow($batch);
         });
+    }
+
+    /**
+     * Weighted expected duration (days) for a batch's composition.
+     *
+     * Single-category: that category's `reference_duration_days`. Mixed:
+     * weight-weighted average across the composition rows. Falls back to
+     * the category default. Returns null when no duration is on record.
+     *
+     * @param array<int, array{category_id:int, weight_kg:float}> $composition
+     */
+    private function expectedDurationDays(array $composition, ?int $categoryId): ?int
+    {
+        if ($composition === []) {
+            if ($categoryId === null) {
+                return null;
+            }
+            $row = $this->db->table('facilities_waste_categories')
+                ->select('reference_duration_days')
+                ->where('tenant_id', CurrentTenant::id())
+                ->where('id', $categoryId)
+                ->get()->getRowArray();
+
+            return $row !== null && $row['reference_duration_days'] !== null
+                ? (int) $row['reference_duration_days']
+                : null;
+        }
+
+        $totalW = 0.0;
+        $weighted = 0.0;
+        foreach ($composition as $c) {
+            $w = (float) $c['weight_kg'];
+            $totalW += $w;
+            $cat = $this->db->table('facilities_waste_categories')
+                ->select('reference_duration_days')
+                ->where('tenant_id', CurrentTenant::id())
+                ->where('id', (int) $c['category_id'])
+                ->get()->getRowArray();
+            $days = $cat !== null && $cat['reference_duration_days'] !== null
+                ? (int) $cat['reference_duration_days']
+                : 30; // sensible fallback when the category has no duration
+            $weighted += $days * $w;
+        }
+
+        return $totalW > 0 ? (int) round($weighted / $totalW) : null;
+    }
+
+    /**
+     * Recompute the stored `expected_completion_date` for every ACTIVE
+     * batch (processing / awaiting_output / curing) that references the
+     * given waste category — either as its single `category_id` or as a
+     * component of its structured composition. Called when the category's
+     * assigned `reference_duration_days` changes, so running drums reflect
+     * the newly assigned expected duration immediately (web + mobile read
+     * the stored date for the drum card / "N% toward expected completion").
+     */
+    private function refreshActiveBatchExpectedDates(int $categoryId): void
+    {
+        $active = [BMG_STATE_PROCESSING, BMG_STATE_AWAITING_OUTPUT, BMG_STATE_CURING];
+
+        $direct = $this->db->table('facilities_bmg_batches')
+            ->select('id, category_id, started_at')
+            ->where('category_id', $categoryId)
+            ->where('archived_at', null)
+            ->where('tenant_id', CurrentTenant::id())
+            ->whereIn('status', $active)
+            ->get()->getResultArray();
+
+        $viaComposition = $this->db->table('facilities_bmg_batches AS b')
+            ->select('b.id, b.category_id, b.started_at')
+            ->join('facilities_bmg_composition AS bc', 'bc.batch_id = b.id')
+            ->where('bc.category_id', $categoryId)
+            ->where('b.archived_at', null)
+            ->where('b.tenant_id', CurrentTenant::id())
+            ->whereIn('b.status', $active)
+            ->get()->getResultArray();
+
+        $byId = [];
+        foreach (array_merge($direct, $viaComposition) as $r) {
+            $byId[(int) $r['id']] = $r;
+        }
+        if ($byId === []) {
+            return;
+        }
+
+        $utc = new DateTimeZone('UTC');
+        foreach ($byId as $id => $row) {
+            $comps = $this->batchCompositions([$id])[$id] ?? [];
+            $days  = $this->expectedDurationDays($comps, $row['category_id'] !== null ? (int) $row['category_id'] : null);
+            $expectedAt = null;
+            if ($days !== null) {
+                $expectedAt = (new DateTimeImmutable((string) $row['started_at'], $utc))
+                    ->modify("+{$days} days")
+                    ->format('Y-m-d H:i:s');
+            }
+            $this->db->table('facilities_bmg_batches')
+                ->where('id', $id)
+                ->update(['expected_completion_date' => $expectedAt, 'updated_at' => $this->utcNow()]);
+        }
+    }
+
+    /**
+     * Unified "Add update" on an active batch — appends ONE immutable,
+     * timestamped entry to the batch-updates ledger, branching internally
+     * by `update_type`:
+     *
+     *   - `output` — output weight recorded. Validated against the CUMULATIVE
+     *     output (ledger sum + new) ≤ total input; otherwise blocked.
+     *   - `curing` — marks the batch moved into the curing phase. At most
+     *     ONE active curing transition per batch (a second one is rejected).
+     *   - `log` — free-form observation (temperature / turning / aeration /
+     *     moisture / notes).
+     *
+     * The batch row's `output_weight_kg` / `status` are DENORMALIZED
+     * aggregates kept in sync for fast reads, but the ledger row is the
+     * source of truth and is never overwritten (append-only).
+     *
+     * @param array{update_type:string, output_weight_kg?:float, curing_note?:?string, event_type?:?string, observation_note?:?string, temperature_celsius?:?float, moisture_level?:?string} $input
+     * @return array<string, mixed> the created entry
+     */
+    public function addBatchUpdate(int $batchId, array $input): array
+    {
+        $batch = $this->policy->loadBatchForOwnership($batchId);
+        if ($batch === null) {
+            throw new ApiException('resource.not_found', 404, [
+                ['code' => 'resource.not_found', 'message' => "BMG batch #{$batchId} not found."],
+            ]);
+        }
+        $this->policy->check('update', $batch);
+        $userId = \App\Auth\CurrentUser::assert();
+
+        $type = (string) ($input['update_type'] ?? '');
+        if (! in_array($type, ['output', 'curing', 'log'], true)) {
+            throw ApiException::validationFailure([
+                ['code' => 'validation.field', 'message' => 'update_type must be output, curing, or log.', 'field' => 'update_type'],
+            ]);
+        }
+
+        return $this->txn(function () use ($batchId, $type, $input, $userId): array {
+            $batch = $this->selectForUpdate('facilities_bmg_batches', ['id' => $batchId, 'tenant_id' => CurrentTenant::id(), 'archived_at' => null]);
+            if ($batch === null) {
+                throw new ApiException('resource.not_found', 404, [
+                    ['code' => 'resource.not_found', 'message' => "Batch #{$batchId} not found."],
+                ]);
+            }
+            if (in_array($batch['status'], [BMG_STATE_IDLE, BMG_STATE_RELEASED, BMG_STATE_CANCELLED], true)) {
+                throw StateMachineException::invalidTransition($batch['status'], 'update', 'bmg');
+            }
+
+            $now = $this->utcNow();
+
+            if ($type === 'output') {
+                $kg = (float) ($input['output_weight_kg'] ?? 0);
+                if ($kg <= 0) {
+                    throw ApiException::validationFailure([
+                        ['code' => 'validation.field', 'message' => 'output_weight_kg must be > 0.', 'field' => 'output_weight_kg'],
+                    ]);
+                }
+                // Cumulative output = ledger sum + this entry. Never exceeds input.
+                $sum = (float) $this->db->table('facilities_bmg_batch_updates')
+                    ->selectSum('output_weight_kg', 'total')
+                    ->where('batch_id', $batchId)
+                    ->where('update_type', 'output')
+                    ->get()->getRowArray()['total'] ?? 0.0;
+                $cumulative = round($sum + $kg, 4);
+                if ($cumulative > (float) $batch['total_input_weight_kg']) {
+                    throw StateMachineException::massInvariant();
+                }
+
+                $this->db->table('facilities_bmg_batch_updates')->insert([
+                    'tenant_id'           => CurrentTenant::id(),
+                    'batch_id'            => $batchId,
+                    'update_type'         => 'output',
+                    'output_weight_kg'    => $kg,
+                    'recorded_by_user_id' => $userId,
+                    'created_at'          => $now,
+                ]);
+                $entryId = (int) $this->db->insertID();
+
+                // Denormalized aggregate + phase advance (Processing → AwaitingOutput).
+                $this->db->table('facilities_bmg_batches')
+                    ->where('id', $batchId)
+                    ->update([
+                        'output_weight_kg'   => $cumulative,
+                        'status'             => $batch['status'] === BMG_STATE_PROCESSING ? BMG_STATE_AWAITING_OUTPUT : $batch['status'],
+                        'awaiting_output_at' => $batch['status'] === BMG_STATE_PROCESSING ? $now : ($batch['awaiting_output_at'] ?? null),
+                        'updated_at'         => $now,
+                    ]);
+
+                $this->audit->enqueue('bmg.output_recorded', 'facilities_bmg_batches', $batchId, $userId, [
+                    'update_entry_id' => $entryId, 'output_weight_kg' => $kg, 'cumulative_kg' => $cumulative,
+                ]);
+
+                return $this->batchUpdateRow($entryId);
+            }
+
+            if ($type === 'curing') {
+                // Only ONE active curing transition per batch.
+                $existing = $this->db->table('facilities_bmg_batch_updates')
+                    ->where('batch_id', $batchId)
+                    ->where('update_type', 'curing')
+                    ->get()->getRowArray();
+                if ($existing !== null) {
+                    throw StateMachineException::invalidTransition($batch['status'], BMG_STATE_CURING, 'bmg');
+                }
+                if (in_array($batch['status'], [BMG_STATE_CURING], true)) {
+                    throw StateMachineException::invalidTransition($batch['status'], BMG_STATE_CURING, 'bmg');
+                }
+
+                $this->db->table('facilities_bmg_batch_updates')->insert([
+                    'tenant_id'           => CurrentTenant::id(),
+                    'batch_id'            => $batchId,
+                    'update_type'         => 'curing',
+                    'curing_note'         => (string) ($input['curing_note'] ?? ''),
+                    'recorded_by_user_id' => $userId,
+                    'created_at'          => $now,
+                ]);
+                $entryId = (int) $this->db->insertID();
+
+                $this->db->table('facilities_bmg_batches')
+                    ->where('id', $batchId)
+                    ->update(['status' => BMG_STATE_CURING, 'updated_at' => $now]);
+                $this->db->table('facilities_bmg_units')
+                    ->where('id', (int) $batch['unit_id'])
+                    ->update(['status' => BMG_STATE_CURING, 'updated_at' => $now]);
+
+                $this->audit->enqueue('bmg.batch_curing', 'facilities_bmg_batches', $batchId, $userId, [
+                    'update_entry_id' => $entryId, 'next_status' => BMG_STATE_CURING,
+                ]);
+
+                return $this->batchUpdateRow($entryId);
+            }
+
+            // log entry
+            $eventType = (string) ($input['event_type'] ?? 'observation');
+            $allowedEvents = ['observation', 'turning', 'aeration', 'moisture_adjustment', 'other'];
+            if (! in_array($eventType, $allowedEvents, true)) {
+                $eventType = 'observation';
+            }
+            $this->db->table('facilities_bmg_batch_updates')->insert([
+                'tenant_id'           => CurrentTenant::id(),
+                'batch_id'            => $batchId,
+                'update_type'         => 'log',
+                'event_type'          => $eventType,
+                'observation_note'    => (string) ($input['observation_note'] ?? ''),
+                'temperature_celsius' => isset($input['temperature_celsius']) && $input['temperature_celsius'] !== null && $input['temperature_celsius'] !== ''
+                    ? (float) $input['temperature_celsius']
+                    : null,
+                'moisture_level'      => ($input['moisture_level'] ?? '') !== '' ? (string) $input['moisture_level'] : null,
+                'recorded_by_user_id' => $userId,
+                'created_at'          => $now,
+            ]);
+            $entryId = (int) $this->db->insertID();
+
+            $this->audit->enqueue('bmg.log_added', 'facilities_bmg_batches', $batchId, $userId, [
+                'update_entry_id' => $entryId, 'event_type' => $eventType,
+            ]);
+
+            return $this->batchUpdateRow($entryId);
+        });
+    }
+
+    /**
+     * Combined, append-only "Updates" feed for a batch — output / curing /
+     * log entries ordered oldest → newest. Read-only.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public function listBatchUpdates(int $batchId): array
+    {
+        $batch = $this->db->table('facilities_bmg_batches')
+            ->select('id, started_by_user_id, tenant_id, archived_at')
+            ->where('id', $batchId)->where('tenant_id', CurrentTenant::id())->where('archived_at', null)
+            ->get()->getRowArray();
+        if ($batch === null) {
+            throw new ApiException('resource.not_found', 404, [
+                ['code' => 'resource.not_found', 'message' => "BMG batch #{$batchId} not found."],
+            ]);
+        }
+        $this->policy->check('analytics', $batch);
+
+        $rows = $this->db->table('facilities_bmg_batch_updates')
+            ->select('id, update_type, output_weight_kg, curing_note, event_type, observation_note, temperature_celsius, moisture_level, recorded_by_user_id, created_at')
+            ->where('batch_id', $batchId)
+            ->where('tenant_id', CurrentTenant::id())
+            ->orderBy('created_at', 'ASC')
+            ->orderBy('id', 'ASC')
+            ->get()->getResultArray();
+
+        return array_map(static fn (array $r): array => [
+            'id'                  => (int) $r['id'],
+            'update_type'         => (string) $r['update_type'],
+            'output_weight_kg'    => $r['output_weight_kg'] !== null ? (float) $r['output_weight_kg'] : null,
+            'curing_note'         => $r['curing_note'] !== null && $r['curing_note'] !== '' ? (string) $r['curing_note'] : null,
+            'event_type'          => $r['event_type'] !== null ? (string) $r['event_type'] : null,
+            'observation_note'    => $r['observation_note'] !== null && $r['observation_note'] !== '' ? (string) $r['observation_note'] : null,
+            'temperature_celsius' => $r['temperature_celsius'] !== null ? (float) $r['temperature_celsius'] : null,
+            'moisture_level'      => $r['moisture_level'] !== null ? (string) $r['moisture_level'] : null,
+            'recorded_by_user_id' => $r['recorded_by_user_id'] !== null ? (int) $r['recorded_by_user_id'] : null,
+            'created_at'          => (string) $r['created_at'],
+        ], $rows);
+    }
+
+    /**
+     * Fetches a single ledger row by id (typed).
+     *
+     * @return array<string, mixed>
+     */
+    private function batchUpdateRow(int $id): array
+    {
+        $row = $this->db->table('facilities_bmg_batch_updates')->where('id', $id)->get()->getRowArray();
+        if ($row === null) {
+            throw new ApiException('resource.not_found', 404, [
+                ['code' => 'resource.not_found', 'message' => "Update entry #{$id} not found."],
+            ]);
+        }
+        return [
+            'id'                  => (int) $row['id'],
+            'update_type'         => (string) $row['update_type'],
+            'output_weight_kg'    => $row['output_weight_kg'] !== null ? (float) $row['output_weight_kg'] : null,
+            'curing_note'         => $row['curing_note'] !== null && $row['curing_note'] !== '' ? (string) $row['curing_note'] : null,
+            'event_type'          => $row['event_type'] !== null ? (string) $row['event_type'] : null,
+            'observation_note'    => $row['observation_note'] !== null && $row['observation_note'] !== '' ? (string) $row['observation_note'] : null,
+            'temperature_celsius' => $row['temperature_celsius'] !== null ? (float) $row['temperature_celsius'] : null,
+            'moisture_level'      => $row['moisture_level'] !== null ? (string) $row['moisture_level'] : null,
+            'recorded_by_user_id' => $row['recorded_by_user_id'] !== null ? (int) $row['recorded_by_user_id'] : null,
+            'created_at'          => (string) $row['created_at'],
+        ];
     }
 
     /**
@@ -362,7 +735,19 @@ final class BmgService extends BaseService
         });
     }
 
-    public function finishBatch(int $batchId): BmgBatchDto
+    /**
+     * Finish = GRADED RELEASE. The single "Finish batch" action requires
+     * a valid quality outcome (quality_grade + maturity_level); the batch
+     * leaves the system as `released` and the drum returns to Idle.
+     *
+     * A run being closed WITHOUT a valid quality outcome (failed /
+     * discarded) is NOT a finish — route it through `cancelBatch`
+     * instead (the spec: "Finish always implies a successful, graded
+     * release").
+     *
+     * @param array{quality_grade?:string, maturity_level?:string, notes?:?string} $input
+     */
+    public function finishBatch(int $batchId, array $input = []): BmgBatchDto
     {
         $batch = $this->policy->loadBatchForOwnership($batchId);
         if ($batch === null) {
@@ -373,7 +758,7 @@ final class BmgService extends BaseService
         $this->policy->check('finish', $batch);
         $userId = \App\Auth\CurrentUser::assert();
 
-        return $this->txn(function () use ($batchId, $userId): BmgBatchDto {
+        return $this->txn(function () use ($batchId, $input, $userId): BmgBatchDto {
             $batch = $this->selectForUpdate('facilities_bmg_batches', ['id' => $batchId, 'tenant_id' => CurrentTenant::id(), 'archived_at' => null]);
 
             if ($batch === null) {
@@ -382,18 +767,81 @@ final class BmgService extends BaseService
                 ]);
             }
 
-            if ($batch['status'] !== BMG_STATE_AWAITING_OUTPUT) {
-                throw StateMachineException::invalidTransition($batch['status'], BMG_STATE_IDLE, 'bmg');
+            // Finish is available from ANY active state (processing /
+            // awaiting_output / curing) — e.g. the operator recorded a
+            // process log confirming the desired output is being met, so
+            // they can finalize the batch without forcing the intermediate
+            // "record output" step. Only terminal/idle batches can't be
+            // finished.
+            if (! in_array($batch['status'], [BMG_STATE_PROCESSING, BMG_STATE_AWAITING_OUTPUT, BMG_STATE_CURING], true)) {
+                throw StateMachineException::invalidTransition($batch['status'], BMG_STATE_RELEASED, 'bmg');
+            }
+
+            // A finish is a GRADED release — both QA fields are required.
+            $grade    = (string) ($input['quality_grade'] ?? '');
+            $maturity = (string) ($input['maturity_level'] ?? '');
+            if ($grade === '' || ! in_array($grade, BMG_QUALITY_GRADES, true)) {
+                throw ApiException::validationFailure([
+                    ['code' => 'validation.field', 'message' => 'quality_grade is required (excellent, good, fair).', 'field' => 'quality_grade'],
+                ]);
+            }
+            if ($maturity === '' || ! in_array($maturity, BMG_MATURITY_LEVELS, true)) {
+                throw ApiException::validationFailure([
+                    ['code' => 'validation.field', 'message' => 'maturity_level is required (mature, maturing, immature).', 'field' => 'maturity_level'],
+                ]);
             }
 
             $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
 
+            // The final output (yield) is recorded AT FINISH — one output
+            // ledger entry, validated so cumulative output never exceeds
+            // the batch's total input. Optional only when the run produced
+            // nothing measurable (then it stays null).
+            $outputKg = isset($input['output_weight_kg']) && $input['output_weight_kg'] !== '' && $input['output_weight_kg'] !== null
+                ? (float) $input['output_weight_kg']
+                : null;
+            if ($outputKg !== null) {
+                if ($outputKg <= 0) {
+                    throw ApiException::validationFailure([
+                        ['code' => 'validation.field', 'message' => 'output_weight_kg must be > 0.', 'field' => 'output_weight_kg'],
+                    ]);
+                }
+                $sum = (float) ($this->db->table('facilities_bmg_batch_updates')
+                    ->selectSum('output_weight_kg', 'total')
+                    ->where('batch_id', $batchId)
+                    ->where('update_type', 'output')
+                    ->get()->getRowArray()['total'] ?? 0.0);
+                $cumulative = round($sum + $outputKg, 4);
+                if ($cumulative > (float) $batch['total_input_weight_kg']) {
+                    throw StateMachineException::massInvariant();
+                }
+                $this->db->table('facilities_bmg_batch_updates')->insert([
+                    'tenant_id'           => CurrentTenant::id(),
+                    'batch_id'            => $batchId,
+                    'update_type'         => 'output',
+                    'output_weight_kg'    => $outputKg,
+                    'recorded_by_user_id' => $userId,
+                    'created_at'          => $now,
+                ]);
+                $this->audit->enqueue('bmg.output_recorded', 'facilities_bmg_batches', $batchId, $userId, [
+                    'output_weight_kg' => $outputKg, 'cumulative_kg' => $cumulative, 'context' => 'finish',
+                ]);
+            }
+
+            $notes = (string) ($input['notes'] ?? '');
+
             $this->db->table('facilities_bmg_batches')
                 ->where('id', $batchId)
                 ->update([
-                    'status'              => BMG_STATE_IDLE,
+                    'status'              => BMG_STATE_RELEASED,
                     'finished_at'         => $now,
                     'finished_by_user_id' => $userId,
+                    'released_at'         => $now,
+                    'released_by_user_id' => $userId,
+                    'quality_grade'       => $grade,
+                    'maturity_level'      => $maturity,
+                    'output_weight_kg'    => $outputKg !== null ? $outputKg : $batch['output_weight_kg'],
+                    'notes'               => $notes !== '' ? $notes : ($batch['notes'] ?? null),
                     'updated_at'          => $now,
                 ]);
 
@@ -406,7 +854,7 @@ final class BmgService extends BaseService
                 'facilities_bmg_batches',
                 $batchId,
                 $userId,
-                ['previous_status' => BMG_STATE_AWAITING_OUTPUT, 'next_status' => BMG_STATE_IDLE],
+                ['previous_status' => (string) $batch['status'], 'next_status' => BMG_STATE_RELEASED, 'quality_grade' => $grade, 'maturity_level' => $maturity],
             );
 
             $fresh = $this->db->table('facilities_bmg_batches')->where('id', $batchId)->get()->getRowArray();
@@ -1183,9 +1631,10 @@ final class BmgService extends BaseService
             $builder->where('is_active', 1);
         }
         $rows  = $builder->get()->getResultArray();
-        // Panel revision: expected days per category come from validated
-        // historical trials (finished batches), with the manual reference
-        // duration only as the fallback while no history exists.
+        // Expected days = the ASSIGNED reference duration (what the operator
+        // sets per category — it drives batch ETAs). Historical trial stats
+        // are still surfaced as `historical_avg_days` / `sample_count` for
+        // context, but never override the assigned value.
         $stats = $this->categoryDurationStats(array_map(static fn (array $r): int => (int) $r['id'], $rows));
 
         return array_map(static function (array $r) use ($stats): array {
@@ -1201,7 +1650,7 @@ final class BmgService extends BaseService
                 'reference_duration_days' => $ref,
                 'historical_avg_days'     => $hist !== null ? round($hist['avg_days'], 1) : null,
                 'sample_count'            => $hist !== null ? $hist['samples'] : 0,
-                'expected_days'           => $hist !== null ? (int) round($hist['avg_days']) : $ref,
+                'expected_days'           => $ref,
                 'is_active'               => (bool) $r['is_active'],
             ];
         }, $rows);
@@ -1281,7 +1730,7 @@ final class BmgService extends BaseService
             'reference_duration_days' => $ref,
             'historical_avg_days'     => $hist !== null ? round($hist['avg_days'], 1) : null,
             'sample_count'            => $hist !== null ? $hist['samples'] : 0,
-            'expected_days'           => $hist !== null ? (int) round($hist['avg_days']) : $ref,
+            'expected_days'           => $ref,
             'is_active'               => (bool) $row['is_active'],
         ];
     }
@@ -1335,6 +1784,13 @@ final class BmgService extends BaseService
             }
 
             $this->db->table('facilities_waste_categories')->where('id', $categoryId)->update($update);
+
+            // A change to the assigned expected days must propagate to the
+            // stored expected completion of any drum currently running this
+            // category, so the ETA reflects the newly assigned duration.
+            if (array_key_exists('reference_duration_days', $input)) {
+                $this->refreshActiveBatchExpectedDates($categoryId);
+            }
 
             $this->audit->enqueue('bmg.waste_category_updated', 'facilities_waste_categories', $categoryId, $userId, [
                 'resource_code' => (string) $cat['code'],
@@ -1857,8 +2313,11 @@ final class BmgService extends BaseService
     }
 
     /**
-     * Per-category expected days: historical average (rounded) when at
-     * least one finished trial exists, else the manual reference days.
+     * Per-category expected days: the ASSIGNED `reference_duration_days`
+     * (the operator's target — drives batch ETAs). `sample_count`
+     * (finished trials) is kept so callers can show historical context;
+     * the rounded historical average is exposed separately on the category
+     * list DTO as `historical_avg_days`.
      *
      * @param array<int, int> $categoryIds
      * @return array<int, array{expected_days: ?int, sample_count: int}>
@@ -1870,7 +2329,6 @@ final class BmgService extends BaseService
             return [];
         }
 
-        $stats = $this->categoryDurationStats($ids);
         $refs  = $this->db->table('facilities_waste_categories')
             ->select('id, reference_duration_days')
             ->whereIn('id', $ids)
@@ -1879,14 +2337,34 @@ final class BmgService extends BaseService
         $out = [];
         foreach ($refs as $r) {
             $id   = (int) $r['id'];
-            $hist = $stats[$id] ?? null;
             $ref  = $r['reference_duration_days'] !== null ? (int) $r['reference_duration_days'] : null;
             $out[$id] = [
-                'expected_days' => $hist !== null ? (int) round($hist['avg_days']) : $ref,
-                'sample_count'  => $hist !== null ? $hist['samples'] : 0,
+                'expected_days' => $ref,
+                'sample_count'  => $this->categorySamples($id),
             ];
         }
         return $out;
+    }
+
+    /**
+     * Number of finished trials for a category (composition rows + the
+     * single-category fallback), used only for historical context.
+     */
+    private function categorySamples(int $categoryId): int
+    {
+        $row = $this->db->query(
+            'SELECT COUNT(*) AS n FROM ('
+            . ' SELECT c.category_id AS cat_id FROM facilities_bmg_composition c'
+            . ' JOIN facilities_bmg_batches b ON b.id = c.batch_id'
+            . ' WHERE b.finished_at IS NOT NULL AND b.archived_at IS NULL AND c.category_id = ' . (int) $categoryId
+            . ' UNION ALL'
+            . ' SELECT b.category_id FROM facilities_bmg_batches b'
+            . ' LEFT JOIN facilities_bmg_composition c2 ON c2.batch_id = b.id'
+            . ' WHERE c2.id IS NULL AND b.category_id IS NOT NULL AND b.finished_at IS NOT NULL'
+            . ' AND b.archived_at IS NULL AND b.category_id = ' . (int) $categoryId
+            . ') t',
+        )->getRowArray();
+        return $row !== null ? (int) $row['n'] : 0;
     }
 
     /**
@@ -2426,121 +2904,6 @@ final class BmgService extends BaseService
             'spec_capacity_kg' => $best['spec_capacity_kg'] !== null ? (float) $best['spec_capacity_kg'] : null,
             'default_category_id' => $best['default_category_id'] !== null ? (int) $best['default_category_id'] : null,
         ];
-    }
-
-    // -------------------------------------------------- SOP register
-
-    /**
-     * @return array<int, array<string, mixed>>
-     */
-    public function listSopDocuments(bool $includeArchived = false): array
-    {
-        $this->policy->check('manage_units');
-
-        $builder = $this->db->table('facilities_sop_documents AS s')
-            ->select('s.id, s.title, s.document_ref, s.category, s.version, s.owner_user_id, s.notes, s.is_active, s.created_at, s.updated_at, u.first_name, u.last_name')
-            ->join('users AS u', 'u.id = s.owner_user_id', 'left')
-            ->where('s.tenant_id', CurrentTenant::id())
-            ->orderBy('s.document_ref', 'ASC')
-            ->orderBy('s.id', 'ASC');
-        if (! $includeArchived) {
-            $builder->where('s.is_active', 1);
-        }
-        return array_map(static fn (array $r): array => [
-            'id'           => (int) $r['id'],
-            'title'        => (string) $r['title'],
-            'document_ref' => (string) $r['document_ref'],
-            'category'     => $r['category'] !== null ? (string) $r['category'] : null,
-            'version'      => $r['version'] !== null ? (string) $r['version'] : null,
-            'owner_user_id'=> $r['owner_user_id'] !== null ? (int) $r['owner_user_id'] : null,
-            'owner_name'   => ($r['first_name'] ?? '') !== '' ? trim((string) $r['first_name'] . ' ' . (string) ($r['last_name'] ?? '')) : null,
-            'notes'        => $r['notes'] !== null ? (string) $r['notes'] : null,
-            'is_active'    => (bool) $r['is_active'],
-            'created_at'   => (string) $r['created_at'],
-            'updated_at'   => (string) $r['updated_at'],
-        ], $builder->get()->getResultArray());
-    }
-
-    /**
-     * @param array<string, mixed> $input
-     * @return array<string, mixed>
-     */
-    public function createSopDocument(array $input): array
-    {
-        $this->policy->check('manage_units');
-        $actor = \App\Auth\CurrentUser::assert();
-        $now   = $this->utcNow();
-
-        $id = $this->txn(function () use ($input, $actor, $now): int {
-            $this->db->table('facilities_sop_documents')->insert([
-                'tenant_id'     => CurrentTenant::id(),
-                'title'         => (string) $input['title'],
-                'document_ref'  => (string) $input['document_ref'],
-                'category'      => isset($input['category']) && $input['category'] !== '' ? (string) $input['category'] : null,
-                'version'       => isset($input['version']) && $input['version'] !== '' ? (string) $input['version'] : null,
-                'owner_user_id' => isset($input['owner_user_id']) && (int) $input['owner_user_id'] > 0 ? (int) $input['owner_user_id'] : null,
-                'notes'         => isset($input['notes']) && $input['notes'] !== '' ? (string) $input['notes'] : null,
-                'is_active'     => 1,
-                'created_at'    => $now,
-                'updated_at'    => $now,
-            ]);
-            $id = (int) $this->db->insertID();
-            $this->audit->enqueue('bmg.sop_created', 'facilities_sop_documents', $id, $actor, ['resource_code' => (string) $input['document_ref']]);
-            return $id;
-        });
-
-        return $this->findSopDocument($id);
-    }
-
-    /**
-     * @param array<string, mixed> $input
-     * @return array<string, mixed>
-     */
-    public function updateSopDocument(int $id, array $input): array
-    {
-        $this->policy->check('manage_units');
-        $actor = \App\Auth\CurrentUser::assert();
-
-        $this->txn(function () use ($id, $input, $actor): void {
-            $row = $this->selectForUpdate('facilities_sop_documents', ['id' => $id, 'tenant_id' => CurrentTenant::id()]);
-            if ($row === null) {
-                throw new ApiException('resource.not_found', 404, [
-                    ['code' => 'resource.not_found', 'message' => "SOP document #{$id} not found."],
-                ]);
-            }
-            $update = ['updated_at' => $this->utcNow()];
-            foreach (['title', 'document_ref', 'category', 'version', 'notes'] as $f) {
-                if (array_key_exists($f, $input)) {
-                    $update[$f] = $input[$f] !== null && $input[$f] !== '' ? (string) $input[$f] : null;
-                }
-            }
-            if (array_key_exists('owner_user_id', $input)) {
-                $update['owner_user_id'] = (int) $input['owner_user_id'] > 0 ? (int) $input['owner_user_id'] : null;
-            }
-            if (array_key_exists('is_active', $input)) {
-                $update['is_active'] = (int) $input['is_active'];
-            }
-            $this->db->table('facilities_sop_documents')->where('id', $id)->update($update);
-            $this->audit->enqueue('bmg.sop_updated', 'facilities_sop_documents', $id, $actor, []);
-        });
-
-        return $this->findSopDocument($id);
-    }
-
-    /**
-     * @return array<string, mixed>
-     */
-    public function findSopDocument(int $id): array
-    {
-        $rows = $this->listSopDocuments(true);
-        foreach ($rows as $r) {
-            if ($r['id'] === $id) {
-                return $r;
-            }
-        }
-        throw new ApiException('resource.not_found', 404, [
-            ['code' => 'resource.not_found', 'message' => "SOP document #{$id} not found."],
-        ]);
     }
 
     // ------------------------------------------- category deviations

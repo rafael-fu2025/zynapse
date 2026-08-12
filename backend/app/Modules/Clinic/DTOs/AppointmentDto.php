@@ -35,6 +35,19 @@ final class AppointmentDto extends BaseDTO
         return $clone;
     }
 
+    /**
+     * Attach the plaintext QR proof-of-booking token (only ever returned to
+     * the client for QR rendering — the DB stores only its HMAC hash).
+     *
+     * NOTE: `$row` is readonly, so a new DTO is built with the merged row
+     * array (never mutated in place — mirror the `decorate()` comment at
+     * AppointmentService.php line ~537).
+     */
+    public function withQrToken(string $token): self
+    {
+        return new self(array_merge($this->row, ['qr_token' => $token]));
+    }
+
     public function jsonSerialize(): array
     {
         return [
@@ -50,6 +63,9 @@ final class AppointmentDto extends BaseDTO
             // Encounter auto-opened at check-in (panel revision); NULL
             // while the appointment is still in the scheduling phase.
             'encounter_id'      => isset($this->row['encounter_id']) && $this->row['encounter_id'] !== null ? (int) $this->row['encounter_id'] : null,
+            // Plaintext QR proof-of-booking token (null unless attached by
+            // the service at booking/issue time; never stored in the DB).
+            'qr_token'          => isset($this->row['qr_token']) && $this->row['qr_token'] !== null ? (string) $this->row['qr_token'] : null,
             'created_at'        => (string) $this->row['created_at'],
         ];
     }

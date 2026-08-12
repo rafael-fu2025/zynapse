@@ -197,6 +197,94 @@ export function useAddContact() {
   });
 }
 
+// Edit / remove for allergies and emergency contacts (2026-08-12).
+
+export function useUpdateAllergy() {
+  const qc = useQueryClient();
+  return useMutation<Student, ApiEnvelopeError, { studentId: number; allergyId: number; input: AddAllergyInput }>({
+    mutationFn: async ({ studentId, allergyId, input }) => {
+      const valid = addAllergySchema.parse(input);
+      const res = await apiClient.post<unknown>(
+        `/clinic/students/${studentId}/allergies/${allergyId}`,
+        valid,
+      );
+      return studentSchema.parse(res.data);
+    },
+    onSuccess: (s) => {
+      void qc.invalidateQueries({ queryKey: ['patients'] });
+      void qc.invalidateQueries({ queryKey: ['patients', 'students', 'detail', s.id] });
+      toast.success('Allergy updated.');
+    },
+    onError: (err) => {
+      toast.error(err.errors[0]?.message ?? 'Failed to update allergy.');
+    },
+  });
+}
+
+export function useDeleteAllergy() {
+  const qc = useQueryClient();
+  return useMutation<Student, ApiEnvelopeError, { studentId: number; allergyId: number }>({
+    mutationFn: async ({ studentId, allergyId }) => {
+      const res = await apiClient.post<unknown>(
+        `/clinic/students/${studentId}/allergies/${allergyId}/delete`,
+        {},
+      );
+      return studentSchema.parse(res.data);
+    },
+    onSuccess: (s) => {
+      void qc.invalidateQueries({ queryKey: ['patients'] });
+      void qc.invalidateQueries({ queryKey: ['patients', 'students', 'detail', s.id] });
+      toast.success('Allergy removed.');
+    },
+    onError: (err) => {
+      toast.error(err.errors[0]?.message ?? 'Failed to remove allergy.');
+    },
+  });
+}
+
+export function useUpdateContact() {
+  const qc = useQueryClient();
+  return useMutation<Student, ApiEnvelopeError, { studentId: number; contactId: number; input: AddContactInput }>({
+    mutationFn: async ({ studentId, contactId, input }) => {
+      const valid = addContactSchema.parse(input);
+      const res = await apiClient.post<unknown>(
+        `/clinic/students/${studentId}/contacts/${contactId}`,
+        valid,
+      );
+      return studentSchema.parse(res.data);
+    },
+    onSuccess: (s) => {
+      void qc.invalidateQueries({ queryKey: ['patients'] });
+      void qc.invalidateQueries({ queryKey: ['patients', 'students', 'detail', s.id] });
+      toast.success('Emergency contact updated.');
+    },
+    onError: (err) => {
+      toast.error(err.errors[0]?.message ?? 'Failed to update contact.');
+    },
+  });
+}
+
+export function useDeleteContact() {
+  const qc = useQueryClient();
+  return useMutation<Student, ApiEnvelopeError, { studentId: number; contactId: number }>({
+    mutationFn: async ({ studentId, contactId }) => {
+      const res = await apiClient.post<unknown>(
+        `/clinic/students/${studentId}/contacts/${contactId}/delete`,
+        {},
+      );
+      return studentSchema.parse(res.data);
+    },
+    onSuccess: (s) => {
+      void qc.invalidateQueries({ queryKey: ['patients'] });
+      void qc.invalidateQueries({ queryKey: ['patients', 'students', 'detail', s.id] });
+      toast.success('Emergency contact removed.');
+    },
+    onError: (err) => {
+      toast.error(err.errors[0]?.message ?? 'Failed to remove contact.');
+    },
+  });
+}
+
 export function useEmployees(
   cursor: string | null,
   limit = 25,

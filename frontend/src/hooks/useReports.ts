@@ -1,5 +1,7 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import axios from 'axios';
+import { toPng } from 'html-to-image';
+import { jsPDF } from 'jspdf';
 import { toast } from 'sonner';
 import { apiClient } from '@/api/client';
 import type { ApiEnvelope, ApiEnvelopeError } from '@/api/envelope';
@@ -187,6 +189,108 @@ export function useReportExport() {
     mutationFn: ({ module, start, end }) =>
       download('/reports/export/' + module + '?' + rangeParams(start, end), 'synapse-report-' + module + '.csv'),
     onSuccess: ({ filename }) => toast.success('Exported ' + filename + '.'),
+    onError: (error) => toast.error(error.message),
+  });
+}
+
+export type PdfExportResult = { filename: string; size: number; shared: boolean };
+
+/**
+ * useReportPdfExport — rasterizes a printable node (`ReportPdfView`) into a
+ * multi-page A4 PDF and shares or downloads it.
+ *
+ * Generation is fully client-side (html-to-image → jsPDF): the node is
+ * captured at 2x, then sliced across A4 pages. When the browser supports the
+ * Web Share API with files (navigator.share({files})), the PDF is handed to
+ * the native share sheet; otherwise it falls back to a direct download.
+ */
+export function useReportPdfExport() {
+  return useMutation<PdfExportResult, Error, { module: ReportModule; start: string; end: string; node: HTMLElement }>({
+    mutationFn: async ({ module, start, end, node }) => {
+      const filename = 'synapse-report-' + module + '-' + start + '_' + end + '.pdf';
+      // The printable node lives off-screen (left: -20000px) so it never
+      // flashes over the page. html-to-image clones it into an SVG at the
+      // node's own offset, which would push the content outside the capture
+      // viewport and produce a BLANK PDF. The `style` option repositions the
+      // CLONE to 0,0 while the source stays off-screen — verified: corner
+      // pixel renders maroon instead of all-white.
+      const dataUrl = await toPng(node, {
+        pixelRatio: 2,
+        backgroundColor: '#ffffff',
+        cacheBust: true,
+        style: { position: 'absolute', left: '0', top: '0', margin: '0' },
+      });
+
+      // Render the PNG into a canvas so we can measure it and multi-page.
+      const image = new Image();
+      image.src = dataUrl;
+      await image.decode();
+      const imgW = image.width;
+      const imgH = image.height;
+      if (imgW === 0 || imgH === 0) throw new Error('Failed to render the report PDF.');
+
+      // A4 portrait, 210×297mm, 10mm margins.
+      const pageW = 210;
+      const pageH = 297;
+      const margin = 10;
+      const contentW = pageW - margin * 2;
+      const contentH = pageH - margin * 2;
+      // Scale the captured image to the printable width, then compute pages.
+      const drawH = contentW * (imgH / imgW);
+      const pages = Math.max(1, Math.ceil(drawH / contentH));
+
+      const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4', compress: true });
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      if (ctx === null) throw new Error('Canvas is not available.');
+
+      for (let page = 0; page < pages; page++) {
+        if (page > 0) doc.addPage();
+        // Slice the source image for this page.
+        const sliceHpx = Math.ceil((imgH * contentH) / drawH);
+        const srcY = page * sliceHpx;
+        const actualSlice = Math.min(sliceHpx, imgH - srcY);
+        if (actualSlice <= 0) continue;
+        canvas.width = imgW;
+        canvas.height = actualSlice;
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(image, 0, srcY, imgW, actualSlice, 0, 0, imgW, actualSlice);
+        const pageDataUrl = canvas.toDataURL('image/png');
+        doc.addImage(
+          pageDataUrl,
+          'PNG',
+          margin,
+          margin,
+          contentW,
+          contentW * (actualSlice / imgW),
+          undefined,
+          'FAST',
+        );
+      }
+      canvas.width = 0;
+      canvas.height = 0;
+
+      const blob = doc.output('blob');
+      const file = new File([blob], filename, { type: 'application/pdf' });
+      const nav = navigator as Navigator & { canShare?: (data?: ShareData) => boolean };
+      const shareData = { files: [file], title: filename };
+      if (typeof nav.canShare === 'function' && nav.canShare(shareData)) {
+        await nav.share(shareData);
+        return { filename, size: blob.size, shared: true };
+      }
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = filename;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
+      return { filename, size: blob.size, shared: false };
+    },
+    onSuccess: ({ filename, shared }) =>
+      toast.success(shared ? 'Sharing ' + filename + '…' : 'Downloaded ' + filename + '.'),
     onError: (error) => toast.error(error.message),
   });
 }

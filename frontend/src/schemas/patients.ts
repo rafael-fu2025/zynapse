@@ -108,6 +108,7 @@ export const updateStudentSchema = z.object({
   date_of_birth: z.string().max(10).optional().or(z.literal('')),
   gender:        z.enum(['male', 'female', 'other']).optional(),
   blood_type:    z.string().max(5).optional().or(z.literal('')),
+  address:       z.string().max(500).optional().or(z.literal('')),
 });
 export type UpdateStudentInput = z.infer<typeof updateStudentSchema>;
 
@@ -131,6 +132,13 @@ export const updateEmployeeSchema = z.object({
   position: z.string().max(100).optional().or(z.literal('')),
   employment_status: z.enum(['active', 'inactive', 'on_leave']).optional(),
   is_teaching: z.boolean().optional(),
+  // View-vs-edit parity: allow editing what the detail dialog already shows.
+  date_hired: z.string().max(10).optional().or(z.literal('')),
+  emergency_contact_name: z.string().max(150).optional().or(z.literal('')),
+  emergency_contact_phone: z.string().max(20).optional().or(z.literal('')),
+  date_of_birth: z.string().max(10).optional().or(z.literal('')),
+  gender: z.enum(['male', 'female', 'other']).optional(),
+  address: z.string().max(500).optional().or(z.literal('')),
 });
 export type UpdateEmployeeInput = z.infer<typeof updateEmployeeSchema>;
 

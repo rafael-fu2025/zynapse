@@ -75,8 +75,55 @@ export const bmgUnitSchema = z.object({
   // Audit #8: how full the drum is vs its spec capacity.
   active_batch_weight_kg: z.number().nullable().optional(),
   utilization_pct: z.number().int().min(0).optional(),
+  // In-use indicator: expected completion + progress of the active batch.
+  active_batch_expected_completion_date: z.string().nullable().optional(),
+  active_batch_progress_pct: z.number().int().min(0).nullable().optional(),
 });
 export type BmgUnit = z.infer<typeof bmgUnitSchema>;
+
+/**
+ * One immutable, timestamped entry in a batch's append-only "Updates"
+ * feed — output / curing / log. Mirrors `BmgService::listBatchUpdates`.
+ */
+export const batchUpdateSchema = z.object({
+  id: z.number().int().positive(),
+  update_type: z.enum(['output', 'curing', 'log']),
+  output_weight_kg: z.number().nullable(),
+  curing_note: z.string().nullable(),
+  event_type: z.string().nullable(),
+  observation_note: z.string().nullable(),
+  temperature_celsius: z.number().nullable(),
+  moisture_level: z.string().nullable(),
+  recorded_by_user_id: z.number().int().positive().nullable(),
+  created_at: z.string(),
+});
+export type BatchUpdate = z.infer<typeof batchUpdateSchema>;
+
+/**
+ * Unified "Add update" — one action, three internal entry types. The
+ * UI branches by what the operator fills in (output weight / curing
+ * note / log details); the backend appends an immutable ledger row.
+ */
+export const addBatchUpdateSchema = z
+  .object({
+    update_type: z.enum(['output', 'curing', 'log']),
+    output_weight_kg: z.number().positive().optional(),
+    curing_note: z.string().max(512).optional().or(z.literal('')),
+    event_type: z.enum(BMG_PROCESS_EVENT_TYPES).optional(),
+    observation_note: z.string().max(1000).optional().or(z.literal('')),
+    temperature_celsius: z.coerce.number().min(-20).max(120).optional(),
+    moisture_level: z.enum(['low', 'normal', 'high']).optional(),
+  })
+  .refine(
+    (v) =>
+      v.update_type === 'output'
+        ? v.output_weight_kg !== undefined
+        : v.update_type === 'curing'
+          ? (v.curing_note ?? '') !== ''
+          : (v.event_type !== undefined || (v.observation_note ?? '') !== '' || v.temperature_celsius !== undefined || v.moisture_level !== undefined),
+    { message: 'Fill in the relevant detail for this update.', path: ['update_type'] },
+  );
+export type AddBatchUpdateInput = z.infer<typeof addBatchUpdateSchema>;
 
 // ---- Phase P5c: Drum CRUD (port of legacy bmg/drums/{create,edit,archive}) ----
 
@@ -138,13 +185,15 @@ export const bmgBatchSchema = z.object({
 export type BmgBatch = z.infer<typeof bmgBatchSchema>;
 
 /**
- * Release a finished/cured batch for use — the final quality/maturity
- * gate. `quality_grade` + `maturity_level` become the batch's
- * certificate fields.
+ * Finish a batch — graded release with the final output (yield) and
+ * quality/maturity gate. `output_weight_kg` is the final yield
+ * recorded at finish (the output ledger entry); it's optional only
+ * when the run produced nothing measurable.
  */
 export const releaseBatchSchema = z.object({
   quality_grade: z.enum(BMG_QUALITY_GRADES),
   maturity_level: z.enum(BMG_MATURITY_LEVELS),
+  output_weight_kg: z.coerce.number().positive().optional(),
   notes: z.string().max(512).optional().or(z.literal('')),
 });
 export type ReleaseBatchInput = z.infer<typeof releaseBatchSchema>;
@@ -175,6 +224,8 @@ export type StartBatchInput = z.infer<typeof startBatchSchema>;
 
 export const recordOutputSchema = z.object({
   output_weight_kg: z.number().positive(),
+  // SKU/qty breakdown is optional — the UI no longer collects it (it was
+  // too technical for the operator/dept). Backend defaults to [].
   output_items: z
     .array(
       z.object({
@@ -182,7 +233,7 @@ export const recordOutputSchema = z.object({
         qty_kg: z.number().positive(),
       }),
     )
-    .min(1),
+    .optional(),
 });
 export type RecordOutputInput = z.infer<typeof recordOutputSchema>;
 
@@ -473,32 +524,6 @@ export const batchHistoryPageSchema = z.object({
   next: z.string().nullable().optional(),
 });
 export type BatchHistoryPage = z.infer<typeof batchHistoryPageSchema>;
-
-/** Training / SOP register document. */
-export const sopDocumentSchema = z.object({
-  id: z.number().int().positive(),
-  title: z.string(),
-  document_ref: z.string(),
-  category: z.string().nullable(),
-  version: z.string().nullable(),
-  owner_user_id: z.number().int().positive().nullable(),
-  owner_name: z.string().nullable(),
-  notes: z.string().nullable(),
-  is_active: z.boolean(),
-  created_at: z.string(),
-  updated_at: z.string(),
-});
-export type SopDocument = z.infer<typeof sopDocumentSchema>;
-
-export const createSopDocumentSchema = z.object({
-  title: z.string().min(1, 'Required').max(200),
-  document_ref: z.string().min(1, 'Required').max(64),
-  category: z.string().max(64).optional().or(z.literal('')),
-  version: z.string().max(32).optional().or(z.literal('')),
-  owner_user_id: z.coerce.number().int().positive().optional().or(z.literal('')),
-  notes: z.string().max(2000).optional().or(z.literal('')),
-});
-export type CreateSopDocumentInput = z.infer<typeof createSopDocumentSchema>;
 
 /** Actual vs expected yield/duration per waste category. */
 export const categoryDeviationSchema = z.object({

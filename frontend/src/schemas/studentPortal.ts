@@ -53,6 +53,9 @@ export const studentAppointmentSchema = z.object({
   scheduled_at: z.string(),
   status: z.string(),
   reason: z.string().nullable(),
+  // Plaintext proof-of-booking QR token — returned at booking/issue time
+  // only (the backend stores just the HMAC hash); null on list responses.
+  qr_token: z.string().nullable().optional(),
   created_at: z.string(),
 });
 export type StudentAppointment = z.infer<typeof studentAppointmentSchema>;

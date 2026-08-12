@@ -95,10 +95,15 @@ const NAV_SECTIONS: ReadonlyArray<{ title: string; items: ReadonlyArray<NavItem>
     ],
   },
   {
-    title: 'Care',
+    title: 'Guidance Center',
     items: [
       { label: 'Counselling', href: '/counselling', icon: MessagesSquare, permission: 'counselling.records.read' },
-      { label: 'Referrals', href: '/referrals', icon: Share2, permission: 'referrals.read' },
+    ],
+  },
+  {
+    title: 'Referrals',
+    items: [
+      { label: 'All Referrals', href: '/referrals', icon: Share2, permission: 'referrals.read' },
     ],
   },
   {

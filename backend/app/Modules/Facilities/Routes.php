@@ -27,9 +27,6 @@ final class Routes implements BaseRoutes
             $r->post('batches/(:num)/release',        'BmgController::releaseBatch/$1');
             $r->get('alerts/open',                    'BmgController::listOpenAlerts');
             $r->get('waste-categories/deviation',     'BmgController::wasteCategoryDeviation');
-            $r->get('sop-documents',                  'BmgController::listSopDocuments');
-            $r->post('sop-documents',                 'BmgController::createSopDocument');
-            $r->post('sop-documents/(:num)',          'BmgController::updateSopDocument/$1');
             $r->get('waste-categories',               'BmgController::listWasteCategories');
             $r->post('waste-categories',              'BmgController::createWasteCategory');
             $r->post('waste-categories/(:num)',       'BmgController::updateWasteCategory/$1');
@@ -40,6 +37,8 @@ final class Routes implements BaseRoutes
             $r->post('batches/(:num)/finish',         'BmgController::finishBatch/$1');
             $r->post('batches/(:num)/cancel',         'BmgController::cancelBatch/$1');
             $r->post('batches/(:num)/curing',         'BmgController::moveToCuring/$1');
+            $r->post('batches/(:num)/update',         'BmgController::addBatchUpdate/$1');
+            $r->get('batches/(:num)/updates',         'BmgController::listBatchUpdates/$1');
             $r->get('batches/(:num)/logs',            'BmgController::listProcessLogs/$1');
             $r->post('batches/(:num)/logs',           'BmgController::addProcessLog/$1');
             $r->get('batches/(:num)/alerts',          'BmgController::listAlerts/$1');

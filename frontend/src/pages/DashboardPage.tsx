@@ -5,6 +5,8 @@
  * - Live counters from the new /dashboard/counters endpoint.
  * - Sign-out.
  */
+import { subMonths } from 'date-fns';
+import { formatInTimeZone } from 'date-fns-tz';
 import {
   Boxes,
   CalendarClock,
@@ -17,6 +19,7 @@ import {
   Users,
   type LucideIcon,
 } from 'lucide-react';
+import { useMemo } from 'react';
 import { Link } from 'react-router-dom';
 
 import {
@@ -25,8 +28,10 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card';
+import { ClinicAnalyticsView } from '@/components/reports/ClinicAnalyticsView';
 import { useMe } from '@/hooks/useAuth';
 import { useDashboardCounters } from '@/hooks/useDashboard';
+import { useClinicReport } from '@/hooks/useReports';
 import { hasPermission, useAuthStore } from '@/store/auth';
 
 interface Module {
@@ -118,6 +123,33 @@ const MODULES: ReadonlyArray<Module> = [
   },
 ];
 
+/**
+ * Clinic-role dashboard body: the analytics data visualization replaces
+ * the Modules grid so clinic staff see it immediately on login. Uses a
+ * trailing ~5-month window so the monthly bar chart is meaningful
+ * (matches the clinic-statistics poster's five-month summary).
+ */
+function ClinicRoleDashboard() {
+  const range = useMemo(() => {
+    const now = new Date();
+    return {
+      start: formatInTimeZone(subMonths(now, 5), 'Asia/Manila', 'yyyy-MM-dd'),
+      end: formatInTimeZone(now, 'Asia/Manila', 'yyyy-MM-dd'),
+    };
+  }, []);
+  const clinic = useClinicReport(range.start, range.end);
+
+  return (
+    <ClinicAnalyticsView
+      report={clinic.data}
+      isLoading={clinic.isLoading}
+      isError={clinic.isError}
+      isFetching={clinic.isFetching}
+      onRetry={() => void clinic.refetch()}
+    />
+  );
+}
+
 export default function DashboardPage() {
   const { data, isLoading } = useMe();
   const counters = useDashboardCounters();
@@ -125,6 +157,25 @@ export default function DashboardPage() {
 
   if (isLoading) {
     return <p className="p-6 text-sm text-muted-foreground">Loading session…</p>;
+  }
+
+  // Clinic role (has clinic.encounters.read but NOT the admin wildcard)
+  // gets the analytics dashboard directly — the Modules grid is hidden.
+  const isClinicRole = hasPermission({ permissions: perms } as never, 'clinic.encounters.read')
+    && !hasPermission({ permissions: perms } as never, '*');
+
+  if (isClinicRole) {
+    return (
+      <main className="mx-auto max-w-7xl space-y-6 p-4 md:p-6">
+        <header>
+          <h1 className="text-2xl font-semibold text-foreground">Dashboard</h1>
+          <p className="text-sm text-muted-foreground">
+            Signed in as {data?.email ?? 'unknown'} — Asia/Manila
+          </p>
+        </header>
+        <ClinicRoleDashboard />
+      </main>
+    );
   }
 
   const visible = MODULES.filter((m) => hasPermission({ permissions: perms } as never, m.code));

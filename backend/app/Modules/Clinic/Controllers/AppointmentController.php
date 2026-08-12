@@ -123,6 +123,34 @@ final class AppointmentController extends ApiController
         return $this->ok($dto->toArray());
     }
 
+    /**
+     * Issue (or re-issue) an appointment's QR proof-of-booking token.
+     * Returns { qr_token } — rendered as a QR by the client. Allowed for
+     * staff with `appointmentsWrite` or the owning patient (self-service).
+     */
+    public function issueQr(int $id): ResponseInterface
+    {
+        $token = $this->service->issueQr($id);
+        return $this->ok(['qr_token' => $token]);
+    }
+
+    /**
+     * PUBLIC minimum-disclosure verify endpoint (no api_auth filter).
+     * Returns ONLY { valid, status, scheduled_at } — never PII.
+     */
+    public function verify(): ResponseInterface
+    {
+        $payload = $this->request->getJSON(true) ?? [];
+        $token   = (string) ($payload['token'] ?? '');
+        if ($token === '') {
+            throw new ApiException('validation.invalid', 422, [
+                ['code' => 'validation.invalid', 'message' => 'token is required.', 'field' => 'token'],
+            ]);
+        }
+
+        return $this->ok($this->service->verify($token));
+    }
+
     private function collectErrors(): array
     {
         $errs = [];

@@ -46,8 +46,17 @@ final class BmgUnitDto extends BaseDTO
                 ? (int) $this->row['active_batch_id']
                 : null,
             'active_batch_weight_kg' => $loaded > 0 ? $loaded : null,
-            // Tier 2.8: how much of the drum's capacity is in use.
-            'utilization_pct'        => $capacity > 0 ? (int) round(($loaded / $capacity) * 100) : 0,
+            'active_batch_expected_completion_date' => isset($this->row['active_batch_expected_completion_date'])
+                && $this->row['active_batch_expected_completion_date'] !== null
+                ? (string) $this->row['active_batch_expected_completion_date']
+                : null,
+            'active_batch_progress_pct' => isset($this->row['active_batch_progress_pct'])
+                && $this->row['active_batch_progress_pct'] !== null
+                ? (int) $this->row['active_batch_progress_pct']
+                : null,
+            // Tier 2.8: how much of the drum's capacity is in use. Capped at
+            // 100% — a drum can never legitimately exceed its rated capacity.
+            'utilization_pct'        => $capacity > 0 ? min(100, (int) round(($loaded / $capacity) * 100)) : 0,
         ];
     }
 }

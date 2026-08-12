@@ -1,22 +1,33 @@
 import {
   Download,
+  FileText,
   Loader2,
   Minus,
+  Share2,
   Sparkles,
   TrendingDown,
   TrendingUp,
 } from 'lucide-react';
 import { subDays } from 'date-fns';
 import { formatInTimeZone } from 'date-fns-tz';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
+import { toast } from 'sonner';
 import { QueryErrorState } from '@/components/QueryErrorState';
+import { ClinicAnalyticsView } from '@/components/reports/ClinicAnalyticsView';
 import { ReportDataTable, type ReportTableRow } from '@/components/reports/ReportDataTable';
+import ReportPdfView from '@/components/reports/ReportPdfView';
 import { SavedReportsSection } from '@/components/reports/SavedReportsSection';
 import { TrendChart } from '@/components/reports/TrendChart';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { DateRangePicker } from '@/components/ui/date-range-picker';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { Label } from '@/components/ui/label';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -28,6 +39,7 @@ import {
   useReferralReport,
   useReportExport,
   useReportNarrative,
+  useReportPdfExport,
   useReportSummary,
 } from '@/hooks/useReports';
 import {
@@ -39,6 +51,7 @@ import {
 } from '@/schemas/reports';
 import { hasPermission, useAuthStore } from '@/store/auth';
 import { fmtUtcToApp } from '@/utils/date';
+import { titleCase } from '@/lib/utils';
 
 const APP_TIMEZONE = 'Asia/Manila';
 
@@ -54,7 +67,7 @@ function isValidRange(start: string, end: string): boolean {
   return reportRangeSchema.safeParse({ start, end }).success;
 }
 
-function moduleLabel(module: ReportModule): string {
+export function moduleLabel(module: ReportModule): string {
   return module.charAt(0).toUpperCase() + module.slice(1);
 }
 
@@ -134,6 +147,8 @@ export default function ReportsPage() {
   const referrals = useReferralReport(start, end, tab === 'referrals');
   const facilities = useFacilitiesReport(start, end, tab === 'facilities');
   const exporter = useReportExport();
+  const pdfExporter = useReportPdfExport();
+  const pdfNodeRef = useRef<HTMLDivElement>(null);
   const narrative = useReportNarrative();
   const [narratives, setNarratives] = useState<Record<string, ReportNarrative>>({});
   const narrativeKey = tab + ':' + start + ':' + end;
@@ -175,6 +190,22 @@ export default function ReportsPage() {
   function exportCurrent(): void {
     exporter.mutate({ module: tab, start, end });
   }
+
+  function exportPdf(): void {
+    // Capture the ReportPdfView root (first child of the fixed wrapper), NOT
+    // the wrapper itself — the wrapper carries `left: -20000px` and
+    // html-to-image clones at that offset, producing a blank PDF. The inner
+    // node has its own width (794px) and captures correctly with the clone
+    // style override in useReportPdfExport.
+    const inner = pdfNodeRef.current?.firstElementChild as HTMLElement | null;
+    if (inner === null) {
+      toast.error('Report is not ready to export yet.');
+      return;
+    }
+    pdfExporter.mutate({ module: tab, start, end, node: inner });
+  }
+
+  const pdfData = activeQuery.data;
 
   const currentNarrative = narratives[narrativeKey];
 
@@ -257,9 +288,30 @@ export default function ReportsPage() {
               </Button>
             )}
             {canExport && (
-              <Button size="sm" variant="outline" onClick={exportCurrent} disabled={exporter.isPending}>
-                {exporter.isPending ? <Loader2 className="animate-spin" /> : <Download />} Export {moduleLabel(tab)}
-              </Button>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button size="sm" variant="outline" disabled={exporter.isPending || pdfExporter.isPending}>
+                    {exporter.isPending || pdfExporter.isPending ? <Loader2 className="animate-spin" /> : <Download />} Export {moduleLabel(tab)}
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-52">
+                  <DropdownMenuItem onClick={exportCurrent} disabled={exporter.isPending || activeQuery.data === undefined}>
+                    <Download className="size-4" />
+                    <span className="flex-1">Export CSV</span>
+                    {exporter.isPending && <Loader2 className="size-4 animate-spin" />}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={exportPdf} disabled={pdfExporter.isPending || activeQuery.data === undefined}>
+                    <FileText className="size-4" />
+                    <span className="flex-1">Export PDF</span>
+                    {pdfExporter.isPending && <Loader2 className="size-4 animate-spin" />}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={exportPdf} disabled={pdfExporter.isPending || activeQuery.data === undefined}>
+                    <Share2 className="size-4" />
+                    <span className="flex-1">Share as PDF</span>
+                    {pdfExporter.isPending && <Loader2 className="size-4 animate-spin" />}
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
             )}
           </div>
         </div>
@@ -276,20 +328,13 @@ export default function ReportsPage() {
         )}
 
         <TabsContent value="clinic" className="space-y-4">
-          {clinic.isError && clinic.data === undefined ? (
-            <QueryErrorState message="Failed to load clinic analytics." onRetry={() => void clinic.refetch()} pending={clinic.isFetching} />
-          ) : (
-            <>
-              <p className="text-sm text-muted-foreground">{clinic.data?.total_encounters.toLocaleString() ?? 'Loading'} encounters in the selected range.</p>
-              <div className="grid min-w-0 gap-4 xl:grid-cols-2">
-                <TrendChart title="Encounter trend" unit="encounters" loading={clinic.isLoading} points={(clinic.data?.daily_trend ?? []).map((point) => ({ day: point.day, value: point.cnt }))} />
-                <ReportDataTable title="Encounter status" columns={['Status', 'Count']} loading={clinic.isLoading} error={clinic.isError} fetching={clinic.isFetching} onRetry={() => void clinic.refetch()} rows={rows((clinic.data?.status_breakdown ?? []).map((item) => [item.status.replace(/_/g, ' '), item.cnt]), 'clinic-status')} />
-                <ReportDataTable title="Privacy-safe complaint categories" columns={['Category', 'Count']} loading={clinic.isLoading} rows={rows((clinic.data?.complaint_categories ?? []).map((item) => [item.category, item.cnt]), 'clinic-complaint')} />
-                <ReportDataTable title="Kiosk outcomes" columns={['Outcome', 'Count']} loading={clinic.isLoading} rows={rows((clinic.data?.checkin_outcomes ?? []).map((item) => [item.outcome.replace(/_/g, ' '), item.cnt]), 'clinic-checkin')} />
-                <ReportDataTable title="Referral flows" columns={['Source', 'Target', 'Status', 'Count']} loading={clinic.isLoading} rows={rows((clinic.data?.referral_flows ?? []).map((item) => [item.source_module, item.target_module, item.status.replace(/_/g, ' '), item.cnt]), 'clinic-referral')} />
-              </div>
-            </>
-          )}
+          <ClinicAnalyticsView
+            report={clinic.data}
+            isLoading={clinic.isLoading}
+            isError={clinic.isError}
+            isFetching={clinic.isFetching}
+            onRetry={() => void clinic.refetch()}
+          />
         </TabsContent>
 
         <TabsContent value="counselling" className="space-y-4">
@@ -303,8 +348,8 @@ export default function ReportsPage() {
               </div>
               <div className="grid min-w-0 gap-4 xl:grid-cols-2">
                 <TrendChart title="Appointment trend" unit="appointments" loading={counselling.isLoading} points={(counselling.data?.daily_trend ?? []).map((point) => ({ day: point.day, value: point.cnt }))} />
-                <ReportDataTable title="Appointment status" columns={['Status', 'Count']} loading={counselling.isLoading} rows={rows((counselling.data?.status_breakdown ?? []).map((item) => [item.status.replace(/_/g, ' '), item.cnt]), 'counselling-status')} />
-                <ReportDataTable title="Appointment type" columns={['Type', 'Count']} loading={counselling.isLoading} rows={rows((counselling.data?.type_breakdown ?? []).map((item) => [item.type.replace(/_/g, ' '), item.cnt]), 'counselling-type')} />
+                <ReportDataTable title="Appointment status" columns={['Status', 'Count']} loading={counselling.isLoading} rows={rows((counselling.data?.status_breakdown ?? []).map((item) => [titleCase(item.status), item.cnt]), 'counselling-status')} />
+                <ReportDataTable title="Appointment type" columns={['Type', 'Count']} loading={counselling.isLoading} rows={rows((counselling.data?.type_breakdown ?? []).map((item) => [titleCase(item.type), item.cnt]), 'counselling-type')} />
               </div>
             </>
           )}
@@ -353,8 +398,8 @@ export default function ReportsPage() {
               </div>
               <div className="grid min-w-0 gap-4 xl:grid-cols-2">
                 <TrendChart title="Referral trend" unit="referrals" loading={referrals.isLoading} points={(referrals.data?.daily_trend ?? []).map((point) => ({ day: point.day, value: point.cnt }))} />
-                <ReportDataTable title="Referral status" columns={['Status', 'Count']} loading={referrals.isLoading} rows={rows((referrals.data?.status_breakdown ?? []).map((item) => [item.status.replace(/_/g, ' '), item.cnt]), 'referrals-status')} />
-                <ReportDataTable title="Referral direction" columns={['Source', 'Target', 'Count']} loading={referrals.isLoading} rows={rows((referrals.data?.flow_breakdown ?? []).map((item) => [item.source_module, item.target_module, item.cnt]), 'referrals-flow')} />
+                <ReportDataTable title="Referral status" columns={['Status', 'Count']} loading={referrals.isLoading} rows={rows((referrals.data?.status_breakdown ?? []).map((item) => [titleCase(item.status), item.cnt]), 'referrals-status')} />
+                <ReportDataTable title="Referral direction" columns={['Source', 'Target', 'Count']} loading={referrals.isLoading} rows={rows((referrals.data?.flow_breakdown ?? []).map((item) => [titleCase(item.source_module), titleCase(item.target_module), item.cnt]), 'referrals-flow')} />
               </div>
             </>
           )}
@@ -372,7 +417,7 @@ export default function ReportsPage() {
               </div>
               <div className="grid min-w-0 gap-4 xl:grid-cols-2">
                 <TrendChart title="Batch-start trend" unit="batches" loading={facilities.isLoading} points={(facilities.data?.daily_trend ?? []).map((point) => ({ day: point.day, value: point.cnt }))} />
-                <ReportDataTable title="Batch status" columns={['Status', 'Count']} loading={facilities.isLoading} rows={rows((facilities.data?.status_breakdown ?? []).map((item) => [item.status.replace(/_/g, ' '), item.cnt]), 'facilities-status')} />
+                <ReportDataTable title="Batch status" columns={['Status', 'Count']} loading={facilities.isLoading} rows={rows((facilities.data?.status_breakdown ?? []).map((item) => [titleCase(item.status), item.cnt]), 'facilities-status')} />
                 <ReportDataTable title="Waste categories" columns={['Category', 'Count']} loading={facilities.isLoading} rows={rows((facilities.data?.category_breakdown ?? []).map((item) => [item.category, item.cnt]), 'facilities-category')} />
               </div>
             </>
@@ -381,6 +426,16 @@ export default function ReportsPage() {
       </Tabs>
 
       <SavedReportsSection start={start} end={end} canConfigure={canConfigure} canExport={canExport} />
+
+      {/* Off-screen printable node for the PDF export. Kept mounted (not
+          display:none) so html-to-image can rasterize it on demand. */}
+      <div
+        ref={pdfNodeRef}
+        aria-hidden
+        style={{ position: 'fixed', left: -20000, top: 0, zIndex: -1, pointerEvents: 'none' }}
+      >
+        <ReportPdfView module={tab} start={start} end={end} data={pdfData} />
+      </div>
     </main>
   );
 }

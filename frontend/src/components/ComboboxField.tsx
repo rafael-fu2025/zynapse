@@ -41,7 +41,7 @@ import {
 import type { ChangeEvent, KeyboardEvent } from 'react';
 import { create } from 'zustand';
 
-import { cn } from '@/lib/utils';
+import { cn, titleCase } from '@/lib/utils';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { Input } from '@/components/ui/input';
 import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover';
@@ -394,7 +394,7 @@ export function ComboboxField(props: ComboboxFieldProps): JSX.Element {
   const displayValue =
     value === ''
       ? ''
-      : merged.find((e) => e.value === value)?.label ?? value;
+      : merged.find((e) => e.value === value)?.label ?? titleCase(value);
 
   return (
     <Popover
@@ -617,7 +617,7 @@ export function ComboboxField(props: ComboboxFieldProps): JSX.Element {
                       />
                       <span className="min-w-0 flex-1">
                         <span className="block truncate font-medium">
-                          {entry.label ?? entry.value}
+                          {entry.label ?? titleCase(entry.value)}
                         </span>
                         {hasHint ? (
                           <span

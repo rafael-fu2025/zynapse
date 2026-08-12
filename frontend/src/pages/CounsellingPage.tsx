@@ -35,6 +35,7 @@ import { useForm } from 'react-hook-form';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { ConfirmDialog, type ConfirmAction } from '@/components/ConfirmDialog';
+import { CounsellingPatientPicker } from '@/components/CounsellingPatientPicker';
 import { QueryErrorRow } from '@/components/QueryErrorState';
 import { useTabParam } from '@/hooks/useTabParam';
 import { DatePicker } from '@/components/ui/date-picker';
@@ -110,6 +111,7 @@ import {
   type SlotAnalytics,
 } from '@/schemas/schedule';
 import { fmtUtcToApp } from '@/utils/date';
+import { titleCase } from '@/lib/utils';
 
 const STATUS_VARIANT: Record<AppointmentStatus, 'secondary' | 'info' | 'success' | 'outline' | 'destructive'> = {
   scheduled: 'info',
@@ -130,8 +132,10 @@ const TYPE_LABEL: Record<string, string> = {
 
 function OpenSessionDialog({ onClose }: { onClose: () => void }) {
   const open = useOpenSession();
-  const { register, handleSubmit, formState: { errors }, reset } =
+  const { handleSubmit, formState: { errors }, reset, setValue, watch } =
     useForm<OpenSessionInput>({ resolver: zodResolver(openSessionSchema) });
+  // Friendly confirmation of the picked patient (cleared on manual edit).
+  const [pickedPatient, setPickedPatient] = useState<string | null>(null);
 
   const onSubmit = handleSubmit((values) => {
     open.mutate(values, {
@@ -150,7 +154,17 @@ function OpenSessionDialog({ onClose }: { onClose: () => void }) {
       <form noValidate onSubmit={(e) => void onSubmit(e)} className="space-y-3">
         <div className="space-y-1.5">
           <Label htmlFor="patient_school_id">Patient school ID</Label>
-          <Input id="patient_school_id" aria-invalid={errors.patient_school_id !== undefined} {...register('patient_school_id')} />
+          <CounsellingPatientPicker
+            value={watch('patient_school_id') ?? ''}
+            onValue={(v) => { setValue('patient_school_id', v, { shouldValidate: true }); setPickedPatient(null); }}
+            onPick={(p) => setPickedPatient(`${p.name} (${p.kind === 'student' ? 'Student' : 'Employee'})`)}
+            error={errors.patient_school_id?.message}
+          />
+          {pickedPatient !== null && (
+            <p className="text-xs text-emerald-600 dark:text-emerald-400">
+              Selected: {pickedPatient}
+            </p>
+          )}
           {errors.patient_school_id !== undefined && (
             <p role="alert" className="text-xs text-destructive">{errors.patient_school_id.message}</p>
           )}
@@ -469,6 +483,8 @@ function BookAppointmentDialog({ onClose }: { onClose: () => void }) {
       resolver: zodResolver(bookAppointmentSchema),
       defaultValues: { type: 'initial', reason: '' },
     });
+  // Friendly confirmation of the picked patient (cleared on manual edit).
+  const [pickedPatient, setPickedPatient] = useState<string | null>(null);
 
   const type = watch('type');
   const counsellorId = watch('counsellor_user_id');
@@ -496,7 +512,18 @@ function BookAppointmentDialog({ onClose }: { onClose: () => void }) {
       <form noValidate onSubmit={(e) => void onSubmit(e)} className="space-y-3">
         <div className="space-y-1.5">
           <Label htmlFor="appt-patient">Patient school ID</Label>
-          <Input id="appt-patient" aria-invalid={errors.patient_school_id !== undefined} {...register('patient_school_id')} />
+          <CounsellingPatientPicker
+            id="appt-patient"
+            value={watch('patient_school_id') ?? ''}
+            onValue={(v) => { setValue('patient_school_id', v, { shouldValidate: true }); setPickedPatient(null); }}
+            onPick={(p) => setPickedPatient(`${p.name} (${p.kind === 'student' ? 'Student' : 'Employee'})`)}
+            error={errors.patient_school_id?.message}
+          />
+          {pickedPatient !== null && (
+            <p className="text-xs text-emerald-600 dark:text-emerald-400">
+              Selected: {pickedPatient}
+            </p>
+          )}
           {errors.patient_school_id !== undefined && (
             <p role="alert" className="text-xs text-destructive">{errors.patient_school_id.message}</p>
           )}
@@ -912,7 +939,7 @@ function SchedulingTab() {
                 <SelectContent>
                   <SelectItem value="all">All statuses</SelectItem>
                   {APPOINTMENT_STATUSES.map((s) => (
-                    <SelectItem key={s} value={s}>{s.replace('_', '-')}</SelectItem>
+                    <SelectItem key={s} value={s}>{titleCase(s)}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
@@ -962,7 +989,7 @@ function SchedulingTab() {
                     </TableCell>
                     <TableCell className="px-3 text-xs">{TYPE_LABEL[a.type]}</TableCell>
                     <TableCell className="px-3">
-                      <Badge variant={STATUS_VARIANT[a.status]}>{a.status.replace('_', '-')}</Badge>
+                      <Badge variant={STATUS_VARIANT[a.status]}>{titleCase(a.status)}</Badge>
                     </TableCell>
                     <TableCell className="px-3 text-right">
                       {active && (

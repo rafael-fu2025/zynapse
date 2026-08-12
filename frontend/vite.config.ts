@@ -53,6 +53,8 @@ export default defineConfig({
       'date-fns-tz',
       'react-day-picker',
       'lucide-react',
+      'recharts',
+      'recharts/types',
       'clsx',
       'tailwind-merge',
       'class-variance-authority',

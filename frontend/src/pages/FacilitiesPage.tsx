@@ -7,7 +7,7 @@
  * status badge and roll back on error. shadcn Table / Dialog /
  * Textarea primitives.
  */
-import { Play, Square, StopCircle, Loader2, Ban, ChevronDown, ChevronLeft, ChevronRight, ClipboardList, Boxes, LineChart, Plus, Wrench, Eye, Pencil, Archive, ArchiveRestore, X, Timer, ShieldCheck, FileCheck2, ScrollText, TriangleAlert, History, Sparkles } from 'lucide-react';
+import { Play, StopCircle, Loader2, Ban, ChevronDown, ChevronLeft, ChevronRight, ClipboardList, Boxes, LineChart, Plus, Wrench, Eye, Pencil, Archive, ArchiveRestore, X, ShieldCheck, FileCheck2, TriangleAlert, History, Sparkles, SquarePen, List } from 'lucide-react';
 import { useId, useMemo, useState } from 'react';
 import { Link, Navigate, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
@@ -51,29 +51,27 @@ import { Textarea } from '@/components/ui/textarea';
 import {
   useActiveBatches,
   useAddBatchIo,
+  useAddBatchUpdate,
   useAddProcessLog,
   useArchiveUnit,
   useBatchAnalytics,
   useBatchCompliance,
   useBatchHistory,
+  useBatchUpdates,
   useBlendCn,
   useBmgUnits,
   useCancelBatch,
-  useCreateSopDocument,
   useCreateUnit,
   useFinishBatch,
-  useMoveToCuring,
   useOpenAlerts,
   useProcessLogs,
   useRecordOutput,
   useReleaseBatch,
   useSetUnitMaintenance,
-  useSopDocuments,
   useStartBatch,
   useSuggestUnit,
   useUnarchiveUnit,
   useUpdateUnit,
-  useUpdateSopDocument,
   useWasteCategories,
 } from '@/hooks/useFacilities';
 import {
@@ -82,7 +80,7 @@ import {
   BMG_QUALITY_GRADES,
   MOISTURE_LEVELS,
   OUTPUT_GRADES,
-  createSopDocumentSchema,
+  addBatchUpdateSchema,
   createUnitSchema,
   recordOutputSchema,
   startBatchSchema,
@@ -98,6 +96,7 @@ import { ApiEnvelopeError } from '@/api/envelope';
 import { fmtHumanDate, fmtUtcToApp, fmtShort } from '@/utils/date';
 import { slugify, uniqueSlug } from '@/utils/slug';
 import { statusLabel } from '@/utils/status';
+import { titleCase } from '@/lib/utils';
 
 function unitStatusVariant(status: BmgUnit['status']): 'default' | 'info' | 'warning' | 'success' | 'destructive' | 'secondary' {
   switch (status) {
@@ -141,6 +140,10 @@ function StartBatchDialog({ unit, onClose }: { unit: BmgUnit; onClose: () => voi
   }
 
   function submit() {
+    if (unit.spec_capacity_kg !== null && unit.spec_capacity_kg > 0 && total > unit.spec_capacity_kg) {
+      toast.error(`Total input weight (${total.toFixed(2)} kg) exceeds this drum's capacity (${unit.spec_capacity_kg} kg).`);
+      return;
+    }
     const composition = rows
       .filter((r) => r.category_id !== '' && r.weight_kg !== '')
       .map((r) => ({ category_id: Number(r.category_id), weight_kg: Number(r.weight_kg) }));
@@ -201,7 +204,14 @@ function StartBatchDialog({ unit, onClose }: { unit: BmgUnit; onClose: () => voi
         </div>
         <div className="flex items-center justify-between rounded-md border bg-muted/40 px-3 py-2">
           <Label htmlFor={totalId} className="text-xs">Total input weight</Label>
-          <span id={totalId} className="font-mono text-sm font-semibold">{total.toFixed(2)} kg</span>
+          <div className="text-right">
+            <span id={totalId} className="font-mono text-sm font-semibold">{total.toFixed(2)} kg</span>
+            {unit.spec_capacity_kg !== null && unit.spec_capacity_kg > 0 && (
+              <p className={`text-[11px] ${total > unit.spec_capacity_kg ? 'font-medium text-destructive' : 'text-muted-foreground'}`}>
+                Drum capacity: {unit.spec_capacity_kg} kg
+              </p>
+            )}
+          </div>
         </div>
         {firstCat !== null && suggest.data !== null && suggest.data !== undefined && (
           <p className="flex items-center gap-1.5 rounded-md border border-primary/20 bg-primary/5 px-3 py-2 text-xs text-foreground">
@@ -226,26 +236,12 @@ function StartBatchDialog({ unit, onClose }: { unit: BmgUnit; onClose: () => voi
 function RecordOutputDialog({ unit, batchId, onClose }: { unit: BmgUnit; batchId: number; onClose: () => void }) {
   const rec = useRecordOutput();
   const [output, setOutput] = useState('');
-  const [items, setItems] = useState('sku=o-1; qty_kg=0.8');
   const outputId = useId();
-  const itemsId = useId();
 
   function submit() {
     const parsed = recordOutputSchema.safeParse({
       output_weight_kg: Number(output),
-      output_items: items
-        .split('\n')
-        .map((l) => l.trim())
-        .filter(Boolean)
-        .map((line) => {
-          const parts = Object.fromEntries(
-            line.split(';').map((kv): [string, string] => {
-              const [k = '', v = ''] = kv.split('=').map((s) => s.trim());
-              return [k, v];
-            }),
-          );
-          return { sku: String(parts['sku'] ?? ''), qty_kg: Number(parts['qty_kg'] ?? 0) };
-        }),
+      output_items: [],
     });
     if (!parsed.success) {
       toast.error(parsed.error.issues[0]?.message ?? 'Invalid input.');
@@ -267,21 +263,271 @@ function RecordOutputDialog({ unit, batchId, onClose }: { unit: BmgUnit; batchId
           <Label htmlFor={outputId}>Output weight (kg)</Label>
           <Input id={outputId} type="number" min={0} step={0.01} value={output} onChange={(e) => setOutput(e.target.value)} />
         </div>
-        <div className="space-y-1.5">
-          <Label htmlFor={itemsId}>Output items</Label>
-          <Textarea
-            id={itemsId}
-            value={items}
-            onChange={(e) => setItems(e.target.value)}
-            className="min-h-24 font-mono text-xs"
-          />
-        </div>
       </div>
       <DialogFooter>
         <Button variant="outline" onClick={onClose}>Cancel</Button>
         <Button onClick={submit} disabled={rec.isPending}>
           {rec.isPending && <Loader2 className="animate-spin" />}
           Record
+        </Button>
+      </DialogFooter>
+    </DialogContent>
+  );
+}
+
+/**
+ * 2. Add update — ONE plain-language action that appends an immutable
+ * ledger entry. Internally branches by what the operator fills in:
+ * output weight → output entry; curing note → curing entry; any log
+ * detail → log entry. Mirrors the mobile `_addUpdate`.
+ */
+function AddUpdateDialog({ unit, batchId, onClose }: { unit: BmgUnit; batchId: number; onClose: () => void }) {
+  const add = useAddBatchUpdate();
+  const [eventType, setEventType] = useState<BmgProcessEventType | 'unset'>('unset');
+  const [temp, setTemp] = useState('');
+  const [moisture, setMoisture] = useState<MoistureLevel | 'unset'>('unset');
+  const [note, setNote] = useState('');
+  const [error, setError] = useState('');
+
+  function submit() {
+    const parsed = addBatchUpdateSchema.safeParse({
+      update_type: 'log',
+      event_type: eventType === 'unset' ? undefined : eventType,
+      observation_note: note.trim() || undefined,
+      temperature_celsius: temp.trim() !== '' ? Number(temp) : undefined,
+      moisture_level: moisture === 'unset' ? undefined : moisture,
+    });
+    if (!parsed.success) {
+      setError(parsed.error.issues[0]?.message ?? 'Invalid input.');
+      return;
+    }
+    setError('');
+    add.mutate(
+      { unitId: unit.id, batchId, input: parsed.data },
+      { onSuccess: () => onClose() },
+    );
+  }
+
+  return (
+    <DialogContent>
+      <DialogHeader>
+        <DialogTitle>Add update — batch #{batchId} on {unit.code}</DialogTitle>
+        <p className="text-sm text-muted-foreground">
+          Add a log observation for this batch (temperature, turning, aeration, moisture, notes). Every entry is stored as an immutable, timestamped record. The final output (yield) is recorded when you finish the batch.
+        </p>
+      </DialogHeader>
+      <div className="space-y-3">
+        <div className="rounded-lg border p-3 space-y-2">
+          <Label htmlFor="update-log-type" className="block text-xs font-semibold">Log type</Label>
+          <Select value={eventType} onValueChange={(v) => setEventType(v as BmgProcessEventType)}>
+            <SelectTrigger id="update-log-type" aria-label="Log type"><SelectValue placeholder="Select log type" /></SelectTrigger>
+            <SelectContent>
+              {BMG_PROCESS_EVENT_TYPES.map((t) => <SelectItem key={t} value={t}>{titleCase(t)}</SelectItem>)}
+            </SelectContent>
+          </Select>
+          <div className="space-y-1.5">
+            <Label htmlFor="update-temp">Temperature (°C)</Label>
+            <Input id="update-temp" type="number" min={-20} max={120} step={0.1} placeholder="e.g. 58.5" value={temp} onChange={(e) => setTemp(e.target.value)} />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="update-moisture">Moisture level</Label>
+            <Select value={moisture} onValueChange={(v) => setMoisture(v as MoistureLevel)}>
+              <SelectTrigger id="update-moisture" aria-label="Moisture level"><SelectValue placeholder="Select moisture level" /></SelectTrigger>
+              <SelectContent>
+                {MOISTURE_LEVELS.map((m) => <SelectItem key={m} value={m}>{titleCase(m)}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="update-notes">Notes</Label>
+            <Textarea id="update-notes" rows={2} maxLength={1000} placeholder="Optional notes" value={note} onChange={(e) => setNote(e.target.value)} />
+          </div>
+        </div>
+        {error !== '' && <p className="text-sm text-destructive">{error}</p>}
+      </div>
+      <DialogFooter>
+        <Button variant="outline" onClick={onClose}>Cancel</Button>
+        <Button onClick={submit} disabled={add.isPending}>
+          {add.isPending && <Loader2 className="animate-spin" />}
+          Add update
+        </Button>
+      </DialogFooter>
+    </DialogContent>
+  );
+}
+
+/**
+ * 6a. Combined, append-only "Updates" feed for the active batch —
+ * output / curing / log entries, oldest → newest. Read-only.
+ */
+function UpdatesFeedDialog({ unit, batchId, onClose }: { unit: BmgUnit; batchId: number; onClose: () => void }) {
+  const updates = useBatchUpdates(batchId);
+  return (
+    <DialogContent className="max-h-[70vh] overflow-y-auto">
+      <DialogHeader>
+        <DialogTitle>Updates — batch #{batchId} on {unit.code}</DialogTitle>
+        <p className="text-sm text-muted-foreground">
+          Append-only record of every output, curing, and log entry for this batch.
+        </p>
+      </DialogHeader>
+      <div className="space-y-2">
+        {updates.isLoading && <div className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="animate-spin size-4" /> Loading…</div>}
+        {updates.isError && <p className="text-sm text-destructive">Could not load updates.</p>}
+        {!updates.isLoading && !updates.isError && (updates.data?.length ?? 0) === 0 && (
+          <p className="text-sm text-muted-foreground">No updates recorded yet.</p>
+        )}
+        {updates.data?.map((u) => (
+          <div key={u.id} className="rounded-lg border p-3">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{u.update_type}</span>
+              <span className="text-xs text-muted-foreground">{fmtUtcToApp(u.created_at)}</span>
+            </div>
+            <p className="mt-1 text-sm">
+              {u.update_type === 'output' && `Output: ${u.output_weight_kg} kg`}
+              {u.update_type === 'curing' && `Moved to curing${u.curing_note ? ` — ${u.curing_note}` : ''}`}
+              {u.update_type === 'log' && (
+                <>
+                  {[u.event_type, u.temperature_celsius !== null && u.temperature_celsius !== undefined ? `${u.temperature_celsius}°C` : null, u.moisture_level].filter(Boolean).join(' · ') || 'Observation'}
+                  {u.observation_note ? <span className="text-muted-foreground"> — {u.observation_note}</span> : null}
+                </>
+              )}
+            </p>
+          </div>
+        ))}
+      </div>
+      <DialogFooter>
+        <Button variant="outline" onClick={onClose}>Close</Button>
+      </DialogFooter>
+    </DialogContent>
+  );
+}
+
+/**
+ * 3. Finish = GRADED RELEASE. Requires quality grade + maturity; the
+ * batch leaves as `released` and the drum returns to Available. A run
+ * closed without a valid quality outcome should be Cancelled instead.
+ */
+function FinishBatchDialog({ unit, batchId, onClose }: { unit: BmgUnit; batchId: number; onClose: () => void }) {
+  const finish = useFinishBatch();
+  const [grade, setGrade] = useState<BmgQualityGrade | 'unset'>('unset');
+  const [maturity, setMaturity] = useState<BmgMaturityLevel | 'unset'>('unset');
+  const [outputKg, setOutputKg] = useState('');
+  const [error, setError] = useState('');
+
+  function submit() {
+    if (grade === 'unset' || maturity === 'unset') {
+      setError('Quality grade and maturity are both required to finish.');
+      return;
+    }
+    setError('');
+    finish.mutate(
+      {
+        unitId: unit.id,
+        batchId,
+        input: {
+          quality_grade: grade,
+          maturity_level: maturity,
+          output_weight_kg: outputKg.trim() !== '' ? Number(outputKg) : undefined,
+        },
+      },
+      { onSuccess: () => onClose() },
+    );
+  }
+
+  return (
+    <DialogContent>
+      <DialogHeader>
+        <DialogTitle>Finish batch #{batchId} on {unit.code}</DialogTitle>
+        <p className="text-sm text-muted-foreground">
+          Finishing is a graded release — record the final output (yield) and quality outcome, then the drum returns to Available. If this run failed or was discarded, cancel it instead.
+        </p>
+      </DialogHeader>
+      <div className="space-y-3">
+        <div className="space-y-1.5">
+          <Label htmlFor="finish-output">Output weight (kg)</Label>
+          <Input id="finish-output" type="number" min={0} step={0.01} placeholder="Final yield, e.g. 18.5" value={outputKg} onChange={(e) => setOutputKg(e.target.value)} />
+        </div>
+        <div className="space-y-1.5">
+          <Label>Quality grade</Label>
+          <Select value={grade} onValueChange={(v) => setGrade(v as BmgQualityGrade)}>
+            <SelectTrigger aria-label="Quality grade"><SelectValue placeholder="Select quality grade" /></SelectTrigger>
+            <SelectContent>
+              {BMG_QUALITY_GRADES.map((g) => <SelectItem key={g} value={g}>{titleCase(g)}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="space-y-1.5">
+          <Label>Maturity</Label>
+          <Select value={maturity} onValueChange={(v) => setMaturity(v as BmgMaturityLevel)}>
+            <SelectTrigger aria-label="Maturity"><SelectValue placeholder="Select maturity level" /></SelectTrigger>
+            <SelectContent>
+              {BMG_MATURITY_LEVELS.map((m) => <SelectItem key={m} value={m}>{titleCase(m)}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </div>
+        {error !== '' && <p className="text-sm text-destructive">{error}</p>}
+      </div>
+      <DialogFooter>
+        <Button variant="outline" onClick={onClose}>Cancel</Button>
+        <Button onClick={submit} disabled={finish.isPending}>
+          {finish.isPending && <Loader2 className="animate-spin" />}
+          Finish batch
+        </Button>
+      </DialogFooter>
+    </DialogContent>
+  );
+}
+
+/**
+ * 5. Drum status — toggle Available / Under Maintenance / Archived.
+ * Only allowed when the drum has no active batch.
+ */
+function DrumStatusDialog({ unit, onClose }: { unit: BmgUnit; onClose: () => void }) {
+  const maintenance = useSetUnitMaintenance();
+  const archiveUnit = useArchiveUnit();
+  const unarchiveUnit = useUnarchiveUnit();
+  const [status, setStatus] = useState<string>(
+    unit.archived_at ? 'archived' : unit.status === 'maintenance' ? 'maintenance' : 'available',
+  );
+  const pending = maintenance.isPending || archiveUnit.isPending || unarchiveUnit.isPending;
+
+  function submit() {
+    if (status === 'maintenance') {
+      maintenance.mutate({ unitId: unit.id, maintenance: true }, { onSuccess: () => onClose() });
+    } else if (status === 'archived') {
+      archiveUnit.mutate({ unitId: unit.id }, { onSuccess: () => onClose() });
+    } else {
+      // Available: clear maintenance (if set) and unarchive (if archived).
+      if (unit.archived_at) unarchiveUnit.mutate({ unitId: unit.id }, { onSuccess: () => onClose() });
+      else if (unit.status === 'maintenance') maintenance.mutate({ unitId: unit.id, maintenance: false }, { onSuccess: () => onClose() });
+      else onClose();
+    }
+  }
+
+  return (
+    <DialogContent>
+      <DialogHeader>
+        <DialogTitle>Drum status — {unit.code}</DialogTitle>
+        <p className="text-sm text-muted-foreground">
+          Available: selectable for a new batch. Under Maintenance: temporarily taken out of service (returns to Available when cleared). Archived: permanently out of service — history is kept but the drum can no longer start a batch.
+        </p>
+      </DialogHeader>
+      <div className="space-y-1.5">
+        <Label>Status</Label>
+        <Select value={status} onValueChange={setStatus}>
+          <SelectTrigger aria-label="Drum status"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="available">Available</SelectItem>
+            <SelectItem value="maintenance">Under Maintenance</SelectItem>
+            <SelectItem value="archived">Archived</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+      <DialogFooter>
+        <Button variant="outline" onClick={onClose}>Cancel</Button>
+        <Button onClick={submit} disabled={pending}>
+          {pending && <Loader2 className="animate-spin" />}
+          Update
         </Button>
       </DialogFooter>
     </DialogContent>
@@ -343,11 +589,11 @@ function ProcessLogsDialog({ unit, batchId, onClose }: { unit: BmgUnit; batchId:
               <p className="text-[10px] text-muted-foreground">{fmtHumanDate(l.log_date)}</p>
               <div className="flex flex-wrap gap-1">
                 {l.event_type !== undefined && l.event_type !== 'observation' && (
-                  <Badge variant="secondary">{l.event_type.replace('_', ' ')}</Badge>
+                  <Badge variant="secondary">{titleCase(l.event_type)}</Badge>
                 )}
                 {l.temperature_celsius !== null && <Badge variant="info">{l.temperature_celsius}°C</Badge>}
                 {l.moisture_level !== null && (
-                  <Badge variant={l.moisture_level === 'normal' ? 'success' : 'warning'}>{l.moisture_level}</Badge>
+                  <Badge variant={l.moisture_level === 'normal' ? 'success' : 'warning'}>{titleCase(l.moisture_level)}</Badge>
                 )}
               </div>
             </header>
@@ -365,7 +611,7 @@ function ProcessLogsDialog({ unit, batchId, onClose }: { unit: BmgUnit; batchId:
             <SelectContent>
               <SelectItem value="unset">Observation (default)</SelectItem>
               {BMG_PROCESS_EVENT_TYPES.filter((t) => t !== 'observation').map((t) => (
-                <SelectItem key={t} value={t}>{t.replace('_', ' ')}</SelectItem>
+                <SelectItem key={t} value={t}>{titleCase(t)}</SelectItem>
               ))}
             </SelectContent>
           </Select>
@@ -386,7 +632,7 @@ function ProcessLogsDialog({ unit, batchId, onClose }: { unit: BmgUnit; batchId:
               <SelectContent>
                 <SelectItem value="unset">—</SelectItem>
                 {MOISTURE_LEVELS.map((m) => (
-                  <SelectItem key={m} value={m}>{m}</SelectItem>
+                  <SelectItem key={m} value={m}>{titleCase(m)}</SelectItem>
                 ))}
               </SelectContent>
             </Select>
@@ -449,7 +695,7 @@ function AnalyticsDialog({ unit, batchId, onClose }: { unit: BmgUnit; batchId: n
             <p className="flex items-center gap-2">
               <span className="font-mono font-semibold">{blend.data.blend_cn}</span>
               <Badge variant={blend.data.status === 'optimal' ? 'success' : 'warning'}>
-                {blend.data.status === 'optimal' ? 'optimal (15–30)' : blend.data.status === 'high' ? 'too high' : blend.data.status === 'low' ? 'too low' : 'unknown'}
+                {blend.data.status === 'optimal' ? 'Optimal (15–30)' : blend.data.status === 'high' ? 'Too high' : blend.data.status === 'low' ? 'Too low' : 'Unknown'}
               </Badge>
               <span className="text-xs text-muted-foreground">({blend.data.n_inputs} inputs)</span>
             </p>
@@ -493,7 +739,7 @@ function AnalyticsDialog({ unit, batchId, onClose }: { unit: BmgUnit; batchId: n
             <Select value={grade} onValueChange={(v) => setGrade(v as 'excellent' | 'good' | 'fair')}>
               <SelectTrigger aria-label="Quality grade" className="h-8 w-28"><SelectValue /></SelectTrigger>
               <SelectContent>
-                {OUTPUT_GRADES.map((g) => <SelectItem key={g} value={g}>{g}</SelectItem>)}
+                {OUTPUT_GRADES.map((g) => <SelectItem key={g} value={g}>{titleCase(g)}</SelectItem>)}
               </SelectContent>
             </Select>
             <Button size="sm" disabled={io.isPending || outKg === ''} onClick={() => io.mutate({ batchId, kind: 'outputs', body: { output_weight_kg: Number(outKg), quality_grade: grade } }, { onSuccess: () => setOutKg('') })}>Add</Button>
@@ -603,7 +849,7 @@ function DrumCard({ batch }: { batch: ActiveBatch }) {
   return (
     <Link
       to={`/facilities/drums/${batch.unit_id}`}
-      className="group flex flex-col gap-2 rounded-lg border bg-card p-3 text-left transition-all hover:shadow-md hover:-translate-y-px focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+      className="group flex flex-col gap-2 rounded-lg border border-primary/50 bg-card p-3 text-left transition-all hover:border-primary hover:shadow-md hover:-translate-y-px focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
     >
       {/* Theme-aware drum graphic (white in dark mode, maroon in light mode). */}
       <div className="flex justify-center py-1">
@@ -1056,7 +1302,7 @@ function ReleaseBatchDialog({ unit, batchId, onClose }: { unit: BmgUnit; batchId
               <SelectTrigger aria-labelledby="quality-grade-label"><SelectValue placeholder="Select…" /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="unset">—</SelectItem>
-                {BMG_QUALITY_GRADES.map((g) => <SelectItem key={g} value={g}>{g}</SelectItem>)}
+                {BMG_QUALITY_GRADES.map((g) => <SelectItem key={g} value={g}>{titleCase(g)}</SelectItem>)}
               </SelectContent>
             </Select>
           </div>
@@ -1066,7 +1312,7 @@ function ReleaseBatchDialog({ unit, batchId, onClose }: { unit: BmgUnit; batchId
               <SelectTrigger aria-labelledby="maturity-label"><SelectValue placeholder="Select…" /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="unset">—</SelectItem>
-                {BMG_MATURITY_LEVELS.map((m) => <SelectItem key={m} value={m}>{m}</SelectItem>)}
+                {BMG_MATURITY_LEVELS.map((m) => <SelectItem key={m} value={m}>{titleCase(m)}</SelectItem>)}
               </SelectContent>
             </Select>
           </div>
@@ -1120,7 +1366,7 @@ function ComplianceDialog({ unit, batchId, onClose }: { unit: BmgUnit; batchId: 
               <div>Thermophilic days (≥55°C): <span className="font-mono">{c.thermophilic_days}</span></div>
               <div>Peak temperature: <span className="font-mono">{c.max_temperature_c !== null ? `${c.max_temperature_c}°C` : '—'}</span></div>
               <div>Consecutive PFRP days: <span className="font-mono">{c.consecutive_pfrp_days}</span></div>
-              <div>Status: <span className="font-mono">{c.status}</span></div>
+              <div>Status: <span className="font-mono">{titleCase(c.status)}</span></div>
             </div>
           </div>
 
@@ -1138,8 +1384,8 @@ function ComplianceDialog({ unit, batchId, onClose }: { unit: BmgUnit; batchId: 
 
           <div className="flex items-center gap-2 rounded-md border p-3 text-sm">
             <span className="text-xs font-medium text-muted-foreground">Final QA:</span>
-            <Badge variant="secondary">{c.quality_grade ?? '—'}</Badge>
-            <Badge variant="secondary">{c.maturity_level ?? '—'}</Badge>
+            <Badge variant="secondary">{c.quality_grade !== null ? titleCase(c.quality_grade) : '—'}</Badge>
+            <Badge variant="secondary">{c.maturity_level !== null ? titleCase(c.maturity_level) : '—'}</Badge>
             {c.released_at !== null && <span className="ml-auto text-xs text-muted-foreground">Released {fmtUtcToApp(c.released_at)}</span>}
           </div>
         </div>
@@ -1178,7 +1424,7 @@ function BatchHistoryDialog({ unitId, onClose }: { unitId: number | null; onClos
   }
 
   return (
-    <DialogContent className="max-w-3xl">
+    <DialogContent className="max-w-5xl sm:max-w-5xl">
       <DialogHeader>
         <DialogTitle className="flex items-center gap-2">
           <History className="size-4 text-primary" /> Batch history
@@ -1222,12 +1468,12 @@ function BatchHistoryDialog({ unitId, onClose }: { unitId: number | null; onClos
               <TableRow key={b.id}>
                 <TableCell className="px-3 font-mono text-xs">{b.reference_code}</TableCell>
                 <TableCell className="px-3 font-mono text-xs">{b.unit_code}</TableCell>
-                <TableCell className="px-3"><Badge variant={b.status === 'released' ? 'success' : b.status === 'cancelled' ? 'destructive' : 'secondary'}>{b.status}</Badge></TableCell>
+                <TableCell className="px-3"><Badge variant={b.status === 'released' ? 'success' : b.status === 'cancelled' ? 'destructive' : 'secondary'}>{titleCase(b.status)}</Badge></TableCell>
                 <TableCell className="px-3 font-mono text-xs">{b.total_input_weight_kg} kg</TableCell>
                 <TableCell className="px-3 font-mono text-xs">{b.output_weight_kg !== null ? `${b.output_weight_kg} kg` : '—'}</TableCell>
                 <TableCell className="px-3 text-xs">
-                  {b.quality_grade !== null && <Badge variant="secondary" className="mr-1">{b.quality_grade}</Badge>}
-                  {b.maturity_level !== null && <Badge variant="secondary">{b.maturity_level}</Badge>}
+                  {b.quality_grade !== null && <Badge variant="secondary" className="mr-1">{titleCase(b.quality_grade)}</Badge>}
+                  {b.maturity_level !== null && <Badge variant="secondary">{titleCase(b.maturity_level)}</Badge>}
                   {b.quality_grade === null && b.maturity_level === null && <span className="text-muted-foreground">—</span>}
                 </TableCell>
                 <TableCell className="px-3 text-xs text-muted-foreground">{fmtUtcToApp(b.started_at)}</TableCell>
@@ -1242,105 +1488,6 @@ function BatchHistoryDialog({ unitId, onClose }: { unitId: number | null; onClos
       <div className="flex items-center justify-between">
         <Button variant="outline" size="sm" onClick={prevPage} disabled={history.length < 2}><ChevronLeft /> Prev</Button>
         <Button variant="outline" size="sm" onClick={nextPage} disabled={batches.data?.next === null || batches.data?.next === undefined}>Next <ChevronRight /></Button>
-      </div>
-      <DialogFooter><Button variant="outline" onClick={onClose}>Close</Button></DialogFooter>
-    </DialogContent>
-  );
-}
-
-/**
- * SopDocumentsDialog — training / SOP register (audit #9). Lists active
- * documents, lets operators add a new one. Read-mostly operational
- * compliance surface.
- */
-function SopDocumentsDialog({ onClose }: { onClose: () => void }) {
-  const create = useCreateSopDocument();
-  const update = useUpdateSopDocument();
-  const [showArchived, setShowArchived] = useState(false);
-  const docs = useSopDocuments(showArchived);
-  const list = docs.data ?? [];
-  const [title, setTitle] = useState('');
-  const [docRef, setDocRef] = useState('');
-  const [category, setCategory] = useState('');
-  const [version, setVersion] = useState('');
-  const [notes, setNotes] = useState('');
-
-  function submit() {
-    const parsed = createSopDocumentSchema.safeParse({ title, document_ref: docRef, category, version, notes });
-    if (!parsed.success) {
-      toast.error(parsed.error.issues[0]?.message ?? 'Invalid input.');
-      return;
-    }
-    create.mutate(parsed.data, {
-      onSuccess: () => { setTitle(''); setDocRef(''); setCategory(''); setVersion(''); setNotes(''); },
-    });
-  }
-
-  return (
-    <DialogContent className="max-w-2xl">
-      <DialogHeader>
-        <DialogTitle className="flex items-center gap-2">
-          <ScrollText className="size-4 text-primary" /> Training & SOP register
-        </DialogTitle>
-      </DialogHeader>
-      <div className="flex items-center justify-between">
-        <p className="text-xs text-muted-foreground">Standard operating procedures &amp; training records.</p>
-        <Button size="sm" variant="outline" onClick={() => setShowArchived((v) => !v)}>
-          {showArchived ? 'Hide archived' : 'Show archived'}
-        </Button>
-      </div>
-      <div className="max-h-64 space-y-2 overflow-auto rounded-md border p-2">
-        {list.length === 0 && <p className="p-2 text-sm text-muted-foreground">No SOP documents yet.</p>}
-        {list.map((d) => (
-          <section key={d.id} className="flex items-center justify-between gap-2 rounded-md border p-2 text-sm">
-            <div className="min-w-0">
-              <p className="flex items-center gap-2 font-medium text-foreground">
-                {d.title}
-                {!d.is_active && <Badge variant="secondary">Archived</Badge>}
-              </p>
-              <p className="text-xs text-muted-foreground">
-                <span className="font-mono">{d.document_ref}</span>
-                {d.version !== null && ` · v${d.version}`}
-                {d.category !== null && ` · ${d.category}`}
-                {d.owner_name !== null && ` · ${d.owner_name}`}
-              </p>
-            </div>
-            {d.is_active && (
-              <Button size="sm" variant="ghost" onClick={() => update.mutate({ docId: d.id, input: { is_active: false } })}>
-                <Archive className="size-3.5" />
-              </Button>
-            )}
-          </section>
-        ))}
-      </div>
-      <div className="space-y-2 rounded-md border p-3">
-        <p className="text-xs font-medium text-muted-foreground">Add a document</p>
-        <div className="grid grid-cols-2 gap-2">
-          <div className="space-y-1">
-            <Label className="text-xs">Title</Label>
-            <Input value={title} onChange={(e) => setTitle(e.target.value)} maxLength={200} />
-          </div>
-          <div className="space-y-1">
-            <Label className="text-xs">Document ref</Label>
-            <Input value={docRef} onChange={(e) => setDocRef(e.target.value)} maxLength={64} placeholder="e.g. SOP-BMG-001" />
-          </div>
-          <div className="space-y-1">
-            <Label className="text-xs">Category</Label>
-            <Input value={category} onChange={(e) => setCategory(e.target.value)} maxLength={64} />
-          </div>
-          <div className="space-y-1">
-            <Label className="text-xs">Version</Label>
-            <Input value={version} onChange={(e) => setVersion(e.target.value)} maxLength={32} />
-          </div>
-        </div>
-        <div className="space-y-1">
-          <Label className="text-xs">Notes</Label>
-          <Textarea rows={2} maxLength={2000} value={notes} onChange={(e) => setNotes(e.target.value)} />
-        </div>
-        <Button size="sm" onClick={submit} disabled={create.isPending}>
-          {create.isPending && <Loader2 className="animate-spin" />}
-          <Plus className="size-3.5" /> Add document
-        </Button>
       </div>
       <DialogFooter><Button variant="outline" onClick={onClose}>Close</Button></DialogFooter>
     </DialogContent>
@@ -1380,18 +1527,18 @@ export default function FacilitiesPage() {
   const units = useBmgUnits(cursor, 50, showArchived);
   const finish = useFinishBatch();
   const cancel = useCancelBatch();
-  const moveCuring = useMoveToCuring();
-  const release = useReleaseBatch();
-  const maintenance = useSetUnitMaintenance();
   const unarchiveUnit = useUnarchiveUnit();
   const [openStart, setOpenStart] = useState<BmgUnit | null>(null);
   const [openOutput, setOpenOutput] = useState<BmgUnit | null>(null);
+  const [openUpdate, setOpenUpdate] = useState<BmgUnit | null>(null);
+  const [openUpdates, setOpenUpdates] = useState<BmgUnit | null>(null);
+  const [openFinish, setOpenFinish] = useState<BmgUnit | null>(null);
+  const [openStatus, setOpenStatus] = useState<BmgUnit | null>(null);
   const [openLogs, setOpenLogs] = useState<BmgUnit | null>(null);
   const [openAnalytics, setOpenAnalytics] = useState<BmgUnit | null>(null);
   const [openRelease, setOpenRelease] = useState<BmgUnit | null>(null);
   const [openCompliance, setOpenCompliance] = useState<{ unit: BmgUnit; batchId: number } | null>(null);
   const [openHistory, setOpenHistory] = useState<number | 'all' | null>(null);
-  const [openSop, setOpenSop] = useState(false);
   const [openCreate, setOpenCreate] = useState(false);
   const [openEdit, setOpenEdit] = useState<BmgUnit | null>(null);
   const [openArchive, setOpenArchive] = useState<BmgUnit | null>(null);
@@ -1451,64 +1598,45 @@ export default function FacilitiesPage() {
           <DropdownMenuItem className="min-h-11" disabled={u.status !== 'idle'} onSelect={() => setOpenStart(u)}>
             <Play /> Start batch
           </DropdownMenuItem>
-          <DropdownMenuItem className="min-h-11" disabled={u.status !== 'processing' || activeBatch === null} onSelect={() => setOpenOutput(u)}>
-            <Square /> Record output
+          {/* 2. Add update — ONE action; output/curing/log internally. */}
+          <DropdownMenuItem className="min-h-11" disabled={!['processing', 'awaiting_output', 'curing'].includes(u.status) || activeBatch === null} onSelect={() => activeBatch !== null && setOpenUpdate(u)}>
+            <SquarePen /> Add update
           </DropdownMenuItem>
+          {/* 6a. Combined append-only Updates feed. */}
+          <DropdownMenuItem className="min-h-11" disabled={activeBatch === null} onSelect={() => activeBatch !== null && setOpenUpdates(u)}>
+            <List /> View updates
+          </DropdownMenuItem>
+          {/* 3. Finish = graded release (requires QA). */}
           <DropdownMenuItem
           className="min-h-11"
-          disabled={u.status !== 'awaiting_output' || activeBatch === null || finish.isPending}
-          onSelect={() => activeBatch !== null && setConfirm({
-            title: `Finish batch #${activeBatch} on ${u.code}?`,
-            description: 'This finalizes the batch and returns the drum to Idle. This cannot be undone.',
-            confirmLabel: 'Finish batch',
-            run: () => finish.mutate({ unitId: u.id, batchId: activeBatch }),
-          })}
+          disabled={!['processing', 'awaiting_output', 'curing'].includes(u.status) || activeBatch === null || finish.isPending}
+          onSelect={() => activeBatch !== null && setOpenFinish(u)}
         >
             <StopCircle /> Finish batch
           </DropdownMenuItem>
-          <DropdownMenuItem
-          className="min-h-11"
-          disabled={u.status !== 'awaiting_output' || activeBatch === null || moveCuring.isPending}
-          onSelect={() => activeBatch !== null && setConfirm({
-            title: `Move batch #${activeBatch} on ${u.code} to curing?`,
-            description: 'The batch and drum will enter the curing phase (slow maturation, lower monitoring). The batch is not finished — you can record output or finish it later.',
-            confirmLabel: 'Move to curing',
-            run: () => moveCuring.mutate({ unitId: u.id, batchId: activeBatch }),
-          })}
-        >
-            <Timer /> Move to curing
-          </DropdownMenuItem>
-          <DropdownMenuItem
-          className="min-h-11"
-          disabled={(u.status !== 'awaiting_output' && u.status !== 'curing') || activeBatch === null || release.isPending}
-          onSelect={() => activeBatch !== null && setOpenRelease(u)}
-        >
-            <ShieldCheck /> Release batch (final QA)
-          </DropdownMenuItem>
           <DropdownMenuSeparator />
-          <DropdownMenuItem className="min-h-11" disabled={activeBatch === null} onSelect={() => setOpenLogs(u)}>
-            <ClipboardList /> Process logs
-          </DropdownMenuItem>
-          <DropdownMenuItem className="min-h-11" disabled={activeBatch === null} onSelect={() => setOpenAnalytics(u)}>
-            <LineChart /> Analytics
+          {/* 6b. View history (read-only). */}
+          <DropdownMenuItem className="min-h-11" onSelect={() => setOpenHistory(u.id)}>
+            <History /> Batch history
           </DropdownMenuItem>
           <DropdownMenuItem className="min-h-11" disabled={activeBatch === null} onSelect={() => activeBatch !== null && setOpenCompliance({ unit: u, batchId: activeBatch })}>
             <FileCheck2 /> Certificate / compliance
           </DropdownMenuItem>
-          <DropdownMenuItem className="min-h-11" onSelect={() => setOpenHistory(u.id)}>
-            <History /> Batch history
+          <DropdownMenuItem className="min-h-11" disabled={activeBatch === null} onSelect={() => setOpenAnalytics(u)}>
+            <LineChart /> Analytics
           </DropdownMenuItem>
           <DropdownMenuSeparator />
+          {/* 5. Drum status (no active batch only). */}
           <DropdownMenuItem
           className="min-h-11"
-          disabled={(u.status !== 'idle' && u.status !== 'maintenance') || maintenance.isPending}
-          onSelect={() => maintenance.mutate({ unitId: u.id, maintenance: u.status !== 'maintenance' })}
+          disabled={activeBatch !== null}
+          onSelect={() => setOpenStatus(u)}
         >
-            <Wrench /> {u.status === 'maintenance' ? 'End maintenance' : 'Maintenance'}
+            <Wrench /> Drum status
           </DropdownMenuItem>
           <DropdownMenuItem
           className="min-h-11 text-destructive focus:text-destructive"
-          disabled={(u.status !== 'processing' && u.status !== 'awaiting_output') || activeBatch === null || cancel.isPending}
+          disabled={!['processing', 'awaiting_output', 'curing'].includes(u.status) || activeBatch === null || cancel.isPending}
           onSelect={() => activeBatch !== null && setConfirm({
             title: `Cancel batch #${activeBatch} on ${u.code}?`,
             description: 'The batch will be cancelled and the drum returned to Idle. This cannot be undone.',
@@ -1539,9 +1667,6 @@ export default function FacilitiesPage() {
             onClick={() => { setShowArchived((v) => !v); setCursor(null); setHistory([null]); }}
           >
             <Archive /> {showArchived ? 'Hide archived' : 'Show archived'}
-          </Button>
-          <Button variant="outline" onClick={() => setOpenSop(true)}>
-            <ScrollText /> SOP register
           </Button>
           <Button variant="outline" onClick={() => setOpenHistory('all')}>
             <History /> Batch history
@@ -1738,6 +1863,42 @@ export default function FacilitiesPage() {
         </Dialog>
       )}
 
+      {openUpdate !== null && openUpdate.active_batch_id !== null && openUpdate.active_batch_id !== undefined && (
+        <Dialog open onOpenChange={(o) => !o && setOpenUpdate(null)}>
+          <AddUpdateDialog
+            unit={openUpdate}
+            batchId={openUpdate.active_batch_id}
+            onClose={() => setOpenUpdate(null)}
+          />
+        </Dialog>
+      )}
+
+      {openUpdates !== null && openUpdates.active_batch_id !== null && openUpdates.active_batch_id !== undefined && (
+        <Dialog open onOpenChange={(o) => !o && setOpenUpdates(null)}>
+          <UpdatesFeedDialog
+            unit={openUpdates}
+            batchId={openUpdates.active_batch_id}
+            onClose={() => setOpenUpdates(null)}
+          />
+        </Dialog>
+      )}
+
+      {openFinish !== null && openFinish.active_batch_id !== null && openFinish.active_batch_id !== undefined && (
+        <Dialog open onOpenChange={(o) => !o && setOpenFinish(null)}>
+          <FinishBatchDialog
+            unit={openFinish}
+            batchId={openFinish.active_batch_id}
+            onClose={() => setOpenFinish(null)}
+          />
+        </Dialog>
+      )}
+
+      {openStatus !== null && (
+        <Dialog open onOpenChange={(o) => !o && setOpenStatus(null)}>
+          <DrumStatusDialog unit={openStatus} onClose={() => setOpenStatus(null)} />
+        </Dialog>
+      )}
+
       {openLogs !== null && openLogs.active_batch_id !== null && openLogs.active_batch_id !== undefined && (
         <Dialog open onOpenChange={(o) => !o && setOpenLogs(null)}>
           <ProcessLogsDialog
@@ -1781,12 +1942,6 @@ export default function FacilitiesPage() {
       {openHistory !== null && (
         <Dialog open onOpenChange={(o) => !o && setOpenHistory(null)}>
           <BatchHistoryDialog unitId={openHistory === 'all' ? null : openHistory} onClose={() => setOpenHistory(null)} />
-        </Dialog>
-      )}
-
-      {openSop && (
-        <Dialog open onOpenChange={(o) => !o && setOpenSop(false)}>
-          <SopDocumentsDialog onClose={() => setOpenSop(false)} />
         </Dialog>
       )}
 

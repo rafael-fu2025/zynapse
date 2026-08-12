@@ -28,37 +28,37 @@ import {
   batchAnalyticsSchema,
   batchComplianceSchema,
   batchHistoryItemSchema,
+  batchUpdateSchema,
   blendCnSchema,
   bmgAlertSchema,
   bmgBatchSchema,
   bmgUnitSchema,
   cancelBatchSchema,
   categoryDeviationSchema,
-  createSopDocumentSchema,
   createUnitSchema,
   createWasteCategorySchema,
   moveToCuringSchema,
   openAlertSchema,
   processLogSchema,
   releaseBatchSchema,
-  sopDocumentSchema,
   updateUnitSchema,
   updateWasteCategorySchema,
   wasteCategorySchema,
   type ActiveBatch,
   type AddBatchInputInput,
   type AddBatchLossInput,
+  type AddBatchUpdateInput,
   type AddProcessLogInput,
   type BatchAnalytics,
   type BatchCompliance,
   type BatchHistoryItem,
+  type BatchUpdate,
   type BlendCn,
   type BmgAlert,
   type BmgBatch,
   type BmgUnit,
   type CancelBatchInput,
   type CategoryDeviation,
-  type CreateSopDocumentInput,
   type CreateUnitInput,
   type CreateWasteCategoryInput,
   type MoveToCuringInput,
@@ -66,7 +66,6 @@ import {
   type ProcessLog,
   type RecordOutputInput,
   type ReleaseBatchInput,
-  type SopDocument,
   type StartBatchInput,
   type UpdateUnitInput,
   type UpdateWasteCategoryInput,
@@ -233,13 +232,16 @@ export function useRecordOutput() {
 export interface UseFinishBatchVars {
   unitId: number;
   batchId: number;
+  input: ReleaseBatchInput;
 }
 
 export function useFinishBatch() {
   const qc = useQueryClient();
   return useMutation<BmgBatch, ApiEnvelopeError, UseFinishBatchVars, UnitsMutationCtx>({
-    mutationFn: async ({ batchId }) => {
-      const res = await apiClient.post<BmgBatch>(`/facilities/batches/${batchId}/finish`);
+    mutationFn: async ({ batchId, input }) => {
+      // Finish = GRADED RELEASE: quality_grade + maturity_level required;
+      // output_weight_kg (final yield) is recorded here at finish.
+      const res = await apiClient.post<BmgBatch>(`/facilities/batches/${batchId}/finish`, input);
       return bmgBatchSchema.parse(res.data);
     },
     onMutate: async ({ unitId }) => {
@@ -258,8 +260,50 @@ export function useFinishBatch() {
       invalidateFacilities(qc, vars.batchId);
     },
     onSuccess: () => {
-      toast.success('Batch finished.');
+      toast.success('Batch finished (released).');
     },
+  });
+}
+
+export interface UseAddBatchUpdateVars {
+  unitId: number;
+  batchId: number;
+  input: AddBatchUpdateInput;
+}
+
+/** Unified "Add update" — appends an immutable output/curing/log entry. */
+export function useAddBatchUpdate() {
+  const qc = useQueryClient();
+  return useMutation<BatchUpdate, ApiEnvelopeError, UseAddBatchUpdateVars, UnitsMutationCtx>({
+    mutationFn: async ({ batchId, input }) => {
+      const res = await apiClient.post<BatchUpdate>(`/facilities/batches/${batchId}/update`, input);
+      return batchUpdateSchema.parse(res.data);
+    },
+    onError: (err, _input, ctx) => {
+      for (const [key, snap] of ctx?.snapshots ?? []) {
+        qc.setQueryData(key, snap);
+      }
+      toast.error(err.errors[0]?.message ?? 'Failed to add update.');
+    },
+    onSettled: (_d, _e, vars) => {
+      invalidateFacilities(qc, vars.batchId);
+      void qc.invalidateQueries({ queryKey: ['facilities', 'updates', vars.batchId] });
+    },
+    onSuccess: () => {
+      toast.success('Update added.');
+    },
+  });
+}
+
+/** Combined, append-only "Updates" feed for a batch (read-only). */
+export function useBatchUpdates(batchId: number | null) {
+  return useQuery<BatchUpdate[], ApiEnvelopeError>({
+    queryKey: ['facilities', 'updates', batchId],
+    queryFn: async () => {
+      const res = await apiClient.get<BatchUpdate[]>(`/facilities/batches/${batchId}/updates`);
+      return z.array(batchUpdateSchema).parse(res.data);
+    },
+    enabled: batchId !== null,
   });
 }
 
@@ -1020,65 +1064,6 @@ export function useSuggestUnit(categoryId: number | null) {
       return bmgUnitSchema.parse(res.data);
     },
     enabled: categoryId !== null && categoryId > 0,
-  });
-}
-
-// ------------------------------------------------------ SOP register
-
-export function useSopDocuments(includeArchived = false) {
-  return useQuery<SopDocument[], ApiEnvelopeError>({
-    queryKey: ['facilities', 'sop-documents', { includeArchived }],
-    queryFn: async () => {
-      const res = await apiClient.get<unknown[]>(
-        `/facilities/sop-documents${includeArchived ? '?include_archived=1' : ''}`,
-      );
-      return z.array(sopDocumentSchema).parse(res.data);
-    },
-  });
-}
-
-export function useCreateSopDocument() {
-  const qc = useQueryClient();
-  return useMutation<SopDocument, ApiEnvelopeError, CreateSopDocumentInput>({
-    mutationFn: async (input) => {
-      const valid = createSopDocumentSchema.parse(input);
-      const payload: Record<string, unknown> = {
-        title: valid.title,
-        document_ref: valid.document_ref,
-      };
-      if (valid.category !== undefined && valid.category !== '') payload['category'] = valid.category;
-      if (valid.version !== undefined && valid.version !== '') payload['version'] = valid.version;
-      if (valid.owner_user_id !== undefined && valid.owner_user_id !== '') {
-        payload['owner_user_id'] = Number(valid.owner_user_id);
-      }
-      if (valid.notes !== undefined && valid.notes !== '') payload['notes'] = valid.notes;
-      const res = await apiClient.post<SopDocument>('/facilities/sop-documents', payload);
-      return sopDocumentSchema.parse(res.data);
-    },
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ['facilities', 'sop-documents'] });
-      toast.success('SOP document saved.');
-    },
-    onError: (err) => {
-      toast.error(err.errors[0]?.message ?? 'Failed to save SOP document.');
-    },
-  });
-}
-
-export function useUpdateSopDocument() {
-  const qc = useQueryClient();
-  return useMutation<SopDocument, ApiEnvelopeError, { docId: number; input: Record<string, unknown> }>({
-    mutationFn: async ({ docId, input }) => {
-      const res = await apiClient.post<SopDocument>(`/facilities/sop-documents/${docId}`, input);
-      return sopDocumentSchema.parse(res.data);
-    },
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ['facilities', 'sop-documents'] });
-      toast.success('SOP document updated.');
-    },
-    onError: (err) => {
-      toast.error(err.errors[0]?.message ?? 'Failed to update SOP document.');
-    },
   });
 }
 

@@ -20,6 +20,10 @@ final class Routes implements BaseRoutes
             '\\Modules\\Clinic\\Controllers\\QueueController::state',
         );
 
+        // PUBLIC minimum-disclosure appointment QR verify — explicitly NOT
+        // under api_auth (mirrors the referrals verify endpoint).
+        $routes->post('api/v1/appointments/verify', '\\Modules\\Clinic\\Controllers\\AppointmentController::verify');
+
         // Employee portal (Phase 11) — authenticated, self-scoped.
         // We mount these at `/api/v1/me/...` so the SPA doesn't need
         // to know the caller's employee id. Static "me" segment
@@ -73,6 +77,7 @@ final class Routes implements BaseRoutes
             $r->get('appointments/(:num)',                   'AppointmentController::show/$1');
             $r->post('appointments/(:num)',                   'AppointmentController::update/$1');
             $r->post('appointments/(:num)/transition',       'AppointmentController::transition/$1');
+            $r->post('appointments/(:num)/qr',               'AppointmentController::issueQr/$1');
 
             // Patient registry (Phase 11 — recycled from synapse_ag)
             $r->get('students',                              'PatientController::listStudents');
@@ -83,7 +88,11 @@ final class Routes implements BaseRoutes
             $r->post('students/(:num)',                      'PatientController::updateStudent/$1');
             $r->post('students/(:num)/archive',              'PatientController::setStudentArchived/$1');
             $r->post('students/(:num)/allergies',            'PatientController::addAllergy/$1');
+            $r->post('students/(:num)/allergies/(:num)',     'PatientController::updateAllergy/$1/$2');
+            $r->post('students/(:num)/allergies/(:num)/delete', 'PatientController::deleteAllergy/$1/$2');
             $r->post('students/(:num)/contacts',             'PatientController::addContact/$1');
+            $r->post('students/(:num)/contacts/(:num)',      'PatientController::updateContact/$1/$2');
+            $r->post('students/(:num)/contacts/(:num)/delete', 'PatientController::deleteContact/$1/$2');
             $r->get('employees',                             'PatientController::listEmployees');
             $r->get('employees/search',                      'PatientController::searchEmployees');
             $r->post('employees/sync-hr',                    'PatientController::syncHrEmployees');

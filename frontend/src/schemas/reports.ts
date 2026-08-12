@@ -78,6 +78,20 @@ export const clinicReportSchema = z.object({
   referral_flows: z.array(
     countRow.extend({ source_module: z.string(), target_module: z.string(), status: z.string() }),
   ),
+  // Clinic data-visualization additions (2026-08-06).
+  monthly_visits: z.array(countRow.extend({ month: z.string() })),
+  most_common_medications: z.array(
+    z.object({
+      generic_name: z.string(),
+      brand_name: z.string().nullable(),
+      unit: z.string(),
+      qty: z.number().int(),
+    }),
+  ),
+  patient_type_breakdown: z.array(countRow.extend({ kind: z.string() })),
+  unique_patients: z.number().int(),
+  avg_visits_per_patient: z.number(),
+  avg_per_day: z.number(),
 });
 export type ClinicReport = z.infer<typeof clinicReportSchema>;
 

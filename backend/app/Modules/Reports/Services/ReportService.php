@@ -158,14 +158,51 @@ final class ReportService extends BaseService
             ->groupBy('source_module, target_module, status')
             ->orderBy('cnt', 'DESC')->get()->getResultArray();
 
+        // Clinic data-visualization additions (2026-08-06): monthly
+        // bucketing for the bar chart, the most-dispensed medications
+        // table, a patient-type split (student / employee / guest), and
+        // patient-care KPIs. All scoped to the same range.
+        $monthlyVisits = $this->timestampBuilder('clinic_encounters', 'created_at', $bounds)
+            ->select("DATE_FORMAT(DATE_ADD(created_at, INTERVAL 8 HOUR), '%Y-%m') AS month, COUNT(*) AS cnt", false)
+            ->where('archived_at', null)
+            ->groupBy('month')->orderBy('month', 'ASC')->get()->getResultArray();
+
+        $mostCommonMedications = $this->timestampBuilder('clinic_medicine_transactions t', 't.created_at', $bounds)
+            ->select('m.generic_name, m.brand_name, m.unit, SUM(t.quantity) AS qty', false)
+            ->join('clinic_medicines m', 'm.id = t.medicine_id')
+            ->where('t.type', 'dispensed')
+            ->groupBy('m.id')->orderBy('qty', 'DESC')->limit(10)->get()->getResultArray();
+
+        $patientType = $this->timestampBuilder('clinic_encounters e', 'e.created_at', $bounds)
+            ->select("COALESCE(u.kind, CASE WHEN e.guest_name IS NOT NULL AND e.guest_name <> '' THEN 'guest' ELSE 'unknown' END) AS kind, COUNT(*) AS cnt", false)
+            ->join('users u', 'u.id = e.patient_user_id', 'left')
+            ->where('e.archived_at', null)
+            ->groupBy('kind')->orderBy('cnt', 'DESC')->get()->getResultArray();
+
+        $uniquePatients = (int) ($this->timestampBuilder('clinic_encounters', 'created_at', $bounds)
+            ->select('COUNT(DISTINCT patient_user_id) AS n', false)
+            ->where('archived_at', null)
+            ->where('patient_user_id IS NOT NULL', null, false)
+            ->get()->getRowArray()['n'] ?? 0);
+
+        $total = array_sum(array_map(static fn (array $r): int => (int) $r['cnt'], $statusBreakdown));
+        $daySpan = max(1, (int) (new DateTimeImmutable($range['end'], new DateTimeZone('UTC')))
+            ->diff(new DateTimeImmutable($range['start'], new DateTimeZone('UTC')))->days + 1);
+
         return [
             'range' => $range,
-            'total_encounters' => array_sum(array_map(static fn (array $r): int => (int) $r['cnt'], $statusBreakdown)),
+            'total_encounters' => $total,
             'status_breakdown' => $this->intify($statusBreakdown),
             'daily_trend' => $this->intify($dailyTrend),
             'complaint_categories' => $this->intify($complaintCategories),
             'checkin_outcomes' => $this->intify($checkinOutcomes),
             'referral_flows' => $this->intify($referralFlows),
+            'monthly_visits' => $this->intify($monthlyVisits),
+            'most_common_medications' => $this->intify($mostCommonMedications),
+            'patient_type_breakdown' => $this->intify($patientType),
+            'unique_patients' => $uniquePatients,
+            'avg_visits_per_patient' => $uniquePatients > 0 ? round($total / $uniquePatients, 1) : 0.0,
+            'avg_per_day' => $daySpan > 0 ? round($total / $daySpan, 1) : 0.0,
         ];
     }
 

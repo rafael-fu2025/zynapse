@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { toast } from 'sonner';
 import { apiClient } from '@/api/client';
 import type { ApiEnvelopeError } from '@/api/envelope';
+import { kioskLookupSchema, type KioskLookupResult } from '@/hooks/usePatientLookup';
 import {
   noteSchema,
   openSessionSchema,
@@ -20,6 +21,28 @@ import {
 interface SessionPage {
   data: Session[];
   next: string | null;
+}
+
+/**
+ * Patient autocomplete for the counselling forms — narrow,
+ * counselling-scoped lookup (`GET /counselling/patient-lookup`), gated by
+ * `counselling.records.create` so counsellors / clinical supervisors can
+ * search patients without broad clinic access.
+ */
+export function useCounsellingPatientLookup(query: string) {
+  const q = query.trim();
+  const enabled = q.length >= 2;
+  return useQuery<KioskLookupResult[], ApiEnvelopeError>({
+    queryKey: ['counselling-patient-lookup', q],
+    enabled,
+    queryFn: async () => {
+      const res = await apiClient.get<unknown[]>(
+        `/counselling/patient-lookup?q=${encodeURIComponent(q)}&limit=8`,
+      );
+      return kioskLookupSchema.parse(res.data);
+    },
+    staleTime: 30_000,
+  });
 }
 
 export function useSessions(cursor: string | null, limit = 25) {

@@ -88,7 +88,7 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip';
 import { apiClient } from '@/api/client';
-import { cn } from '@/lib/utils';
+import { cn, titleCase } from '@/lib/utils';
 import { useTabParam } from '@/hooks/useTabParam';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { useTableRowKeyboardNav } from '@/hooks/useTableRowKeyboardNav';
@@ -294,7 +294,13 @@ function SupplyLastMovementHint({
  * this one display. Returns strings like "2d ago", "3h ago", "just now".
  */
 function fmtRelativeFromNow(iso: string): string {
-  const then = new Date(iso).getTime();
+  // API timestamps are MySQL `YYYY-MM-DD HH:mm:ss` in UTC with NO zone
+  // designator — `new Date` would read them as LOCAL time and skew the
+  // offset by the tz difference (e.g. "8h ago" for "just now" in
+  // Asia/Manila). Normalize to an explicit UTC instant first, mirroring
+  // `parseUtc` in utils/date.ts (which the ledger uses).
+  const hasZone = /[zZ]$|[+-]\d{2}:?\d{2}$/.test(iso);
+  const then = new Date(hasZone ? iso : iso.replace(' ', 'T') + 'Z').getTime();
   if (Number.isNaN(then)) return '';
   const diffMs = Date.now() - then;
   const diffSec = Math.round(diffMs / 1000);
@@ -827,7 +833,7 @@ function MedicineLedgerDialog({ medicine, onClose }: { medicine: Medicine; onClo
   const txns = useMedicineTransactions(medicine.id);
   const rows = (txns.data ?? []).map((t) => ({
     id: t.id,
-    label: t.reference_type !== null ? `${t.type} · ${t.reference_type}#${t.reference_id ?? '?'}` : t.type,
+    label: t.reference_type !== null ? `${titleCase(t.type)} · ${titleCase(t.reference_type)}#${t.reference_id ?? '?'}` : titleCase(t.type),
     by: t.user_email ?? null,
     qty_in: t.qty_in,
     qty_out: t.qty_out,
@@ -925,7 +931,7 @@ function BatchesDialog({ medicineId, onClose }: { medicineId: number; onClose: (
                   </TableCell>
                   <TableCell className="text-xs">{b.supplier ?? '—'}</TableCell>
                   <TableCell>
-                    <Badge variant={BATCH_STATUS_VARIANT[b.status]}>{b.status}</Badge>
+                    <Badge variant={BATCH_STATUS_VARIANT[b.status]}>{titleCase(b.status)}</Badge>
                   </TableCell>
                   <TableCell className="text-right">
                     {writable && (
@@ -2003,23 +2009,23 @@ function ReordersTab() {
               <TableRow key={r.id} {...reorderRowNav.getRowProps(idx)}>
                 <TableCell className="px-3 font-mono text-xs">
                   {r.id}
-                  {r.auto_triggered && <Badge variant="outline" className="ml-1.5">auto</Badge>}
+                  {r.auto_triggered && <Badge variant="outline" className="ml-1.5">Auto</Badge>}
                 </TableCell>
                 <TableCell className="px-3">
                   {r.item_name === null
                     ? `#${r.medicine_id ?? r.supply_item_id ?? '?'}`
                     : highlightMatch(r.item_name, debouncedQ)}
-                  {r.item_type === 'supply' && <Badge variant="outline" className="ml-1.5">supply</Badge>}
+                  {r.item_type === 'supply' && <Badge variant="outline" className="ml-1.5">Supply</Badge>}
                 </TableCell>
                 <TableCell className="px-3 font-mono text-xs">{r.requested_quantity} {r.unit ?? ''}</TableCell>
                 <TableCell className="px-3 font-mono text-xs text-muted-foreground">
                   {r.reorder_level}
                 </TableCell>
                 <TableCell className="px-3">
-                  <Badge variant={URGENCY_VARIANT[r.urgency]}>{r.urgency}</Badge>
+                  <Badge variant={URGENCY_VARIANT[r.urgency]}>{titleCase(r.urgency)}</Badge>
                 </TableCell>
                 <TableCell className="px-3">
-                  <Badge variant={REORDER_STATUS_VARIANT[r.status]}>{r.status}</Badge>
+                  <Badge variant={REORDER_STATUS_VARIANT[r.status]}>{titleCase(r.status)}</Badge>
                 </TableCell>
                 <TableCell className="px-3 text-xs text-muted-foreground">
                   {r.order_date !== null && <>ordered {r.order_date}<br /></>}
@@ -2069,12 +2075,12 @@ function ReordersTab() {
                   ? `#${r.medicine_id ?? r.supply_item_id ?? '?'}`
                   : highlightMatch(r.item_name, debouncedQ)}
               </span>
-              <Badge variant={REORDER_STATUS_VARIANT[r.status]}>{r.status}</Badge>
+              <Badge variant={REORDER_STATUS_VARIANT[r.status]}>{titleCase(r.status)}</Badge>
             </div>
             <div className="mb-1 flex flex-wrap gap-1.5">
-              {r.auto_triggered && <Badge variant="outline">auto</Badge>}
-              {r.item_type === 'supply' && <Badge variant="outline">supply</Badge>}
-              <Badge variant={URGENCY_VARIANT[r.urgency]}>{r.urgency}</Badge>
+              {r.auto_triggered && <Badge variant="outline">Auto</Badge>}
+              {r.item_type === 'supply' && <Badge variant="outline">Supply</Badge>}
+              <Badge variant={URGENCY_VARIANT[r.urgency]}>{titleCase(r.urgency)}</Badge>
             </div>
             <MobileCardField label="Qty to order"><span className="font-mono text-xs">{r.requested_quantity} {r.unit ?? ''}</span></MobileCardField>
             <MobileCardField label="Threshold"><span className="font-mono text-xs text-muted-foreground">{r.reorder_level}</span></MobileCardField>
@@ -2669,7 +2675,7 @@ function InsightsTab({ onJumpToTab }: { onJumpToTab: (tab: 'medicines' | 'suppli
                       {b.written_off_at !== null ? ` · ${fmtUtcToApp(b.written_off_at)}` : ''}
                     </div>
                   </div>
-                  <Badge variant={BATCH_STATUS_VARIANT[b.status]}>{b.status}</Badge>
+                  <Badge variant={BATCH_STATUS_VARIANT[b.status]}>{titleCase(b.status)}</Badge>
                 </li>
               ))}
             </ul>

@@ -11,12 +11,14 @@
  * Also lists the student's own appointments so the dashboard isn't a
  * dead end.
  */
-import { CalendarPlus, Clock3, Loader2, UserRound } from 'lucide-react';
+import { CalendarPlus, Clock3, Loader2, QrCode, UserRound } from 'lucide-react';
 import { useState } from 'react';
 import { toast } from 'sonner';
+import { AppointmentQrDialog } from '@/components/AppointmentQrDialog';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Dialog } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -29,6 +31,7 @@ import {
 } from '@/hooks/useStudentPortal';
 import type { StudentAppointment } from '@/schemas/studentPortal';
 import { appDateTimeToUtcSql, fmtUtcToApp } from '@/utils/date';
+import { titleCase } from '@/lib/utils';
 
 const STATUS_VARIANT: Record<string, 'info' | 'success' | 'warning' | 'secondary' | 'destructive'> = {
   scheduled: 'info',
@@ -48,6 +51,9 @@ export function StudentBookingSection() {
   const [date, setDate] = useState('');
   const [time, setTime] = useState('');
   const [reason, setReason] = useState('');
+  // Proof-of-booking QR — opened right after a successful booking and via
+  // the QR icon on each appointment row (mirrors the mobile surface).
+  const [qrAppt, setQrAppt] = useState<StudentAppointment | null>(null);
 
   function submit() {
     if (providerId === null) {
@@ -62,10 +68,13 @@ export function StudentBookingSection() {
     book.mutate(
       { provider_user_id: providerId, scheduled_at: scheduledAt, reason: reason.trim() !== '' ? reason.trim() : undefined },
       {
-        onSuccess: () => {
+        onSuccess: (a) => {
           setDate('');
           setTime('');
           setReason('');
+          // The backend returns the plaintext `qr_token` here — surface
+          // the booking QR immediately so the student can screenshot it.
+          setQrAppt(a);
         },
       },
     );
@@ -148,17 +157,31 @@ export function StudentBookingSection() {
           {appointments.data !== undefined && appointments.data.length > 0 && (
             <ul className="max-h-80 space-y-2 overflow-y-auto pr-1 text-xs">
               {appointments.data.map((a) => (
-                <AppointmentRow key={a.id} a={a} />
+                <AppointmentRow key={a.id} a={a} onShowQr={setQrAppt} />
               ))}
             </ul>
           )}
         </CardContent>
       </Card>
+
+      {qrAppt !== null && (
+        <Dialog open onOpenChange={(o) => !o && setQrAppt(null)}>
+          <AppointmentQrDialog
+            appointmentId={qrAppt.id}
+            patientLabel="You"
+            scheduledAt={qrAppt.scheduled_at}
+            status={qrAppt.status}
+            initialToken={qrAppt.qr_token ?? null}
+            canIssue
+            onClose={() => setQrAppt(null)}
+          />
+        </Dialog>
+      )}
     </div>
   );
 }
 
-function AppointmentRow({ a }: { a: StudentAppointment }) {
+function AppointmentRow({ a, onShowQr }: { a: StudentAppointment; onShowQr: (a: StudentAppointment) => void }) {
   return (
     <li className="flex items-center gap-3 rounded-lg border bg-muted/30 px-3 py-2">
       <div className="min-w-0 flex-1">
@@ -168,8 +191,18 @@ function AppointmentRow({ a }: { a: StudentAppointment }) {
           {a.reason !== null && a.reason !== '' ? ` · ${a.reason}` : ''}
         </p>
       </div>
-      <Badge variant={STATUS_VARIANT[a.status] ?? 'secondary'} className="shrink-0 capitalize">
-        {a.status.replace('_', ' ')}
+      <Button
+        type="button"
+        size="icon"
+        variant="ghost"
+        aria-label={`Show booking QR for ${fmtUtcToApp(a.scheduled_at)}`}
+        title="Show booking QR"
+        onClick={() => onShowQr(a)}
+      >
+        <QrCode className="size-4" aria-hidden />
+      </Button>
+      <Badge variant={STATUS_VARIANT[a.status] ?? 'secondary'} className="shrink-0">
+        {titleCase(a.status)}
       </Badge>
     </li>
   );

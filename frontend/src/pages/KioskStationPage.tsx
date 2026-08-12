@@ -21,7 +21,7 @@
  * station screen is bystander-readable, so results only show in the
  * auto-clearing queue modal.
  */
-import { Activity, CloudOff, Loader2, ScanLine } from 'lucide-react';
+import { CloudOff, Loader2, ScanLine } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -68,6 +68,89 @@ function useDebounced<T>(value: T, ms: number): T {
   return v;
 }
 
+/** Shared autocomplete dropdown for the kiosk ID and Name comboboxes. */
+function StationSuggestions({
+  id,
+  visible,
+  query,
+  lookup,
+  onSelectPatient,
+  onSelectGuest,
+}: {
+  id: string;
+  visible: boolean;
+  query: string;
+  lookup: ReturnType<typeof usePatientLookup>;
+  onSelectPatient: (p: KioskLookupResult) => void;
+  onSelectGuest: (name: string) => void;
+}) {
+  if (!visible) return null;
+  return (
+    <ul
+      id={id}
+      role="listbox"
+      className="absolute left-0 top-full z-20 mt-1 max-h-72 w-96 overflow-auto rounded-xl border bg-popover shadow-lg"
+    >
+      {lookup.isLoading && (
+        <li className="flex items-center gap-2 px-4 py-4 text-sm text-muted-foreground">
+          <Loader2 className="size-4 animate-spin" /> Searching…
+        </li>
+      )}
+      {lookup.isError && !lookup.isLoading && (
+        <li className="px-4 py-4 text-sm text-destructive">
+          Could not search. Please try again.
+        </li>
+      )}
+      {lookup.isSuccess && (lookup.data?.length ?? 0) === 0 && (
+        <li className="px-4 py-4 text-sm text-muted-foreground">
+          No matches for “{query}”. Try the last name, or scan your ID.
+        </li>
+      )}
+      {(lookup.data ?? []).map((p) => (
+        <li key={p.id}>
+          <button
+            type="button"
+            role="option"
+            aria-selected="false"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => onSelectPatient(p)}
+            className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-accent"
+          >
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-base font-medium">{p.name}</span>
+              <span className="block font-mono text-xs text-muted-foreground">
+                {p.school_id}
+              </span>
+            </span>
+            <Badge variant={p.kind === 'student' ? 'info' : 'secondary'}>
+              {p.kind === 'student' ? 'Student' : 'Employee'}
+            </Badge>
+          </button>
+        </li>
+      ))}
+      {/* Guest walk-in — no account / patient record. */}
+      <li>
+        <button
+          type="button"
+          role="option"
+          aria-selected="false"
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => onSelectGuest(query)}
+          className="flex w-full items-center gap-3 border-t px-4 py-3 text-left transition-colors hover:bg-accent"
+        >
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-base font-medium">Check in without an account</span>
+            <span className="block truncate text-xs text-muted-foreground">
+              as “{query}”
+            </span>
+          </span>
+          <Badge variant="outline">Guest</Badge>
+        </button>
+      </li>
+    </ul>
+  );
+}
+
 export default function KioskStationPage() {
   const k = useKioskController();
   const nameInputRef = useRef<HTMLInputElement>(null);
@@ -86,8 +169,12 @@ export default function KioskStationPage() {
   const lookup = usePatientLookup(debouncedId);
   const [suggestOpen, setSuggestOpen] = useState(false);
   const [otherOpen, setOtherOpen] = useState(false);
-  // Guest name entry — the name field is a plain underline (letters only).
+  // Name combobox state — the name field ALSO autocompletes against the
+  // registry (name match) with a "Check in without an account" fallback.
   const [nameValue, setNameValue] = useState('');
+  const debouncedName = useDebounced(nameValue, 300);
+  const nameLookup = usePatientLookup(debouncedName);
+  const [nameSuggestOpen, setNameSuggestOpen] = useState(false);
 
   // Attract/idle screen removed (2026-08) — the station stays live so
   // the ID field never loses scanner focus.
@@ -136,6 +223,9 @@ export default function KioskStationPage() {
   const suggestionsVisible =
     suggestOpen && k.resolvedPatient === null && debouncedId.trim().length >= 2;
 
+  const nameSuggestionsVisible =
+    nameSuggestOpen && k.resolvedPatient === null && debouncedName.trim().length >= 2;
+
   const isNumericId = /^\d+$/.test(k.identifier.trim());
   const patientReady =
     k.resolvedPatient !== null || isNumericId || nameValue.trim() !== '';
@@ -149,8 +239,10 @@ export default function KioskStationPage() {
   }
 
   function handleNameChange(v: string): void {
-    // Guest name only — letters, spaces, and the comma for "Last, First".
-    const clean = v.replace(/[^A-Za-z ,]/g, '').slice(0, 60);
+    // Letters, spaces, comma (for "Last, First"), and an apostrophe
+    // (O'Brien-style names) — enough for both guest names and the
+    // registry autocomplete.
+    const clean = v.replace(/[^A-Za-z ,']/g, '').slice(0, 60);
     setNameValue(clean);
     if (k.resolvedPatient !== null) k.setResolvedPatient(null);
   }
@@ -161,6 +253,7 @@ export default function KioskStationPage() {
     k.setIdentifier(p.school_id);
     setNameValue(p.name);
     setSuggestOpen(false);
+    setNameSuggestOpen(false);
   }
 
   function selectGuest(name: string): void {
@@ -168,6 +261,7 @@ export default function KioskStationPage() {
     k.setIdentifier('');
     setNameValue(name);
     setSuggestOpen(false);
+    setNameSuggestOpen(false);
   }
 
   function handleCheckIn(): void {
@@ -200,6 +294,15 @@ export default function KioskStationPage() {
     if (canCheckIn) handleCheckIn();
   }
 
+  function handleNameEnter(): void {
+    const top = nameLookup.data?.[0];
+    if (nameSuggestionsVisible && top !== undefined) {
+      selectPatient(top);
+      return;
+    }
+    if (canCheckIn) handleCheckIn();
+  }
+
   return (
     <main
       className="min-h-dvh bg-background p-6 text-foreground md:p-10"
@@ -209,8 +312,13 @@ export default function KioskStationPage() {
 
       <div className="mx-auto max-w-3xl space-y-6">
         <header className="flex items-center gap-3">
-          <span className="grid size-12 place-items-center rounded-xl bg-primary text-primary-foreground">
-            <Activity className="size-6" aria-hidden />
+          <span className="grid size-12 place-items-center overflow-hidden rounded-xl bg-white ring-1 ring-black/5">
+            <img
+              src="/synapse-maroon.png"
+              alt=""
+              className="size-10 object-contain"
+              draggable={false}
+            />
           </span>
           <div>
             <h1 className="text-2xl font-semibold tracking-tight">Clinic Check-in</h1>
@@ -273,89 +381,51 @@ export default function KioskStationPage() {
                 aria-describedby={k.scanError !== null ? 'station-id-error' : undefined}
                 className="border-primary focus-visible:border-primary focus-visible:ring-primary"
               />
-              {suggestionsVisible && (
-                <ul
-                  id="station-suggestions"
-                  role="listbox"
-                  className="absolute left-0 top-full z-20 mt-1 max-h-72 w-96 overflow-auto rounded-xl border bg-popover shadow-lg"
-                >
-                  {lookup.isLoading && (
-                    <li className="flex items-center gap-2 px-4 py-4 text-sm text-muted-foreground">
-                      <Loader2 className="size-4 animate-spin" /> Searching…
-                    </li>
-                  )}
-                  {lookup.isError && !lookup.isLoading && (
-                    <li className="px-4 py-4 text-sm text-destructive">
-                      Could not search. Please try again.
-                    </li>
-                  )}
-                  {lookup.isSuccess && (lookup.data?.length ?? 0) === 0 && (
-                    <li className="px-4 py-4 text-sm text-muted-foreground">
-                      No matches for “{debouncedId}”. Try the last name, or scan your ID.
-                    </li>
-                  )}
-                  {(lookup.data ?? []).map((p) => {
-                    return (
-                      <li key={p.id}>
-                        <button
-                          type="button"
-                          role="option"
-                          aria-selected="false"
-                          onMouseDown={(e) => e.preventDefault()}
-                          onClick={() => selectPatient(p)}
-                          className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-accent"
-                        >
-                          <span className="min-w-0 flex-1">
-                            <span className="block truncate text-base font-medium">{p.name}</span>
-                            <span className="block font-mono text-xs text-muted-foreground">
-                              {p.school_id}
-                            </span>
-                          </span>
-                          <Badge variant={p.kind === 'student' ? 'info' : 'secondary'}>
-                            {p.kind === 'student' ? 'Student' : 'Employee'}
-                          </Badge>
-                        </button>
-                      </li>
-                    );
-                  })}
-                  {/* Guest walk-in — no account / patient record. */}
-                  <li>
-                    <button
-                      type="button"
-                      role="option"
-                      aria-selected="false"
-                      onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => selectGuest(debouncedId)}
-                      className="flex w-full items-center gap-3 border-t px-4 py-3 text-left transition-colors hover:bg-accent"
-                    >
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate text-base font-medium">Check in without an account</span>
-                        <span className="block truncate text-xs text-muted-foreground">
-                          as “{debouncedId}”
-                        </span>
-                      </span>
-                      <Badge variant="outline">Guest</Badge>
-                    </button>
-                  </li>
-                </ul>
-              )}
+              <StationSuggestions
+                id="station-suggestions"
+                visible={suggestionsVisible}
+                query={debouncedId}
+                lookup={lookup}
+                onSelectPatient={selectPatient}
+                onSelectGuest={selectGuest}
+              />
             </div>
 
-            {/* Guest name entry — plain underline, letters only. */}
-            <Input
-              id="station-name"
-              ref={nameInputRef}
-              autoComplete="off"
-              value={nameValue}
-              onChange={(e) => handleNameChange(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  e.preventDefault();
-                  if (canCheckIn) handleCheckIn();
-                }
-              }}
-              className="rounded-none border-0 border-b-2 border-primary bg-transparent px-0 shadow-none focus-visible:border-primary focus-visible:ring-0 sm:flex-1"
-            />
+            {/* Name combobox — autocompletes against the registry (name
+                match), with "Check in without an account" as the fallback
+                for walk-in guests. */}
+            <div className="relative w-full sm:flex-1">
+              <Input
+                id="station-name"
+                ref={nameInputRef}
+                autoComplete="off"
+                role="combobox"
+                aria-expanded={nameSuggestionsVisible}
+                aria-controls="station-name-suggestions"
+                placeholder="Last name, First name"
+                value={nameValue}
+                onChange={(e) => handleNameChange(e.target.value)}
+                onFocus={() => setNameSuggestOpen(true)}
+                onBlur={() => setNameSuggestOpen(false)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    handleNameEnter();
+                  } else if (e.key === 'Escape') {
+                    setNameSuggestOpen(false);
+                  }
+                }}
+                className="rounded-none border-0 border-b-2 border-primary bg-transparent px-0 shadow-none focus-visible:border-primary focus-visible:ring-0"
+              />
+              <StationSuggestions
+                id="station-name-suggestions"
+                visible={nameSuggestionsVisible}
+                query={debouncedName}
+                lookup={nameLookup}
+                onSelectPatient={selectPatient}
+                onSelectGuest={selectGuest}
+              />
+            </div>
           </div>
 
           {/* Purpose cards — one tap, plus "Other" for a custom reason. */}

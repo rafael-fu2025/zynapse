@@ -22,9 +22,25 @@ export const appointmentSchema = z.object({
   // Encounter auto-opened at check-in (panel revision); null while
   // the appointment is still in the scheduling phase.
   encounter_id: z.number().int().positive().nullable().optional(),
+  // Plaintext proof-of-booking QR token. Only ever returned to the client
+  // at booking/issue time (the DB stores just the HMAC hash), so it is
+  // null on plain list/show responses — the SPA issues it on demand via
+  // POST /clinic/appointments/{id}/qr.
+  qr_token: z.string().nullable().optional(),
   created_at: z.string(),
 });
 export type Appointment = z.infer<typeof appointmentSchema>;
+
+/**
+ * Public minimum-disclosure verify result — `POST /appointments/verify`
+ * (no auth). Reveals only validity + status + scheduled time, never PII.
+ */
+export const appointmentQrVerifySchema = z.object({
+  valid: z.boolean(),
+  status: z.string().nullable(),
+  scheduled_at: z.string().nullable(),
+});
+export type AppointmentQrVerify = z.infer<typeof appointmentQrVerifySchema>;
 
 export const scheduleAppointmentSchema = z.object({
   patient_school_id: z.string().min(1).max(32),

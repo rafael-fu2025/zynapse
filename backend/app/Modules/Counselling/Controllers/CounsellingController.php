@@ -36,6 +36,20 @@ final class CounsellingController extends ApiController
         );
     }
 
+    /**
+     * Patient autocomplete for the counselling forms — narrow,
+     * counselling-scoped lookup (gated by `counselling.records.create`,
+     * not `clinic.patients.read`). Mirrors the referrals lookup.
+     */
+    public function lookupPatient(): ResponseInterface
+    {
+        $q = trim((string) ($this->request->getGet('q') ?? ''));
+        if (mb_strlen($q) < 2) {
+            return $this->ok([]);
+        }
+        return $this->ok($this->service->lookupPatient($q, (int) ($this->request->getGet('limit') ?? 8)));
+    }
+
     public function openSession(): ResponseInterface
     {
         $payload = $this->request->getJSON(true) ?? [];

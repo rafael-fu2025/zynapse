@@ -147,7 +147,10 @@ final class BmgController extends ApiController
 
         $rules = [
             'output_weight_kg' => 'required|decimal|greater_than[0]|bmg_mass_invariant[' . $maxKg . ']',
-            'output_items'     => 'required',
+            // output_items is OPTIONAL free-form record-keeping detail
+            // (SKU/qty breakdown). The UI now asks only for the output
+            // weight — a sku=qty_kg ledger line was too technical for the
+            // operator/dept. Stored when provided, omitted otherwise.
         ];
         if (! $this->makeValidation($rules)->run($payload)) {
             throw ApiException::validationFailure($this->collectErrors());
@@ -156,7 +159,7 @@ final class BmgController extends ApiController
         $dto = $this->service->recordOutput(
             $batchId,
             (float) $payload['output_weight_kg'],
-            $payload['output_items'],
+            $payload['output_items'] ?? [],
         );
 
         return $this->ok($dto->toArray());
@@ -164,8 +167,45 @@ final class BmgController extends ApiController
 
     public function finishBatch(int $batchId): ResponseInterface
     {
-        $dto = $this->service->finishBatch($batchId);
+        $payload = $this->request->getJSON(true) ?? [];
+        $rules = [
+            'quality_grade'    => 'required|in_list[excellent,good,fair]',
+            'maturity_level'   => 'required|in_list[mature,maturing,immature]',
+            'output_weight_kg' => 'permit_empty|decimal|greater_than[0]',
+            'notes'            => 'permit_empty|max_length[512]',
+        ];
+        if (! $this->makeValidation($rules)->run($payload)) {
+            throw ApiException::validationFailure($this->collectErrors());
+        }
+        $dto = $this->service->finishBatch($batchId, $payload);
         return $this->ok($dto->toArray());
+    }
+
+    /**
+     * Unified "Add update" — one action, three internal entry types
+     * (output / curing / log). Appends an immutable ledger row.
+     */
+    public function addBatchUpdate(int $batchId): ResponseInterface
+    {
+        $payload = $this->request->getJSON(true) ?? [];
+        $rules = [
+            'update_type'         => 'required|in_list[output,curing,log]',
+            'output_weight_kg'    => 'permit_empty|decimal|greater_than[0]',
+            'curing_note'         => 'permit_empty|max_length[512]',
+            'event_type'          => 'permit_empty|in_list[observation,turning,aeration,moisture_adjustment,other]',
+            'observation_note'    => 'permit_empty|max_length[1000]',
+            'temperature_celsius' => 'permit_empty|decimal|greater_than_equal_to[-20]|less_than_equal_to[120]',
+            'moisture_level'      => 'permit_empty|in_list[low,normal,high]',
+        ];
+        if (! $this->makeValidation($rules)->run($payload)) {
+            throw ApiException::validationFailure($this->collectErrors());
+        }
+        return $this->ok($this->service->addBatchUpdate($batchId, $payload), null, 201);
+    }
+
+    public function listBatchUpdates(int $batchId): ResponseInterface
+    {
+        return $this->ok($this->service->listBatchUpdates($batchId));
     }
 
     public function cancelBatch(int $batchId): ResponseInterface
@@ -439,45 +479,5 @@ final class BmgController extends ApiController
     public function wasteCategoryDeviation(): ResponseInterface
     {
         return $this->ok($this->service->wasteCategoryDeviation());
-    }
-
-    public function listSopDocuments(): ResponseInterface
-    {
-        $includeArchived = (string) ($this->request->getGet('include_archived') ?? '') === '1';
-        return $this->ok($this->service->listSopDocuments($includeArchived));
-    }
-
-    public function createSopDocument(): ResponseInterface
-    {
-        $payload = $this->request->getJSON(true) ?? [];
-        $rules = [
-            'title'         => 'required|max_length[200]',
-            'document_ref'  => 'required|max_length[64]',
-            'category'      => 'permit_empty|max_length[64]',
-            'version'       => 'permit_empty|max_length[32]',
-            'owner_user_id' => 'permit_empty|is_natural_no_zero',
-            'notes'         => 'permit_empty|max_length[2000]',
-        ];
-        if (! $this->makeValidation($rules)->run($payload)) {
-            throw ApiException::validationFailure($this->collectErrors());
-        }
-        return $this->ok($this->service->createSopDocument($payload), null, 201);
-    }
-
-    public function updateSopDocument(int $docId): ResponseInterface
-    {
-        $payload = $this->request->getJSON(true) ?? [];
-        $rules = [
-            'title'         => 'permit_empty|max_length[200]',
-            'document_ref'  => 'permit_empty|max_length[64]',
-            'category'      => 'permit_empty|max_length[64]',
-            'version'       => 'permit_empty|max_length[32]',
-            'owner_user_id' => 'permit_empty|is_natural_no_zero',
-            'notes'         => 'permit_empty|max_length[2000]',
-        ];
-        if (! $this->makeValidation($rules)->run($payload)) {
-            throw ApiException::validationFailure($this->collectErrors());
-        }
-        return $this->ok($this->service->updateSopDocument($docId, $payload));
     }
 }

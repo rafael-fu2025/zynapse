@@ -7,9 +7,11 @@ import { toast } from 'sonner';
 import { apiClient } from '@/api/client';
 import type { ApiEnvelopeError } from '@/api/envelope';
 import {
+  appointmentQrVerifySchema,
   appointmentSchema,
   scheduleAppointmentSchema,
   type Appointment,
+  type AppointmentQrVerify,
   type AppointmentTransition,
   type ScheduleAppointmentInput,
   type UpdateAppointmentInput,
@@ -120,6 +122,43 @@ export function useAppointment(id: number | null) {
     queryFn: async () => {
       const res = await apiClient.get<unknown>(`/clinic/appointments/${id}`);
       return appointmentSchema.parse(res.data);
+    },
+  });
+}
+
+/**
+ * Issue (or re-issue) the appointment's proof-of-booking QR token.
+ * `POST /clinic/appointments/{id}/qr` → `{ qr_token }`. Allowed for
+ * staff with `clinic.appointments.write` or the booking's owner.
+ * Re-issuing rotates the token (the old QR stops verifying).
+ */
+export function useIssueAppointmentQr() {
+  const qc = useQueryClient();
+  return useMutation<{ qr_token: string }, ApiEnvelopeError, number>({
+    mutationFn: async (id) => {
+      const res = await apiClient.post<{ qr_token: string }>(`/clinic/appointments/${id}/qr`);
+      return res.data;
+    },
+    onSuccess: () => {
+      // The QR display is rendered client-side from the returned token;
+      // refresh the list so any persisted state stays consistent.
+      void qc.invalidateQueries({ queryKey: ['appointments'] });
+    },
+    onError: (err) => {
+      toast.error(err.errors[0]?.message ?? 'Failed to issue QR.');
+    },
+  });
+}
+
+/**
+ * PUBLIC minimum-disclosure verify — `POST /appointments/verify` (no auth).
+ * Reveals only validity + status + scheduled time, never PII.
+ */
+export function useVerifyAppointmentQr() {
+  return useMutation<AppointmentQrVerify, ApiEnvelopeError, string>({
+    mutationFn: async (token) => {
+      const res = await apiClient.post<AppointmentQrVerify>('/appointments/verify', { token });
+      return appointmentQrVerifySchema.parse(res.data);
     },
   });
 }

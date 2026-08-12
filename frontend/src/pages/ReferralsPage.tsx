@@ -72,6 +72,7 @@ import {
 } from '@/schemas/referrals';
 import { fmtUtcToApp } from '@/utils/date';
 import { statusLabel } from '@/utils/status';
+import { titleCase } from '@/lib/utils';
 
 const REFERRAL_MODULES = ['clinic', 'counselling'] as const;
 type ReferralModule = (typeof REFERRAL_MODULES)[number];
@@ -231,7 +232,7 @@ function CreateReferralDialog({ onClose }: { onClose: () => void }) {
           >
             <SelectTrigger aria-labelledby="source-module-label"><SelectValue placeholder="Select…" /></SelectTrigger>
             <SelectContent>
-              {REFERRAL_MODULES.filter((m) => m !== target).map((m) => (
+              {REFERRAL_MODULES.map((m) => (
                 <SelectItem key={m} value={m}>{MODULE_LABEL[m]}</SelectItem>
               ))}
             </SelectContent>
@@ -249,7 +250,7 @@ function CreateReferralDialog({ onClose }: { onClose: () => void }) {
           >
             <SelectTrigger aria-labelledby="target-module-label"><SelectValue placeholder="Select…" /></SelectTrigger>
             <SelectContent>
-              {REFERRAL_MODULES.filter((m) => m !== source).map((m) => (
+              {REFERRAL_MODULES.map((m) => (
                 <SelectItem key={m} value={m}>{MODULE_LABEL[m]}</SelectItem>
               ))}
             </SelectContent>
@@ -534,7 +535,7 @@ function VerifyResultBadge({ result }: { result: VerifyResult }) {
   return (
     <Badge variant={variant}>
       <ShieldCheck className="mr-1 size-3" />
-      {statusLabel(result.status)} · {result.artifact_type ?? '—'}
+      {statusLabel(result.status)} · {titleCase(result.artifact_type ?? '—')}
       {result.issuer !== null ? ` · issuer=${result.issuer}` : ''}
     </Badge>
   );
@@ -775,9 +776,9 @@ export default function ReferralsPage() {
               <TableRow key={r.id}>
                 <TableCell className="px-3 font-mono text-xs">{r.id}</TableCell>
                 <TableCell className="px-3 font-mono text-xs">{r.patient_school_id}</TableCell>
-                <TableCell className="px-3">{r.source_module}</TableCell>
-                <TableCell className="px-3">{r.target_module}</TableCell>
-                <TableCell className="px-3 text-xs">{r.artifact_type}</TableCell>
+                <TableCell className="px-3">{titleCase(r.source_module)}</TableCell>
+                <TableCell className="px-3">{titleCase(r.target_module)}</TableCell>
+                <TableCell className="px-3 text-xs">{titleCase(r.artifact_type)}</TableCell>
                 <TableCell className="px-3">
                   <Badge variant={r.status === 'closed' ? 'success' : r.status === 'under_review' ? 'warning' : 'info'}>{statusLabel(r.status)}</Badge>
                 </TableCell>

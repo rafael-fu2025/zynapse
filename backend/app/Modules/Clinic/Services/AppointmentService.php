@@ -302,6 +302,10 @@ final class AppointmentService extends BaseService
             [, $patient] = (new PatientLookupService())->findByIdentifier($patientSchoolId);
             $patientUserId = $patient !== null ? (int) $patient['id'] : null;
 
+            // QR proof-of-booking: mint a high-entropy token, store only its
+            // HMAC hash; the plaintext is returned for QR rendering.
+            [$plain, $hash] = $this->newQrToken();
+
             $this->db->table('clinic_appointments')->insert([
                 'patient_user_id'   => $patientUserId,
                 'patient_school_id' => $patientSchoolId,
@@ -309,6 +313,7 @@ final class AppointmentService extends BaseService
                 'scheduled_at'      => $scheduledAtUtc,
                 'status'            => 'scheduled',
                 'reason'            => $reason,
+                'qr_token_hash'     => $hash,
                 'created_at'        => $now,
                 'updated_at'        => $now,
             ]);
@@ -332,7 +337,7 @@ final class AppointmentService extends BaseService
             );
 
             $row = $this->db->table('clinic_appointments')->where('id', $id)->get()->getRowArray();
-            return AppointmentDto::fromRow($this->decorate([$row])[0]);
+            return AppointmentDto::fromRow($this->decorate([$row])[0])->withQrToken($plain);
         });
     }
 
@@ -387,6 +392,10 @@ final class AppointmentService extends BaseService
             $this->assertNoClash('provider_user_id', $providerUserId, $scheduledAtUtc, 'That provider is already booked at that time.');
 
             $nowSql = $now->format('Y-m-d H:i:s');
+            // QR proof-of-booking: mint a high-entropy token, store only its
+            // HMAC hash; the plaintext is returned for QR rendering.
+            [$plain, $hash] = $this->newQrToken();
+
             $this->db->table('clinic_appointments')->insert([
                 'patient_user_id'   => $patientUserId,
                 'patient_school_id' => $schoolId,
@@ -394,6 +403,7 @@ final class AppointmentService extends BaseService
                 'scheduled_at'      => $scheduledAtUtc,
                 'status'            => 'scheduled',
                 'reason'            => $reason !== null && $reason !== '' ? $reason : null,
+                'qr_token_hash'     => $hash,
                 'created_at'        => $nowSql,
                 'updated_at'        => $nowSql,
             ]);
@@ -409,8 +419,103 @@ final class AppointmentService extends BaseService
             );
 
             $row = $this->db->table('clinic_appointments')->where('id', $id)->get()->getRowArray();
-            return AppointmentDto::fromRow($this->decorate([$row])[0]);
+            return AppointmentDto::fromRow($this->decorate([$row])[0])->withQrToken($plain);
         });
+    }
+
+    /**
+     * Issue (or re-issue) an appointment's QR proof-of-booking token.
+     *
+     * Only the plaintext is returned to the caller; the DB stores the HMAC
+     * hash. Allowed for staff with `appointmentsWrite` OR the owning patient
+     * viewing their own appointment (self-service). Re-issuing rotates the
+     * token (the old QR stops verifying), mirroring referral QR behaviour.
+     */
+    public function issueQr(int $id): string
+    {
+        $userId = \App\Auth\CurrentUser::assert();
+
+        return $this->txn(function () use ($id, $userId): string {
+            $row = $this->db->table('clinic_appointments')
+                ->select('id, patient_user_id')
+                ->where('id', $id)
+                ->where('archived_at', null)
+                ->get()->getRowArray();
+
+            if ($row === null) {
+                throw new ApiException('resource.not_found', 404, [
+                    ['code' => 'resource.not_found', 'message' => "Appointment #{$id} not found."],
+                ]);
+            }
+
+            $isStaff = true;
+            try {
+                $this->policy->check('appointmentsWrite');
+            } catch (\Throwable) {
+                $isStaff = false;
+            }
+            $isOwner = (int) ($row['patient_user_id'] ?? 0) === $userId;
+            if (! $isStaff && ! $isOwner) {
+                throw new ApiException('rbac.denied', 403, [
+                    ['code' => 'rbac.denied', 'message' => 'Not allowed to view this appointment QR.'],
+                ]);
+            }
+
+            [$plain, $hash] = $this->newQrToken();
+            $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
+            $this->db->table('clinic_appointments')
+                ->where('id', $id)
+                ->update(['qr_token_hash' => $hash, 'updated_at' => $now]);
+
+            $this->audit->enqueue('clinic.appointment_qr_issued', 'clinic_appointments', $id, $userId, []);
+
+            return $plain;
+        });
+    }
+
+    /**
+     * MINIMUM-DISCLOSURE verify — PUBLIC endpoint. Returns ONLY
+     * { valid, status, scheduled_at }; NEVER returns PII.
+     */
+    public function verify(string $plainToken): array
+    {
+        $hash = $this->hashToken($plainToken);
+
+        $row = $this->db->table('clinic_appointments')
+            ->select('id, status, scheduled_at')
+            ->where('qr_token_hash', $hash)
+            ->where('archived_at', null)
+            ->get()->getRowArray();
+
+        if ($row === null) {
+            return ['valid' => false, 'status' => null, 'scheduled_at' => null];
+        }
+
+        return [
+            'valid'        => true,
+            'status'       => (string) $row['status'],
+            'scheduled_at' => (string) $row['scheduled_at'],
+        ];
+    }
+
+    /**
+     * Mint a 128-bit CSPRNG token (base64url) + its HMAC-SHA256 hash.
+     *
+     * @return array{0: string, 1: string} [plain, hash]
+     */
+    private function newQrToken(): array
+    {
+        $plain = rtrim(strtr(base64_encode(random_bytes(16)), '+/', '-_'), '=');
+        return [$plain, $this->hashToken($plain)];
+    }
+
+    private function hashToken(string $plain): string
+    {
+        $key = (string) (getenv('APPOINTMENT_HMAC_KEY') ?: getenv('REFERRAL_HMAC_KEY') ?: '');
+        if ($key === '') {
+            throw new \RuntimeException('APPOINTMENT_HMAC_KEY (or REFERRAL_HMAC_KEY) is not configured.');
+        }
+        return hash_hmac('sha256', $plain, $key);
     }
 
     /**

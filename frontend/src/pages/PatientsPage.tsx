@@ -22,6 +22,7 @@ import {
   Phone,
   Plus,
   Search,
+  Trash2,
   UserPlus,
 } from 'lucide-react';
 import { useState } from 'react';
@@ -72,6 +73,8 @@ import {
   useCreateDepartment,
   useCreateEmployee,
   useCreateStudent,
+  useDeleteAllergy,
+  useDeleteContact,
   useDepartments,
   useEmployee,
   useEmployeeSearch,
@@ -81,6 +84,8 @@ import {
   useStudent,
   useStudentSearch,
   useStudents,
+  useUpdateAllergy,
+  useUpdateContact,
   useUpdateEmployee,
   useUpdateStudent,
 } from '@/hooks/usePatients';
@@ -338,6 +343,8 @@ function EditStudentDialog({ student, onClose }: { student: Student; onClose: ()
         ? student.gender
         : undefined,
       blood_type:  student.blood_type ?? '',
+      date_of_birth: student.date_of_birth ?? '',
+      address:     student.address ?? '',
     },
   });
   const gender = watch('gender');
@@ -397,6 +404,14 @@ function EditStudentDialog({ student, onClose }: { student: Student; onClose: ()
           <Label htmlFor="es-blood">Blood type</Label>
           <Input id="es-blood" placeholder="O+" {...register('blood_type')} />
         </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="es-dob">Date of birth</Label>
+          <Input id="es-dob" placeholder="YYYY-MM-DD" {...register('date_of_birth')} />
+        </div>
+        <div className="col-span-2 space-y-1.5">
+          <Label htmlFor="es-address">Address</Label>
+          <Input id="es-address" {...register('address')} />
+        </div>
         <DialogFooter className="col-span-2">
           <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
           <Button type="submit" disabled={update.isPending}>
@@ -412,6 +427,13 @@ function StudentDetailDialog({ studentId, onClose }: { studentId: number; onClos
   const detail = useStudent(studentId);
   const addAllergy = useAddAllergy();
   const addContact = useAddContact();
+  const updateAllergy = useUpdateAllergy();
+  const deleteAllergy = useDeleteAllergy();
+  const updateContact = useUpdateContact();
+  const deleteContact = useDeleteContact();
+  // When editing an existing row, `editingId` + `editType` tell the forms
+  // to prefill and submit an UPDATE instead of an ADD.
+  const [editing, setEditing] = useState<{ type: 'allergy' | 'contact'; id: number } | null>(null);
 
   const allergyForm = useForm<AddAllergyInput>({
     resolver: zodResolver(addAllergySchema),
@@ -426,17 +448,52 @@ function StudentDetailDialog({ studentId, onClose }: { studentId: number; onClos
   const severity = allergyForm.watch('severity');
   const isPrimary = contactForm.watch('is_primary');
 
+  function startEditAllergy(a: { id: number; allergen: string; severity: string; reaction: string | null }): void {
+    setEditing({ type: 'allergy', id: a.id });
+    allergyForm.reset({
+      allergen: a.allergen,
+      severity: (a.severity === 'mild' || a.severity === 'moderate' || a.severity === 'severe') ? a.severity : 'mild',
+      reaction: a.reaction ?? '',
+    });
+  }
+
+  function startEditContact(c: { id: number; contact_name: string; relationship: string; phone: string; is_primary: boolean }): void {
+    setEditing({ type: 'contact', id: c.id });
+    contactForm.reset({
+      contact_name: c.contact_name,
+      relationship: c.relationship,
+      phone: c.phone,
+      is_primary: c.is_primary,
+    });
+  }
+
   const submitAllergy = allergyForm.handleSubmit((values) => {
-    addAllergy.mutate(
-      { studentId, input: values },
-      { onSuccess: () => allergyForm.reset({ allergen: '', severity: 'mild', reaction: '' }) },
-    );
+    const onDone = () => {
+      setEditing(null);
+      allergyForm.reset({ allergen: '', severity: 'mild', reaction: '' });
+    };
+    if (editing?.type === 'allergy') {
+      updateAllergy.mutate(
+        { studentId, allergyId: editing.id, input: values },
+        { onSuccess: onDone },
+      );
+    } else {
+      addAllergy.mutate({ studentId, input: values }, { onSuccess: onDone });
+    }
   });
   const submitContact = contactForm.handleSubmit((values) => {
-    addContact.mutate(
-      { studentId, input: values },
-      { onSuccess: () => contactForm.reset({ contact_name: '', relationship: '', phone: '', is_primary: false }) },
-    );
+    const onDone = () => {
+      setEditing(null);
+      contactForm.reset({ contact_name: '', relationship: '', phone: '', is_primary: false });
+    };
+    if (editing?.type === 'contact') {
+      updateContact.mutate(
+        { studentId, contactId: editing.id, input: values },
+        { onSuccess: onDone },
+      );
+    } else {
+      addContact.mutate({ studentId, input: values }, { onSuccess: onDone });
+    }
   });
 
   return (
@@ -469,7 +526,22 @@ function StudentDetailDialog({ studentId, onClose }: { studentId: number; onClos
                 <li key={a.id} className="flex items-center gap-2 text-sm">
                   <Badge variant={SEVERITY_VARIANT[a.severity]}>{a.severity}</Badge>
                   <span className="font-medium">{a.allergen}</span>
-                  {a.reaction !== null && <span className="text-xs text-muted-foreground">— {a.reaction}</span>}
+                  {a.reaction !== null && <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">— {a.reaction}</span>}
+                  <span className="flex items-center gap-0.5">
+                    <Button variant="ghost" size="sm" className="size-7 p-0" aria-label={`Edit allergy ${a.allergen}`} onClick={() => startEditAllergy(a)}>
+                      <Pencil className="size-3.5" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="size-7 p-0 text-destructive"
+                      aria-label={`Remove allergy ${a.allergen}`}
+                      disabled={deleteAllergy.isPending}
+                      onClick={() => deleteAllergy.mutate({ studentId, allergyId: a.id })}
+                    >
+                      <Trash2 className="size-3.5" />
+                    </Button>
+                  </span>
                 </li>
               ))}
             </ul>
@@ -489,9 +561,20 @@ function StudentDetailDialog({ studentId, onClose }: { studentId: number; onClos
                   </SelectContent>
                 </Select>
               </div>
-              <Button type="submit" size="sm" disabled={addAllergy.isPending}>
-                {addAllergy.isPending ? <Loader2 className="animate-spin" /> : <Plus />} Add
-              </Button>
+              {editing?.type === 'allergy' ? (
+                <>
+                  <Button type="button" size="sm" variant="outline" onClick={() => { setEditing(null); allergyForm.reset({ allergen: '', severity: 'mild', reaction: '' }); }}>
+                    Cancel
+                  </Button>
+                  <Button type="submit" size="sm" disabled={updateAllergy.isPending}>
+                    {updateAllergy.isPending ? <Loader2 className="animate-spin" /> : <Pencil className="size-3.5" />} Save
+                  </Button>
+                </>
+              ) : (
+                <Button type="submit" size="sm" disabled={addAllergy.isPending}>
+                  {addAllergy.isPending ? <Loader2 className="animate-spin" /> : <Plus />} Add
+                </Button>
+              )}
             </form>
           </section>
 
@@ -508,7 +591,22 @@ function StudentDetailDialog({ studentId, onClose }: { studentId: number; onClos
                   {c.is_primary && <Badge variant="info">primary</Badge>}
                   <span className="font-medium">{c.contact_name}</span>
                   <span className="text-xs text-muted-foreground">({c.relationship})</span>
-                  <span className="font-mono text-xs">{c.phone}</span>
+                  <span className="min-w-0 flex-1 truncate font-mono text-xs">{c.phone}</span>
+                  <span className="flex items-center gap-0.5">
+                    <Button variant="ghost" size="sm" className="size-7 p-0" aria-label={`Edit contact ${c.contact_name}`} onClick={() => startEditContact(c)}>
+                      <Pencil className="size-3.5" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="size-7 p-0 text-destructive"
+                      aria-label={`Remove contact ${c.contact_name}`}
+                      disabled={deleteContact.isPending}
+                      onClick={() => deleteContact.mutate({ studentId, contactId: c.id })}
+                    >
+                      <Trash2 className="size-3.5" />
+                    </Button>
+                  </span>
                 </li>
               ))}
             </ul>
@@ -533,9 +631,20 @@ function StudentDetailDialog({ studentId, onClose }: { studentId: number; onClos
                 />
                 <Label htmlFor="is_primary" className="text-xs font-normal">Primary</Label>
               </div>
-              <Button type="submit" size="sm" disabled={addContact.isPending}>
-                {addContact.isPending ? <Loader2 className="animate-spin" /> : <Plus />} Add
-              </Button>
+              {editing?.type === 'contact' ? (
+                <>
+                  <Button type="button" size="sm" variant="outline" onClick={() => { setEditing(null); contactForm.reset({ contact_name: '', relationship: '', phone: '', is_primary: false }); }}>
+                    Cancel
+                  </Button>
+                  <Button type="submit" size="sm" disabled={updateContact.isPending}>
+                    {updateContact.isPending ? <Loader2 className="animate-spin" /> : <Pencil className="size-3.5" />} Save
+                  </Button>
+                </>
+              ) : (
+                <Button type="submit" size="sm" disabled={addContact.isPending}>
+                  {addContact.isPending ? <Loader2 className="animate-spin" /> : <Plus />} Add
+                </Button>
+              )}
             </form>
           </section>
         </div>
@@ -680,11 +789,21 @@ function EditEmployeeDialog({ employee, onClose }: { employee: Employee; onClose
         position: employee.position ?? '',
         employment_status: employee.employment_status ?? 'active',
         is_teaching: employee.is_teaching ?? false,
+        date_hired: employee.date_hired ?? '',
+        emergency_contact_name: employee.emergency_contact_name ?? '',
+        emergency_contact_phone: employee.emergency_contact_phone ?? '',
+        // employee.gender is `string | null`; narrow to the union.
+        gender: employee.gender === 'male' || employee.gender === 'female' || employee.gender === 'other'
+          ? employee.gender
+          : undefined,
+        date_of_birth: employee.date_of_birth ?? '',
+        address: employee.address ?? '',
       },
     });
   const status = watch('employment_status');
   const department = watch('department');
   const isTeaching = watch('is_teaching');
+  const gender = watch('gender');
 
   const onSubmit = handleSubmit((values) => {
     update.mutate({ id: employee.id, input: values }, { onSuccess: () => { reset(); onClose(); } });
@@ -753,6 +872,44 @@ function EditEmployeeDialog({ employee, onClose }: { employee: Employee; onClose
           />
           <span>Teaching employee (faculty — can refer students to counselling)</span>
         </label>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div className="space-y-1.5">
+            <Label htmlFor="emp-date-hired">Date hired</Label>
+            <Input id="emp-date-hired" placeholder="YYYY-MM-DD" {...register('date_hired')} />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="emp-dob">Date of birth</Label>
+            <Input id="emp-dob" placeholder="YYYY-MM-DD" {...register('date_of_birth')} />
+          </div>
+        </div>
+        <div className="space-y-1.5">
+          <Label id="emp-gender-label">Gender</Label>
+          <Select
+            {...(gender !== undefined ? { value: gender } : {})}
+            onValueChange={(v) => setValue('gender', v as UpdateEmployeeInput['gender'])}
+          >
+            <SelectTrigger aria-labelledby="emp-gender-label"><SelectValue placeholder="Select…" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="male">Male</SelectItem>
+              <SelectItem value="female">Female</SelectItem>
+              <SelectItem value="other">Other</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="emp-address">Address</Label>
+          <Input id="emp-address" {...register('address')} />
+        </div>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div className="space-y-1.5">
+            <Label htmlFor="emp-ec-name">Emergency contact name</Label>
+            <Input id="emp-ec-name" {...register('emergency_contact_name')} />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="emp-ec-phone">Emergency contact phone</Label>
+            <Input id="emp-ec-phone" placeholder="09XX XXX XXXX" {...register('emergency_contact_phone')} />
+          </div>
+        </div>
         <DialogFooter>
           <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
           <Button type="submit" disabled={update.isPending}>
@@ -973,7 +1130,12 @@ export default function PatientsPage() {
           disabled={setArchived.isPending}
           onSelect={() => {
             if (student.archived) {
-              setArchived.mutate({ id: student.id, archived: false });
+              setConfirm({
+                title: `Restore ${student.student_number}?`,
+                description: 'The student is returned to the active registry and their workflows become available again.',
+                confirmLabel: 'Restore',
+                run: () => setArchived.mutate({ id: student.id, archived: false }),
+              });
             } else {
               setConfirm({
                 title: `Archive ${student.student_number}?`,
@@ -1011,7 +1173,12 @@ export default function PatientsPage() {
           disabled={archiveEmp.isPending}
           onSelect={() => {
             if (employee.archived) {
-              archiveEmp.mutate({ id: employee.id, archived: false });
+              setConfirm({
+                title: `Restore ${employee.employee_number}?`,
+                description: 'The employee is returned to the active registry and their workflows become available again.',
+                confirmLabel: 'Restore',
+                run: () => archiveEmp.mutate({ id: employee.id, archived: false }),
+              });
             } else {
               setConfirm({
                 title: `Archive ${employee.employee_number}?`,

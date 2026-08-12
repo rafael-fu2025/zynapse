@@ -30,6 +30,7 @@ final class BmgPolicy extends BasePolicy
      * is not in this set because no prior batch exists to own.
      */
     private const OWNED_BATCH_ACTIONS = [
+        'update',
         'record_output',
         'finish',
         'cancel',
@@ -64,6 +65,7 @@ final class BmgPolicy extends BasePolicy
             'list'             => 'facilities.units.read',
             'manage_units'     => 'facilities.units.manage',
             'start'            => 'facilities.bmg.transition',
+            'update'           => 'facilities.bmg.transition',
             'record_output'    => 'facilities.bmg.record_output',
             'finish'           => 'facilities.bmg.transition',
             'cancel'           => 'facilities.bmg.transition',

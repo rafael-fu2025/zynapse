@@ -14,6 +14,7 @@ final class Routes implements BaseRoutes
         $routes->group('api/v1/counselling', ['namespace' => 'Modules\\Counselling\\Controllers', 'filter' => 'api_auth'], static function (RouteCollection $r): void {
             $r->get('sessions',                       'CounsellingController::listSessions');
             $r->post('sessions',                      'CounsellingController::openSession');
+            $r->get('patient-lookup',                 'CounsellingController::lookupPatient');
             $r->post('sessions/(:num)/notes',         'CounsellingController::writeNotes/$1');
             $r->get('sessions/(:num)/notes',          'CounsellingController::readNotes/$1');
             $r->post('sessions/(:num)/close',         'CounsellingController::closeSession/$1');

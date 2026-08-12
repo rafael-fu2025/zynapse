@@ -52,6 +52,7 @@ import {
   type MoistureLevel,
 } from '@/schemas/facilities';
 import { fmtHumanDate, fmtShort, fmtUtcToApp } from '@/utils/date';
+import { titleCase } from '@/lib/utils';
 
 /** Process-log timeline + inline observation form for the batch. */
 function ProcessLogSection({ batchId }: { batchId: number }) {
@@ -136,11 +137,11 @@ function ProcessLogSection({ batchId }: { batchId: number }) {
                 <p className="text-[10px] text-muted-foreground">{fmtHumanDate(l.log_date)}</p>
                 <div className="flex flex-wrap gap-1">
                   {l.event_type !== undefined && l.event_type !== 'observation' && (
-                    <Badge variant="secondary">{l.event_type.replace('_', ' ')}</Badge>
+                    <Badge variant="secondary">{titleCase(l.event_type)}</Badge>
                   )}
                   {l.temperature_celsius !== null && <Badge variant="info">{l.temperature_celsius}°C</Badge>}
                   {l.moisture_level !== null && (
-                    <Badge variant={l.moisture_level === 'normal' ? 'success' : 'warning'}>{l.moisture_level}</Badge>
+                    <Badge variant={l.moisture_level === 'normal' ? 'success' : 'warning'}>{titleCase(l.moisture_level)}</Badge>
                   )}
                   {l.oxygen_pct !== null && l.oxygen_pct !== undefined && (
                     <Badge variant="secondary">O₂ {l.oxygen_pct}%</Badge>
@@ -155,7 +156,7 @@ function ProcessLogSection({ batchId }: { batchId: number }) {
                             : 'destructive'
                       }
                     >
-                      cal {l.calibration_status}
+                      cal {titleCase(l.calibration_status)}
                     </Badge>
                   )}
                   {l.device_id !== null && l.device_id !== undefined && (
@@ -177,7 +178,7 @@ function ProcessLogSection({ batchId }: { batchId: number }) {
               <SelectContent>
                 <SelectItem value="unset">Observation (default)</SelectItem>
                 {BMG_PROCESS_EVENT_TYPES.filter((t) => t !== 'observation').map((t) => (
-                  <SelectItem key={t} value={t}>{t.replace('_', ' ')}</SelectItem>
+                  <SelectItem key={t} value={t}>{titleCase(t)}</SelectItem>
                 ))}
               </SelectContent>
             </Select>
@@ -198,7 +199,7 @@ function ProcessLogSection({ batchId }: { batchId: number }) {
                 <SelectContent>
                   <SelectItem value="unset">—</SelectItem>
                   {MOISTURE_LEVELS.map((m) => (
-                    <SelectItem key={m} value={m}>{m}</SelectItem>
+                    <SelectItem key={m} value={m}>{titleCase(m)}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
@@ -301,7 +302,7 @@ function LossSection({ batchId }: { batchId: number }) {
               <SelectContent>
                 <SelectItem value="unset">—</SelectItem>
                 {BMG_LOSS_CATEGORIES.map((c) => (
-                  <SelectItem key={c} value={c}>{c.replace(/_/g, ' ')}</SelectItem>
+                  <SelectItem key={c} value={c}>{titleCase(c)}</SelectItem>
                 ))}
               </SelectContent>
             </Select>

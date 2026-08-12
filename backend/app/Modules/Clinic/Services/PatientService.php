@@ -87,6 +87,8 @@ final class PatientService extends BaseService
                 ->like('student_number', $q)
                 ->orLike('first_name', $q)
                 ->orLike('last_name', $q)
+                ->orLike('middle_name', $q)
+                ->orLike('course', $q)
             ->groupEnd()
             ->orderBy('last_name', 'ASC')
             ->orderBy('first_name', 'ASC')
@@ -356,6 +358,142 @@ final class PatientService extends BaseService
         });
     }
 
+    /**
+     * Edit an existing allergy row (must belong to the student).
+     *
+     * @param array<string, mixed> $input
+     */
+    public function updateAllergy(int $studentId, int $allergyId, array $input): UserDto
+    {
+        $this->policy->check('patientsWrite');
+        $userId = CurrentUser::assert();
+
+        return $this->txn(function () use ($studentId, $allergyId, $input, $userId): UserDto {
+            $row = $this->db->table('patient_allergies')
+                ->where('id', $allergyId)
+                ->where('user_id', $studentId)
+                ->get()->getRowArray();
+            if ($row === null) {
+                throw new ApiException('resource.not_found', 404, [
+                    ['code' => 'resource.not_found', 'message' => "Allergy #{$allergyId} not found for student #{$studentId}."],
+                ]);
+            }
+
+            $this->db->table('patient_allergies')->where('id', $allergyId)->update([
+                'allergen'         => (string) $input['allergen'],
+                'severity'         => (string) ($input['severity'] ?? 'mild'),
+                'reaction'         => $this->strOrNull($input, 'reaction'),
+                'updated_at'       => $this->utcNow(),
+            ]);
+
+            $this->audit->enqueue('clinic.patient_allergy_updated', 'patient_allergies', $allergyId, $userId, [
+                'severity' => (string) ($input['severity'] ?? 'mild'),
+            ]);
+
+            return $this->getStudent($studentId);
+        });
+    }
+
+    /** Remove an allergy row (must belong to the student). */
+    public function deleteAllergy(int $studentId, int $allergyId): UserDto
+    {
+        $this->policy->check('patientsWrite');
+        $userId = CurrentUser::assert();
+
+        return $this->txn(function () use ($studentId, $allergyId, $userId): UserDto {
+            $row = $this->db->table('patient_allergies')
+                ->where('id', $allergyId)
+                ->where('user_id', $studentId)
+                ->get()->getRowArray();
+            if ($row === null) {
+                throw new ApiException('resource.not_found', 404, [
+                    ['code' => 'resource.not_found', 'message' => "Allergy #{$allergyId} not found for student #{$studentId}."],
+                ]);
+            }
+
+            $this->db->table('patient_allergies')->where('id', $allergyId)->delete();
+
+            $this->audit->enqueue('clinic.patient_allergy_removed', 'patient_allergies', $allergyId, $userId, [
+                'resource_code' => (string) $row['allergen'],
+            ]);
+
+            return $this->getStudent($studentId);
+        });
+    }
+
+    /**
+     * Edit an existing emergency contact (must belong to the student).
+     * If the edited row is set primary, other contacts are demoted first.
+     *
+     * @param array<string, mixed> $input
+     */
+    public function updateContact(int $studentId, int $contactId, array $input): UserDto
+    {
+        $this->policy->check('patientsWrite');
+        $userId = CurrentUser::assert();
+
+        return $this->txn(function () use ($studentId, $contactId, $input, $userId): UserDto {
+            $row = $this->db->table('patient_contacts')
+                ->where('id', $contactId)
+                ->where('user_id', $studentId)
+                ->get()->getRowArray();
+            if ($row === null) {
+                throw new ApiException('resource.not_found', 404, [
+                    ['code' => 'resource.not_found', 'message' => "Contact #{$contactId} not found for student #{$studentId}."],
+                ]);
+            }
+
+            $isPrimary = (bool) ($input['is_primary'] ?? false);
+            if ($isPrimary) {
+                $this->db->table('patient_contacts')
+                    ->where('user_id', $studentId)
+                    ->where('id !=', $contactId)
+                    ->update(['is_primary' => 0]);
+            }
+
+            $this->db->table('patient_contacts')->where('id', $contactId)->update([
+                'contact_name' => (string) $input['contact_name'],
+                'relationship' => (string) $input['relationship'],
+                'phone'        => (string) $input['phone'],
+                'is_primary'   => $isPrimary ? 1 : 0,
+                'updated_at'   => $this->utcNow(),
+            ]);
+
+            $this->audit->enqueue('clinic.patient_contact_updated', 'patient_contacts', $contactId, $userId, [
+                'is_primary' => $isPrimary ? '1' : '0',
+            ]);
+
+            return $this->getStudent($studentId);
+        });
+    }
+
+    /** Remove an emergency contact (must belong to the student). */
+    public function deleteContact(int $studentId, int $contactId): UserDto
+    {
+        $this->policy->check('patientsWrite');
+        $userId = CurrentUser::assert();
+
+        return $this->txn(function () use ($studentId, $contactId, $userId): UserDto {
+            $row = $this->db->table('patient_contacts')
+                ->where('id', $contactId)
+                ->where('user_id', $studentId)
+                ->get()->getRowArray();
+            if ($row === null) {
+                throw new ApiException('resource.not_found', 404, [
+                    ['code' => 'resource.not_found', 'message' => "Contact #{$contactId} not found for student #{$studentId}."],
+                ]);
+            }
+
+            $this->db->table('patient_contacts')->where('id', $contactId)->delete();
+
+            $this->audit->enqueue('clinic.patient_contact_removed', 'patient_contacts', $contactId, $userId, [
+                'resource_code' => (string) $row['contact_name'],
+            ]);
+
+            return $this->getStudent($studentId);
+        });
+    }
+
     // ---------------------------------------------------------- employees
 
     /**
@@ -545,6 +683,9 @@ final class PatientService extends BaseService
     }
 
     /**
+     * Bounded LIKE search on number, names, department, and position —
+     * matches the web placeholder ("Search number, name, department…").
+     *
      * @return array<int, array<string, mixed>>
      */
     public function searchEmployees(string $q, int $limit = 20): array
@@ -559,6 +700,9 @@ final class PatientService extends BaseService
                 ->like('employee_number', $q)
                 ->orLike('first_name', $q)
                 ->orLike('last_name', $q)
+                ->orLike('middle_name', $q)
+                ->orLike('department', $q)
+                ->orLike('position', $q)
             ->groupEnd()
             ->where('archived_at', null)
             ->orderBy('last_name', 'ASC')

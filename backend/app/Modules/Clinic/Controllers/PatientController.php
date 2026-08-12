@@ -152,6 +152,48 @@ final class PatientController extends ApiController
         return $this->ok($this->service->addContact($id, $payload)->toArray(), null, 201);
     }
 
+    public function updateAllergy(int $id, int $allergyId): ResponseInterface
+    {
+        $payload = $this->request->getJSON(true) ?? [];
+
+        $rules = [
+            'allergen' => 'required|max_length[200]',
+            'severity' => 'permit_empty|in_list[mild,moderate,severe]',
+            'reaction' => 'permit_empty|max_length[2000]',
+        ];
+        if (! $this->makeValidation($rules)->run($payload)) {
+            throw ApiException::validationFailure($this->collectErrors());
+        }
+
+        return $this->ok($this->service->updateAllergy($id, $allergyId, $payload)->toArray());
+    }
+
+    public function deleteAllergy(int $id, int $allergyId): ResponseInterface
+    {
+        return $this->ok($this->service->deleteAllergy($id, $allergyId)->toArray());
+    }
+
+    public function updateContact(int $id, int $contactId): ResponseInterface
+    {
+        $payload = $this->request->getJSON(true) ?? [];
+
+        $rules = [
+            'contact_name' => 'required|max_length[150]',
+            'relationship' => 'required|max_length[50]',
+            'phone'        => 'required|max_length[20]',
+        ];
+        if (! $this->makeValidation($rules)->run($payload)) {
+            throw ApiException::validationFailure($this->collectErrors());
+        }
+
+        return $this->ok($this->service->updateContact($id, $contactId, $payload)->toArray());
+    }
+
+    public function deleteContact(int $id, int $contactId): ResponseInterface
+    {
+        return $this->ok($this->service->deleteContact($id, $contactId)->toArray());
+    }
+
     // ---------------------------------------------------------- employees
 
     public function listEmployees(): ResponseInterface
