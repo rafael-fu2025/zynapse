@@ -13,6 +13,7 @@ namespace Modules\Clinic\Services;
 use App\Auth\CurrentUser;
 use App\Exceptions\ApiException;
 use App\Modules\Shared\BaseService;
+use App\Services\CurrentTenant;
 use DateTimeImmutable;
 use DateTimeZone;
 use Modules\Clinic\DTOs\UserDto;
@@ -83,6 +84,7 @@ final class EmployeeSelfService extends BaseService
         $patch['updated_at'] = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
 
         $this->db->table('users')
+            ->where('users.tenant_id', CurrentTenant::id())
             ->where('id', $id)
             ->where('kind', 'employee')
             ->update($patch);
@@ -109,6 +111,7 @@ final class EmployeeSelfService extends BaseService
 
         $rows = $this->db->table('clinic_encounters')
             ->select('id, patient_user_id, chief_complaint, triage_priority, status, attending_user_id, started_at, closed_at, created_at')
+            ->where('clinic_encounters.tenant_id', CurrentTenant::id())
             ->where('patient_user_id', $userId)
             ->where('archived_at', null)
             ->orderBy('started_at', 'DESC')
@@ -125,6 +128,7 @@ final class EmployeeSelfService extends BaseService
             if ($userIds !== []) {
                 $uRows = $this->db->table('users')
                     ->select('id, username')
+                    ->where('users.tenant_id', CurrentTenant::id())
                     ->whereIn('id', $userIds)
                     ->get()->getResultArray();
                 foreach ($uRows as $u) {
@@ -156,6 +160,7 @@ final class EmployeeSelfService extends BaseService
     {
         $row = $this->db->table('users')
             ->select(self::USER_COLS)
+            ->where('users.tenant_id', CurrentTenant::id())
             ->where('id', $userId)
             ->where('kind', 'employee')
             ->where('archived_at', null)

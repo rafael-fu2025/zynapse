@@ -9,6 +9,7 @@ use App\Modules\Shared\BaseService;
 use App\Modules\Shared\StateMachineException;
 use App\Pagination\KeysetPaginator;
 use App\Services\Audit\AuditOutboxService;
+use App\Services\CurrentTenant;
 use App\Services\Notify\NotificationOutboxService;
 use CodeIgniter\Database\RawSql;
 use DateTimeImmutable;
@@ -56,6 +57,7 @@ final class AppointmentService extends BaseService
         $this->policy->check('appointmentsRead');
 
         $builder = $this->db->table('clinic_appointments AS a')
+            ->where('a.tenant_id', CurrentTenant::id())
             ->select('a.id, a.patient_user_id, a.patient_school_id, a.provider_user_id, a.scheduled_at, a.status, a.reason, a.created_at')
             ->where('a.archived_at', null)
             ->orderBy('a.created_at', 'DESC')
@@ -172,6 +174,7 @@ final class AppointmentService extends BaseService
         $patientKinds = [];
         if ($patientIds !== []) {
             $pRows = $this->db->table('users')
+                ->where('users.tenant_id', CurrentTenant::id())
                 ->select('id, kind, first_name, last_name, middle_name')
                 ->whereIn('id', $patientIds)
                 ->get()->getResultArray();
@@ -198,6 +201,7 @@ final class AppointmentService extends BaseService
         }
         if ($missingIds !== []) {
             $fallbackRows = $this->db->table('users')
+                ->where('users.tenant_id', CurrentTenant::id())
                 ->select('id, kind, first_name, last_name, middle_name, student_number, employee_number')
                 ->groupStart()
                     ->whereIn('student_number', $missingIds)
@@ -222,6 +226,7 @@ final class AppointmentService extends BaseService
         $providerNames = [];
         if ($providerIds !== []) {
             $uRows = $this->db->table('users')
+                ->where('users.tenant_id', CurrentTenant::id())
                 ->select('id, username, first_name, last_name')
                 ->whereIn('id', $providerIds)
                 ->get()->getResultArray();
@@ -241,6 +246,7 @@ final class AppointmentService extends BaseService
         $apptIds = array_map(static fn (array $r) => (int) $r['id'], $rows);
         if ($apptIds !== []) {
             $encRows = $this->db->table('clinic_encounters')
+                ->where('clinic_encounters.tenant_id', CurrentTenant::id())
                 ->select('id, appointment_id')
                 ->whereIn('appointment_id', $apptIds)
                 ->where('archived_at', null)
@@ -307,6 +313,7 @@ final class AppointmentService extends BaseService
             [$plain, $hash] = $this->newQrToken();
 
             $this->db->table('clinic_appointments')->insert([
+                'tenant_id'         => CurrentTenant::id(),
                 'patient_user_id'   => $patientUserId,
                 'patient_school_id' => $patientSchoolId,
                 'provider_user_id'  => $providerUserId,
@@ -339,7 +346,7 @@ final class AppointmentService extends BaseService
                 $this->notify->enqueue($patientUserId, 'appointment.scheduled', ['resource_code' => 'appointment#' . $id, 'appointment_at' => $scheduledAtUtc, 'appointment_status' => 'scheduled', 'destination' => 'clinic']);
             }
 
-            $row = $this->db->table('clinic_appointments')->where('id', $id)->get()->getRowArray();
+            $row = $this->db->table('clinic_appointments')->where('clinic_appointments.tenant_id', CurrentTenant::id())->where('id', $id)->get()->getRowArray();
             return AppointmentDto::fromRow($this->decorate([$row])[0])->withQrToken($plain);
         });
     }
@@ -380,6 +387,7 @@ final class AppointmentService extends BaseService
 
             // The patient books for themselves — resolve their school id.
             $patient = $this->db->table('users')
+                ->where('users.tenant_id', CurrentTenant::id())
                 ->select('student_number, employee_number')
                 ->where('id', $patientUserId)
                 ->where('archived_at', null)
@@ -400,6 +408,7 @@ final class AppointmentService extends BaseService
             [$plain, $hash] = $this->newQrToken();
 
             $this->db->table('clinic_appointments')->insert([
+                'tenant_id'         => CurrentTenant::id(),
                 'patient_user_id'   => $patientUserId,
                 'patient_school_id' => $schoolId,
                 'provider_user_id'  => $providerUserId,
@@ -424,7 +433,7 @@ final class AppointmentService extends BaseService
                 $this->notify->enqueue($patientUserId, 'appointment.scheduled', ['resource_code' => 'appointment#' . $id, 'appointment_at' => $scheduledAtUtc, 'appointment_status' => 'scheduled', 'destination' => 'clinic']);
             }
 
-            $row = $this->db->table('clinic_appointments')->where('id', $id)->get()->getRowArray();
+            $row = $this->db->table('clinic_appointments')->where('clinic_appointments.tenant_id', CurrentTenant::id())->where('id', $id)->get()->getRowArray();
             return AppointmentDto::fromRow($this->decorate([$row])[0])->withQrToken($plain);
         });
     }
@@ -443,6 +452,7 @@ final class AppointmentService extends BaseService
 
         return $this->txn(function () use ($id, $userId): string {
             $row = $this->db->table('clinic_appointments')
+                ->where('clinic_appointments.tenant_id', CurrentTenant::id())
                 ->select('id, patient_user_id')
                 ->where('id', $id)
                 ->where('archived_at', null)
@@ -470,6 +480,7 @@ final class AppointmentService extends BaseService
             [$plain, $hash] = $this->newQrToken();
             $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
             $this->db->table('clinic_appointments')
+                ->where('clinic_appointments.tenant_id', CurrentTenant::id())
                 ->where('id', $id)
                 ->update(['qr_token_hash' => $hash, 'updated_at' => $now]);
 
@@ -488,6 +499,7 @@ final class AppointmentService extends BaseService
         $hash = $this->hashToken($plainToken);
 
         $row = $this->db->table('clinic_appointments')
+            ->where('clinic_appointments.tenant_id', CurrentTenant::id())
             ->select('id, status, scheduled_at')
             ->where('qr_token_hash', $hash)
             ->where('archived_at', null)
@@ -533,6 +545,7 @@ final class AppointmentService extends BaseService
     public function myAppointments(int $patientUserId): array
     {
         $rows = $this->db->table('clinic_appointments a')
+            ->where('a.tenant_id', CurrentTenant::id())
             ->select('a.id, a.patient_school_id, a.provider_user_id, a.scheduled_at, a.status, a.reason, a.created_at, u.username AS provider_username')
             ->join('users u', 'u.id = a.provider_user_id', 'left')
             ->where('a.patient_user_id', $patientUserId)
@@ -589,6 +602,7 @@ final class AppointmentService extends BaseService
     private function assertNoClash(string $column, int $userId, string $scheduledAtUtc, string $message): void
     {
         $clash = $this->db->table('clinic_appointments')
+            ->where('clinic_appointments.tenant_id', CurrentTenant::id())
             ->where($column, $userId)
             ->whereIn('status', ['scheduled', 'confirmed'])
             ->where('ABS(TIMESTAMPDIFF(SECOND, scheduled_at, ' . $this->db->escape($scheduledAtUtc) . ')) <', 3600)
@@ -614,7 +628,7 @@ final class AppointmentService extends BaseService
         }
 
         return $this->txn(function () use ($appointmentId, $nextStatus, $from, $userId): AppointmentDto {
-            $row = $this->selectForUpdate('clinic_appointments', ['id' => $appointmentId, 'archived_at' => null]);
+            $row = $this->selectForUpdate('clinic_appointments', ['tenant_id' => CurrentTenant::id(), 'id' => $appointmentId, 'archived_at' => null]);
 
             if ($row === null) {
                 throw new ApiException('resource.not_found', 404, [
@@ -628,6 +642,7 @@ final class AppointmentService extends BaseService
             $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
 
             $this->db->table('clinic_appointments')
+                ->where('clinic_appointments.tenant_id', CurrentTenant::id())
                 ->where('id', $appointmentId)
                 ->update(['status' => $nextStatus, 'updated_at' => $now]);
 
@@ -638,9 +653,9 @@ final class AppointmentService extends BaseService
                 $this->openEncounterForAppointment($row, $userId, $now);
             }
             if (in_array($nextStatus, ['cancelled', 'no_show'], true)) {
-                $encounter = $this->db->table('clinic_encounters')->select('id')->where('appointment_id', $appointmentId)->get()->getRowArray();
+                $encounter = $this->db->table('clinic_encounters')->where('clinic_encounters.tenant_id', CurrentTenant::id())->select('id')->where('appointment_id', $appointmentId)->get()->getRowArray();
                 if ($encounter !== null) {
-                    $this->db->table('clinic_queue_entries')->where('encounter_id', (int) $encounter['id'])->whereIn('status', ['waiting','called'])->update(['status'=>'skipped','finished_at'=>$now,'updated_at'=>$now]);
+                    $this->db->table('clinic_queue_entries')->where('clinic_queue_entries.tenant_id', CurrentTenant::id())->where('encounter_id', (int) $encounter['id'])->whereIn('status', ['waiting','called'])->update(['status'=>'skipped','finished_at'=>$now,'updated_at'=>$now]);
                 }
             }
 
@@ -655,7 +670,7 @@ final class AppointmentService extends BaseService
                 $this->notify->enqueue($recipient, 'appointment.' . $nextStatus, ['resource_code'=>'appointment#'.$appointmentId,'appointment_at'=>(string)$row['scheduled_at'],'appointment_status'=>$nextStatus,'destination'=>'clinic']);
             }
 
-            $fresh = $this->db->table('clinic_appointments')->where('id', $appointmentId)->get()->getRowArray();
+            $fresh = $this->db->table('clinic_appointments')->where('clinic_appointments.tenant_id', CurrentTenant::id())->where('id', $appointmentId)->get()->getRowArray();
             return AppointmentDto::fromRow($this->decorate([$fresh])[0]);
         });
     }
@@ -675,6 +690,7 @@ final class AppointmentService extends BaseService
         $appointmentId = (int) $appt['id'];
 
         $existing = $this->db->table('clinic_encounters')
+            ->where('clinic_encounters.tenant_id', CurrentTenant::id())
             ->select('id')
             ->where('appointment_id', $appointmentId)
             ->get()->getRowArray();
@@ -687,6 +703,7 @@ final class AppointmentService extends BaseService
             : "Scheduled visit — appointment #{$appointmentId}";
 
         $this->db->table('clinic_encounters')->insert([
+            'tenant_id'         => CurrentTenant::id(),
             'patient_school_id' => (string) $appt['patient_school_id'],
             'appointment_id'    => $appointmentId,
             'chief_complaint'   => $reason,
@@ -708,6 +725,7 @@ final class AppointmentService extends BaseService
         )->getRowArray();
         $position = ($last !== null ? (int) $last['position'] : 0) + 1;
         $this->db->table('clinic_queue_entries')->insert([
+            'tenant_id'    => CurrentTenant::id(),
             'encounter_id' => $encounterId,
             'queue_date'   => $queueDate,
             'position'     => $position,
@@ -737,6 +755,7 @@ final class AppointmentService extends BaseService
         $this->policy->check('appointmentsRead');
 
         $row = $this->db->table('clinic_appointments')
+            ->where('clinic_appointments.tenant_id', CurrentTenant::id())
             ->where('id', $appointmentId)
             ->where('archived_at', null)
             ->get()->getRowArray();
@@ -768,7 +787,7 @@ final class AppointmentService extends BaseService
         $userId = \App\Auth\CurrentUser::assert();
 
         return $this->txn(function () use ($appointmentId, $input, $userId): AppointmentDto {
-            $row = $this->selectForUpdate('clinic_appointments', ['id' => $appointmentId, 'archived_at' => null]);
+            $row = $this->selectForUpdate('clinic_appointments', ['tenant_id' => CurrentTenant::id(), 'id' => $appointmentId, 'archived_at' => null]);
             if ($row === null) {
                 throw new ApiException('resource.not_found', 404, [
                     ['code' => 'resource.not_found', 'message' => "Appointment #{$appointmentId} not found."],
@@ -813,6 +832,7 @@ final class AppointmentService extends BaseService
             $update['updated_at'] = $now;
 
             $this->db->table('clinic_appointments')
+                ->where('clinic_appointments.tenant_id', CurrentTenant::id())
                 ->where('id', $appointmentId)
                 ->update($update);
 
@@ -844,7 +864,7 @@ final class AppointmentService extends BaseService
                 }
             }
 
-            $fresh = $this->db->table('clinic_appointments')->where('id', $appointmentId)->get()->getRowArray();
+            $fresh = $this->db->table('clinic_appointments')->where('clinic_appointments.tenant_id', CurrentTenant::id())->where('id', $appointmentId)->get()->getRowArray();
             return AppointmentDto::fromRow($this->decorate([$fresh])[0]);
         });
     }
@@ -878,6 +898,7 @@ final class AppointmentService extends BaseService
             ->setTimezone(new DateTimeZone('UTC'))->format('Y-m-d H:i:s');
 
         $ids = $this->db->table('clinic_appointments')
+            ->where('clinic_appointments.tenant_id', CurrentTenant::id())
             ->select('id')
             ->where('status', 'scheduled')
             ->where('archived_at', null)
@@ -893,6 +914,7 @@ final class AppointmentService extends BaseService
             try {
                 $advanced += $this->txn(function () use ($id, $now): int {
                     $row = $this->selectForUpdate('clinic_appointments', [
+                        'tenant_id'   => CurrentTenant::id(),
                         'id'          => $id,
                         'archived_at' => null,
                     ]);
@@ -905,6 +927,7 @@ final class AppointmentService extends BaseService
                     $userId = (int) ($row['provider_user_id'] ?? 0);
 
                     $this->db->table('clinic_appointments')
+                        ->where('clinic_appointments.tenant_id', CurrentTenant::id())
                         ->where('id', $id)
                         ->update(['status' => 'checked_in', 'updated_at' => $now]);
 

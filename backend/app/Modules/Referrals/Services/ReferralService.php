@@ -54,6 +54,7 @@ final class ReferralService extends BaseService
         $this->policy->check('list');
 
         $builder = $this->db->table('referral_referrals AS r')
+            ->where('r.tenant_id', CurrentTenant::id())
             ->select('r.id, r.patient_school_id, r.source_encounter_id, r.source_session_id, r.source_module, r.target_module, r.artifact_type, r.status, r.reason_code, r.provider_user_id, r.queue_handoff_destination, r.queue_handoff_entry_id, r.queue_handoff_at, r.created_at, r.updated_at, r.qr_expires_at, r.qr_revoked_at, u.username AS provider_name')
             ->join('users AS u', 'u.id = r.provider_user_id', 'left')
             ->where('r.archived_at', null);
@@ -231,7 +232,7 @@ final class ReferralService extends BaseService
                 ],
             );
 
-            $fresh = $this->db->table('referral_referrals')->where('id', $id)->get()->getRowArray();
+            $fresh = $this->db->table('referral_referrals')->where('referral_referrals.tenant_id', CurrentTenant::id())->where('id', $id)->get()->getRowArray();
             return ReferralDto::fromRow($fresh);
         });
     }
@@ -255,6 +256,7 @@ final class ReferralService extends BaseService
         }
 
         $rows = $this->db->table('users')
+            ->where('users.tenant_id', CurrentTenant::id())
             ->select('id, kind, first_name, last_name, middle_name, student_number, employee_number')
             ->whereIn('kind', ['student', 'employee'])
             ->where('archived_at', null)
@@ -322,7 +324,7 @@ final class ReferralService extends BaseService
         $userId = \App\Auth\CurrentUser::assert();
 
         return $this->txn(function () use ($id, $userId): array {
-            $referral = $this->selectForUpdate('referral_referrals', ['id' => $id, 'archived_at' => null]);
+            $referral = $this->selectForUpdate('referral_referrals', ['tenant_id' => CurrentTenant::id(), 'id' => $id, 'archived_at' => null]);
             if ($referral === null) {
                 throw new ApiException('resource.not_found', 404, [
                     ['code' => 'resource.not_found', 'message' => "Referral #{$id} not found."],
@@ -376,7 +378,7 @@ final class ReferralService extends BaseService
 
             $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
             if (($referral['queue_handoff_entry_id'] ?? null) === null) {
-                $this->db->table('referral_referrals')->where('id', $id)->update([
+                $this->db->table('referral_referrals')->where('referral_referrals.tenant_id', CurrentTenant::id())->where('id', $id)->update([
                     'queue_handoff_destination' => $target,
                     'queue_handoff_entry_id' => (int) $queue['id'],
                     'queue_handoff_at' => $now,
@@ -396,14 +398,14 @@ final class ReferralService extends BaseService
                 );
             }
 
-            $fresh = $this->db->table('referral_referrals')->where('id', $id)->get()->getRowArray();
+            $fresh = $this->db->table('referral_referrals')->where('referral_referrals.tenant_id', CurrentTenant::id())->where('id', $id)->get()->getRowArray();
             return ['referral' => ReferralDto::fromRow($fresh)->toArray(), 'queue' => $queue];
         });
     }
 
     public function createFromEncounter(int $encounterId, ?string $reasonCode, ?string $notesPlaintext): ReferralDto
     {
-        $row = $this->db->table('clinic_encounters')->select('patient_school_id')
+        $row = $this->db->table('clinic_encounters')->where('clinic_encounters.tenant_id', CurrentTenant::id())->select('patient_school_id')
             ->where('id', $encounterId)->where('archived_at', null)->get()->getRowArray();
         if ($row === null) {
             throw new ApiException('resource.not_found', 404, [[
@@ -415,7 +417,7 @@ final class ReferralService extends BaseService
 
     public function createFromSession(int $sessionId, ?string $reasonCode, ?string $notesPlaintext): ReferralDto
     {
-        $row = $this->db->table('counselling_sessions')->select('patient_school_id')
+        $row = $this->db->table('counselling_sessions')->where('counselling_sessions.tenant_id', CurrentTenant::id())->select('patient_school_id')
             ->where('id', $sessionId)->where('archived_at', null)->get()->getRowArray();
         if ($row === null) {
             throw new ApiException('resource.not_found', 404, [[
@@ -440,14 +442,14 @@ final class ReferralService extends BaseService
             return null;
         }
         if ($sourceModule === 'clinic' && $sourceEncounterId !== null && $sourceSessionId === null) {
-            $record = $this->selectForUpdate('clinic_encounters', ['id' => $sourceEncounterId, 'archived_at' => null]);
+            $record = $this->selectForUpdate('clinic_encounters', ['tenant_id' => CurrentTenant::id(), 'id' => $sourceEncounterId, 'archived_at' => null]);
             if ($record === null) throw new ApiException('resource.not_found', 404, [['code' => 'resource.not_found', 'message' => "Encounter #{$sourceEncounterId} not found."]]);
             (new ClinicPolicy())->check('refer', $record);
             if ((string) $record['status'] !== 'open') throw new ApiException('statemachine.clinic.encounter_closed', 409, [['code' => 'statemachine.clinic.encounter_closed', 'message' => 'Only an open Clinic encounter can create a referral.']]);
             return (string) $record['patient_school_id'];
         }
         if ($sourceModule === 'counselling' && $sourceSessionId !== null && $sourceEncounterId === null) {
-            $record = $this->selectForUpdate('counselling_sessions', ['id' => $sourceSessionId, 'archived_at' => null]);
+            $record = $this->selectForUpdate('counselling_sessions', ['tenant_id' => CurrentTenant::id(), 'id' => $sourceSessionId, 'archived_at' => null]);
             if ($record === null) throw new ApiException('resource.not_found', 404, [['code' => 'resource.not_found', 'message' => "Session #{$sourceSessionId} not found."]]);
             (new CounsellingPolicy())->check('refer', $record);
             if ($record['ended_at'] !== null) throw new ApiException('statemachine.counselling.session_closed', 409, [['code' => 'statemachine.counselling.session_closed', 'message' => 'Only an active Guidance session can create a referral.']]);
@@ -468,7 +470,7 @@ final class ReferralService extends BaseService
         $from = $allowed[$nextStatus] ?? [];
 
         return $this->txn(function () use ($id, $nextStatus, $userId, $providerUserId, $from): ReferralDto {
-            $row = $this->selectForUpdate('referral_referrals', ['id' => $id, 'archived_at' => null]);
+            $row = $this->selectForUpdate('referral_referrals', ['tenant_id' => CurrentTenant::id(), 'id' => $id, 'archived_at' => null]);
 
             if ($row === null) {
                 throw new ApiException('resource.not_found', 404, [
@@ -492,6 +494,7 @@ final class ReferralService extends BaseService
                 $update['provider_user_id'] = $this->resolveProviderId($providerUserId);
             }
             $this->db->table('referral_referrals')
+                ->where('referral_referrals.tenant_id', CurrentTenant::id())
                 ->where('id', $id)
                 ->update($update);
 
@@ -518,7 +521,7 @@ final class ReferralService extends BaseService
                 );
             }
 
-            $fresh = $this->db->table('referral_referrals')->where('id', $id)->get()->getRowArray();
+            $fresh = $this->db->table('referral_referrals')->where('referral_referrals.tenant_id', CurrentTenant::id())->where('id', $id)->get()->getRowArray();
             return ReferralDto::fromRow($fresh);
         });
     }
@@ -533,7 +536,7 @@ final class ReferralService extends BaseService
         $userId = \App\Auth\CurrentUser::assert();
 
         return $this->txn(function () use ($id, $ttlSeconds, $userId): array {
-            $row = $this->selectForUpdate('referral_referrals', ['id' => $id, 'archived_at' => null]);
+            $row = $this->selectForUpdate('referral_referrals', ['tenant_id' => CurrentTenant::id(), 'id' => $id, 'archived_at' => null]);
 
             if ($row === null) {
                 throw new ApiException('resource.not_found', 404, [
@@ -549,6 +552,7 @@ final class ReferralService extends BaseService
             $expires = $now->modify('+' . $ttlSeconds . ' seconds')->format('Y-m-d H:i:s');
 
             $this->db->table('referral_referrals')
+                ->where('referral_referrals.tenant_id', CurrentTenant::id())
                 ->where('id', $id)
                 ->update([
                     'qr_token_hash' => $hash,
@@ -587,7 +591,7 @@ final class ReferralService extends BaseService
         $userId = \App\Auth\CurrentUser::assert();
 
         return $this->txn(function () use ($id, $userId): ReferralDto {
-            $row = $this->selectForUpdate('referral_referrals', ['id' => $id, 'archived_at' => null]);
+            $row = $this->selectForUpdate('referral_referrals', ['tenant_id' => CurrentTenant::id(), 'id' => $id, 'archived_at' => null]);
 
             if ($row === null) {
                 throw new ApiException('resource.not_found', 404, [
@@ -607,6 +611,7 @@ final class ReferralService extends BaseService
 
             $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
             $this->db->table('referral_referrals')
+                ->where('referral_referrals.tenant_id', CurrentTenant::id())
                 ->where('id', $id)
                 ->update(['qr_revoked_at' => $now, 'updated_at' => $now]);
 
@@ -618,7 +623,7 @@ final class ReferralService extends BaseService
                 ['resource_code' => 'referral#' . $id],
             );
 
-            $fresh = $this->db->table('referral_referrals')->where('id', $id)->get()->getRowArray();
+            $fresh = $this->db->table('referral_referrals')->where('referral_referrals.tenant_id', CurrentTenant::id())->where('id', $id)->get()->getRowArray();
             return ReferralDto::fromRow($fresh);
         });
     }
@@ -633,6 +638,7 @@ final class ReferralService extends BaseService
         $hash = $this->hashToken($plainToken);
 
         $row = $this->db->table('referral_referrals')
+            ->where('referral_referrals.tenant_id', CurrentTenant::id())
             ->select('id, artifact_type, issuer_user_id, qr_token_hash, qr_expires_at, qr_revoked_at')
             ->where('qr_token_hash', $hash)
             ->where('archived_at', null)
@@ -649,6 +655,7 @@ final class ReferralService extends BaseService
         }
 
         $issuer = $this->db->table('users')
+            ->where('users.tenant_id', CurrentTenant::id())
             ->select('username')
             ->where('id', $row['issuer_user_id'])
             ->get()->getRowArray();
@@ -679,7 +686,7 @@ final class ReferralService extends BaseService
         if ($providerUserId === null || $providerUserId <= 0) {
             return null;
         }
-        $row = $this->db->table('users')->select('id')->where('id', $providerUserId)->get()->getRowArray();
+        $row = $this->db->table('users')->where('users.tenant_id', CurrentTenant::id())->select('id')->where('id', $providerUserId)->get()->getRowArray();
         if ($row === null) {
             throw new ApiException('resource.not_found', 404, [
                 ['code' => 'resource.not_found', 'message' => "Provider user #{$providerUserId} not found.", 'field' => 'provider_user_id'],
@@ -719,6 +726,7 @@ final class ReferralService extends BaseService
     private function issuerIsTeachingEmployee(int $userId): bool
     {
         $row = $this->db->table('users')
+            ->where('users.tenant_id', CurrentTenant::id())
             ->select('is_teaching, archived_at')
             ->where('id', $userId)
             ->where('kind', 'employee')

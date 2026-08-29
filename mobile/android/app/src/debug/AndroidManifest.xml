@@ -4,4 +4,9 @@
          to allow setting breakpoints, to provide hot reload, etc.
     -->
     <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- DEBUG BUILDS ONLY — merged over the main manifest by Gradle.
+         The local dev backend speaks plain HTTP on :8090, which Android
+         blocks by default. Release builds must talk HTTPS to a real
+         deployment; never re-add this flag to the main manifest. -->
+    <application android:usesCleartextTraffic="true"/>
 </manifest>

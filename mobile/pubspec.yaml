@@ -20,8 +20,11 @@ dependencies:
   # stored and replayed on /auth/refresh, exactly like the browser does.
   cookie_jar: ^4.0.0
   dio_cookie_manager: ^3.1.1
-  # Persist the access token across launches (demo convenience; the web
-  # app keeps it in memory only, but a mobile app needs it to survive restarts).
+  # Persist the access token across launches — in the platform
+  # keystore/Keychain via flutter_secure_storage. shared_preferences is
+  # plaintext XML and the token is a live credential; SharedPreferences
+  # remains only as the one-time migration source (see ApiClient.restoreToken).
+  flutter_secure_storage: ^11.0.0
   shared_preferences: ^2.2.2
   # Save report CSV exports to the app's documents directory.
   path_provider: ^2.1.4

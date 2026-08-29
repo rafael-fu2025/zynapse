@@ -1,14 +1,9 @@
 import { expect, test } from '@playwright/test';
+import { signInMocked } from './helpers/auth';
 
 async function signInAsKiosk(page: import('@playwright/test').Page) {
   const session = { id: 99, email: 'kiosk.station@foundationu.edu.ph', username: 'synapse-kiosk', is_active: true, force_reset: false, permissions: ['kiosk.checkin.submit'] };
-  await page.route('**/api/v1/auth/login', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ success: true, data: { access_token: 'test-token', expires_in: 900 }, errors: [], meta: null }) }));
-  await page.route('**/api/v1/auth/me', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ success: true, data: session, errors: [], meta: null }) }));
-  await page.goto('/login');
-  await page.getByLabel(/email/i).fill(session.email);
-  await page.getByRole('textbox', { name: 'Password' }).fill('DevPassw0rd!');
-  await page.getByRole('button', { name: /sign in/i }).click();
-  await page.waitForURL('/');
+  await signInMocked(page, session);
   await page.evaluate(() => { window.history.pushState({}, '', '/kiosk-station'); window.dispatchEvent(new PopStateEvent('popstate')); });
   await expect(page.getByRole('heading', { name: 'Where are you going?' })).toBeVisible();
 }

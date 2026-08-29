@@ -29,6 +29,11 @@ final class ConsolidateLegacyIntoUsers extends Migration
 {
     public function up(): void
     {
+        // See ClinicalPatientUserId::up() — Forge never resets the
+        // connection's field cache, and this migration runs right after
+        // UsersIdentityColumns added the columns the guard below checks.
+        $this->db->resetDataCache();
+
         if (! $this->db->tableExists('users')) {
             return;
         }

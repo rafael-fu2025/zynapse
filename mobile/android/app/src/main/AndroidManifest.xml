@@ -1,11 +1,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET"/>
-    <!-- Dev/demo only: the local backend speaks plain HTTP on :8090.
-         Remove this flag for any production build (should be HTTPS). -->
     <application
         android:label="SYNAPSE"
         android:name="${applicationName}"
-        android:usesCleartextTraffic="true"
         android:icon="@mipmap/ic_launcher">
         <activity
             android:name=".MainActivity"

@@ -6,6 +6,7 @@ namespace Modules\Reports\Services;
 
 use App\Exceptions\ApiException;
 use App\Modules\Shared\BaseService;
+use App\Services\CurrentTenant;
 use DateTimeImmutable;
 use DateTimeZone;
 use Generator;
@@ -212,18 +213,21 @@ final class ReportService extends BaseService
         $bounds = $this->ranges->timestampBounds($range);
 
         $statusBreakdown = $this->db->table('counselling_appointments')
+            ->where('counselling_appointments.tenant_id', CurrentTenant::id())
             ->select('status, COUNT(*) AS cnt')
             ->where('appointment_date >=', $range['start'])
             ->where('appointment_date <=', $range['end'])
             ->groupBy('status')->orderBy('cnt', 'DESC')->get()->getResultArray();
 
         $typeBreakdown = $this->db->table('counselling_appointments')
+            ->where('counselling_appointments.tenant_id', CurrentTenant::id())
             ->select('type, COUNT(*) AS cnt')
             ->where('appointment_date >=', $range['start'])
             ->where('appointment_date <=', $range['end'])
             ->groupBy('type')->orderBy('cnt', 'DESC')->get()->getResultArray();
 
         $dailyTrend = $this->db->table('counselling_appointments')
+            ->where('counselling_appointments.tenant_id', CurrentTenant::id())
             ->select('appointment_date AS day, COUNT(*) AS cnt')
             ->where('appointment_date >=', $range['start'])
             ->where('appointment_date <=', $range['end'])
@@ -258,6 +262,7 @@ final class ReportService extends BaseService
             ->modify('+90 days')->format('Y-m-d');
 
         $lowStock = $this->db->table('clinic_medicines m')
+            ->where('m.tenant_id', CurrentTenant::id())
             ->select('m.id, m.generic_name, m.brand_name, m.unit, m.reorder_threshold, COALESCE(SUM(b.quantity_remaining), 0) AS total_stock', false)
             ->join('clinic_medicine_batches b', "b.medicine_id = m.id AND b.status = 'active'", 'left', false)
             ->where('m.archived_at', null)
@@ -266,6 +271,7 @@ final class ReportService extends BaseService
             ->orderBy('total_stock', 'ASC')->get()->getResultArray();
 
         $expired = $this->db->table('clinic_medicine_batches b')
+            ->where('b.tenant_id', CurrentTenant::id())
             ->select('b.id, b.batch_number, b.quantity_remaining, b.expiration_date, m.generic_name, m.brand_name, m.unit')
             ->join('clinic_medicines m', 'm.id = b.medicine_id')
             ->where('b.status', 'active')->where('b.quantity_remaining >', 0)
@@ -273,6 +279,7 @@ final class ReportService extends BaseService
             ->orderBy('b.expiration_date', 'ASC')->get()->getResultArray();
 
         $expiring = $this->db->table('clinic_medicine_batches b')
+            ->where('b.tenant_id', CurrentTenant::id())
             ->select('b.id, b.batch_number, b.quantity_remaining, b.expiration_date, m.generic_name, m.brand_name, m.unit')
             ->join('clinic_medicines m', 'm.id = b.medicine_id')
             ->where('b.status', 'active')->where('b.quantity_remaining >', 0)
@@ -399,6 +406,7 @@ final class ReportService extends BaseService
             'counselling' => [
                 ['Date', 'Type', 'Status', 'Appointment count'],
                 $this->db->table('counselling_appointments')
+                    ->where('counselling_appointments.tenant_id', CurrentTenant::id())
                     ->select('appointment_date AS day, type, status, COUNT(*) AS cnt')
                     ->where('appointment_date >=', $range['start'])->where('appointment_date <=', $range['end'])
                     ->groupBy('day, type, status')->orderBy('day', 'ASC'),
@@ -450,6 +458,7 @@ final class ReportService extends BaseService
         $now = $this->utcNow();
 
         $this->db->table('report_summaries')->insert([
+            'tenant_id' => CurrentTenant::id(),
             'module' => $module,
             'period_start' => $range['start'],
             'period_end' => $range['end'],
@@ -540,7 +549,14 @@ final class ReportService extends BaseService
      */
     private function timestampBuilder(string $table, string $column, array $bounds): \CodeIgniter\Database\BaseBuilder
     {
+        // The table expression may carry an alias ("clinic_encounters e");
+        // MySQL requires the alias for qualification when one is present.
+        $qualifier = str_contains($table, ' ')
+            ? substr($table, (int) strrpos($table, ' ') + 1)
+            : $table;
+
         return $this->db->table($table)
+            ->where($qualifier . '.tenant_id', CurrentTenant::id())
             ->where($column . ' >=', $bounds['start_utc'])
             ->where($column . ' <', $bounds['end_utc_exclusive']);
     }
@@ -581,6 +597,7 @@ final class ReportService extends BaseService
     {
         $count = function (array $range) use ($table, $column): int {
             return (int) $this->db->table($table)
+                ->where($table . '.tenant_id', CurrentTenant::id())
                 ->where($column . ' >=', $range['start'])
                 ->where($column . ' <=', $range['end'])
                 ->countAllResults();
@@ -616,6 +633,7 @@ final class ReportService extends BaseService
     private function countWhere(string $table, array $where): int
     {
         $builder = $this->db->table($table);
+        $builder->where($table . '.tenant_id', CurrentTenant::id());
         foreach ($where as $column => $value) {
             $builder->where($column, $value);
         }

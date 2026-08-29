@@ -36,7 +36,19 @@
         ]
     },
     "scripts": {
-        "test": "phpunit"
+        "test": "phpunit",
+        "test:feature": "phpunit -c phpunit.feature.xml",
+        "test:all": [
+            "@test",
+            "@test:feature"
+        ],
+        "scan:tenancy": "@php scripts/scan-tenant-scope.php"
+    },
+    "scripts-descriptions": {
+        "test": "Unit suite — framework-free, no database required.",
+        "test:feature": "Feature suite — boots the CI4 kernel; needs MySQL/MariaDB and the `tests` DB group.",
+        "test:all": "Both suites. Separate configs because the two bootstraps are mutually exclusive.",
+        "scan:tenancy": "List every unscoped tenant query site with file:line — the Phase-2.4 burn-down worklist."
     },
     "config": {
         "optimize-autoloader": true,

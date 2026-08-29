@@ -64,8 +64,9 @@ class AuthController extends ChangeNotifier {
         if (data is Map<String, dynamic>) {
           _session = Session.fromJson(data);
         }
-      } catch (_) {
+      } catch (e) {
         // Token expired and refresh failed -> stay logged out.
+        if (kDebugMode) debugPrint('AuthController.bootstrap failed: $e');
         _session = null;
       }
       return _session;
@@ -122,8 +123,9 @@ class AuthController extends ChangeNotifier {
   Future<void> logout() async {
     try {
       await ApiClient.I.dio.post('/auth/logout');
-    } catch (_) {
+    } catch (e) {
       // best effort — revoke may fail if the token already expired.
+      if (kDebugMode) debugPrint('AuthController.logout failed: $e');
     }
     await ApiClient.I.setAccessToken(null);
     await ApiClient.I.clearRefreshCookie();

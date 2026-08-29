@@ -25,11 +25,18 @@ final class CurrentTenant
     /**
      * Returns the active tenant id. Defaults to 1 (Foundation
      * University) in the single-tenant deployment.
+     *
+     * Request-scoped binding happens in ApiAuthFilter (from the
+     * authenticated user's `users.tenant_id`), so every authenticated
+     * request overwrites any stale process-level value. The env var is
+     * the CLI/fallback path; an explicit `0` is honoured (matches
+     * set(0)) rather than being eaten by a falsy `?:`.
      */
     public static function id(): int
     {
         if (self::$id === null) {
-            self::$id = (int) (getenv('SYNAPSE_TENANT_ID') ?: 1);
+            $env = getenv('SYNAPSE_TENANT_ID');
+            self::$id = ($env === false || $env === '') ? 1 : (int) $env;
         }
         return self::$id;
     }

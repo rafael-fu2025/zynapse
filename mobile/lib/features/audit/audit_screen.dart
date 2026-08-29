@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
@@ -141,8 +142,9 @@ class _AuditScreenState extends State<AuditScreen>
         _items = page.items;
         _nextCursor = page.meta?.nextCursor;
       });
-    } catch (_) {
+    } catch (e) {
       // Keep the current list on transient errors.
+      if (kDebugMode) debugPrint('AuditScreen.poll failed: $e');
     }
   }
 
@@ -160,8 +162,9 @@ class _AuditScreenState extends State<AuditScreen>
       final facets = await ApiService.I.auditFacets();
       if (!mounted) return;
       setState(() => _facets = facets);
-    } catch (_) {
+    } catch (e) {
       // Non-fatal: dropdowns fall back to free text.
+      if (kDebugMode) debugPrint('AuditScreen.loadFacets failed: $e');
     }
   }
 
@@ -214,8 +217,9 @@ class _AuditScreenState extends State<AuditScreen>
         _items = [..._items, ...page.items];
         _nextCursor = page.meta?.nextCursor;
       });
-    } catch (_) {
+    } catch (e) {
       // ignore
+      if (kDebugMode) debugPrint('AuditScreen.loadMore failed: $e');
     } finally {
       setState(() => _loadingMore = false);
     }
@@ -235,6 +239,7 @@ class _AuditScreenState extends State<AuditScreen>
         _verifying = false;
       });
     } catch (e) {
+      if (kDebugMode) debugPrint('AuditScreen.verifyChain failed: $e');
       if (!mounted) return;
       setState(() {
         _verifyFailed = true;

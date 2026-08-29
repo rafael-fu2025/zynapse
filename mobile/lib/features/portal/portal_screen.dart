@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:hugeicons/hugeicons.dart';
@@ -63,8 +64,9 @@ class _PortalScreenState extends State<PortalScreen>
         _profile = profile;
         _visits = visits;
       });
-    } catch (_) {
+    } catch (e) {
       // Keep the current profile / visits.
+      if (kDebugMode) debugPrint('PortalScreen.poll failed: $e');
     }
   }
 

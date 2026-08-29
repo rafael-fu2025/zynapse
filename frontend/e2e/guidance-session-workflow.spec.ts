@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { signInMocked } from './helpers/auth';
 
 const session = {
   id: 127, patient_school_id: '2026-0042', counsellor_user_id: 8,
@@ -8,14 +9,10 @@ const session = {
 };
 
 async function signIn(page: Page, permissions: string[]) {
-  await page.route('**/api/v1/auth/refresh', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ success: true, data: { access_token: 'test-token', expires_in: 900 }, errors: [], meta: null }) }));
-  await page.route('**/api/v1/auth/login', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ success: true, data: { access_token: 'test-token', expires_in: 900 }, errors: [], meta: null }) }));
-  await page.route('**/api/v1/auth/me', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ success: true, data: { id: 8, email: 'guidance@example.test', username: 'guidance-counsellor', is_active: true, force_reset: false, permissions }, errors: [], meta: null }) }));
-  await page.goto('/login');
-  await page.getByLabel(/email/i).fill('guidance@example.test');
-  await page.getByRole('textbox', { name: 'Password' }).fill('DevPassw0rd!');
-  await page.getByRole('button', { name: /sign in/i }).click();
-  await page.waitForURL('/');
+  await signInMocked(page, {
+    id: 8, email: 'guidance@example.test', username: 'guidance-counsellor',
+    is_active: true, force_reset: false, permissions,
+  }, { mockRefresh: true });
 }
 
 async function mockSessionApis(page: Page) {

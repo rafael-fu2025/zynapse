@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -244,7 +245,8 @@ class _ClinicSessionWorkspaceState extends State<ClinicSessionWorkspace> {
           setState(() =>
               _medicineOptions = page.items.where((m) => !m.archived).toList());
         }
-      } catch (_) {
+      } catch (e) {
+        if (kDebugMode) debugPrint('ClinicSessionWorkspace.searchMedicines failed: $e');
         if (mounted) setState(() => _medicineOptions = []);
       }
     });

@@ -4,6 +4,7 @@
  * on :8090 and the DevUserSeeder account).
  */
 import { expect, test } from '@playwright/test';
+import { signInLive } from './helpers/auth';
 
 const RUN = process.env['SYNAPSE_E2E'] === '1';
 
@@ -13,9 +14,7 @@ test('login → dashboard → clinic → audit (screenshots)', async ({ page }) 
   await page.goto('/login');
   await page.screenshot({ path: 'e2e/artifacts/01-login.png', fullPage: true });
 
-  await page.getByLabel(/email/i).fill('admin@synapse.dev');
-  await page.getByLabel(/password/i).fill('DevPassw0rd!');
-  await page.getByRole('button', { name: /sign in/i }).click();
+  await signInLive(page);
 
   // Dashboard after login — module grid with live counters.
   await page.waitForURL(/\/$/, { timeout: 15_000 });

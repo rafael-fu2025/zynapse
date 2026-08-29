@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:hugeicons/hugeicons.dart';
@@ -107,8 +108,9 @@ class _PatientsScreenState extends State<PatientsScreen> {
         _items = [..._items, ...page.items];
         _nextCursor = page.meta?.nextCursor;
       });
-    } catch (_) {
+    } catch (e) {
       // ignore
+      if (kDebugMode) debugPrint('PatientsScreen.loadMore failed: $e');
     } finally {
       setState(() => _loadingMore = false);
     }

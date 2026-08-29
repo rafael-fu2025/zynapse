@@ -43,6 +43,14 @@ final class ClinicalPatientUserId extends Migration
 
     public function up(): void
     {
+        // Forge never resets the connection's metadata cache, and this
+        // migration runs in the same process as UsersIdentityColumns,
+        // which added `student_number`. Without this reset the guard
+        // below reads a stale field list, silently no-ops, and every
+        // later query referencing patient_user_id breaks on a
+        // freshly-built database ("Unknown column 'patient_user_id'").
+        $this->db->resetDataCache();
+
         if ($this->db->fieldExists('student_number', 'users') === false) {
             return; // M1/M2 must have run first.
         }

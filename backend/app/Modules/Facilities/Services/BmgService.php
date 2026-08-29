@@ -8,6 +8,7 @@ use App\Exceptions\ApiException;
 use App\Modules\Shared\BaseService;
 use App\Modules\Shared\StateMachineException;
 use App\Pagination\KeysetPaginator;
+use App\Services\Analytics\BmgAnalytics;
 use App\Services\Audit\AuditOutboxService;
 use App\Services\CurrentTenant;
 use App\Services\Notify\NotificationOutboxService;
@@ -18,6 +19,12 @@ use Modules\Facilities\DTOs\BmgAlertDto;
 use Modules\Facilities\DTOs\BmgBatchDto;
 use Modules\Facilities\DTOs\BmgUnitDto;
 use Modules\Facilities\Policies\BmgPolicy;
+use Modules\Facilities\Services\Bmg\AlertService;
+use Modules\Facilities\Services\Bmg\AnalyticsReader;
+use Modules\Facilities\Services\Bmg\BatchIoService;
+use Modules\Facilities\Services\Bmg\BmgSupport;
+use Modules\Facilities\Services\Bmg\CategoryService;
+use Modules\Facilities\Services\Bmg\HistoryService;
 
 /**
  * BmgService — Facilities state machine.
@@ -30,6 +37,14 @@ use Modules\Facilities\Policies\BmgPolicy;
  */
 final class BmgService extends BaseService
 {
+    private readonly BmgAnalytics $analytics;
+    private readonly BmgSupport $support;
+    private readonly BatchIoService $batchIo;
+    private readonly AnalyticsReader $analyticsReader;
+    private readonly AlertService $alerts;
+    private readonly HistoryService $history;
+    private readonly CategoryService $categories;
+
     public function __construct(
         private readonly BmgPolicy $policy,
         private readonly AuditOutboxService $audit,
@@ -39,6 +54,18 @@ final class BmgService extends BaseService
         parent::__construct();
         $this->alertEngine ??= new BmgAlertEngine();
         $this->notify ??= new NotificationOutboxService();
+
+        // Stateless/pure collaborators — the analytics instance is shared
+        // with BmgSupport and AnalyticsReader. One BmgPolicy instance is
+        // shared across every cluster so the action-name contract and the
+        // ownership toggle stay identical everywhere.
+        $this->analytics       = new BmgAnalytics();
+        $this->support         = new BmgSupport($this->db, $this->analytics);
+        $this->batchIo         = new BatchIoService($this->db, $this->policy, $this->audit, $this->support);
+        $this->analyticsReader = new AnalyticsReader($this->db, $this->policy, $this->support, $this->analytics);
+        $this->alerts          = new AlertService($this->db, $this->policy, $this->audit);
+        $this->history         = new HistoryService($this->db, $this->policy);
+        $this->categories      = new CategoryService($this->db, $this->policy, $this->audit, $this->support);
     }
 
     /**
@@ -74,7 +101,7 @@ final class BmgService extends BaseService
         // (mirrors the `listActiveBatches` computation, so the drum card
         // can show an ETA and progress bar on Start / while In Use).
         $today = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d');
-        $a     = new \App\Services\Analytics\BmgAnalytics();
+        $a     = $this->analytics;
         foreach ($final['rows'] as &$r) {
             if ($r['active_batch_started_at'] === null) {
                 $r['active_batch_expected_completion_date'] = null;
@@ -84,7 +111,7 @@ final class BmgService extends BaseService
             $startDate = substr((string) $r['active_batch_started_at'], 0, 10);
             $expected  = $r['active_batch_expected_completion_date'] !== null
                 ? substr((string) $r['active_batch_expected_completion_date'], 0, 10)
-                : $a->expectedCompletionDate($startDate, \App\Services\Analytics\BmgAnalytics::DEFAULT_DURATION_DAYS);
+                : $a->expectedCompletionDate($startDate, BmgAnalytics::DEFAULT_DURATION_DAYS);
             $r['active_batch_progress_pct'] = $a->progressPercent($startDate, $expected, $today);
         }
         unset($r);
@@ -115,7 +142,7 @@ final class BmgService extends BaseService
         // is supplied (one row per waste category with its weight), the
         // component weights must add up to the declared total — the
         // ratios drive the mix-weighted expected duration.
-        $composition = $this->normalizeComposition($composition, $totalInputKg);
+        $composition = $this->support->normalizeComposition($composition, $totalInputKg);
 
         return $this->txn(function () use ($unitId, $inputItems, $totalInputKg, $composition, $userId): BmgBatchDto {
             // Lock the unit row.
@@ -195,7 +222,7 @@ final class BmgService extends BaseService
             // reference_duration_days (the longest-running component
             // governs the cure). Drives the "expected completion" +
             // progress indicator surfaced on Start.
-            $expectedDays = $this->expectedDurationDays($composition, $categoryId);
+            $expectedDays = $this->support->expectedDurationDays($composition, $categoryId);
             $expectedAt  = null;
             if ($expectedDays !== null) {
                 $expectedAt = (new DateTimeImmutable($now, new DateTimeZone('UTC')))
@@ -233,6 +260,7 @@ final class BmgService extends BaseService
 
             // Update the unit.
             $this->db->table('facilities_bmg_units')
+                ->where('facilities_bmg_units.tenant_id', CurrentTenant::id())
                 ->where('id', $unitId)
                 ->update([
                     'status'     => BMG_STATE_PROCESSING,
@@ -247,108 +275,11 @@ final class BmgService extends BaseService
                 ['resource_code' => $ref, 'next_status' => BMG_STATE_PROCESSING],
             );
 
-            $batch = $this->db->table('facilities_bmg_batches')->where('id', $batchId)->get()->getRowArray();
+            $batch = $this->db->table('facilities_bmg_batches')
+                ->where('facilities_bmg_batches.tenant_id', CurrentTenant::id())
+                ->where('id', $batchId)->get()->getRowArray();
             return BmgBatchDto::fromRow($batch);
         });
-    }
-
-    /**
-     * Weighted expected duration (days) for a batch's composition.
-     *
-     * Single-category: that category's `reference_duration_days`. Mixed:
-     * weight-weighted average across the composition rows. Falls back to
-     * the category default. Returns null when no duration is on record.
-     *
-     * @param array<int, array{category_id:int, weight_kg:float}> $composition
-     */
-    private function expectedDurationDays(array $composition, ?int $categoryId): ?int
-    {
-        if ($composition === []) {
-            if ($categoryId === null) {
-                return null;
-            }
-            $row = $this->db->table('facilities_waste_categories')
-                ->select('reference_duration_days')
-                ->where('tenant_id', CurrentTenant::id())
-                ->where('id', $categoryId)
-                ->get()->getRowArray();
-
-            return $row !== null && $row['reference_duration_days'] !== null
-                ? (int) $row['reference_duration_days']
-                : null;
-        }
-
-        $totalW = 0.0;
-        $weighted = 0.0;
-        foreach ($composition as $c) {
-            $w = (float) $c['weight_kg'];
-            $totalW += $w;
-            $cat = $this->db->table('facilities_waste_categories')
-                ->select('reference_duration_days')
-                ->where('tenant_id', CurrentTenant::id())
-                ->where('id', (int) $c['category_id'])
-                ->get()->getRowArray();
-            $days = $cat !== null && $cat['reference_duration_days'] !== null
-                ? (int) $cat['reference_duration_days']
-                : 30; // sensible fallback when the category has no duration
-            $weighted += $days * $w;
-        }
-
-        return $totalW > 0 ? (int) round($weighted / $totalW) : null;
-    }
-
-    /**
-     * Recompute the stored `expected_completion_date` for every ACTIVE
-     * batch (processing / awaiting_output / curing) that references the
-     * given waste category — either as its single `category_id` or as a
-     * component of its structured composition. Called when the category's
-     * assigned `reference_duration_days` changes, so running drums reflect
-     * the newly assigned expected duration immediately (web + mobile read
-     * the stored date for the drum card / "N% toward expected completion").
-     */
-    private function refreshActiveBatchExpectedDates(int $categoryId): void
-    {
-        $active = [BMG_STATE_PROCESSING, BMG_STATE_AWAITING_OUTPUT, BMG_STATE_CURING];
-
-        $direct = $this->db->table('facilities_bmg_batches')
-            ->select('id, category_id, started_at')
-            ->where('category_id', $categoryId)
-            ->where('archived_at', null)
-            ->where('tenant_id', CurrentTenant::id())
-            ->whereIn('status', $active)
-            ->get()->getResultArray();
-
-        $viaComposition = $this->db->table('facilities_bmg_batches AS b')
-            ->select('b.id, b.category_id, b.started_at')
-            ->join('facilities_bmg_composition AS bc', 'bc.batch_id = b.id')
-            ->where('bc.category_id', $categoryId)
-            ->where('b.archived_at', null)
-            ->where('b.tenant_id', CurrentTenant::id())
-            ->whereIn('b.status', $active)
-            ->get()->getResultArray();
-
-        $byId = [];
-        foreach (array_merge($direct, $viaComposition) as $r) {
-            $byId[(int) $r['id']] = $r;
-        }
-        if ($byId === []) {
-            return;
-        }
-
-        $utc = new DateTimeZone('UTC');
-        foreach ($byId as $id => $row) {
-            $comps = $this->batchCompositions([$id])[$id] ?? [];
-            $days  = $this->expectedDurationDays($comps, $row['category_id'] !== null ? (int) $row['category_id'] : null);
-            $expectedAt = null;
-            if ($days !== null) {
-                $expectedAt = (new DateTimeImmutable((string) $row['started_at'], $utc))
-                    ->modify("+{$days} days")
-                    ->format('Y-m-d H:i:s');
-            }
-            $this->db->table('facilities_bmg_batches')
-                ->where('id', $id)
-                ->update(['expected_completion_date' => $expectedAt, 'updated_at' => $this->utcNow()]);
-        }
     }
 
     /**
@@ -399,7 +330,7 @@ final class BmgService extends BaseService
                 throw StateMachineException::invalidTransition($batch['status'], 'update', 'bmg');
             }
 
-            $now = $this->utcNow();
+            $now = $this->support->utcNow();
 
             if ($type === 'output') {
                 $kg = (float) ($input['output_weight_kg'] ?? 0);
@@ -410,6 +341,7 @@ final class BmgService extends BaseService
                 }
                 // Cumulative output = ledger sum + this entry. Never exceeds input.
                 $sum = (float) $this->db->table('facilities_bmg_batch_updates')
+                    ->where('facilities_bmg_batch_updates.tenant_id', CurrentTenant::id())
                     ->selectSum('output_weight_kg', 'total')
                     ->where('batch_id', $batchId)
                     ->where('update_type', 'output')
@@ -431,6 +363,7 @@ final class BmgService extends BaseService
 
                 // Denormalized aggregate + phase advance (Processing → AwaitingOutput).
                 $this->db->table('facilities_bmg_batches')
+                    ->where('facilities_bmg_batches.tenant_id', CurrentTenant::id())
                     ->where('id', $batchId)
                     ->update([
                         'output_weight_kg'   => $cumulative,
@@ -449,6 +382,7 @@ final class BmgService extends BaseService
             if ($type === 'curing') {
                 // Only ONE active curing transition per batch.
                 $existing = $this->db->table('facilities_bmg_batch_updates')
+                    ->where('facilities_bmg_batch_updates.tenant_id', CurrentTenant::id())
                     ->where('batch_id', $batchId)
                     ->where('update_type', 'curing')
                     ->get()->getRowArray();
@@ -470,9 +404,11 @@ final class BmgService extends BaseService
                 $entryId = (int) $this->db->insertID();
 
                 $this->db->table('facilities_bmg_batches')
+                    ->where('facilities_bmg_batches.tenant_id', CurrentTenant::id())
                     ->where('id', $batchId)
                     ->update(['status' => BMG_STATE_CURING, 'updated_at' => $now]);
                 $this->db->table('facilities_bmg_units')
+                    ->where('facilities_bmg_units.tenant_id', CurrentTenant::id())
                     ->where('id', (int) $batch['unit_id'])
                     ->update(['status' => BMG_STATE_CURING, 'updated_at' => $now]);
 
@@ -554,13 +490,42 @@ final class BmgService extends BaseService
     }
 
     /**
+     * Shared validation for the two graded-release transitions —
+     * `finishBatch` (any active state, records a final output entry,
+     * stamps finished_at) and `releaseBatch` (awaiting_output/curing
+     * only, no output entry). They are deliberately SEPARATE operations
+     * with different state guards, side effects, and audit events; this
+     * helper deduplicates only the QA-fields validation they share.
+     *
+     * @return array{grade:string, maturity:string}
+     */
+    private function assertGradedReleaseInput(array $input): array
+    {
+        $grade    = (string) ($input['quality_grade'] ?? '');
+        $maturity = (string) ($input['maturity_level'] ?? '');
+        if ($grade === '' || ! in_array($grade, BMG_QUALITY_GRADES, true)) {
+            throw ApiException::validationFailure([
+                ['code' => 'validation.field', 'message' => 'quality_grade is required (excellent, good, fair).', 'field' => 'quality_grade'],
+            ]);
+        }
+        if ($maturity === '' || ! in_array($maturity, BMG_MATURITY_LEVELS, true)) {
+            throw ApiException::validationFailure([
+                ['code' => 'validation.field', 'message' => 'maturity_level is required (mature, maturing, immature).', 'field' => 'maturity_level'],
+            ]);
+        }
+        return ['grade' => $grade, 'maturity' => $maturity];
+    }
+
+    /**
      * Fetches a single ledger row by id (typed).
      *
      * @return array<string, mixed>
      */
     private function batchUpdateRow(int $id): array
     {
-        $row = $this->db->table('facilities_bmg_batch_updates')->where('id', $id)->get()->getRowArray();
+        $row = $this->db->table('facilities_bmg_batch_updates')
+            ->where('facilities_bmg_batch_updates.tenant_id', CurrentTenant::id())
+            ->where('id', $id)->get()->getRowArray();
         if ($row === null) {
             throw new ApiException('resource.not_found', 404, [
                 ['code' => 'resource.not_found', 'message' => "Update entry #{$id} not found."],
@@ -640,6 +605,7 @@ final class BmgService extends BaseService
 
             try {
                 $this->db->table('facilities_bmg_batches')
+                    ->where('facilities_bmg_batches.tenant_id', CurrentTenant::id())
                     ->where('id', $batchId)
                     ->update([
                         'status'             => BMG_STATE_AWAITING_OUTPUT,
@@ -664,7 +630,9 @@ final class BmgService extends BaseService
                 ['previous_status' => BMG_STATE_PROCESSING, 'next_status' => BMG_STATE_AWAITING_OUTPUT, 'reason_code' => 'record_output'],
             );
 
-            $fresh = $this->db->table('facilities_bmg_batches')->where('id', $batchId)->get()->getRowArray();
+            $fresh = $this->db->table('facilities_bmg_batches')
+                ->where('facilities_bmg_batches.tenant_id', CurrentTenant::id())
+                ->where('id', $batchId)->get()->getRowArray();
             return BmgBatchDto::fromRow($fresh);
         });
     }
@@ -703,10 +671,11 @@ final class BmgService extends BaseService
                 throw StateMachineException::invalidTransition($batch['status'], BMG_STATE_CURING, 'bmg');
             }
 
-            $now = $this->utcNow();
+            $now = $this->support->utcNow();
             $aip = $accumulatedKg !== null ? round($accumulatedKg, 2) : 0.00;
 
             $this->db->table('facilities_bmg_batches')
+                ->where('facilities_bmg_batches.tenant_id', CurrentTenant::id())
                 ->where('id', $batchId)
                 ->update([
                     'status'                    => BMG_STATE_CURING,
@@ -715,6 +684,7 @@ final class BmgService extends BaseService
                 ]);
 
             $this->db->table('facilities_bmg_units')
+                ->where('facilities_bmg_units.tenant_id', CurrentTenant::id())
                 ->where('id', (int) $batch['unit_id'])
                 ->update(['status' => BMG_STATE_CURING, 'updated_at' => $now]);
 
@@ -730,7 +700,9 @@ final class BmgService extends BaseService
                 ],
             );
 
-            $fresh = $this->db->table('facilities_bmg_batches')->where('id', $batchId)->get()->getRowArray();
+            $fresh = $this->db->table('facilities_bmg_batches')
+                ->where('facilities_bmg_batches.tenant_id', CurrentTenant::id())
+                ->where('id', $batchId)->get()->getRowArray();
             return BmgBatchDto::fromRow($fresh);
         });
     }
@@ -778,18 +750,7 @@ final class BmgService extends BaseService
             }
 
             // A finish is a GRADED release — both QA fields are required.
-            $grade    = (string) ($input['quality_grade'] ?? '');
-            $maturity = (string) ($input['maturity_level'] ?? '');
-            if ($grade === '' || ! in_array($grade, BMG_QUALITY_GRADES, true)) {
-                throw ApiException::validationFailure([
-                    ['code' => 'validation.field', 'message' => 'quality_grade is required (excellent, good, fair).', 'field' => 'quality_grade'],
-                ]);
-            }
-            if ($maturity === '' || ! in_array($maturity, BMG_MATURITY_LEVELS, true)) {
-                throw ApiException::validationFailure([
-                    ['code' => 'validation.field', 'message' => 'maturity_level is required (mature, maturing, immature).', 'field' => 'maturity_level'],
-                ]);
-            }
+            ['grade' => $grade, 'maturity' => $maturity] = $this->assertGradedReleaseInput($input);
 
             $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
 
@@ -807,6 +768,7 @@ final class BmgService extends BaseService
                     ]);
                 }
                 $sum = (float) ($this->db->table('facilities_bmg_batch_updates')
+                    ->where('facilities_bmg_batch_updates.tenant_id', CurrentTenant::id())
                     ->selectSum('output_weight_kg', 'total')
                     ->where('batch_id', $batchId)
                     ->where('update_type', 'output')
@@ -831,6 +793,7 @@ final class BmgService extends BaseService
             $notes = (string) ($input['notes'] ?? '');
 
             $this->db->table('facilities_bmg_batches')
+                ->where('facilities_bmg_batches.tenant_id', CurrentTenant::id())
                 ->where('id', $batchId)
                 ->update([
                     'status'              => BMG_STATE_RELEASED,
@@ -846,6 +809,7 @@ final class BmgService extends BaseService
                 ]);
 
             $this->db->table('facilities_bmg_units')
+                ->where('facilities_bmg_units.tenant_id', CurrentTenant::id())
                 ->where('id', (int) $batch['unit_id'])
                 ->update(['status' => BMG_STATE_IDLE, 'updated_at' => $now]);
 
@@ -857,7 +821,9 @@ final class BmgService extends BaseService
                 ['previous_status' => (string) $batch['status'], 'next_status' => BMG_STATE_RELEASED, 'quality_grade' => $grade, 'maturity_level' => $maturity],
             );
 
-            $fresh = $this->db->table('facilities_bmg_batches')->where('id', $batchId)->get()->getRowArray();
+            $fresh = $this->db->table('facilities_bmg_batches')
+                ->where('facilities_bmg_batches.tenant_id', CurrentTenant::id())
+                ->where('id', $batchId)->get()->getRowArray();
             return BmgBatchDto::fromRow($fresh);
         });
     }
@@ -889,6 +855,7 @@ final class BmgService extends BaseService
             $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
 
             $this->db->table('facilities_bmg_batches')
+                ->where('facilities_bmg_batches.tenant_id', CurrentTenant::id())
                 ->where('id', $batchId)
                 ->update([
                     'status'       => BMG_STATE_CANCELLED,
@@ -900,6 +867,7 @@ final class BmgService extends BaseService
                 ]);
 
             $this->db->table('facilities_bmg_units')
+                ->where('facilities_bmg_units.tenant_id', CurrentTenant::id())
                 ->where('id', (int) $batch['unit_id'])
                 ->update(['status' => BMG_STATE_IDLE, 'updated_at' => $now]);
 
@@ -911,7 +879,9 @@ final class BmgService extends BaseService
                 ['previous_status' => (string) $batch['status'], 'next_status' => BMG_STATE_CANCELLED, 'reason_code' => $reasonCode],
             );
 
-            $fresh = $this->db->table('facilities_bmg_batches')->where('id', $batchId)->get()->getRowArray();
+            $fresh = $this->db->table('facilities_bmg_batches')
+                ->where('facilities_bmg_batches.tenant_id', CurrentTenant::id())
+                ->where('id', $batchId)->get()->getRowArray();
             return BmgBatchDto::fromRow($fresh);
         });
     }
@@ -932,7 +902,7 @@ final class BmgService extends BaseService
         $this->policy->check('manage_units');
         $userId = \App\Auth\CurrentUser::assert();
 
-        $code = $this->assertSlug((string) $input['code'], 'code');
+        $code = $this->support->assertSlug((string) $input['code'], 'code');
 
         $defaultCategoryId = $this->resolveCategoryId($input['default_category_id'] ?? null);
 
@@ -943,7 +913,7 @@ final class BmgService extends BaseService
                     ['code' => 'resource.conflict', 'message' => "A unit with code '{$code}' already exists.", 'field' => 'code'],
                 ]);
             }
-            $now = $this->utcNow();
+            $now = $this->support->utcNow();
             $this->db->table('facilities_bmg_units')->insert([
                 'code'                => $code,
                 'tenant_id'           => CurrentTenant::id(),
@@ -971,6 +941,7 @@ final class BmgService extends BaseService
             );
 
             $row = $this->db->table('facilities_bmg_units AS u')
+                ->where('u.tenant_id', CurrentTenant::id())
                 ->select('u.*, c.name AS default_category_name')
                 ->join('facilities_waste_categories AS c', 'c.id = u.default_category_id', 'left')
                 ->where('u.id', $id)
@@ -999,7 +970,7 @@ final class BmgService extends BaseService
                 ]);
             }
 
-            $update = ['updated_at' => $this->utcNow()];
+            $update = ['updated_at' => $this->support->utcNow()];
             if (array_key_exists('display_name', $input) && $input['display_name'] !== null) {
                 $dn = trim((string) $input['display_name']);
                 if ($dn === '') {
@@ -1025,7 +996,9 @@ final class BmgService extends BaseService
                     ? (string) $input['notes'] : null;
             }
 
-            $this->db->table('facilities_bmg_units')->where('id', $unitId)->update($update);
+            $this->db->table('facilities_bmg_units')
+                ->where('facilities_bmg_units.tenant_id', CurrentTenant::id())
+                ->where('id', $unitId)->update($update);
 
             $this->audit->enqueue(
                 'bmg.unit_updated',
@@ -1036,6 +1009,7 @@ final class BmgService extends BaseService
             );
 
             $fresh = $this->db->table('facilities_bmg_units AS u')
+                ->where('u.tenant_id', CurrentTenant::id())
                 ->select('u.*, c.name AS default_category_name')
                 ->join('facilities_waste_categories AS c', 'c.id = u.default_category_id', 'left')
                 ->where('u.id', $unitId)
@@ -1102,11 +1076,13 @@ final class BmgService extends BaseService
                 ]);
             }
 
-            $now = $this->utcNow();
-            $this->db->table('facilities_bmg_units')->where('id', $unitId)->update([
-                'archived_at' => $now,
-                'updated_at'  => $now,
-            ]);
+            $now = $this->support->utcNow();
+            $this->db->table('facilities_bmg_units')
+                ->where('facilities_bmg_units.tenant_id', CurrentTenant::id())
+                ->where('id', $unitId)->update([
+                    'archived_at' => $now,
+                    'updated_at'  => $now,
+                ]);
 
             $this->audit->enqueue(
                 'bmg.unit_archived',
@@ -1116,7 +1092,9 @@ final class BmgService extends BaseService
                 ['resource_code' => (string) $unit['code']],
             );
 
-            $fresh = $this->db->table('facilities_bmg_units')->where('id', $unitId)->get()->getRowArray();
+            $fresh = $this->db->table('facilities_bmg_units')
+                ->where('facilities_bmg_units.tenant_id', CurrentTenant::id())
+                ->where('id', $unitId)->get()->getRowArray();
             return BmgUnitDto::fromRow($fresh);
         });
     }
@@ -1142,6 +1120,7 @@ final class BmgService extends BaseService
             if ($unit['archived_at'] === null) {
                 // Idempotent: already active — just return the row.
                 $fresh = $this->db->table('facilities_bmg_units AS u')
+                    ->where('u.tenant_id', CurrentTenant::id())
                     ->select('u.*, c.name AS default_category_name')
                     ->join('facilities_waste_categories AS c', 'c.id = u.default_category_id', 'left')
                     ->where('u.id', $unitId)
@@ -1149,11 +1128,13 @@ final class BmgService extends BaseService
                 return BmgUnitDto::fromRow($fresh);
             }
 
-            $now = $this->utcNow();
-            $this->db->table('facilities_bmg_units')->where('id', $unitId)->update([
-                'archived_at' => null,
-                'updated_at'  => $now,
-            ]);
+            $now = $this->support->utcNow();
+            $this->db->table('facilities_bmg_units')
+                ->where('facilities_bmg_units.tenant_id', CurrentTenant::id())
+                ->where('id', $unitId)->update([
+                    'archived_at' => null,
+                    'updated_at'  => $now,
+                ]);
 
             $this->audit->enqueue(
                 'bmg.unit_restored',
@@ -1164,6 +1145,7 @@ final class BmgService extends BaseService
             );
 
             $fresh = $this->db->table('facilities_bmg_units AS u')
+                ->where('u.tenant_id', CurrentTenant::id())
                 ->select('u.*, c.name AS default_category_name')
                 ->join('facilities_waste_categories AS c', 'c.id = u.default_category_id', 'left')
                 ->where('u.id', $unitId)
@@ -1185,92 +1167,7 @@ final class BmgService extends BaseService
      */
     public function listActiveBatches(): array
     {
-        $this->policy->check('list');
-
-        $rows = $this->db->table('facilities_bmg_batches AS b')
-            ->select(
-                'b.id            AS batch_id,'
-                . ' b.reference_code AS batch_code,'
-                . ' b.status       AS batch_status,'
-                . ' b.total_input_weight_kg,'
-                . ' b.output_weight_kg,'
-                . ' b.started_at,'
-                . ' b.category_id,'
-                . ' u.id            AS unit_id,'
-                . ' u.code          AS unit_code,'
-                . ' u.display_name  AS unit_name,'
-                . ' u.location_code AS unit_location,'
-                . ' c.name          AS category_name,'
-                . ' c.reference_duration_days'
-            )
-            ->join('facilities_bmg_units AS u', 'u.id = b.unit_id', 'left')
-            ->join('facilities_waste_categories AS c', 'c.id = b.category_id', 'left')
-            ->where('b.archived_at', null)
-            ->where('b.tenant_id', CurrentTenant::id())
-            ->where('u.tenant_id', CurrentTenant::id())
-            ->where('c.tenant_id', CurrentTenant::id())
-            ->whereIn('b.status', [BMG_STATE_PROCESSING, BMG_STATE_AWAITING_OUTPUT])
-            ->orderBy('b.started_at', 'ASC')
-            ->get()->getResultArray();
-
-        $today = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d');
-        $a     = new \App\Services\Analytics\BmgAnalytics();
-
-        // Panel revision: the ETA is weighted by each drum's specific
-        // waste mix — per-category expected days (historical average,
-        // falling back to the manual reference) × weight ratio.
-        $batchIds     = array_map(static fn (array $r): int => (int) $r['batch_id'], $rows);
-        $compositions = $this->batchCompositions($batchIds);
-        $catIds       = [];
-        foreach ($compositions as $comps) {
-            foreach ($comps as $c) {
-                $catIds[] = $c['category_id'];
-            }
-        }
-        foreach ($rows as $r) {
-            if ($r['category_id'] !== null) {
-                $catIds[] = (int) $r['category_id'];
-            }
-        }
-        $expectedByCat = $this->expectedDaysByCategory($catIds);
-
-        return array_map(function (array $r) use ($a, $today, $compositions, $expectedByCat): array {
-            $startDate = substr((string) $r['started_at'], 0, 10);
-            $refDays   = $r['reference_duration_days'] !== null ? (int) $r['reference_duration_days'] : 0;
-
-            $comps    = $compositions[(int) $r['batch_id']] ?? [];
-            $expDays  = $this->weightedExpectedDays($comps, $expectedByCat);
-            if ($expDays === null && $r['category_id'] !== null) {
-                $expDays = $expectedByCat[(int) $r['category_id']]['expected_days'] ?? null;
-            }
-            $effDays = $expDays ?? ($refDays > 0 ? $refDays : 0);
-
-            // expectedCompletionDate() falls back to the panel-approved baseline when neither
-            // history nor a reference exists, so the progress bar always moves.
-            $expected = $a->expectedCompletionDate($startDate, $effDays);
-
-            $daysActive = max(0, (int) ((new DateTimeImmutable($today))->diff(new DateTimeImmutable($startDate)))->days);
-
-            return [
-                'batch_id'                 => (int)    $r['batch_id'],
-                'batch_code'               => (string) $r['batch_code'],
-                'batch_status'             => (string) $r['batch_status'],
-                'unit_id'                  => (int)    $r['unit_id'],
-                'unit_code'                => (string) $r['unit_code'],
-                'unit_name'                => (string) $r['unit_name'],
-                'unit_location'            => $r['unit_location'] !== null ? (string) $r['unit_location'] : null,
-                'category_name'            => $r['category_name'] !== null ? (string) $r['category_name'] : null,
-                'input_kg'                 => round((float) $r['total_input_weight_kg'], 2),
-                'output_kg'                => $r['output_weight_kg'] !== null ? round((float) $r['output_weight_kg'], 2) : null,
-                'started_at'               => (string) $r['started_at'],
-                'days_active'              => $daysActive,
-                'reference_duration_days'  => $refDays > 0 ? $refDays : null,
-                'expected_days'            => $expDays ?? ($refDays > 0 ? $refDays : null),
-                'expected_completion_date' => $expected,
-                'days_until_expected'      => $a->daysUntilExpected($expected, $today),
-                'progress_pct'             => $a->progressPercent($startDate, $expected, $today),
-            ];
-        }, $rows);
+        return $this->analyticsReader->listActiveBatches();
     }
 
     // ------------------------------------------------- process logs
@@ -1388,6 +1285,7 @@ final class BmgService extends BaseService
             // uses the freshly-inserted row as `lastLog`.
             // -----------------------------------------------------------------
             $previousLog = $this->db->table('facilities_bmg_process_logs')
+                ->where('facilities_bmg_process_logs.tenant_id', CurrentTenant::id())
                 ->select('log_date')
                 ->where('batch_id', $batchId)
                 ->where('id !=', $id)
@@ -1397,7 +1295,9 @@ final class BmgService extends BaseService
                 ->get()
                 ->getRowArray();
 
-            $row = $this->db->table('facilities_bmg_process_logs')->where('id', $id)->get()->getRowArray();
+            $row = $this->db->table('facilities_bmg_process_logs')
+                ->where('facilities_bmg_process_logs.tenant_id', CurrentTenant::id())
+                ->where('id', $id)->get()->getRowArray();
 
             $daysSince = $this->alertEngine->daysSinceLastLog($previousLog ?: null);
             $alerts = $this->alertEngine->evaluate(
@@ -1519,7 +1419,7 @@ final class BmgService extends BaseService
                 ]);
             }
 
-            $now = $this->utcNow();
+            $now = $this->support->utcNow();
             $this->db->table('facilities_bmg_losses')->insert([
                 'batch_id'            => $batchId,
                 'tenant_id'           => CurrentTenant::id(),
@@ -1622,38 +1522,7 @@ final class BmgService extends BaseService
      */
     public function listWasteCategories(bool $activeOnly = false): array
     {
-        $this->policy->check('list');
-        $builder = $this->db->table('facilities_waste_categories')
-            ->select('id, code, name, description, expected_yield_pct, reference_duration_days, is_active')
-            ->where('tenant_id', CurrentTenant::id())
-            ->orderBy('name', 'ASC');
-        if ($activeOnly) {
-            $builder->where('is_active', 1);
-        }
-        $rows  = $builder->get()->getResultArray();
-        // Expected days = the ASSIGNED reference duration (what the operator
-        // sets per category — it drives batch ETAs). Historical trial stats
-        // are still surfaced as `historical_avg_days` / `sample_count` for
-        // context, but never override the assigned value.
-        $stats = $this->categoryDurationStats(array_map(static fn (array $r): int => (int) $r['id'], $rows));
-
-        return array_map(static function (array $r) use ($stats): array {
-            $id   = (int) $r['id'];
-            $hist = $stats[$id] ?? null;
-            $ref  = $r['reference_duration_days'] !== null ? (int) $r['reference_duration_days'] : null;
-            return [
-                'id'                      => $id,
-                'code'                    => (string) $r['code'],
-                'name'                    => (string) $r['name'],
-                'description'             => $r['description'] !== null ? (string) $r['description'] : null,
-                'expected_yield_pct'      => $r['expected_yield_pct'] !== null ? (float) $r['expected_yield_pct'] : null,
-                'reference_duration_days' => $ref,
-                'historical_avg_days'     => $hist !== null ? round($hist['avg_days'], 1) : null,
-                'sample_count'            => $hist !== null ? $hist['samples'] : 0,
-                'expected_days'           => $ref,
-                'is_active'               => (bool) $r['is_active'],
-            ];
-        }, $rows);
+        return $this->categories->listWasteCategories($activeOnly);
     }
 
     /**
@@ -1662,77 +1531,7 @@ final class BmgService extends BaseService
      */
     public function createWasteCategory(array $input): array
     {
-        $this->policy->check('categories_manage');
-        $userId = \App\Auth\CurrentUser::assert();
-
-        // Waste category codes follow the same slug contract as drum
-        // codes (panel revision): lowercase, hyphen-separated.
-        $input['code'] = $this->assertSlug((string) $input['code'], 'code');
-
-        return $this->txn(function () use ($input, $userId): array {
-            $dup = $this->db->table('facilities_waste_categories')->where('code', (string) $input['code'])->where('tenant_id', CurrentTenant::id())->get()->getRowArray();
-            if ($dup !== null) {
-                throw new ApiException('resource.conflict', 409, [
-                    ['code' => 'resource.conflict', 'message' => 'A waste category with this code already exists.', 'field' => 'code'],
-                ]);
-            }
-            $now = $this->utcNow();
-            $this->db->table('facilities_waste_categories')->insert([
-                'code'                    => (string) $input['code'],
-                'tenant_id'               => CurrentTenant::id(),
-                'name'                    => (string) $input['name'],
-                'description'             => isset($input['description']) && $input['description'] !== '' ? (string) $input['description'] : null,
-                'expected_yield_pct'      => isset($input['expected_yield_pct']) && $input['expected_yield_pct'] !== '' ? (float) $input['expected_yield_pct'] : null,
-                'reference_duration_days' => isset($input['reference_duration_days']) && $input['reference_duration_days'] !== '' ? (int) $input['reference_duration_days'] : null,
-                'is_active'               => 1,
-                'created_at'              => $now,
-                'updated_at'              => $now,
-            ]);
-            $id = (int) $this->db->insertID();
-            $this->audit->enqueue('bmg.waste_category_created', 'facilities_waste_categories', $id, $userId, [
-                'resource_code' => (string) $input['code'],
-            ]);
-            return ['id' => $id, 'code' => (string) $input['code'], 'name' => (string) $input['name'], 'is_active' => true];
-        });
-    }
-
-    /**
-     * Full decorated DTO for a single waste category — the SAME shape
-     * `listWasteCategories` returns (including the derived historical
-     * trial stats `historical_avg_days` / `sample_count` / `expected_days`).
-     *
-     * Every mutating endpoint (update/archive/unarchive) returns this so
-     * the frontend `wasteCategorySchema` parse succeeds. Previously these
-     * returned a PARTIAL row, which made the edit/archive form surface a
-     * spurious `Required` ZodError (toast "Required", form never closed)
-     * even though the write itself had succeeded.
-     *
-     * @return array<string, mixed>
-     */
-    private function wasteCategoryDto(int $categoryId): array
-    {
-        $row = $this->db->table('facilities_waste_categories')
-            ->where('id', $categoryId)
-            ->where('tenant_id', CurrentTenant::id())
-            ->get()
-            ->getRowArray();
-
-        $stats = $this->categoryDurationStats([$categoryId]);
-        $hist  = $stats[$categoryId] ?? null;
-        $ref   = $row !== null && $row['reference_duration_days'] !== null ? (int) $row['reference_duration_days'] : null;
-
-        return [
-            'id'                      => (int) $row['id'],
-            'code'                    => (string) $row['code'],
-            'name'                    => (string) $row['name'],
-            'description'             => $row['description'] !== null ? (string) $row['description'] : null,
-            'expected_yield_pct'      => $row['expected_yield_pct'] !== null ? (float) $row['expected_yield_pct'] : null,
-            'reference_duration_days' => $ref,
-            'historical_avg_days'     => $hist !== null ? round($hist['avg_days'], 1) : null,
-            'sample_count'            => $hist !== null ? $hist['samples'] : 0,
-            'expected_days'           => $ref,
-            'is_active'               => (bool) $row['is_active'],
-        ];
+        return $this->categories->createWasteCategory($input);
     }
 
     /**
@@ -1746,190 +1545,34 @@ final class BmgService extends BaseService
      */
     public function updateWasteCategory(int $categoryId, array $input): array
     {
-        $this->policy->check('categories_manage');
-        $userId = \App\Auth\CurrentUser::assert();
-
-        return $this->txn(function () use ($categoryId, $input, $userId): array {
-            $cat = $this->selectForUpdate('facilities_waste_categories', ['id' => $categoryId, 'tenant_id' => CurrentTenant::id()]);
-            if ($cat === null) {
-                throw new ApiException('resource.not_found', 404, [
-                    ['code' => 'resource.not_found', 'message' => "Waste category #{$categoryId} not found."],
-                ]);
-            }
-
-            $update = ['updated_at' => $this->utcNow()];
-            if (array_key_exists('name', $input) && $input['name'] !== null) {
-                $n = trim((string) $input['name']);
-                if ($n === '') {
-                    throw new ApiException('validation.invalid', 422, [
-                        ['code' => 'validation.invalid', 'message' => 'name cannot be empty.', 'field' => 'name'],
-                    ]);
-                }
-                $update['name'] = $n;
-            }
-            if (array_key_exists('description', $input)) {
-                $update['description'] = $input['description'] !== null && $input['description'] !== ''
-                    ? (string) $input['description'] : null;
-            }
-            if (array_key_exists('expected_yield_pct', $input)) {
-                $update['expected_yield_pct'] = $input['expected_yield_pct'] !== null && $input['expected_yield_pct'] !== ''
-                    ? (float) $input['expected_yield_pct'] : null;
-            }
-            if (array_key_exists('reference_duration_days', $input)) {
-                $update['reference_duration_days'] = $input['reference_duration_days'] !== null && $input['reference_duration_days'] !== ''
-                    ? (int) $input['reference_duration_days'] : null;
-            }
-            if (array_key_exists('is_active', $input) && $input['is_active'] !== null) {
-                $update['is_active'] = $input['is_active'] ? 1 : 0;
-            }
-
-            $this->db->table('facilities_waste_categories')->where('id', $categoryId)->update($update);
-
-            // A change to the assigned expected days must propagate to the
-            // stored expected completion of any drum currently running this
-            // category, so the ETA reflects the newly assigned duration.
-            if (array_key_exists('reference_duration_days', $input)) {
-                $this->refreshActiveBatchExpectedDates($categoryId);
-            }
-
-            $this->audit->enqueue('bmg.waste_category_updated', 'facilities_waste_categories', $categoryId, $userId, [
-                'resource_code' => (string) $cat['code'],
-            ]);
-
-            return $this->wasteCategoryDto($categoryId);
-        });
+        return $this->categories->updateWasteCategory($categoryId, $input);
     }
 
     /**
-     * Soft-archive a waste category by setting `is_active = 0`. The
-     * FK `default_category_id` on `facilities_bmg_units` is `SET NULL`
-     * on parent change — but the operator may have set a drum's default
-     * to this category, so we refuse the archive if any active unit
-     * still references it. The operator must clear the unit's
-     * `default_category_id` first.
+     * Soft-archive a waste category by setting `is_active = 0` (refuses
+     * while any unit still uses it as its default).
      */
     public function archiveWasteCategory(int $categoryId): array
     {
-        $this->policy->check('categories_manage');
-        $userId = \App\Auth\CurrentUser::assert();
-
-        return $this->txn(function () use ($categoryId, $userId): array {
-            $cat = $this->selectForUpdate('facilities_waste_categories', ['id' => $categoryId, 'tenant_id' => CurrentTenant::id()]);
-            if ($cat === null) {
-                throw new ApiException('resource.not_found', 404, [
-                    ['code' => 'resource.not_found', 'message' => "Waste category #{$categoryId} not found."],
-                ]);
-            }
-            if ((int) $cat['is_active'] === 0) {
-                throw new ApiException('resource.conflict', 409, [
-                    ['code' => 'resource.conflict', 'message' => 'Category is already archived.', 'field' => 'is_active'],
-                ]);
-            }
-
-            // Guard: refuse to archive while any unit still uses this as its default.
-            $refs = $this->db->table('facilities_bmg_units')
-                ->where('default_category_id', $categoryId)
-                ->where('archived_at', null)
-                ->countAllResults();
-            if ($refs > 0) {
-                throw new ApiException('resource.conflict', 409, [
-                    ['code' => 'resource.conflict', 'message' => "Cannot archive: {$refs} unit(s) still use this category as their default. Clear those first."],
-                ]);
-            }
-
-            $now = $this->utcNow();
-            $this->db->table('facilities_waste_categories')->where('id', $categoryId)->update([
-                'is_active'  => 0,
-                'updated_at' => $now,
-            ]);
-
-            $this->audit->enqueue('bmg.waste_category_archived', 'facilities_waste_categories', $categoryId, $userId, [
-                'resource_code' => (string) $cat['code'],
-            ]);
-
-            return $this->wasteCategoryDto($categoryId);
-        });
+        return $this->categories->archiveWasteCategory($categoryId);
     }
 
     /**
      * Restore an archived waste category (`is_active = 1`) so it
-     * reappears in pickers. Mirrors `archiveWasteCategory` — 409 when
-     * the category is already active, same-transaction audit row.
+     * reappears in pickers.
      */
     public function unarchiveWasteCategory(int $categoryId): array
     {
-        $this->policy->check('categories_manage');
-        $userId = \App\Auth\CurrentUser::assert();
-
-        return $this->txn(function () use ($categoryId, $userId): array {
-            $cat = $this->selectForUpdate('facilities_waste_categories', ['id' => $categoryId, 'tenant_id' => CurrentTenant::id()]);
-            if ($cat === null) {
-                throw new ApiException('resource.not_found', 404, [
-                    ['code' => 'resource.not_found', 'message' => "Waste category #{$categoryId} not found."],
-                ]);
-            }
-            if ((int) $cat['is_active'] === 1) {
-                throw new ApiException('resource.conflict', 409, [
-                    ['code' => 'resource.conflict', 'message' => 'Category is already active.', 'field' => 'is_active'],
-                ]);
-            }
-
-            $now = $this->utcNow();
-            $this->db->table('facilities_waste_categories')->where('id', $categoryId)->update([
-                'is_active'  => 1,
-                'updated_at' => $now,
-            ]);
-
-            $this->audit->enqueue('bmg.waste_category_restored', 'facilities_waste_categories', $categoryId, $userId, [
-                'resource_code' => (string) $cat['code'],
-            ]);
-
-            return $this->wasteCategoryDto($categoryId);
-        });
+        return $this->categories->unarchiveWasteCategory($categoryId);
     }
 
     /**
-     * Hard-delete a waste category. Refuses if any batch or unit still
-     * references it — the operator should archive instead, which keeps
-     * the category out of pickers but preserves history. Mirrors the
-     * legacy `WasteCategoryController::delete()` guard.
+     * Hard-delete a waste category (refused while any batch or unit
+     * still references it).
      */
     public function deleteWasteCategory(int $categoryId): void
     {
-        $this->policy->check('categories_manage');
-        $userId = \App\Auth\CurrentUser::assert();
-
-        $this->txn(function () use ($categoryId, $userId): void {
-            $cat = $this->selectForUpdate('facilities_waste_categories', ['id' => $categoryId, 'tenant_id' => CurrentTenant::id()]);
-            if ($cat === null) {
-                throw new ApiException('resource.not_found', 404, [
-                    ['code' => 'resource.not_found', 'message' => "Waste category #{$categoryId} not found."],
-                ]);
-            }
-
-            $batchRefs = $this->db->table('facilities_bmg_batches')
-                ->where('category_id', $categoryId)
-                ->countAllResults();
-            if ($batchRefs > 0) {
-                throw new ApiException('resource.conflict', 409, [
-                    ['code' => 'resource.conflict', 'message' => "Cannot delete: {$batchRefs} batch(es) reference this category. Archive it instead."],
-                ]);
-            }
-            $unitRefs = $this->db->table('facilities_bmg_units')
-                ->where('default_category_id', $categoryId)
-                ->countAllResults();
-            if ($unitRefs > 0) {
-                throw new ApiException('resource.conflict', 409, [
-                    ['code' => 'resource.conflict', 'message' => "Cannot delete: {$unitRefs} unit(s) reference this category as their default. Clear those first."],
-                ]);
-            }
-
-            $this->db->table('facilities_waste_categories')->where('id', $categoryId)->delete();
-
-            $this->audit->enqueue('bmg.waste_category_deleted', 'facilities_waste_categories', $categoryId, $userId, [
-                'resource_code' => (string) $cat['code'],
-            ]);
-        });
+        $this->categories->deleteWasteCategory($categoryId);
     }
 
     // --------------------------------------------------- structured I/O
@@ -1940,7 +1583,7 @@ final class BmgService extends BaseService
      */
     public function addBatchInput(int $batchId, array $input): array
     {
-        return $this->recordIo($batchId, 'input', $input);
+        return $this->batchIo->addBatchInput($batchId, $input);
     }
 
     /**
@@ -1949,81 +1592,7 @@ final class BmgService extends BaseService
      */
     public function addBatchOutput(int $batchId, array $input): array
     {
-        return $this->recordIo($batchId, 'output', $input);
-    }
-
-    /**
-     * @param array<string, mixed> $input
-     * @return array<string, mixed>
-     */
-    private function recordIo(int $batchId, string $kind, array $input): array
-    {
-        // Tier 3.2 — load the batch row outside the txn so the policy's
-        // record-level ownership check can see `started_by_user_id`.
-        // `io_record` is in OWNED_BATCH_ACTIONS, so without this load the
-        // policy would fail closed (no record → no permission).
-        $batch = $this->policy->loadBatchForOwnership($batchId);
-        if ($batch === null) {
-            throw new ApiException('resource.not_found', 404, [
-                ['code' => 'resource.not_found', 'message' => "BMG batch #{$batchId} not found."],
-            ]);
-        }
-        $this->policy->check('io_record', $batch);
-        $userId = \App\Auth\CurrentUser::assert();
-
-        return $this->txn(function () use ($batchId, $kind, $input, $userId): array {
-            $batch = $this->selectForUpdate('facilities_bmg_batches', ['id' => $batchId, 'tenant_id' => CurrentTenant::id(), 'archived_at' => null]);
-            if ($batch === null) {
-                throw new ApiException('resource.not_found', 404, [
-                    ['code' => 'resource.not_found', 'message' => "Batch #{$batchId} not found."],
-                ]);
-            }
-            if (! in_array($batch['status'], [BMG_STATE_PROCESSING, BMG_STATE_AWAITING_OUTPUT], true)) {
-                throw new ApiException('statemachine.bmg.io_terminal_batch', 409, [
-                    ['code' => 'statemachine.bmg.io_terminal_batch', 'message' => 'Inputs/outputs can only be recorded on an active batch.'],
-                ]);
-            }
-            $now = $this->utcNow();
-
-            if ($kind === 'input') {
-                $this->db->table('facilities_bmg_inputs')->insert([
-                    'batch_id'              => $batchId,
-                    'tenant_id'             => CurrentTenant::id(),
-                    'weight_kg'             => (float) $input['weight_kg'],
-                    'cn_ratio'              => isset($input['cn_ratio']) && $input['cn_ratio'] !== '' ? (float) $input['cn_ratio'] : null,
-                    'bulk_density_kg_per_m3'=> isset($input['bulk_density_kg_per_m3']) && $input['bulk_density_kg_per_m3'] !== '' ? (float) $input['bulk_density_kg_per_m3'] : null,
-                    'ph'                    => isset($input['ph']) && $input['ph'] !== '' ? (float) $input['ph'] : null,
-                    'note'                  => isset($input['note']) && $input['note'] !== '' ? (string) $input['note'] : null,
-                    'recorded_by_user_id'   => $userId,
-                    'recorded_at'           => $now,
-                    'created_at'            => $now,
-                ]);
-                $id = (int) $this->db->insertID();
-                $this->audit->enqueue('bmg.input_recorded', 'facilities_bmg_inputs', $id, $userId, ['resource_code' => (string) $batch['reference_code']]);
-                return [
-                    'id'                     => $id,
-                    'batch_id'               => $batchId,
-                    'weight_kg'              => (float) $input['weight_kg'],
-                    'cn_ratio'               => isset($input['cn_ratio']) && $input['cn_ratio'] !== '' ? (float) $input['cn_ratio'] : null,
-                    'bulk_density_kg_per_m3' => isset($input['bulk_density_kg_per_m3']) && $input['bulk_density_kg_per_m3'] !== '' ? (float) $input['bulk_density_kg_per_m3'] : null,
-                    'ph'                     => isset($input['ph']) && $input['ph'] !== '' ? (float) $input['ph'] : null,
-                ];
-            }
-
-            $this->db->table('facilities_bmg_outputs')->insert([
-                'batch_id'            => $batchId,
-                'tenant_id'           => CurrentTenant::id(),
-                'output_weight_kg'    => (float) $input['output_weight_kg'],
-                'harvest_date'        => isset($input['harvest_date']) && $input['harvest_date'] !== '' ? (string) $input['harvest_date'] : null,
-                'quality_grade'       => isset($input['quality_grade']) && $input['quality_grade'] !== '' ? (string) $input['quality_grade'] : null,
-                'note'                => isset($input['note']) && $input['note'] !== '' ? (string) $input['note'] : null,
-                'recorded_by_user_id' => $userId,
-                'created_at'          => $now,
-            ]);
-            $id = (int) $this->db->insertID();
-            $this->audit->enqueue('bmg.output_recorded_detail', 'facilities_bmg_outputs', $id, $userId, ['resource_code' => (string) $batch['reference_code']]);
-            return ['id' => $id, 'batch_id' => $batchId, 'output_weight_kg' => (float) $input['output_weight_kg']];
-        });
+        return $this->batchIo->addBatchOutput($batchId, $input);
     }
 
     /**
@@ -2033,126 +1602,7 @@ final class BmgService extends BaseService
      */
     public function batchAnalytics(int $batchId): array
     {
-        // Tier 3.2 — `analytics` is owned, so the batch row must be
-        // loaded with `started_by_user_id` and tennat/archived filtered
-        // before the policy check fires.
-        $batch = $this->db->table('facilities_bmg_batches')
-            ->select('id, reference_code, category_id, status, total_input_weight_kg, output_weight_kg, total_loss_kg, accumulated_in_process_kg, started_at, finished_at, started_by_user_id, tenant_id, archived_at')
-            ->where('id', $batchId)->where('archived_at', null)->where('tenant_id', CurrentTenant::id())
-            ->get()->getRowArray();
-        if ($batch === null) {
-            throw new ApiException('resource.not_found', 404, [
-                ['code' => 'resource.not_found', 'message' => "BMG batch #{$batchId} not found."],
-            ]);
-        }
-        $this->policy->check('analytics', $batch);
-
-        $structuredIn  = (float) ($this->db->table('facilities_bmg_inputs')->selectSum('weight_kg', 't')->where('batch_id', $batchId)->get()->getRowArray()['t'] ?? 0);
-        $structuredOut = (float) ($this->db->table('facilities_bmg_outputs')->selectSum('output_weight_kg', 't')->where('batch_id', $batchId)->get()->getRowArray()['t'] ?? 0);
-
-        // Per-category loss breakdown (drives the loss pie/bar chart).
-        // Group-level SUM is safe here (no PII, no tenant mix-up since
-        // we already filtered by batch above and FK guarantees tenancy).
-        $lossRows = $this->db->table('facilities_bmg_losses')
-            ->select('category_code, SUM(weight_kg) AS w')
-            ->where('batch_id', $batchId)
-            ->where('tenant_id', CurrentTenant::id())
-            ->groupBy('category_code')
-            ->orderBy('w', 'DESC')
-            ->get()->getResultArray();
-        $losses = array_map(static fn (array $r): array => [
-            'category_code' => (string) $r['category_code'],
-            'weight_kg'     => round((float) $r['w'], 2),
-        ], $lossRows);
-
-        $totalLossKg = $this->db->table('facilities_bmg_losses')
-            ->select('COALESCE(SUM(weight_kg), 0) AS s', false)
-            ->where('batch_id', $batchId)
-            ->where('tenant_id', CurrentTenant::id())
-            ->get()->getRowArray();
-        $totalLossKg = $totalLossKg !== null ? (float) $totalLossKg['s'] : 0.0;
-
-        // Prefer the row-level recomputed total over the denormalised
-        // column — if they drift, the row source wins (it's the
-        // truth) and the column is corrected in the same response.
-        $denormLoss = isset($batch['total_loss_kg']) && $batch['total_loss_kg'] !== null
-            ? (float) $batch['total_loss_kg']
-            : 0.0;
-
-        $aip = isset($batch['accumulated_in_process_kg']) && $batch['accumulated_in_process_kg'] !== null
-            ? (float) $batch['accumulated_in_process_kg']
-            : null;
-
-        $inputKg  = $structuredIn > 0 ? $structuredIn : (float) $batch['total_input_weight_kg'];
-        $outputKg = $structuredOut > 0 ? $structuredOut : (float) ($batch['output_weight_kg'] ?? 0);
-
-        $category = null;
-        if ($batch['category_id'] !== null) {
-            $category = $this->db->table('facilities_waste_categories')
-                ->select('name, expected_yield_pct, reference_duration_days')
-                ->where('id', (int) $batch['category_id'])->get()->getRowArray();
-        }
-
-        // Panel revision: mix-weighted expected duration + per-component
-        // breakdown (weight ratios) for the drum detail screen.
-        $comps         = $this->batchCompositions([$batchId])[$batchId] ?? [];
-        $catIds        = array_map(static fn (array $c): int => $c['category_id'], $comps);
-        if ($batch['category_id'] !== null) {
-            $catIds[] = (int) $batch['category_id'];
-        }
-        $expectedByCat = $this->expectedDaysByCategory($catIds);
-        $mixDays       = $this->weightedExpectedDays($comps, $expectedByCat);
-
-        $totalCompKg = 0.0;
-        foreach ($comps as $c) {
-            $totalCompKg += $c['weight_kg'];
-        }
-        $composition = array_map(static function (array $c) use ($expectedByCat, $totalCompKg): array {
-            $meta = $expectedByCat[$c['category_id']] ?? null;
-            return [
-                'category_id'   => $c['category_id'],
-                'category_name' => $c['category_name'],
-                'weight_kg'     => round($c['weight_kg'], 2),
-                'ratio_pct'     => $totalCompKg > 0 ? round(($c['weight_kg'] / $totalCompKg) * 100, 1) : null,
-                'expected_days' => $meta['expected_days'] ?? null,
-                'sample_count'  => $meta['sample_count'] ?? 0,
-            ];
-        }, $comps);
-
-        $a         = new \App\Services\Analytics\BmgAnalytics();
-        $yield     = $a->computeYield($inputKg, $outputKg);
-        $startDate = substr((string) $batch['started_at'], 0, 10);
-        $refDays   = $category !== null && $category['reference_duration_days'] !== null ? (int) $category['reference_duration_days'] : 0;
-
-        $expDays = $mixDays;
-        if ($expDays === null && $batch['category_id'] !== null) {
-            $expDays = $expectedByCat[(int) $batch['category_id']]['expected_days'] ?? null;
-        }
-        $effDays  = $expDays ?? $refDays;
-        $expected = $a->expectedCompletionDate($startDate, $effDays);
-        $today    = $this->utcNow();
-
-        return [
-            'batch_id'                => $batchId,
-            'input_kg'                => round($inputKg, 2),
-            'output_kg'               => round($outputKg, 2),
-            'yield_pct'               => $yield,
-            'yield_class'             => $a->classifyYield($yield),
-            'mass_reduction_pct'      => $a->massReduction($yield),
-            'expected_yield_pct'      => $category !== null && $category['expected_yield_pct'] !== null ? (float) $category['expected_yield_pct'] : null,
-            'category_name'           => $category['name'] ?? null,
-            'reference_duration_days' => $refDays > 0 ? $refDays : null,
-            'expected_days'           => $expDays ?? ($refDays > 0 ? $refDays : null),
-            'composition'             => $composition,
-            'expected_completion_date'=> $effDays > 0 ? $expected : null,
-            'days_until_expected'     => $effDays > 0 ? $a->daysUntilExpected($expected, $today) : null,
-            'progress_pct'            => $effDays > 0 ? $a->progressPercent($startDate, $expected, $today) : null,
-            // Mass-balance breakdown.
-            'total_loss_kg'           => round($totalLossKg, 2),
-            'losses_denormalised_kg'  => round($denormLoss, 2),
-            'accumulated_in_process_kg' => $aip !== null ? round($aip, 2) : null,
-            'losses'                  => $losses,
-        ];
+        return $this->analyticsReader->batchAnalytics($batchId);
     }
 
     /** Toggle a unit between Idle and Maintenance (only when not busy). */
@@ -2182,234 +1632,18 @@ final class BmgService extends BaseService
             if (in_array($current, $blocked, true) || ! in_array($current, $allowed, true)) {
                 throw StateMachineException::invalidTransition($current, $next, 'bmg');
             }
-            $now = $this->utcNow();
-            $this->db->table('facilities_bmg_units')->where('id', $unitId)->update([
-                'status'     => $next,
-                'updated_at' => $now,
-            ]);
+            $now = $this->support->utcNow();
+            $this->db->table('facilities_bmg_units')
+                ->where('facilities_bmg_units.tenant_id', CurrentTenant::id())
+                ->where('id', $unitId)->update([
+                    'status'     => $next,
+                    'updated_at' => $now,
+                ]);
             $this->audit->enqueue('bmg.unit_maintenance', 'facilities_bmg_units', $unitId, $userId, [
                 'next_status' => $next,
             ]);
             return ['id' => $unitId, 'status' => $next];
         });
-    }
-
-    private function utcNow(): string
-    {
-        return (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
-    }
-
-    // -------------------------------------------- panel-revision helpers
-
-    /**
-     * Validate + normalize a batch composition payload: positive weights,
-     * no duplicate categories, and the component sum must equal the
-     * declared total (±0.01 kg tolerance).
-     *
-     * @param array<int, mixed> $composition
-     * @return array<int, array{category_id:int, weight_kg:float}>
-     */
-    private function normalizeComposition(array $composition, float $totalInputKg): array
-    {
-        if ($composition === []) {
-            return [];
-        }
-
-        $out  = [];
-        $sum  = 0.0;
-        $seen = [];
-        foreach ($composition as $c) {
-            $cid = isset($c['category_id']) ? (int) $c['category_id'] : 0;
-            $w   = isset($c['weight_kg']) ? (float) $c['weight_kg'] : 0.0;
-            if ($cid <= 0) {
-                throw new ApiException('validation.invalid', 422, [
-                    ['code' => 'validation.invalid', 'message' => 'Each composition row needs a category_id.', 'field' => 'composition'],
-                ]);
-            }
-            if ($w <= 0) {
-                throw new ApiException('validation.invalid', 422, [
-                    ['code' => 'validation.invalid', 'message' => 'Each composition row needs a weight_kg > 0.', 'field' => 'composition'],
-                ]);
-            }
-            if (isset($seen[$cid])) {
-                throw new ApiException('validation.invalid', 422, [
-                    ['code' => 'validation.invalid', 'message' => 'Duplicate waste category in composition.', 'field' => 'composition'],
-                ]);
-            }
-            $seen[$cid] = true;
-            $sum += $w;
-            $out[] = ['category_id' => $cid, 'weight_kg' => round($w, 2)];
-        }
-
-        if (abs($sum - $totalInputKg) > 0.01) {
-            throw new ApiException('validation.invalid', 422, [
-                ['code' => 'validation.invalid', 'message' => sprintf('Composition weights (%.2f kg) must add up to total_input_weight_kg (%.2f kg).', $sum, $totalInputKg), 'field' => 'composition'],
-            ]);
-        }
-
-        return $out;
-    }
-
-    /**
-     * Normalize + assert the slug contract for `code` fields: lowercase
-     * `a-z0-9` groups separated by single hyphens. Whitespace and
-     * uppercase input are normalized rather than rejected. Delegates the
-     * pure normalization/validation to {@see BmgAnalytics} so the rule
-     * is unit-tested without booting the DB.
-     */
-    private function assertSlug(string $raw, string $field): string
-    {
-        $a    = new \App\Services\Analytics\BmgAnalytics();
-        $slug = $a->normalizeSlug($raw);
-        if (! $a->isValidSlug($slug)) {
-            throw new ApiException('validation.invalid', 422, [
-                ['code' => 'validation.invalid', 'message' => 'Must be a slug: lowercase letters/digits separated by single hyphens (e.g. drum-01).', 'field' => $field],
-            ]);
-        }
-        return $slug;
-    }
-
-    /**
-     * Historical duration per category, averaged over FINISHED batches
-     * (multi-trial validated data — panel revision). A batch counts for
-     * a category when the category is in its structured composition;
-     * legacy batches without composition rows count via their single
-     * `category_id` tag.
-     *
-     * @param array<int, int> $categoryIds
-     * @return array<int, array{avg_days: float, samples: int}>
-     */
-    private function categoryDurationStats(array $categoryIds): array
-    {
-        $ids = array_values(array_unique(array_map('intval', $categoryIds)));
-        if ($ids === []) {
-            return [];
-        }
-        $in = implode(',', $ids);
-
-        $rows = $this->db->query(
-            'SELECT t.cat_id, AVG(t.days) AS avg_days, COUNT(*) AS samples FROM ('
-            . ' SELECT c.category_id AS cat_id, DATEDIFF(b.finished_at, b.started_at) AS days'
-            . ' FROM facilities_bmg_composition c'
-            . ' JOIN facilities_bmg_batches b ON b.id = c.batch_id'
-            . " WHERE b.finished_at IS NOT NULL AND b.archived_at IS NULL AND c.category_id IN ({$in})"
-            . ' UNION ALL'
-            . ' SELECT b.category_id, DATEDIFF(b.finished_at, b.started_at)'
-            . ' FROM facilities_bmg_batches b'
-            . ' LEFT JOIN facilities_bmg_composition c2 ON c2.batch_id = b.id'
-            . ' WHERE c2.id IS NULL AND b.category_id IS NOT NULL AND b.finished_at IS NOT NULL'
-            . " AND b.archived_at IS NULL AND b.category_id IN ({$in})"
-            . ') t GROUP BY t.cat_id',
-        )->getResultArray();
-
-        $out = [];
-        foreach ($rows as $r) {
-            $out[(int) $r['cat_id']] = [
-                'avg_days' => (float) $r['avg_days'],
-                'samples'  => (int) $r['samples'],
-            ];
-        }
-        return $out;
-    }
-
-    /**
-     * Per-category expected days: the ASSIGNED `reference_duration_days`
-     * (the operator's target — drives batch ETAs). `sample_count`
-     * (finished trials) is kept so callers can show historical context;
-     * the rounded historical average is exposed separately on the category
-     * list DTO as `historical_avg_days`.
-     *
-     * @param array<int, int> $categoryIds
-     * @return array<int, array{expected_days: ?int, sample_count: int}>
-     */
-    private function expectedDaysByCategory(array $categoryIds): array
-    {
-        $ids = array_values(array_unique(array_map('intval', $categoryIds)));
-        if ($ids === []) {
-            return [];
-        }
-
-        $refs  = $this->db->table('facilities_waste_categories')
-            ->select('id, reference_duration_days')
-            ->whereIn('id', $ids)
-            ->get()->getResultArray();
-
-        $out = [];
-        foreach ($refs as $r) {
-            $id   = (int) $r['id'];
-            $ref  = $r['reference_duration_days'] !== null ? (int) $r['reference_duration_days'] : null;
-            $out[$id] = [
-                'expected_days' => $ref,
-                'sample_count'  => $this->categorySamples($id),
-            ];
-        }
-        return $out;
-    }
-
-    /**
-     * Number of finished trials for a category (composition rows + the
-     * single-category fallback), used only for historical context.
-     */
-    private function categorySamples(int $categoryId): int
-    {
-        $row = $this->db->query(
-            'SELECT COUNT(*) AS n FROM ('
-            . ' SELECT c.category_id AS cat_id FROM facilities_bmg_composition c'
-            . ' JOIN facilities_bmg_batches b ON b.id = c.batch_id'
-            . ' WHERE b.finished_at IS NOT NULL AND b.archived_at IS NULL AND c.category_id = ' . (int) $categoryId
-            . ' UNION ALL'
-            . ' SELECT b.category_id FROM facilities_bmg_batches b'
-            . ' LEFT JOIN facilities_bmg_composition c2 ON c2.batch_id = b.id'
-            . ' WHERE c2.id IS NULL AND b.category_id IS NOT NULL AND b.finished_at IS NOT NULL'
-            . ' AND b.archived_at IS NULL AND b.category_id = ' . (int) $categoryId
-            . ') t',
-        )->getRowArray();
-        return $row !== null ? (int) $row['n'] : 0;
-    }
-
-    /**
-     * Structured composition rows (with category names) for a set of
-     * batches, keyed by batch id.
-     *
-     * @param array<int, int> $batchIds
-     * @return array<int, array<int, array{category_id:int, category_name:string, weight_kg:float}>>
-     */
-    private function batchCompositions(array $batchIds): array
-    {
-        $ids = array_values(array_unique(array_map('intval', $batchIds)));
-        if ($ids === []) {
-            return [];
-        }
-
-        $rows = $this->db->table('facilities_bmg_composition AS bc')
-            ->select('bc.batch_id, bc.category_id, bc.weight_kg, c.name AS category_name')
-            ->join('facilities_waste_categories AS c', 'c.id = bc.category_id')
-            ->whereIn('bc.batch_id', $ids)
-            ->orderBy('bc.weight_kg', 'DESC')
-            ->get()->getResultArray();
-
-        $out = [];
-        foreach ($rows as $r) {
-            $out[(int) $r['batch_id']][] = [
-                'category_id'   => (int) $r['category_id'],
-                'category_name' => (string) $r['category_name'],
-                'weight_kg'     => (float) $r['weight_kg'],
-            ];
-        }
-        return $out;
-    }
-
-    /**
-     * Weight-ratio-weighted expected duration for a drum's specific mix.
-     * Delegates the pure math to {@see BmgAnalytics::weightedExpectedDays}
-     * (unit-tested); returns null when no component carries data.
-     *
-     * @param array<int, array{category_id:int, weight_kg:float}> $components
-     * @param array<int, array{expected_days: ?int, sample_count: int}> $expectedByCat
-     */
-    private function weightedExpectedDays(array $components, array $expectedByCat): ?int
-    {
-        return (new \App\Services\Analytics\BmgAnalytics())->weightedExpectedDays($components, $expectedByCat);
     }
 
     // -------------------------------------------------------- alerts
@@ -2423,32 +1657,7 @@ final class BmgService extends BaseService
      */
     public function listAlerts(int $batchId): array
     {
-        // Tier 3.2 — `alerts_read` is owned; the tenant-guarded batch
-        // lookup doubles as the ownership-row source.
-        $batch = $this->db->table('facilities_bmg_batches')
-            ->select('id, started_by_user_id, tenant_id, archived_at')
-            ->where('id', $batchId)
-            ->where('tenant_id', CurrentTenant::id())
-            ->where('archived_at', null)
-            ->get()
-            ->getRowArray();
-        if ($batch === null) {
-            throw new ApiException('resource.not_found', 404, [
-                ['code' => 'resource.not_found', 'message' => "Batch #{$batchId} not found."],
-            ]);
-        }
-        $this->policy->check('alerts_read', $batch);
-
-        $rows = $this->db->table('facilities_bmg_alerts')
-            ->where('batch_id', $batchId)
-            ->where('tenant_id', CurrentTenant::id())
-            ->orderBy('acknowledged_at', 'ASC', false)
-            ->orderBy('triggered_at', 'DESC')
-            ->orderBy('id', 'DESC')
-            ->get()
-            ->getResultArray();
-
-        return array_map(static fn (array $r) => BmgAlertDto::fromRow($r)->toArray(), $rows);
+        return $this->alerts->listAlerts($batchId);
     }
 
     /**
@@ -2457,72 +1666,8 @@ final class BmgService extends BaseService
      */
     public function acknowledgeAlert(int $alertId): array
     {
-        // Tier 3.2 — `alerts_ack` is owned. Load the alert first to
-        // discover its batch_id, then load the batch row for the
-        // ownership check. Both reads are tenant-scoped.
-        $alert = $this->db->table('facilities_bmg_alerts')
-            ->select('id, batch_id, tenant_id')
-            ->where('id', $alertId)
-            ->where('tenant_id', CurrentTenant::id())
-            ->get()->getRowArray();
-        if ($alert === null) {
-            throw new ApiException('resource.not_found', 404, [
-                ['code' => 'resource.not_found', 'message' => "Alert #{$alertId} not found."],
-            ]);
-        }
-        $batch = $this->policy->loadBatchForOwnership((int) $alert['batch_id']);
-        if ($batch === null) {
-            throw new ApiException('resource.not_found', 404, [
-                ['code' => 'resource.not_found', 'message' => "BMG batch #{$alert['batch_id']} not found."],
-            ]);
-        }
-        $this->policy->check('alerts_ack', $batch);
-        $userId = \App\Auth\CurrentUser::assert();
-
-        return $this->txn(function () use ($alertId, $userId): array {
-            $row = $this->selectForUpdate('facilities_bmg_alerts', [
-                'id'        => $alertId,
-                'tenant_id' => CurrentTenant::id(),
-            ]);
-            if ($row === null) {
-                throw new ApiException('resource.not_found', 404, [
-                    ['code' => 'resource.not_found', 'message' => "Alert #{$alertId} not found."],
-                ]);
-            }
-            if ($row['acknowledged_at'] !== null) {
-                // Idempotent — re-acking is allowed and returns the
-                // current row, but we don't write a second audit event.
-                return BmgAlertDto::fromRow($row)->toArray();
-            }
-
-            $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
-            $this->db->table('facilities_bmg_alerts')
-                ->where('id', $alertId)
-                ->where('tenant_id', CurrentTenant::id())
-                ->update([
-                    'acknowledged_at'         => $now,
-                    'acknowledged_by_user_id' => $userId,
-                    'updated_at'              => $now,
-                ]);
-
-            $this->audit->enqueue(
-                'bmg.alert_acknowledged',
-                'facilities_bmg_alerts',
-                $alertId,
-                $userId,
-                [
-                    'batch_id' => (int) $row['batch_id'],
-                    'code'     => (string) $row['code'],
-                ],
-            );
-
-            $row['acknowledged_at'] = $now;
-            $row['acknowledged_by_user_id'] = $userId;
-            return BmgAlertDto::fromRow($row)->toArray();
-        });
+        return $this->alerts->acknowledgeAlert($alertId);
     }
-
-    // -------------------------------------------------- open alerts
 
     /**
      * Global open-alert feed — every unacknowledged alert across ALL
@@ -2533,37 +1678,7 @@ final class BmgService extends BaseService
      */
     public function listOpenAlerts(): array
     {
-        $this->policy->check('list');
-
-        $rows = $this->db->table('facilities_bmg_alerts AS a')
-            ->select(
-                'a.id AS alert_id, a.code, a.severity, a.message, a.triggered_at, a.acknowledged_at,'
-                . ' b.id AS batch_id, b.reference_code, b.status AS batch_status,'
-                . ' u.id AS unit_id, u.code AS unit_code, u.display_name AS unit_name'
-            )
-            ->join('facilities_bmg_batches AS b', 'b.id = a.batch_id')
-            ->join('facilities_bmg_units AS u', 'u.id = b.unit_id', 'left')
-            ->where('a.tenant_id', CurrentTenant::id())
-            ->where('a.acknowledged_at', null)
-            ->whereIn('b.status', [BMG_STATE_PROCESSING, BMG_STATE_AWAITING_OUTPUT, BMG_STATE_CURING])
-            ->orderBy('a.triggered_at', 'DESC')
-            ->orderBy('a.id', 'DESC')
-            ->get()->getResultArray();
-
-        return array_map(static fn (array $r): array => [
-            'alert_id'       => (int) $r['alert_id'],
-            'code'           => (string) $r['code'],
-            'severity'       => (string) $r['severity'],
-            'message'        => (string) $r['message'],
-            'triggered_at'   => (string) $r['triggered_at'],
-            'acknowledged_at'=> $r['acknowledged_at'] !== null ? (string) $r['acknowledged_at'] : null,
-            'batch_id'       => (int) $r['batch_id'],
-            'reference_code' => (string) $r['reference_code'],
-            'batch_status'   => (string) $r['batch_status'],
-            'unit_id'        => $r['unit_id'] !== null ? (int) $r['unit_id'] : null,
-            'unit_code'      => $r['unit_code'] !== null ? (string) $r['unit_code'] : null,
-            'unit_name'      => $r['unit_name'] !== null ? (string) $r['unit_name'] : null,
-        ], $rows);
+        return $this->alerts->listOpenAlerts();
     }
 
     // ------------------------------------------------- batch history
@@ -2577,55 +1692,7 @@ final class BmgService extends BaseService
      */
     public function listBatches(?int $unitId, ?string $status, ?string $cursor, int $limit): array
     {
-        $this->policy->check('list');
-
-        $builder = $this->db->table('facilities_bmg_batches AS b')
-            ->select(
-                'b.id, b.reference_code, b.status, b.total_input_weight_kg, b.output_weight_kg,'
-                . ' b.total_loss_kg, b.quality_grade, b.maturity_level, b.started_at, b.finished_at,'
-                . ' b.released_at, b.cancelled_at, b.created_at,'
-                . ' u.id AS unit_id, u.code AS unit_code, u.display_name AS unit_name,'
-                . ' c.name AS category_name'
-            )
-            ->join('facilities_bmg_units AS u', 'u.id = b.unit_id', 'left')
-            ->join('facilities_waste_categories AS c', 'c.id = b.category_id', 'left')
-            ->where('b.archived_at', null)
-            ->where('b.tenant_id', CurrentTenant::id())
-            ->orderBy('b.created_at', 'DESC')
-            ->orderBy('b.id', 'DESC');
-
-        if ($unitId !== null) {
-            $builder->where('b.unit_id', $unitId);
-        }
-        if ($status !== null) {
-            $builder->where('b.status', $status);
-        }
-
-        KeysetPaginator::apply($builder, $cursor, $limit, 'b.created_at', 'b.id');
-
-        $rows  = $builder->get()->getResultArray();
-        $final = KeysetPaginator::finalize($rows, $limit, 'created_at');
-
-        $data = array_map(static fn (array $r): array => [
-            'id'                  => (int) $r['id'],
-            'reference_code'      => (string) $r['reference_code'],
-            'status'              => (string) $r['status'],
-            'unit_id'             => (int) $r['unit_id'],
-            'unit_code'           => (string) $r['unit_code'],
-            'unit_name'           => (string) $r['unit_name'],
-            'category_name'       => $r['category_name'] !== null ? (string) $r['category_name'] : null,
-            'total_input_weight_kg' => (float) $r['total_input_weight_kg'],
-            'output_weight_kg'    => $r['output_weight_kg'] !== null ? (float) $r['output_weight_kg'] : null,
-            'total_loss_kg'       => $r['total_loss_kg'] !== null ? (float) $r['total_loss_kg'] : null,
-            'quality_grade'       => $r['quality_grade'] !== null ? (string) $r['quality_grade'] : null,
-            'maturity_level'      => $r['maturity_level'] !== null ? (string) $r['maturity_level'] : null,
-            'started_at'          => (string) $r['started_at'],
-            'finished_at'         => $r['finished_at'] !== null ? (string) $r['finished_at'] : null,
-            'released_at'         => $r['released_at'] !== null ? (string) $r['released_at'] : null,
-            'cancelled_at'        => $r['cancelled_at'] !== null ? (string) $r['cancelled_at'] : null,
-        ], $final['rows']);
-
-        return ['data' => $data, 'next' => $final['nextCursor'], 'count' => $limit];
+        return $this->history->listBatches($unitId, $status, $cursor, $limit);
     }
 
     // ----------------------------------------- final QA release gate
@@ -2661,22 +1728,12 @@ final class BmgService extends BaseService
                 throw StateMachineException::invalidTransition($batch['status'], BMG_STATE_RELEASED, 'bmg');
             }
 
-            $grade    = (string) ($input['quality_grade'] ?? '');
-            $maturity = (string) ($input['maturity_level'] ?? '');
-            if ($grade === '' || ! in_array($grade, BMG_QUALITY_GRADES, true)) {
-                throw ApiException::validationFailure([
-                    ['code' => 'validation.field', 'message' => 'quality_grade is required (excellent, good, fair).', 'field' => 'quality_grade'],
-                ]);
-            }
-            if ($maturity === '' || ! in_array($maturity, BMG_MATURITY_LEVELS, true)) {
-                throw ApiException::validationFailure([
-                    ['code' => 'validation.field', 'message' => 'maturity_level is required (mature, maturing, immature).', 'field' => 'maturity_level'],
-                ]);
-            }
+            ['grade' => $grade, 'maturity' => $maturity] = $this->assertGradedReleaseInput($input);
 
-            $now = $this->utcNow();
+            $now = $this->support->utcNow();
             $notes = (string) ($input['notes'] ?? '');
             $this->db->table('facilities_bmg_batches')
+                ->where('facilities_bmg_batches.tenant_id', CurrentTenant::id())
                 ->where('id', $batchId)
                 ->update([
                     'status'              => BMG_STATE_RELEASED,
@@ -2689,6 +1746,7 @@ final class BmgService extends BaseService
                 ]);
 
             $this->db->table('facilities_bmg_units')
+                ->where('facilities_bmg_units.tenant_id', CurrentTenant::id())
                 ->where('id', (int) $batch['unit_id'])
                 ->update(['status' => BMG_STATE_IDLE, 'updated_at' => $now]);
 
@@ -2700,7 +1758,9 @@ final class BmgService extends BaseService
                 ['previous_status' => (string) $batch['status'], 'next_status' => BMG_STATE_RELEASED, 'quality_grade' => $grade, 'maturity_level' => $maturity],
             );
 
-            $fresh = $this->db->table('facilities_bmg_batches')->where('id', $batchId)->get()->getRowArray();
+            $fresh = $this->db->table('facilities_bmg_batches')
+                ->where('facilities_bmg_batches.tenant_id', CurrentTenant::id())
+                ->where('id', $batchId)->get()->getRowArray();
             return BmgBatchDto::fromRow($fresh)->toArray();
         });
     }
@@ -2720,83 +1780,7 @@ final class BmgService extends BaseService
      */
     public function batchCompliance(int $batchId): array
     {
-        $batch = $this->db->table('facilities_bmg_batches')
-            ->select('id, reference_code, status, total_input_weight_kg, output_weight_kg, total_loss_kg, accumulated_in_process_kg, quality_grade, maturity_level, started_at, finished_at, released_at, cancelled_at, started_by_user_id, tenant_id, archived_at')
-            ->where('id', $batchId)->where('tenant_id', CurrentTenant::id())->where('archived_at', null)
-            ->get()->getRowArray();
-        if ($batch === null) {
-            throw new ApiException('resource.not_found', 404, [
-                ['code' => 'resource.not_found', 'message' => "BMG batch #{$batchId} not found."],
-            ]);
-        }
-        $this->policy->check('analytics', $batch);
-
-        $logs = $this->db->table('facilities_bmg_process_logs')
-            ->select('log_date, temperature_celsius')
-            ->where('batch_id', $batchId)
-            ->where('temperature_celsius IS NOT NULL', null, false)
-            ->orderBy('log_date', 'ASC')
-            ->orderBy('id', 'ASC')
-            ->get()->getResultArray();
-
-        $thermoDays = 0;      // distinct days ≥55 °C
-        $maxTemp    = null;
-        $consecutive = 0;     // longest run of consecutive thermo days
-        $bestRun    = 0;
-        $prevDay    = null;
-        foreach ($logs as $l) {
-            $temp = (float) $l['temperature_celsius'];
-            if ($temp > ($maxTemp ?? -999)) {
-                $maxTemp = $temp;
-            }
-            $day = (string) $l['log_date'];
-            if ($temp >= 55.0) {
-                $thermoDays++;
-                if ($prevDay !== null) {
-                    $prev = new \DateTimeImmutable($prevDay);
-                    $cur  = new \DateTimeImmutable($day);
-                    $diff = (int) $prev->diff($cur)->days;
-                    $consecutive = ($diff === 1) ? $consecutive + 1 : 1;
-                } else {
-                    $consecutive = 1;
-                }
-                $bestRun = max($bestRun, $consecutive);
-                $prevDay = $day;
-            }
-        }
-
-        $inputKg  = (float) $batch['total_input_weight_kg'];
-        $outputKg = $batch['output_weight_kg'] !== null ? (float) $batch['output_weight_kg'] : 0.0;
-        $lossKg   = $batch['total_loss_kg'] !== null ? (float) $batch['total_loss_kg'] : 0.0;
-        $inProcess = $batch['accumulated_in_process_kg'] !== null ? (float) $batch['accumulated_in_process_kg'] : 0.0;
-        $accounted = $outputKg + $lossKg + $inProcess;
-        $balanceKg = round($inputKg - $accounted, 2);
-        $yieldPct  = $inputKg > 0 ? round(($outputKg / $inputKg) * 100, 1) : null;
-
-        return [
-            'batch_id'          => $batchId,
-            'reference_code'    => (string) $batch['reference_code'],
-            'status'            => (string) $batch['status'],
-            'started_at'        => (string) $batch['started_at'],
-            'finished_at'       => $batch['finished_at'] !== null ? (string) $batch['finished_at'] : null,
-            'released_at'       => $batch['released_at'] !== null ? (string) $batch['released_at'] : null,
-            'cancelled_at'      => $batch['cancelled_at'] !== null ? (string) $batch['cancelled_at'] : null,
-            // PFRP: thermophilic ≥55 °C (pathogen-reduction window).
-            'thermophilic_days' => $thermoDays,
-            'max_temperature_c' => $maxTemp !== null ? round($maxTemp, 1) : null,
-            'consecutive_pfrp_days' => $bestRun,
-            'pfrp_met'          => $bestRun >= 3 || $maxTemp !== null && $maxTemp >= 65.0,
-            // Mass balance.
-            'input_kg'          => round($inputKg, 2),
-            'output_kg'         => round($outputKg, 2),
-            'loss_kg'           => round($lossKg, 2),
-            'in_process_kg'     => round($inProcess, 2),
-            'unaccounted_kg'    => $balanceKg,
-            'yield_pct'         => $yieldPct,
-            // Final QA (only set when released).
-            'quality_grade'     => $batch['quality_grade'] !== null ? (string) $batch['quality_grade'] : null,
-            'maturity_level'    => $batch['maturity_level'] !== null ? (string) $batch['maturity_level'] : null,
-        ];
+        return $this->analyticsReader->batchCompliance($batchId);
     }
 
     // ------------------------------------------------------ blend C:N
@@ -2812,47 +1796,7 @@ final class BmgService extends BaseService
      */
     public function blendCn(int $batchId): array
     {
-        $batch = $this->db->table('facilities_bmg_batches')
-            ->select('id, started_by_user_id, tenant_id, archived_at')
-            ->where('id', $batchId)->where('tenant_id', CurrentTenant::id())->where('archived_at', null)
-            ->get()->getRowArray();
-        if ($batch === null) {
-            throw new ApiException('resource.not_found', 404, [
-                ['code' => 'resource.not_found', 'message' => "BMG batch #{$batchId} not found."],
-            ]);
-        }
-        $this->policy->check('analytics', $batch);
-
-        $rows = $this->db->table('facilities_bmg_inputs')
-            ->select('weight_kg, cn_ratio')
-            ->where('batch_id', $batchId)
-            ->where('tenant_id', CurrentTenant::id())
-            ->where('cn_ratio IS NOT NULL', null, false)
-            ->get()->getResultArray();
-
-        if ($rows === []) {
-            return ['blend_cn' => null, 'n_inputs' => 0, 'status' => 'unknown', 'note' => 'No feedstock C:N data recorded.'];
-        }
-
-        $weighted = 0.0;
-        $weight   = 0.0;
-        foreach ($rows as $r) {
-            $w = (float) $r['weight_kg'];
-            $weighted += (float) $r['cn_ratio'] * $w;
-            $weight   += $w;
-        }
-        $blend = $weight > 0 ? round($weighted / $weight, 1) : null;
-
-        if ($blend === null) {
-            return ['blend_cn' => null, 'n_inputs' => count($rows), 'status' => 'unknown', 'note' => 'Could not compute blend C:N.'];
-        }
-        if ($blend < 15) {
-            return ['blend_cn' => $blend, 'n_inputs' => count($rows), 'status' => 'low', 'note' => 'Blend C:N below 15 — risk of ammonia off-gassing; add carbon-rich (brown) material.'];
-        }
-        if ($blend > 30) {
-            return ['blend_cn' => $blend, 'n_inputs' => count($rows), 'status' => 'high', 'note' => 'Blend C:N above 30 — decomposition may be nitrogen-starved; add nitrogen-rich (green) material.'];
-        }
-        return ['blend_cn' => $blend, 'n_inputs' => count($rows), 'status' => 'optimal', 'note' => 'Blend C:N within the 15–30 operational band.'];
+        return $this->analyticsReader->blendCn($batchId);
     }
 
     // ----------------------------------------------- unit utilization
@@ -2917,44 +1861,7 @@ final class BmgService extends BaseService
      */
     public function wasteCategoryDeviation(): array
     {
-        $this->policy->check('manage_units');
-
-        $cats = $this->db->table('facilities_waste_categories')
-            ->select('id, code, name, expected_yield_pct, reference_duration_days')
-            ->where('tenant_id', CurrentTenant::id())
-            ->orderBy('name', 'ASC')
-            ->get()->getResultArray();
-
-        $out = [];
-        foreach ($cats as $c) {
-            $cid = (int) $c['id'];
-            $stats = $this->db->table('facilities_bmg_batches')
-                ->select('COUNT(*) AS n, AVG(output_weight_kg / NULLIF(total_input_weight_kg, 0)) * 100 AS avg_yield, AVG(DATEDIFF(COALESCE(released_at, finished_at), started_at)) AS avg_days')
-                ->where('category_id', $cid)
-                ->whereIn('status', [BMG_STATE_RELEASED, BMG_STATE_IDLE])
-                ->where('archived_at', null)
-                ->where('tenant_id', CurrentTenant::id())
-                ->get()->getRowArray();
-
-            $n = (int) ($stats['n'] ?? 0);
-            $avgYield = $stats['avg_yield'] !== null ? round((float) $stats['avg_yield'], 1) : null;
-            $avgDays  = $stats['avg_days'] !== null ? (int) round((float) $stats['avg_days']) : null;
-            $expYield = $c['expected_yield_pct'] !== null ? (float) $c['expected_yield_pct'] : null;
-            $expDays  = $c['reference_duration_days'] !== null ? (int) $c['reference_duration_days'] : null;
-
-            $out[] = [
-                'category_id'            => $cid,
-                'code'                   => (string) $c['code'],
-                'name'                   => (string) $c['name'],
-                'batch_count'            => $n,
-                'actual_yield_pct'       => $avgYield,
-                'expected_yield_pct'     => $expYield,
-                'yield_delta_pp'         => $expYield !== null && $avgYield !== null ? round($avgYield - $expYield, 1) : null,
-                'actual_days'            => $avgDays,
-                'expected_days'          => $expDays,
-                'days_delta'             => $expDays !== null && $avgDays !== null ? $avgDays - $expDays : null,
-            ];
-        }
-        return $out;
+        return $this->analyticsReader->wasteCategoryDeviation();
     }
 }
+

@@ -9,6 +9,7 @@ use App\Modules\Shared\BaseService;
 use App\Pagination\KeysetPaginator;
 use App\Services\Analytics\TriageAssistant;
 use App\Services\Audit\AuditOutboxService;
+use App\Services\CurrentTenant;
 use App\Services\Notify\NotificationOutboxService;
 use DateTimeImmutable;
 use DateTimeZone;
@@ -39,6 +40,7 @@ final class ClinicService extends BaseService
         $this->policy->check('list');
 
         $builder = $this->db->table('clinic_encounters e')
+            ->where('e.tenant_id', CurrentTenant::id())
             ->select("e.id, e.patient_user_id, e.patient_school_id, e.appointment_id, e.chief_complaint, e.triage_priority, e.triage_override, e.diagnosis, e.status, e.attending_user_id, e.station_id, e.started_at, e.closed_at, e.created_at, u.first_name, u.last_name")
             // Patients are `users` (identity-consolidated) — the join
             // powers the patient-name tooltip in the Closed tab. When
@@ -89,6 +91,7 @@ final class ClinicService extends BaseService
             $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
 
             $this->db->table('clinic_encounters')->insert([
+                'tenant_id'         => CurrentTenant::id(),
                 'patient_user_id'   => $this->resolvePatientUserId($patientSchoolId),
                 'patient_school_id' => $patientSchoolId,
                 'chief_complaint'   => $chiefComplaint,
@@ -109,7 +112,7 @@ final class ClinicService extends BaseService
                 ['next_status' => 'open'],
             );
 
-            $row = $this->db->table('clinic_encounters')->where('id', $id)->get()->getRowArray();
+            $row = $this->db->table('clinic_encounters')->where('clinic_encounters.tenant_id', CurrentTenant::id())->where('id', $id)->get()->getRowArray();
             return EncounterDto::fromRow($row);
         });
     }
@@ -145,6 +148,7 @@ final class ClinicService extends BaseService
             $lastId  = 0;
             foreach ($rows as $row) {
                 $this->db->table('clinic_encounters')->insert([
+                    'tenant_id'         => CurrentTenant::id(),
                     'patient_user_id'   => $this->resolvePatientUserId((string) $row['patient_school_id']),
                     'patient_school_id' => $row['patient_school_id'],
                     'chief_complaint'   => $row['chief_complaint'],
@@ -170,6 +174,7 @@ final class ClinicService extends BaseService
                 $position = ($lastPos !== null ? (int) $lastPos['position'] : 0) + 1;
 
                 $this->db->table('clinic_queue_entries')->insert([
+                    'tenant_id'    => CurrentTenant::id(),
                     'encounter_id' => $lastId,
                     'queue_date'   => $queueDate,
                     'position'     => $position,
@@ -196,7 +201,7 @@ final class ClinicService extends BaseService
         $userId = \App\Auth\CurrentUser::assert();
 
         return $this->txn(function () use ($encounterId, $vitals, $userId): VitalsDto {
-            $enc = $this->selectForUpdate('clinic_encounters', ['id' => $encounterId, 'archived_at' => null]);
+            $enc = $this->selectForUpdate('clinic_encounters', ['tenant_id' => CurrentTenant::id(), 'id' => $encounterId, 'archived_at' => null]);
 
             if ($enc === null) {
                 throw new ApiException('resource.not_found', 404, [
@@ -209,6 +214,7 @@ final class ClinicService extends BaseService
             $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
 
             $this->db->table('clinic_vitals')->insert([
+                'tenant_id'           => CurrentTenant::id(),
                 'encounter_id'        => $encounterId,
                 'bp_systolic'         => $vitals['bp_systolic']  ?? null,
                 'bp_diastolic'        => $vitals['bp_diastolic'] ?? null,
@@ -232,6 +238,7 @@ final class ClinicService extends BaseService
             );
 
             $row = $this->db->table('clinic_vitals')
+                ->where('clinic_vitals.tenant_id', CurrentTenant::id())
                 ->where('encounter_id', $encounterId)
                 ->orderBy('id', 'DESC')
                 ->limit(1)
@@ -253,6 +260,7 @@ final class ClinicService extends BaseService
         $this->policy->check('vitalsRead');
 
         $rows = $this->db->table('clinic_vitals')
+            ->where('clinic_vitals.tenant_id', CurrentTenant::id())
             ->where('encounter_id', $encounterId)
             ->orderBy('id', 'DESC')
             ->get()->getResultArray();
@@ -264,6 +272,7 @@ final class ClinicService extends BaseService
     public function getEncounter(int $encounterId): array
     {
         $row = $this->db->table('clinic_encounters e')
+            ->where('e.tenant_id', CurrentTenant::id())
             ->select('e.*, u.first_name, u.last_name, q.id AS queue_entry_id, q.position AS queue_position, q.status AS queue_status, q.called_at AS queue_called_at, q.started_at AS queue_started_at, q.finished_at AS queue_finished_at, q.referral_id AS incoming_referral_id')
             ->join('users u', 'u.id = e.patient_user_id', 'left')
             ->join('clinic_queue_entries q', 'q.encounter_id = e.id', 'left')
@@ -276,9 +285,10 @@ final class ClinicService extends BaseService
         }
         $this->policy->check('view', $row);
 
-        $vitalsCount = (int) $this->db->table('clinic_vitals')->where('encounter_id', $encounterId)->countAllResults();
-        $treatmentCount = (int) $this->db->table('clinic_treatments')->where('encounter_id', $encounterId)->countAllResults();
+        $vitalsCount = (int) $this->db->table('clinic_vitals')->where('clinic_vitals.tenant_id', CurrentTenant::id())->where('encounter_id', $encounterId)->countAllResults();
+        $treatmentCount = (int) $this->db->table('clinic_treatments')->where('clinic_treatments.tenant_id', CurrentTenant::id())->where('encounter_id', $encounterId)->countAllResults();
         $outgoing = $this->db->table('referral_referrals')
+            ->where('referral_referrals.tenant_id', CurrentTenant::id())
             ->where('source_encounter_id', $encounterId)->where('archived_at', null)
             ->orderBy('id', 'DESC')->limit(1)->get()->getRowArray();
         $position = $row['queue_position'] !== null ? (int) $row['queue_position'] : null;
@@ -311,6 +321,7 @@ final class ClinicService extends BaseService
         $this->policy->check('vitalsRead');
 
         $encounter = $this->db->table('clinic_encounters')
+            ->where('clinic_encounters.tenant_id', CurrentTenant::id())
             ->select('id, patient_user_id, patient_school_id')
             ->where('id', $encounterId)
             ->where('archived_at', null)
@@ -323,6 +334,7 @@ final class ClinicService extends BaseService
         }
 
         $builder = $this->db->table('clinic_vitals v')
+            ->where('v.tenant_id', CurrentTenant::id())
             ->select('v.encounter_id AS source_encounter_id, v.weight_kg, v.height_cm, v.recorded_at')
             ->join('clinic_encounters e', 'e.id = v.encounter_id', 'inner')
             ->where('e.archived_at', null)
@@ -359,7 +371,7 @@ final class ClinicService extends BaseService
         $userId = \App\Auth\CurrentUser::assert();
 
         return $this->txn(function () use ($encounterId, $userId): EncounterDto {
-            $enc = $this->selectForUpdate('clinic_encounters', ['id' => $encounterId, 'archived_at' => null]);
+            $enc = $this->selectForUpdate('clinic_encounters', ['tenant_id' => CurrentTenant::id(), 'id' => $encounterId, 'archived_at' => null]);
 
             if ($enc === null) {
                 throw new ApiException('resource.not_found', 404, [
@@ -401,7 +413,7 @@ final class ClinicService extends BaseService
         $userId = \App\Auth\CurrentUser::assert();
 
         return $this->txn(function () use ($encounterId, $userId): EncounterDto {
-            $enc = $this->selectForUpdate('clinic_encounters', ['id' => $encounterId, 'archived_at' => null]);
+            $enc = $this->selectForUpdate('clinic_encounters', ['tenant_id' => CurrentTenant::id(), 'id' => $encounterId, 'archived_at' => null]);
             if ($enc === null) {
                 throw new ApiException('resource.not_found', 404, [
                     ['code' => 'resource.not_found', 'message' => "Encounter #{$encounterId} not found."],
@@ -439,6 +451,7 @@ final class ClinicService extends BaseService
 
             // 1) Encounter → closed + outcome=no_show
             $this->db->table('clinic_encounters')
+                ->where('clinic_encounters.tenant_id', CurrentTenant::id())
                 ->where('id', $encounterId)
                 ->update([
                     'status'     => 'closed',
@@ -452,11 +465,13 @@ final class ClinicService extends BaseService
             if (isset($enc['appointment_id']) && $enc['appointment_id'] !== null) {
                 $apptId = (int) $enc['appointment_id'];
                 $appt = $this->selectForUpdate('clinic_appointments', [
+                    'tenant_id'   => CurrentTenant::id(),
                     'id'          => $apptId,
                     'archived_at' => null,
                 ]);
                 if ($appt !== null && in_array((string) $appt['status'], ['scheduled', 'checked_in'], true)) {
                     $this->db->table('clinic_appointments')
+                        ->where('clinic_appointments.tenant_id', CurrentTenant::id())
                         ->where('id', $apptId)
                         ->update(['status' => 'no_show', 'updated_at' => $now]);
                     $this->audit->enqueue(
@@ -480,6 +495,7 @@ final class ClinicService extends BaseService
             // 3) Queue entry → done + outcome=no_show (if linked).
             if ($queueRow !== null) {
                 $this->db->table('clinic_queue_entries')
+                    ->where('clinic_queue_entries.tenant_id', CurrentTenant::id())
                     ->where('id', (int) $queueRow['id'])
                     ->update([
                         'status'      => 'done',
@@ -497,7 +513,7 @@ final class ClinicService extends BaseService
                 ['previous_status' => 'open', 'next_status' => 'closed', 'outcome' => 'no_show'],
             );
 
-            $row = $this->db->table('clinic_encounters')->where('id', $encounterId)->get()->getRowArray();
+            $row = $this->db->table('clinic_encounters')->where('clinic_encounters.tenant_id', CurrentTenant::id())->where('id', $encounterId)->get()->getRowArray();
             return EncounterDto::fromRow($row);
         });
     }
@@ -524,7 +540,7 @@ final class ClinicService extends BaseService
 
         try {
             $this->txn(function () use ($encounterId, $userId): void {
-                $enc = $this->selectForUpdate('clinic_encounters', ['id' => $encounterId, 'archived_at' => null]);
+                $enc = $this->selectForUpdate('clinic_encounters', ['tenant_id' => CurrentTenant::id(), 'id' => $encounterId, 'archived_at' => null]);
                 if ($enc === null || (string) $enc['status'] !== 'open') {
                     return; // lost the race — already closed by a parallel close/no-show
                 }
@@ -532,6 +548,7 @@ final class ClinicService extends BaseService
                 $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
 
                 $this->db->table('clinic_encounters')
+                    ->where('clinic_encounters.tenant_id', CurrentTenant::id())
                     ->where('id', $encounterId)
                     ->update([
                         'status'     => 'closed',
@@ -542,11 +559,13 @@ final class ClinicService extends BaseService
 
                 if (isset($enc['appointment_id']) && $enc['appointment_id'] !== null) {
                     $appt = $this->selectForUpdate('clinic_appointments', [
+                        'tenant_id'   => CurrentTenant::id(),
                         'id'          => (int) $enc['appointment_id'],
                         'archived_at' => null,
                     ]);
                     if ($appt !== null && (string) $appt['status'] === 'checked_in') {
                         $this->db->table('clinic_appointments')
+                            ->where('clinic_appointments.tenant_id', CurrentTenant::id())
                             ->where('id', (int) $appt['id'])
                             ->update(['status' => 'completed', 'updated_at' => $now]);
                         $this->audit->enqueue(
@@ -568,6 +587,7 @@ final class ClinicService extends BaseService
                 if ($queueRow !== null
                     && in_array((string) $queueRow['status'], ['waiting', 'called', 'in_session'], true)) {
                     $this->db->table('clinic_queue_entries')
+                        ->where('clinic_queue_entries.tenant_id', CurrentTenant::id())
                         ->where('id', (int) $queueRow['id'])
                         ->update([
                             'status'      => 'done',
@@ -610,7 +630,7 @@ final class ClinicService extends BaseService
         $userId = \App\Auth\CurrentUser::assert();
 
         return $this->txn(function () use ($encounterId, $input, $userId): EncounterDto {
-            $enc = $this->selectForUpdate('clinic_encounters', ['id' => $encounterId, 'archived_at' => null]);
+            $enc = $this->selectForUpdate('clinic_encounters', ['tenant_id' => CurrentTenant::id(), 'id' => $encounterId, 'archived_at' => null]);
             if ($enc === null) {
                 throw new ApiException('resource.not_found', 404, [
                     ['code' => 'resource.not_found', 'message' => "Encounter #{$encounterId} not found."],
@@ -629,12 +649,12 @@ final class ClinicService extends BaseService
                 $update['diagnosis'] = $input['diagnosis'] !== '' && $input['diagnosis'] !== null ? (string) $input['diagnosis'] : null;
             }
 
-            $this->db->table('clinic_encounters')->where('id', $encounterId)->update($update);
+            $this->db->table('clinic_encounters')->where('clinic_encounters.tenant_id', CurrentTenant::id())->where('id', $encounterId)->update($update);
             $this->audit->enqueue('clinic.encounter_assessed', 'clinic_encounters', $encounterId, $userId, [
                 'outcome' => (string) ($update['triage_priority'] ?? 'diagnosis'),
             ]);
 
-            $row = $this->db->table('clinic_encounters')->where('id', $encounterId)->get()->getRowArray();
+            $row = $this->db->table('clinic_encounters')->where('clinic_encounters.tenant_id', CurrentTenant::id())->where('id', $encounterId)->get()->getRowArray();
             return EncounterDto::fromRow($row);
         });
     }
@@ -649,6 +669,7 @@ final class ClinicService extends BaseService
         $this->policy->check('treatmentsRead');
 
         $rows = $this->db->table('clinic_treatments t')
+            ->where('t.tenant_id', CurrentTenant::id())
             ->select('t.id, t.encounter_id, t.treatment_type, t.description, t.medicine_id, t.quantity_used, t.administered_by_user_id, t.administered_at, m.generic_name, m.unit', false)
             ->join('clinic_medicines m', 'm.id = t.medicine_id', 'left')
             ->where('t.encounter_id', $encounterId)
@@ -681,7 +702,7 @@ final class ClinicService extends BaseService
         $userId = \App\Auth\CurrentUser::assert();
 
         return $this->txn(function () use ($encounterId, $input, $userId): array {
-            $enc = $this->selectForUpdate('clinic_encounters', ['id' => $encounterId, 'archived_at' => null]);
+            $enc = $this->selectForUpdate('clinic_encounters', ['tenant_id' => CurrentTenant::id(), 'id' => $encounterId, 'archived_at' => null]);
             if ($enc === null) {
                 throw new ApiException('resource.not_found', 404, [
                     ['code' => 'resource.not_found', 'message' => "Encounter #{$encounterId} not found."],
@@ -708,6 +729,7 @@ final class ClinicService extends BaseService
             }
 
             $this->db->table('clinic_treatments')->insert([
+                'tenant_id'               => CurrentTenant::id(),
                 'encounter_id'            => $encounterId,
                 'treatment_type'          => $type,
                 'description'             => (string) $input['description'],
@@ -722,7 +744,7 @@ final class ClinicService extends BaseService
 
             $this->audit->enqueue('clinic.treatment_recorded', 'clinic_treatments', $id, $userId, ['outcome' => $type]);
 
-            $row = $this->db->table('clinic_treatments')->where('id', $id)->get()->getRowArray();
+            $row = $this->db->table('clinic_treatments')->where('clinic_treatments.tenant_id', CurrentTenant::id())->where('id', $id)->get()->getRowArray();
             return [
                 'id'              => (int) $row['id'],
                 'encounter_id'    => (int) $row['encounter_id'],
@@ -748,7 +770,7 @@ final class ClinicService extends BaseService
             ]);
         }
 
-        $med = $this->selectForUpdate('clinic_medicines', ['id' => $medicineId, 'archived_at' => null]);
+        $med = $this->selectForUpdate('clinic_medicines', ['tenant_id' => CurrentTenant::id(), 'id' => $medicineId, 'archived_at' => null]);
         if ($med === null) {
             throw new ApiException('resource.not_found', 404, [
                 ['code' => 'resource.not_found', 'message' => "Medicine #{$medicineId} not found."],
@@ -784,12 +806,13 @@ final class ClinicService extends BaseService
                 $firstBatchId = $bid;
             }
 
-            $this->db->table('clinic_medicine_batches')->where('id', $bid)->update([
+            $this->db->table('clinic_medicine_batches')->where('clinic_medicine_batches.tenant_id', CurrentTenant::id())->where('id', $bid)->update([
                 'quantity_remaining' => $newQty,
                 'status'             => $newQty === 0 ? 'depleted' : 'active',
             ]);
             $balance -= $take;
             $this->db->table('clinic_medicine_transactions')->insert([
+                'tenant_id'            => CurrentTenant::id(),
                 'medicine_id'          => $medicineId,
                 'batch_id'             => $bid,
                 'type'                 => 'dispensed',
@@ -843,6 +866,7 @@ final class ClinicService extends BaseService
         $userId = \App\Auth\CurrentUser::assert();
 
         $enc = $this->db->table('clinic_encounters')
+            ->where('clinic_encounters.tenant_id', CurrentTenant::id())
             ->where('id', $encounterId)->where('archived_at', null)
             ->get()->getRowArray();
         if ($enc === null) {
@@ -852,6 +876,7 @@ final class ClinicService extends BaseService
         }
 
         $vitals = $this->db->table('clinic_vitals')
+            ->where('clinic_vitals.tenant_id', CurrentTenant::id())
             ->where('encounter_id', $encounterId)
             ->orderBy('id', 'DESC')->limit(1)
             ->get()->getRowArray();
@@ -877,6 +902,7 @@ final class ClinicService extends BaseService
 
         $now = $this->utcNow();
         $this->db->table('clinic_triage_predictions')->insert([
+            'tenant_id'          => CurrentTenant::id(),
             'encounter_id'       => $encounterId,
             'patient_school_id'  => (string) $enc['patient_school_id'],
             'input_text'         => (string) $enc['chief_complaint'],
@@ -915,7 +941,7 @@ final class ClinicService extends BaseService
         $userId = \App\Auth\CurrentUser::assert();
 
         return $this->txn(function () use ($predictionId, $decision, $staffPriority, $userId): array {
-            $pred = $this->selectForUpdate('clinic_triage_predictions', ['id' => $predictionId]);
+            $pred = $this->selectForUpdate('clinic_triage_predictions', ['tenant_id' => CurrentTenant::id(), 'id' => $predictionId]);
             if ($pred === null) {
                 throw new ApiException('resource.not_found', 404, [
                     ['code' => 'resource.not_found', 'message' => "Prediction #{$predictionId} not found."],
@@ -933,14 +959,14 @@ final class ClinicService extends BaseService
                 : (string) $staffPriority;
             $now = $this->utcNow();
 
-            $this->db->table('clinic_triage_predictions')->where('id', $predictionId)->update([
+            $this->db->table('clinic_triage_predictions')->where('clinic_triage_predictions.tenant_id', CurrentTenant::id())->where('id', $predictionId)->update([
                 'staff_decision'     => $decision,
                 'staff_priority'     => $decision === 'overridden' ? $staffPriority : null,
                 'decided_by_user_id' => $userId,
                 'decided_at'         => $now,
             ]);
 
-            $this->db->table('clinic_encounters')->where('id', (int) $pred['encounter_id'])->update([
+            $this->db->table('clinic_encounters')->where('clinic_encounters.tenant_id', CurrentTenant::id())->where('id', (int) $pred['encounter_id'])->update([
                 'triage_priority' => $finalPriority,
                 'triage_override' => $decision === 'overridden' ? 1 : 0,
                 'updated_at'      => $now,

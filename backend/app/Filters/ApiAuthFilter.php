@@ -7,6 +7,7 @@ namespace App\Filters;
 use App\Auth\AccountStateService;
 use App\Auth\CurrentUser;
 use App\Exceptions\ApiException;
+use App\Services\CurrentTenant;
 use CodeIgniter\Filters\FilterInterface;
 use CodeIgniter\HTTP\RequestInterface;
 use CodeIgniter\HTTP\ResponseInterface;
@@ -56,8 +57,14 @@ final class ApiAuthFilter implements FilterInterface
             ]));
         }
 
-        // Hydrate the request-scoped CurrentUser.
+        // Hydrate the request-scoped CurrentUser, and derive the active
+        // tenant from the SAME row (users.tenant_id). Binding here, per
+        // request, is what makes CurrentTenant request-scoped in practice:
+        // the static inside CurrentTenant would otherwise leak across
+        // requests under any persistent runtime. Services must scope
+        // queries with CurrentTenant::id().
         CurrentUser::bind($userId);
+        CurrentTenant::set($state['tenant_id']);
 
         return $request;
     }

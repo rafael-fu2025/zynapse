@@ -1,4 +1,5 @@
 import { expect, test, type BrowserContext, type Page } from '@playwright/test';
+import { signInMocked } from './helpers/auth';
 
 const queueState = {
   guidance: {
@@ -45,7 +46,10 @@ async function installSettings(page: Page, value: unknown) {
 }
 
 async function signInAsAdmin(page: Page) {
-  const session = { id: 1, email: 'admin@foundationu.edu.ph', username: 'admin', is_active: true, force_reset: false, permissions: ['rbac.manage'] };
+  // The /admin/kiosk-settings route guards on `kiosk.content.manage`
+  // (src/router.tsx) — the mock must carry the permission the page
+  // actually requires, or the SPA correctly renders 403.
+  const session = { id: 1, email: 'admin@foundationu.edu.ph', username: 'admin', is_active: true, force_reset: false, permissions: ['kiosk.content.manage'] };
   let kioskRevision = 0;
   await page.route('**/api/v1/kiosk-settings', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ success: true, data: { settings: settings(), revision: 0, updated_at: null }, errors: [], meta: null }) }));
   await page.route('**/api/v1/admin/kiosk-settings', async (route) => {
@@ -53,13 +57,7 @@ async function signInAsAdmin(page: Page) {
     kioskRevision += 1;
     await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ success: true, data: { settings: payload.settings, revision: kioskRevision, updated_at: '2026-08-15 04:00:00' }, errors: [], meta: null }) });
   });
-  await page.route('**/api/v1/auth/login', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ success: true, data: { access_token: 'test-token', expires_in: 900 }, errors: [], meta: null }) }));
-  await page.route('**/api/v1/auth/me', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ success: true, data: session, errors: [], meta: null }) }));
-  await page.goto('/login');
-  await page.getByLabel(/email/i).fill(session.email);
-  await page.getByRole('textbox', { name: 'Password' }).fill('DevPassw0rd!');
-  await page.getByRole('button', { name: /sign in/i }).click();
-  await page.waitForURL('/');
+  await signInMocked(page, session);
   await page.evaluate(() => { window.history.pushState({}, '', '/admin/kiosk-settings'); window.dispatchEvent(new PopStateEvent('popstate')); });
   await expect(page.getByRole('heading', { name: 'Kiosk Settings' })).toBeVisible();
 }

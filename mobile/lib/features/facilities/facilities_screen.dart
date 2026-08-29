@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:hugeicons/hugeicons.dart';
@@ -52,8 +53,9 @@ class _FacilitiesScreenState extends State<FacilitiesScreen>
         _items = page.items;
         _nextCursor = page.meta?.nextCursor;
       });
-    } catch (_) {
+    } catch (e) {
       // Keep the current list on transient errors.
+      if (kDebugMode) debugPrint('FacilitiesScreen.poll failed: $e');
     }
   }
 
@@ -88,8 +90,9 @@ class _FacilitiesScreenState extends State<FacilitiesScreen>
         _items = [..._items, ...page.items];
         _nextCursor = page.meta?.nextCursor;
       });
-    } catch (_) {
+    } catch (e) {
       // ignore
+      if (kDebugMode) debugPrint('FacilitiesScreen.loadMore failed: $e');
     } finally {
       setState(() => _loadingMore = false);
     }
@@ -128,7 +131,9 @@ class _FacilitiesScreenState extends State<FacilitiesScreen>
     List<Map<String, dynamic>> categories = [];
     try {
       categories = await ApiService.I.facilityWasteCategories();
-    } catch (_) {}
+    } catch (e) {
+      if (kDebugMode) debugPrint('FacilitiesScreen.startBatch failed: $e');
+    }
     if (!mounted) return;
     if (categories.isEmpty) {
       showCrudMessage(context, 'No waste categories available.', error: true);
@@ -300,7 +305,11 @@ class _FacilitiesScreenState extends State<FacilitiesScreen>
     List<Map<String, dynamic>> alerts = [];
     try {
       alerts = await ApiService.I.facilityOpenAlerts();
-    } catch (_) {}
+    } catch (e) {
+      if (kDebugMode) {
+        debugPrint('FacilitiesScreen.acknowledgeAlerts failed: $e');
+      }
+    }
     if (!mounted) return;
     if (alerts.isEmpty) {
       showCrudMessage(context, 'No open alerts.');

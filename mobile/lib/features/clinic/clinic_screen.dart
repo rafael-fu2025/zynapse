@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:hugeicons/hugeicons.dart';
@@ -54,8 +55,9 @@ class _ClinicScreenState extends State<ClinicScreen>
         _items = page.items;
         _nextCursor = page.meta?.nextCursor;
       });
-    } catch (_) {
+    } catch (e) {
       // Keep the current list on transient errors.
+      if (kDebugMode) debugPrint('ClinicScreen.poll failed: $e');
     }
   }
 
@@ -93,8 +95,9 @@ class _ClinicScreenState extends State<ClinicScreen>
         _items = [..._items, ...page.items];
         _nextCursor = page.meta?.nextCursor;
       });
-    } catch (_) {
+    } catch (e) {
       // ignore
+      if (kDebugMode) debugPrint('ClinicScreen.loadMore failed: $e');
     } finally {
       if (mounted) setState(() => _loadingMore = false);
     }
@@ -111,8 +114,9 @@ class _ClinicScreenState extends State<ClinicScreen>
       ]);
       vitals = results[0];
       treatments = results[1];
-    } catch (_) {
+    } catch (e) {
       // vitals/treatments are best-effort in the view
+      if (kDebugMode) debugPrint('ClinicScreen.view failed: $e');
     }
     if (!mounted) return;
 
@@ -328,7 +332,9 @@ class _ClinicScreenState extends State<ClinicScreen>
                   'name': p.fullName,
                 })
             .toList();
-      } catch (_) {}
+      } catch (e) {
+        if (kDebugMode) debugPrint('ClinicScreen.staffSchedules failed: $e');
+      }
       if (!mounted) return;
       final options = staff.map((s) => '${s['id']} · ${s['name']}').toList();
       final payload = await showCrudForm(

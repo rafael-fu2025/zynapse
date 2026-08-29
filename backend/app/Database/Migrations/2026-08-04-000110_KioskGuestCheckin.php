@@ -38,15 +38,39 @@ final class KioskGuestCheckin extends Migration
         $this->forge->modifyColumn('clinic_encounters', [
             'patient_school_id' => ['type' => 'VARCHAR', 'constraint' => 32, 'null' => true],
         ]);
-        $this->forge->addColumn('clinic_encounters', [
-            'guest_name' => [
-                'type'       => 'VARCHAR',
-                'constraint' => 120,
-                'null'       => true,
-                'default'    => null,
-                'after'      => 'patient_user_id',
-            ],
-        ]);
+
+        // Position `guest_name` after whichever patient column exists.
+        //
+        // `patient_user_id` is not created until
+        // 2026-08-05-000040_ClinicalPatientUserId, which runs a day LATER
+        // in the chain. Hard-coding it as the anchor made this migration
+        // pass on databases that were migrated incrementally (the column
+        // was already there) but fail on a fresh one with
+        // "Unknown column 'patient_user_id' in 'clinic_encounters'" —
+        // i.e. the schema could not be rebuilt from scratch.
+        //
+        // Resolving the anchor at runtime keeps both paths working and
+        // matches the defensive style of the surrounding identity
+        // migrations (see ClinicalPatientUserId::up()).
+        $encounterAnchor = 'id';
+        foreach (['patient_user_id', 'patient_identifier_id', 'patient_school_id'] as $candidate) {
+            if ($this->db->fieldExists($candidate, 'clinic_encounters')) {
+                $encounterAnchor = $candidate;
+                break;
+            }
+        }
+
+        if (! $this->db->fieldExists('guest_name', 'clinic_encounters')) {
+            $this->forge->addColumn('clinic_encounters', [
+                'guest_name' => [
+                    'type'       => 'VARCHAR',
+                    'constraint' => 120,
+                    'null'       => true,
+                    'default'    => null,
+                    'after'      => $encounterAnchor,
+                ],
+            ]);
+        }
     }
 
     public function down(): void

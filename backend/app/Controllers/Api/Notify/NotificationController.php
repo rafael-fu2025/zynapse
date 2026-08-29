@@ -8,6 +8,7 @@ use App\Auth\CurrentUser;
 use App\Controllers\Api\ApiController;
 use App\Exceptions\ApiException;
 use App\Pagination\KeysetPaginator;
+use App\Services\CurrentTenant;
 use CodeIgniter\HTTP\ResponseInterface;
 use Config\Services;
 use DateTimeImmutable;
@@ -33,6 +34,7 @@ final class NotificationController extends ApiController
         $builder = Services::database()
             ->table('notifications')
             ->select('id, template_code, context_json, read_at, created_at')
+            ->where('tenant_id', CurrentTenant::id())
             ->where('recipient_user_id', $userId)
             ->orderBy('created_at', 'DESC')
             ->orderBy('id', 'DESC');
@@ -64,6 +66,7 @@ final class NotificationController extends ApiController
 
         $db = Services::database();
         $row = $db->table('notifications')
+            ->where('tenant_id', CurrentTenant::id())
             ->where('id', $id)
             ->where('recipient_user_id', $userId)
             ->get()->getRowArray();
@@ -74,6 +77,7 @@ final class NotificationController extends ApiController
 
         if ($row['read_at'] === null) {
             $db->table('notifications')
+                ->where('tenant_id', CurrentTenant::id())
                 ->where('id', $id)
                 ->update(['read_at' => (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s')]);
         }
@@ -93,6 +97,7 @@ final class NotificationController extends ApiController
 
         $db = Services::database();
         $db->table('notifications')
+            ->where('tenant_id', CurrentTenant::id())
             ->where('recipient_user_id', $userId)
             ->where('read_at', null)
             ->update(['read_at' => (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s')]);

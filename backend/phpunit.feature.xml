@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Feature / integration suite.
+
+  Separate from `phpunit.xml` because PHPUnit has no per-testsuite bootstrap
+  attribute and the two bootstraps are mutually exclusive: the unit
+  bootstrap stubs `service()`/`config()` and never boots the kernel, while
+  the feature bootstrap boots the real kernel (which declares those helpers
+  for real). See tests/_bootstrap_feature.php for the full rationale.
+
+  Requires a live MySQL/MariaDB and a schema distinct from the dev database
+  (the bootstrap refuses to run otherwise). The schema is not portable to
+  SQLite: ~40 migrations emit raw DDL including SIGNAL SQLSTATE triggers,
+  ALTER TABLE ADD CONSTRAINT CHECK, and ENUM columns.
+
+  Run from the backend/ directory:  composer test:feature
+-->
+<phpunit xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:noNamespaceSchemaLocation="https://schema.phpunit.de/10.5/phpunit.xsd"
+         bootstrap="tests/_bootstrap_feature.php"
+         cacheDirectory="writable/cache/.phpunit.feature.cache"
+         colors="true"
+         failOnWarning="true"
+         failOnRisky="true"
+         stopOnError="false">
+    <testsuites>
+        <testsuite name="feature">
+            <directory>tests/Feature</directory>
+        </testsuite>
+    </testsuites>
+    <source>
+        <include>
+            <directory suffix=".php">app</directory>
+        </include>
+        <exclude>
+            <directory>app/Views</directory>
+            <directory>app/Database/Migrations</directory>
+        </exclude>
+    </source>
+    <php>
+        <!--
+          The refresh cookie is Secure=true in .env, which a test client
+          over plain HTTP would discard. Feature tests assert on the
+          Set-Cookie header directly, so relax it here for determinism.
+        -->
+        <env name="REFRESH_COOKIE_SECURE" value="false" force="true"/>
+        <!--
+          Login lockout is 5 failures / 15 min and auth rate limiting is
+          30/min. A suite that logs in repeatedly would trip both, so raise
+          the ceilings; the dedicated throttle tests drive the real limits
+          through the service directly rather than relying on these.
+        -->
+        <env name="RATELIMIT_GLOBAL_PER_MIN" value="100000" force="true"/>
+        <env name="RATELIMIT_AUTH_PER_MIN" value="100000" force="true"/>
+        <env name="LOGIN_LOCKOUT_MAX_FAILURES" value="100000" force="true"/>
+        <!--
+          Audit/notification auto-drain needs no flag here: the post_system
+          hook in app/Config/Events.php is guarded by `! is_cli()`, and
+          PHPUnit keeps PHP_SAPI = 'cli' even while FeatureTestTrait
+          simulates HTTP requests. Tests that need drained rows must invoke
+          the drain service explicitly.
+        -->
+        <!--
+          Crypto/JWT material for environments without a real .env (CI).
+          Deliberately NOT force=true: locally the project .env still wins.
+          These are throwaway test-only values, never production secrets.
+        -->
+        <env name="JWT_SECRET" value="feature-suite-jwt-secret-0123456789abcdef"/>
+        <env name="REFERRAL_HMAC_KEY" value="feature-suite-referral-hmac-key-0123456789"/>
+        <env name="COUNSELLING_KEY" value="f1e2d3c4b5a6978897a6b5c4d3e2f1e0a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4"/>
+        <env name="COUNSELLING_KEY_VERSION" value="1"/>
+        <env name="SYNAPSE_TENANT_ID" value="1"/>
+    </php>
+</phpunit>

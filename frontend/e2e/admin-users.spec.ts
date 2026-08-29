@@ -1,20 +1,13 @@
 import { expect, test, type Page } from '@playwright/test';
+import { signInLive } from './helpers/auth';
 
 const RUN = process.env['SYNAPSE_E2E'] === '1';
-const PASSWORD = 'DevPassw0rd!';
 
 test.skip(!RUN, 'SYNAPSE_E2E=1 not set, skipping live Admin Users checks.');
 test.setTimeout(90_000);
 
 async function signInAndOpenUsers(page: Page): Promise<void> {
-  await expect(async () => {
-    await page.goto('/login', { waitUntil: 'domcontentloaded', timeout: 15_000 });
-    await expect(page.getByLabel(/email/i)).toBeVisible({ timeout: 10_000 });
-  }).toPass({ timeout: 30_000 });
-  await page.getByLabel(/email/i).fill('admin@synapse.dev');
-  await page.locator('input[name="password"]').fill(PASSWORD);
-  await page.getByRole('button', { name: /sign in/i }).click();
-  await page.waitForURL(/\/$/, { timeout: 20_000 });
+  await signInLive(page);
   await page.getByRole('link', { name: 'Users', exact: true }).click();
   await page.waitForURL(/\/admin\/users(?:\?|$)/, { timeout: 20_000 });
   await expect(page.getByRole('region', { name: 'User filters' })).toBeVisible();

@@ -1,20 +1,13 @@
 import { expect, test, type Page } from '@playwright/test';
+import { signInLive } from './helpers/auth';
 
 const RUN = process.env['SYNAPSE_E2E'] === '1';
-const PASSWORD = 'DevPassw0rd!';
 
 test.skip(!RUN, 'SYNAPSE_E2E=1 not set — skipping live reports checks.');
 test.setTimeout(90_000);
 
 async function signIn(page: Page, email: string): Promise<void> {
-  await expect(async () => {
-    await page.goto('/login', { waitUntil: 'domcontentloaded', timeout: 15_000 });
-    await expect(page.getByLabel(/email/i)).toBeVisible({ timeout: 10_000 });
-  }).toPass({ timeout: 30_000 });
-  await page.getByLabel(/email/i).fill(email);
-  await page.locator('input[name="password"]').fill(PASSWORD);
-  await page.getByRole('button', { name: /sign in/i }).click();
-  await page.waitForURL(/\/$/, { timeout: 20_000 });
+  await signInLive(page, email);
   if ((page.viewportSize()?.width ?? 1280) < 768) {
     await page.getByRole('banner').getByRole('button', { name: /toggle sidebar/i }).click();
   }

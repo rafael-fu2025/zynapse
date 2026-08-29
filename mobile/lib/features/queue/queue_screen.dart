@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:hugeicons/hugeicons.dart';
 import 'package:provider/provider.dart';
@@ -110,8 +111,9 @@ class _QueueScreenState extends State<QueueScreen>
         _public = public;
         _today = today;
       });
-    } catch (_) {
+    } catch (e) {
       // Keep the last known queue state.
+      if (kDebugMode) debugPrint('QueueScreen.poll failed: $e');
     }
   }
 

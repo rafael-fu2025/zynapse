@@ -6,6 +6,7 @@ namespace App\Controllers\Api\Dashboard;
 
 use App\Controllers\Api\ApiController;
 use App\Exceptions\ApiException;
+use App\Services\CurrentTenant;
 use CodeIgniter\HTTP\ResponseInterface;
 use Config\Services;
 
@@ -25,15 +26,15 @@ final class DashboardController extends ApiController
 
         if ($this->permissions->userHas(\App\Auth\CurrentUser::assert(), 'clinic.encounters.read')) {
             $out['clinic'] = [
-                'open_encounters'   => (int) $db->table('clinic_encounters')->where('status', 'open')->where('archived_at', null)->countAllResults(),
-                'closed_encounters' => (int) $db->table('clinic_encounters')->where('status', 'closed')->where('archived_at', null)->countAllResults(),
+                'open_encounters'   => (int) $db->table('clinic_encounters')->where('tenant_id', CurrentTenant::id())->where('status', 'open')->where('archived_at', null)->countAllResults(),
+                'closed_encounters' => (int) $db->table('clinic_encounters')->where('tenant_id', CurrentTenant::id())->where('status', 'closed')->where('archived_at', null)->countAllResults(),
             ];
         }
 
         if ($this->permissions->userHas(\App\Auth\CurrentUser::assert(), 'counselling.records.read')) {
             $out['counselling'] = [
-                'open_sessions'   => (int) $db->table('counselling_sessions')->where('ended_at', null)->where('archived_at', null)->countAllResults(),
-                'closed_sessions' => (int) $db->table('counselling_sessions')->where('ended_at !=', null)->where('archived_at', null)->countAllResults(),
+                'open_sessions'   => (int) $db->table('counselling_sessions')->where('tenant_id', CurrentTenant::id())->where('ended_at', null)->where('archived_at', null)->countAllResults(),
+                'closed_sessions' => (int) $db->table('counselling_sessions')->where('tenant_id', CurrentTenant::id())->where('ended_at !=', null)->where('archived_at', null)->countAllResults(),
             ];
         }
 
@@ -55,10 +56,10 @@ final class DashboardController extends ApiController
 
         if ($this->permissions->userHas(\App\Auth\CurrentUser::assert(), 'referrals.read')) {
             $out['referrals'] = [
-                'submitted'   => (int) $db->table('referral_referrals')->where('status', 'submitted')->where('archived_at', null)->countAllResults(),
-                'acknowledged'=> (int) $db->table('referral_referrals')->where('status', 'acknowledged')->where('archived_at', null)->countAllResults(),
-                'under_review'=> (int) $db->table('referral_referrals')->where('status', 'under_review')->where('archived_at', null)->countAllResults(),
-                'closed'      => (int) $db->table('referral_referrals')->where('status', 'closed')->where('archived_at', null)->countAllResults(),
+                'submitted'   => (int) $db->table('referral_referrals')->where('tenant_id', CurrentTenant::id())->where('status', 'submitted')->where('archived_at', null)->countAllResults(),
+                'acknowledged'=> (int) $db->table('referral_referrals')->where('tenant_id', CurrentTenant::id())->where('status', 'acknowledged')->where('archived_at', null)->countAllResults(),
+                'under_review'=> (int) $db->table('referral_referrals')->where('tenant_id', CurrentTenant::id())->where('status', 'under_review')->where('archived_at', null)->countAllResults(),
+                'closed'      => (int) $db->table('referral_referrals')->where('tenant_id', CurrentTenant::id())->where('status', 'closed')->where('archived_at', null)->countAllResults(),
             ];
         }
 
@@ -74,8 +75,9 @@ final class DashboardController extends ApiController
         // patient identity (`kind` IS NOT NULL). Gated by rbac.read so
         // any admin can see the rollout status.
         if ($this->permissions->userHas(\App\Auth\CurrentUser::assert(), 'rbac.read')) {
-            $totalUsers = (int) $db->table('users')->where('deleted_at', null)->countAllResults();
+            $totalUsers = (int) $db->table('users')->where('tenant_id', CurrentTenant::id())->where('deleted_at', null)->countAllResults();
             $linkedUsers = (int) $db->table('users')
+                ->where('tenant_id', CurrentTenant::id())
                 ->where('deleted_at', null)
                 ->where('kind IS NOT NULL', null, false)
                 ->countAllResults();

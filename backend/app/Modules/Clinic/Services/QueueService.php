@@ -8,6 +8,7 @@ use App\Exceptions\ApiException;
 use App\Modules\Shared\BaseService;
 use App\Modules\Shared\StateMachineException;
 use App\Services\Audit\AuditOutboxService;
+use App\Services\CurrentTenant;
 use App\Services\Notify\NotificationOutboxService;
 use DateTimeImmutable;
 use DateTimeZone;
@@ -97,6 +98,7 @@ final class QueueService extends BaseService
         return $this->txn(function () use ($patientUserId, $patientSchoolId, $referralId, $userId): array {
             $existingReferral = $this->db->table('clinic_queue_entries')
                 ->select('id')
+                ->where('clinic_queue_entries.tenant_id', CurrentTenant::id())
                 ->where('referral_id', $referralId)
                 ->get()->getRowArray();
             if ($existingReferral !== null) {
@@ -111,7 +113,7 @@ final class QueueService extends BaseService
                 [$patientSchoolId, 'waiting', 'called', 'in_session'],
             )->getRowArray();
             if ($active !== null) {
-                $this->db->table('clinic_queue_entries')->where('id', (int) $active['id'])->update([
+                $this->db->table('clinic_queue_entries')->where('clinic_queue_entries.tenant_id', CurrentTenant::id())->where('id', (int) $active['id'])->update([
                     'referral_id' => $referralId,
                     'updated_at' => $this->utcNow(),
                 ]);
@@ -120,6 +122,7 @@ final class QueueService extends BaseService
 
             $now = $this->utcNow();
             $this->db->table('clinic_encounters')->insert([
+                'tenant_id' => CurrentTenant::id(),
                 'patient_user_id' => $patientUserId,
                 'patient_school_id' => $patientSchoolId,
                 'chief_complaint' => 'Referral handoff to Clinic (pending triage)',
@@ -137,6 +140,7 @@ final class QueueService extends BaseService
             )->getRowArray();
             $position = ($last !== null ? (int) $last['position'] : 0) + 1;
             $this->db->table('clinic_queue_entries')->insert([
+                'tenant_id' => CurrentTenant::id(),
                 'encounter_id' => $encounterId,
                 'referral_id' => $referralId,
                 'queue_date' => $this->utcToday(),
@@ -174,6 +178,7 @@ final class QueueService extends BaseService
 
         $ids = $this->db->table('clinic_encounters')
             ->select('id')
+            ->where('clinic_encounters.tenant_id', CurrentTenant::id())
             ->where('status', 'open')
             ->where('archived_at', null)
             ->where('started_at <', $dayStart)
@@ -237,7 +242,7 @@ final class QueueService extends BaseService
             }
 
             $now = $this->utcNow();
-            $this->db->table('clinic_queue_entries')->where('id', (int) $next['id'])->update([
+            $this->db->table('clinic_queue_entries')->where('clinic_queue_entries.tenant_id', CurrentTenant::id())->where('id', (int) $next['id'])->update([
                 'status'            => 'called',
                 'called_at'         => $now,
                 'called_by_user_id' => $userId,
@@ -265,6 +270,7 @@ final class QueueService extends BaseService
     {
         $row = $this->db->table('clinic_queue_entries q')
             ->select('q.id, q.position, q.status, q.called_at, q.started_at, q.finished_at, q.encounter_id')
+            ->where('q.tenant_id', CurrentTenant::id())
             ->join('clinic_encounters e', 'e.id = q.encounter_id')
             ->where('q.queue_date', $this->utcToday())
             ->where('e.patient_user_id', $patientUserId)
@@ -282,6 +288,7 @@ final class QueueService extends BaseService
         // People ahead = those in an earlier position still waiting or
         // being served (mirrors the publicState estimate).
         $ahead = $waiting ? (int) $this->db->table('clinic_queue_entries')
+            ->where('clinic_queue_entries.tenant_id', CurrentTenant::id())
             ->where('queue_date', $this->utcToday())
             ->whereIn('status', ['waiting', 'called', 'in_session'])
             ->where('position <', (int) $row['position'])
@@ -313,7 +320,7 @@ final class QueueService extends BaseService
         }
 
         return $this->txn(function () use ($id, $action, $userId): array {
-            $row = $this->selectForUpdate('clinic_queue_entries', ['id' => $id]);
+            $row = $this->selectForUpdate('clinic_queue_entries', ['tenant_id' => CurrentTenant::id(), 'id' => $id]);
             if ($row === null) {
                 throw new ApiException('resource.not_found', 404, [
                     ['code' => 'resource.not_found', 'message' => "Queue entry #{$id} not found."],
@@ -334,7 +341,7 @@ final class QueueService extends BaseService
                 $update['finished_at'] = $now;
             }
 
-            $this->db->table('clinic_queue_entries')->where('id', $id)->update($update);
+            $this->db->table('clinic_queue_entries')->where('clinic_queue_entries.tenant_id', CurrentTenant::id())->where('id', $id)->update($update);
 
             $this->audit->enqueue(
                 'clinic.queue_' . self::RESULT[$action],
@@ -415,6 +422,7 @@ final class QueueService extends BaseService
     {
         $row = $this->db->table('clinic_queue_entries q')
             ->select('q.position, e.patient_user_id')
+            ->where('q.tenant_id', CurrentTenant::id())
             ->join('clinic_encounters e', 'e.id = q.encounter_id')
             ->where('q.id', $queueEntryId)
             ->get()->getRowArray();
@@ -443,6 +451,7 @@ final class QueueService extends BaseService
     {
         return $this->db->table('clinic_queue_entries q')
             ->select('q.id, q.encounter_id, q.position, q.status, q.outcome, q.called_at, q.started_at, q.finished_at, q.created_at, e.status AS encounter_status, e.patient_user_id, e.patient_school_id, e.guest_name, e.chief_complaint, e.outcome AS encounter_outcome, e.station_id, u.first_name, u.last_name')
+            ->where('q.tenant_id', CurrentTenant::id())
             ->join('clinic_encounters e', 'e.id = q.encounter_id')
             // Patients are `users` (identity-consolidated) — one join
             // covers both students and employees queueing at the kiosk.
@@ -467,6 +476,7 @@ final class QueueService extends BaseService
     {
         $row = $this->db->table('clinic_queue_entries q')
             ->select('q.id, q.encounter_id, q.position, q.status, q.outcome, q.called_at, q.started_at, q.finished_at, q.created_at, e.status AS encounter_status, e.patient_user_id, e.patient_school_id, e.guest_name, e.chief_complaint, e.outcome AS encounter_outcome, e.station_id, u.first_name, u.last_name')
+            ->where('q.tenant_id', CurrentTenant::id())
             ->join('clinic_encounters e', 'e.id = q.encounter_id')
             ->join(
                 'users u',

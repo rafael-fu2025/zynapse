@@ -9,6 +9,7 @@ use App\Exceptions\ApiException;
 use App\Modules\Shared\BaseService;
 use App\Pagination\KeysetPaginator;
 use App\Services\Audit\AuditOutboxService;
+use App\Services\CurrentTenant;
 use DateTimeImmutable;
 use DateTimeZone;
 use Modules\Clinic\DTOs\UserDto;
@@ -46,6 +47,7 @@ final class PatientService extends BaseService
         $this->policy->check('patientsRead');
 
         $builder = $this->db->table('users')
+            ->where('users.tenant_id', CurrentTenant::id())
             ->select(self::USER_COLS)
             ->where('kind', 'student')
             ->orderBy('created_at', 'DESC')
@@ -80,6 +82,7 @@ final class PatientService extends BaseService
         $limit = max(1, min($limit, 50));
 
         $builder = $this->db->table('users')
+            ->where('users.tenant_id', CurrentTenant::id())
             ->select(self::USER_COLS)
             ->where('kind', 'student')
             ->where('archived_at', null)
@@ -106,6 +109,7 @@ final class PatientService extends BaseService
         $this->policy->check('patientsRead');
 
         $row = $this->db->table('users')
+            ->where('users.tenant_id', CurrentTenant::id())
             ->select(self::USER_COLS)
             ->where('id', $id)
             ->where('kind', 'student')
@@ -155,6 +159,7 @@ final class PatientService extends BaseService
             $now = $this->utcNow();
 
             $this->db->table('users')->insert([
+                'tenant_id'           => CurrentTenant::id(),
                 'kind'                => 'student',
                 'student_number'      => (string) $input['student_number'],
                 'first_name'          => (string) $input['first_name'],
@@ -206,7 +211,7 @@ final class PatientService extends BaseService
         $userId = CurrentUser::assert();
 
         return $this->txn(function () use ($id, $input, $userId): UserDto {
-            $row = $this->selectForUpdate('users', ['id' => $id, 'kind' => 'student']);
+            $row = $this->selectForUpdate('users', ['tenant_id' => CurrentTenant::id(), 'id' => $id, 'kind' => 'student']);
             if ($row === null) {
                 throw new ApiException('resource.not_found', 404, [
                     ['code' => 'resource.not_found', 'message' => "Student #{$id} not found."],
@@ -228,7 +233,7 @@ final class PatientService extends BaseService
 
             if ($update !== []) {
                 $update['updated_at'] = $this->utcNow();
-                $this->db->table('users')->where('id', $id)->where('kind', 'student')->update($update);
+                $this->db->table('users')->where('users.tenant_id', CurrentTenant::id())->where('id', $id)->where('kind', 'student')->update($update);
 
                 $this->audit->enqueue(
                     'clinic.patient_student_updated',
@@ -249,7 +254,7 @@ final class PatientService extends BaseService
         $userId = CurrentUser::assert();
 
         return $this->txn(function () use ($id, $archived, $userId): UserDto {
-            $row = $this->selectForUpdate('users', ['id' => $id, 'kind' => 'student']);
+            $row = $this->selectForUpdate('users', ['tenant_id' => CurrentTenant::id(), 'id' => $id, 'kind' => 'student']);
             if ($row === null) {
                 throw new ApiException('resource.not_found', 404, [
                     ['code' => 'resource.not_found', 'message' => "Student #{$id} not found."],
@@ -257,7 +262,7 @@ final class PatientService extends BaseService
             }
 
             $now = $this->utcNow();
-            $this->db->table('users')->where('id', $id)->where('kind', 'student')->update([
+            $this->db->table('users')->where('users.tenant_id', CurrentTenant::id())->where('id', $id)->where('kind', 'student')->update([
                 'archived_at' => $archived ? $now : null,
                 'updated_at'  => $now,
             ]);
@@ -283,7 +288,7 @@ final class PatientService extends BaseService
         $userId = CurrentUser::assert();
 
         return $this->txn(function () use ($studentId, $input, $userId): UserDto {
-            $row = $this->selectForUpdate('users', ['id' => $studentId, 'kind' => 'student']);
+            $row = $this->selectForUpdate('users', ['tenant_id' => CurrentTenant::id(), 'id' => $studentId, 'kind' => 'student']);
             if ($row === null) {
                 throw new ApiException('resource.not_found', 404, [
                     ['code' => 'resource.not_found', 'message' => "Student #{$studentId} not found."],
@@ -323,7 +328,7 @@ final class PatientService extends BaseService
         $userId = CurrentUser::assert();
 
         return $this->txn(function () use ($studentId, $input, $userId): UserDto {
-            $row = $this->selectForUpdate('users', ['id' => $studentId, 'kind' => 'student']);
+            $row = $this->selectForUpdate('users', ['tenant_id' => CurrentTenant::id(), 'id' => $studentId, 'kind' => 'student']);
             if ($row === null) {
                 throw new ApiException('resource.not_found', 404, [
                     ['code' => 'resource.not_found', 'message' => "Student #{$studentId} not found."],
@@ -504,6 +509,7 @@ final class PatientService extends BaseService
         $this->policy->check('patientsRead');
 
         $builder = $this->db->table('users')
+            ->where('users.tenant_id', CurrentTenant::id())
             ->select(self::USER_COLS)
             ->where('kind', 'employee')
             ->orderBy('created_at', 'DESC')
@@ -558,6 +564,7 @@ final class PatientService extends BaseService
             $now = $this->utcNow();
 
             $this->db->table('users')->insert([
+                'tenant_id'              => CurrentTenant::id(),
                 'kind'                   => 'employee',
                 'employee_number'        => (string) $input['employee_number'],
                 'first_name'             => (string) $input['first_name'],
@@ -670,6 +677,7 @@ final class PatientService extends BaseService
     {
         $this->policy->check('patientsRead');
         $row = $this->db->table('users')
+            ->where('users.tenant_id', CurrentTenant::id())
             ->select(self::USER_COLS)
             ->where('id', $id)
             ->where('kind', 'employee')
@@ -694,6 +702,7 @@ final class PatientService extends BaseService
         $limit = max(1, min($limit, 50));
 
         $rows = $this->db->table('users')
+            ->where('users.tenant_id', CurrentTenant::id())
             ->select(self::USER_COLS)
             ->where('kind', 'employee')
             ->groupStart()
@@ -727,6 +736,7 @@ final class PatientService extends BaseService
         $limit = max(1, min($limit, 12));
 
         $rows = $this->db->table('users')
+            ->where('users.tenant_id', CurrentTenant::id())
             ->select('id, kind, first_name, last_name, middle_name, student_number, employee_number')
             ->whereIn('kind', ['student', 'employee'])
             ->where('archived_at', null)
@@ -767,7 +777,7 @@ final class PatientService extends BaseService
         $userId = CurrentUser::assert();
 
         return $this->txn(function () use ($id, $input, $userId): UserDto {
-            $row = $this->selectForUpdate('users', ['id' => $id, 'kind' => 'employee']);
+            $row = $this->selectForUpdate('users', ['tenant_id' => CurrentTenant::id(), 'id' => $id, 'kind' => 'employee']);
             if ($row === null) {
                 throw new ApiException('resource.not_found', 404, [
                     ['code' => 'resource.not_found', 'message' => "Employee #{$id} not found."],
@@ -795,7 +805,7 @@ final class PatientService extends BaseService
 
             if ($update !== []) {
                 $update['updated_at'] = $this->utcNow();
-                $this->db->table('users')->where('id', $id)->where('kind', 'employee')->update($update);
+                $this->db->table('users')->where('users.tenant_id', CurrentTenant::id())->where('id', $id)->where('kind', 'employee')->update($update);
                 $this->audit->enqueue('clinic.patient_employee_updated', 'users', $id, $userId, [
                     'fields' => implode(',', array_keys($update)),
                 ]);
@@ -811,14 +821,14 @@ final class PatientService extends BaseService
         $userId = CurrentUser::assert();
 
         return $this->txn(function () use ($id, $archived, $userId): UserDto {
-            $row = $this->selectForUpdate('users', ['id' => $id, 'kind' => 'employee']);
+            $row = $this->selectForUpdate('users', ['tenant_id' => CurrentTenant::id(), 'id' => $id, 'kind' => 'employee']);
             if ($row === null) {
                 throw new ApiException('resource.not_found', 404, [
                     ['code' => 'resource.not_found', 'message' => "Employee #{$id} not found."],
                 ]);
             }
             $now = $this->utcNow();
-            $this->db->table('users')->where('id', $id)->where('kind', 'employee')->update([
+            $this->db->table('users')->where('users.tenant_id', CurrentTenant::id())->where('id', $id)->where('kind', 'employee')->update([
                 'archived_at' => $archived ? $now : null,
                 'updated_at'  => $now,
             ]);
@@ -859,6 +869,7 @@ final class PatientService extends BaseService
                     continue;
                 }
                 $existing = $this->db->table('users')
+                    ->where('users.tenant_id', CurrentTenant::id())
                     ->where('kind', 'employee')
                     ->where('employee_number', $number)
                     ->get()->getRowArray();
@@ -883,10 +894,10 @@ final class PatientService extends BaseService
                 ];
 
                 if ($existing !== null) {
-                    $this->db->table('users')->where('id', (int) $existing['id'])->where('kind', 'employee')->update($fields);
+                    $this->db->table('users')->where('users.tenant_id', CurrentTenant::id())->where('id', (int) $existing['id'])->where('kind', 'employee')->update($fields);
                     $updated++;
                 } else {
-                    $this->db->table('users')->insert($fields + [
+                    $this->db->table('users')->insert(['tenant_id' => CurrentTenant::id()] + $fields + [
                         'kind'           => 'employee',
                         'employee_number' => $number,
                         'status'         => 'active',
@@ -915,6 +926,7 @@ final class PatientService extends BaseService
         $this->policy->check('patientsRead');
 
         $builder = $this->db->table('clinic_departments')
+            ->where('clinic_departments.tenant_id', CurrentTenant::id())
             ->select('id, name, code, description, is_active')
             ->orderBy('name', 'ASC');
         if ($activeOnly) {
@@ -945,6 +957,7 @@ final class PatientService extends BaseService
 
             $now = $this->utcNow();
             $this->db->table('clinic_departments')->insert([
+                'tenant_id'   => CurrentTenant::id(),
                 'name'        => (string) $input['name'],
                 'code'        => (string) $input['code'],
                 'description' => $this->strOrNull($input, 'description'),
@@ -967,6 +980,7 @@ final class PatientService extends BaseService
     private function getUserRowDto(int $id): UserDto
     {
         $row = $this->db->table('users')
+            ->where('users.tenant_id', CurrentTenant::id())
             ->select(self::USER_COLS)
             ->where('id', $id)
             ->get()->getRowArray();
@@ -978,6 +992,18 @@ final class PatientService extends BaseService
         return UserDto::fromRow($row);
     }
 
+    /**
+     * Deliberately NOT tenant-scoped, despite `users`/`clinic_departments`
+     * carrying tenant_id: the schema enforces these identifiers with
+     * GLOBAL unique indexes (`uniq_users_student_number`, `uniq_users_
+     * employee_number`, `uniq_users_qr_code`, `uniq_users_rfid_tag`,
+     * `username`, `clinic_departments.code`, `clinic_departments.name`).
+     * A per-tenant check here would let a duplicate through PHP-side and
+     * then die on the constraint as an unhandled 500 — the whole-table
+     * check keeps the 409 clean and matches the database contract.
+     * Revisit BOTH layers together if per-tenant identifiers are ever
+     * wanted (composite unique indexes + this check).
+     */
     private function assertHandleUnique(string $table, string $column, string $value, ?int $exceptId): void
     {
         $builder = $this->db->table($table)->where($column, $value);

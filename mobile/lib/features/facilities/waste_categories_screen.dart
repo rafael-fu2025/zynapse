@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:hugeicons/hugeicons.dart';
 import 'package:provider/provider.dart';
@@ -41,8 +42,9 @@ class _WasteCategoriesScreenState extends State<WasteCategoriesScreen> {
       List<Map<String, dynamic>> deviation = [];
       try {
         deviation = await ApiService.I.wasteCategoryDeviation();
-      } catch (_) {
+      } catch (e) {
         // Deviation is read-only bonus info — don't block the page.
+        if (kDebugMode) debugPrint('WasteCategoriesScreen.loadDeviation failed: $e');
       }
       if (!mounted) return;
       setState(() {

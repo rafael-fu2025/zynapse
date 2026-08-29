@@ -7,6 +7,7 @@ namespace Modules\Reports\Services;
 use App\Exceptions\ApiException;
 use App\Modules\Shared\BaseService;
 use App\Services\Audit\AuditOutboxService;
+use App\Services\CurrentTenant;
 use DateTimeImmutable;
 use DateTimeZone;
 
@@ -43,8 +44,10 @@ final class ReportConfigService extends BaseService
         if ($module !== null) {
             $this->assertModule($module);
         }
-        $countBuilder = $this->db->table('report_configurations');
+        $countBuilder = $this->db->table('report_configurations')
+            ->where('report_configurations.tenant_id', CurrentTenant::id());
         $builder = $this->db->table('report_configurations')
+            ->where('report_configurations.tenant_id', CurrentTenant::id())
             ->select('id, name, module, report_type, parameters, is_active, created_at, updated_at')
             ->orderBy('created_at', 'DESC')->orderBy('id', 'DESC');
         if (! $includeArchived) {
@@ -75,6 +78,7 @@ final class ReportConfigService extends BaseService
         return $this->txn(function () use ($input, $params, $userId): array {
             $now = $this->utcNow();
             $this->db->table('report_configurations')->insert([
+                'tenant_id' => CurrentTenant::id(),
                 'name' => trim((string) $input['name']),
                 'module' => (string) $input['module'],
                 'report_type' => 'export',
@@ -99,7 +103,7 @@ final class ReportConfigService extends BaseService
         $userId = \App\Auth\CurrentUser::assert();
 
         return $this->txn(function () use ($id, $input, $userId): array {
-            $config = $this->selectForUpdate('report_configurations', ['id' => $id, 'is_active' => 1]);
+            $config = $this->selectForUpdate('report_configurations', ['tenant_id' => CurrentTenant::id(), 'id' => $id, 'is_active' => 1]);
             if ($config === null) {
                 throw $this->notFound('Report configuration', $id);
             }
@@ -118,7 +122,9 @@ final class ReportConfigService extends BaseService
                 );
             }
 
-            $this->db->table('report_configurations')->where('id', $id)->update($update);
+            $this->db->table('report_configurations')
+                ->where('report_configurations.tenant_id', CurrentTenant::id())
+                ->where('id', $id)->update($update);
             $this->audit->enqueue('reports.config_updated', 'report_configurations', $id, $userId, []);
             return $this->getConfig($id);
         });
@@ -128,14 +134,16 @@ final class ReportConfigService extends BaseService
     {
         $userId = \App\Auth\CurrentUser::assert();
         $this->txn(function () use ($id, $userId): void {
-            $config = $this->selectForUpdate('report_configurations', ['id' => $id, 'is_active' => 1]);
+            $config = $this->selectForUpdate('report_configurations', ['tenant_id' => CurrentTenant::id(), 'id' => $id, 'is_active' => 1]);
             if ($config === null) {
                 throw $this->notFound('Report configuration', $id);
             }
-            $this->db->table('report_configurations')->where('id', $id)->update([
-                'is_active' => 0,
-                'updated_at' => $this->utcNow(),
-            ]);
+            $this->db->table('report_configurations')
+                ->where('report_configurations.tenant_id', CurrentTenant::id())
+                ->where('id', $id)->update([
+                    'is_active' => 0,
+                    'updated_at' => $this->utcNow(),
+                ]);
             $this->audit->enqueue('reports.config_archived', 'report_configurations', $id, $userId, []);
         });
     }
@@ -145,15 +153,17 @@ final class ReportConfigService extends BaseService
     {
         $userId = \App\Auth\CurrentUser::assert();
         return $this->txn(function () use ($id, $userId): array {
-            $config = $this->selectForUpdate('report_configurations', ['id' => $id]);
+            $config = $this->selectForUpdate('report_configurations', ['tenant_id' => CurrentTenant::id(), 'id' => $id]);
             if ($config === null) {
                 throw $this->notFound('Report configuration', $id);
             }
             if ((int) $config['is_active'] !== 1) {
-                $this->db->table('report_configurations')->where('id', $id)->update([
-                    'is_active' => 1,
-                    'updated_at' => $this->utcNow(),
-                ]);
+                $this->db->table('report_configurations')
+                    ->where('report_configurations.tenant_id', CurrentTenant::id())
+                    ->where('id', $id)->update([
+                        'is_active' => 1,
+                        'updated_at' => $this->utcNow(),
+                    ]);
                 $this->audit->enqueue('reports.config_restored', 'report_configurations', $id, $userId, []);
             }
             return $this->getConfig($id);
@@ -165,6 +175,7 @@ final class ReportConfigService extends BaseService
     {
         $userId = \App\Auth\CurrentUser::assert();
         $config = $this->db->table('report_configurations')
+            ->where('report_configurations.tenant_id', CurrentTenant::id())
             ->where(['id' => $configId, 'is_active' => 1])->get()->getRowArray();
         if ($config === null) {
             throw $this->notFound('Report configuration', $configId);
@@ -179,6 +190,7 @@ final class ReportConfigService extends BaseService
         return $this->txn(function () use ($configId, $userId, $module, $params, $range, $filename): array {
             $now = $this->utcNow();
             $this->db->table('generated_reports')->insert([
+                'tenant_id' => CurrentTenant::id(),
                 'config_id' => $configId,
                 'module' => $module,
                 'file_path' => $filename,
@@ -222,12 +234,15 @@ final class ReportConfigService extends BaseService
     {
         $now = $this->utcNow();
         $rows = $this->db->table('generated_reports')
+            ->where('generated_reports.tenant_id', CurrentTenant::id())
             ->select('id, file_path')->where('status', 'completed')
             ->where('expires_at IS NOT NULL', null, false)->where('expires_at <=', $now)
             ->get()->getResultArray();
         foreach ($rows as $row) {
             $this->deleteReportFile((string) $row['file_path']);
-            $this->db->table('generated_reports')->where('id', $row['id'])->update(['status' => 'expired']);
+            $this->db->table('generated_reports')
+                ->where('generated_reports.tenant_id', CurrentTenant::id())
+                ->where('id', $row['id'])->update(['status' => 'expired']);
         }
         return count($rows);
     }
@@ -249,8 +264,10 @@ final class ReportConfigService extends BaseService
                 ['code' => 'validation.field', 'message' => 'Unknown generated-report status.', 'field' => 'status'],
             ]);
         }
-        $countBuilder = $this->db->table('generated_reports');
+        $countBuilder = $this->db->table('generated_reports')
+            ->where('generated_reports.tenant_id', CurrentTenant::id());
         $builder = $this->db->table('generated_reports')
+            ->where('generated_reports.tenant_id', CurrentTenant::id())
             ->select('id, config_id, module, file_path, format, status, row_count, parameters_used, ai_summary, error_message, generated_at, started_at, completed_at, expires_at')
             ->orderBy('generated_at', 'DESC')->orderBy('id', 'DESC');
         foreach (['module' => $module, 'status' => $status] as $column => $value) {
@@ -272,7 +289,9 @@ final class ReportConfigService extends BaseService
     /** @return array{path: string, name: string} */
     public function fileForDownload(int $id): array
     {
-        $row = $this->db->table('generated_reports')->where('id', $id)->get()->getRowArray();
+        $row = $this->db->table('generated_reports')
+            ->where('generated_reports.tenant_id', CurrentTenant::id())
+            ->where('id', $id)->get()->getRowArray();
         if ($row === null) {
             throw $this->notFound('Generated report', $id);
         }
@@ -281,7 +300,9 @@ final class ReportConfigService extends BaseService
         }
         if ($row['expires_at'] !== null && (string) $row['expires_at'] <= $this->utcNow()) {
             $this->deleteReportFile((string) $row['file_path']);
-            $this->db->table('generated_reports')->where('id', $id)->update(['status' => 'expired']);
+            $this->db->table('generated_reports')
+                ->where('generated_reports.tenant_id', CurrentTenant::id())
+                ->where('id', $id)->update(['status' => 'expired']);
             throw new ApiException('resource.not_found', 404, [
                 ['code' => 'resource.not_found', 'message' => 'The report file has expired.'],
             ]);
@@ -306,11 +327,13 @@ final class ReportConfigService extends BaseService
             if ($row === null) {
                 return null;
             }
-            $this->db->table('generated_reports')->where('id', $row['id'])->update([
-                'status' => 'processing',
-                'started_at' => $this->utcNow(),
-                'error_message' => null,
-            ]);
+            $this->db->table('generated_reports')
+                ->where('generated_reports.tenant_id', CurrentTenant::id())
+                ->where('id', $row['id'])->update([
+                    'status' => 'processing',
+                    'started_at' => $this->utcNow(),
+                    'error_message' => null,
+                ]);
             $row['status'] = 'processing';
             return $row;
         });
@@ -380,14 +403,16 @@ final class ReportConfigService extends BaseService
 
             $expires = (new DateTimeImmutable($completed, new DateTimeZone('UTC')))
                 ->modify('+' . self::RETENTION_DAYS . ' days')->format('Y-m-d H:i:s');
-            $this->db->table('generated_reports')->where('id', $id)->update([
-                'status' => 'completed',
-                'row_count' => $rowCount,
-                'ai_summary' => $summary,
-                'completed_at' => $completed,
-                'expires_at' => $expires,
-                'error_message' => null,
-            ]);
+            $this->db->table('generated_reports')
+                ->where('generated_reports.tenant_id', CurrentTenant::id())
+                ->where('id', $id)->update([
+                    'status' => 'completed',
+                    'row_count' => $rowCount,
+                    'ai_summary' => $summary,
+                    'completed_at' => $completed,
+                    'expires_at' => $expires,
+                    'error_message' => null,
+                ]);
             $this->audit->enqueue('reports.generated', 'generated_reports', $id, (int) $job['generated_by_user_id'], [
                 'resource_code' => $module . ':' . $range['start'] . '..' . $range['end'],
             ]);
@@ -398,11 +423,13 @@ final class ReportConfigService extends BaseService
                 'id' => $id,
                 'message' => $throwable->getMessage(),
             ]);
-            $this->db->table('generated_reports')->where('id', $id)->update([
-                'status' => 'failed',
-                'error_message' => 'Report generation failed. Retry the configuration or contact an administrator.',
-                'completed_at' => $this->utcNow(),
-            ]);
+            $this->db->table('generated_reports')
+                ->where('generated_reports.tenant_id', CurrentTenant::id())
+                ->where('id', $id)->update([
+                    'status' => 'failed',
+                    'error_message' => 'Report generation failed. Retry the configuration or contact an administrator.',
+                    'completed_at' => $this->utcNow(),
+                ]);
         }
     }
 
@@ -435,6 +462,7 @@ final class ReportConfigService extends BaseService
     private function getConfig(int $id): array
     {
         $row = $this->db->table('report_configurations')
+            ->where('report_configurations.tenant_id', CurrentTenant::id())
             ->select('id, name, module, report_type, parameters, is_active, created_at, updated_at')
             ->where('id', $id)->get()->getRowArray();
         if ($row === null) {
@@ -447,6 +475,7 @@ final class ReportConfigService extends BaseService
     private function getGenerated(int $id): array
     {
         $row = $this->db->table('generated_reports')
+            ->where('generated_reports.tenant_id', CurrentTenant::id())
             ->select('id, config_id, module, file_path, format, status, row_count, parameters_used, ai_summary, error_message, generated_at, started_at, completed_at, expires_at')
             ->where('id', $id)->get()->getRowArray();
         if ($row === null) {

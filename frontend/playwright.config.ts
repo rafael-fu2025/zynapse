@@ -15,7 +15,11 @@ export default defineConfig({
   workers: 1,
   forbidOnly: !!process.env['CI'],
   retries: process.env['CI'] !== undefined ? 2 : 0,
-  reporter: 'list',
+  // JUnit output in CI so the pipeline can ingest results per test case;
+  // plain list output locally where a human is reading.
+  reporter: process.env['CI']
+    ? [['list'], ['junit', { outputFile: 'test-results/junit.xml' }]]
+    : 'list',
   use: {
     baseURL,
     trace: 'on-first-retry',

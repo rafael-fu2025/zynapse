@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:hugeicons/hugeicons.dart';
 import 'package:qr_flutter/qr_flutter.dart';
@@ -73,8 +74,9 @@ class _AppointmentQrSheetState extends State<AppointmentQrSheet> {
       if (saved != null && saved.isNotEmpty) {
         setState(() => _token = saved);
       }
-    } catch (_) {
+    } catch (e) {
       // Non-fatal: fall back to showing the "Issue QR" action.
+      if (kDebugMode) debugPrint('AppointmentQrSheet.restoreToken failed: $e');
     }
   }
 
@@ -91,8 +93,9 @@ class _AppointmentQrSheetState extends State<AppointmentQrSheet> {
       try {
         final prefs = await SharedPreferences.getInstance();
         await prefs.setString(_prefKey, token);
-      } catch (_) {
+      } catch (e) {
         // Non-fatal: the in-memory token still works for this session.
+        if (kDebugMode) debugPrint('AppointmentQrSheet.issue failed: $e');
       }
       if (!mounted) return;
       setState(() {

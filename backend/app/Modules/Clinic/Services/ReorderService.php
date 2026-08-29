@@ -9,6 +9,7 @@ use App\Modules\Shared\BaseService;
 use App\Modules\Shared\StateMachineException;
 use App\Pagination\KeysetPaginator;
 use App\Services\Audit\AuditOutboxService;
+use App\Services\CurrentTenant;
 use App\Services\Inventory\StockLevelPolicy;
 use App\Services\Notify\NotificationOutboxService;
 use DateTimeImmutable;
@@ -72,6 +73,7 @@ final class ReorderService extends BaseService
 
         $builder = $this->db->table('clinic_reorder_requests r')
             ->select('r.*, m.generic_name, COALESCE(m.generic_name, i.name) AS item_name, COALESCE(m.unit, i.unit) AS unit')
+            ->where('r.tenant_id', CurrentTenant::id())
             ->join('clinic_medicines m', 'm.id = r.medicine_id', 'left')
             ->join('clinic_inventory_items i', 'i.id = r.supply_item_id', 'left')
             ->orderBy('r.created_at', 'DESC')
@@ -117,7 +119,7 @@ final class ReorderService extends BaseService
 
         return $this->txn(function () use ($itemType, $itemId, $quantity, $urgency, $note, $userId): ReorderDto {
             if ($itemType === 'supply') {
-                $item = $this->selectForUpdate('clinic_inventory_items', ['id' => $itemId, 'archived_at' => null]);
+                $item = $this->selectForUpdate('clinic_inventory_items', ['tenant_id' => CurrentTenant::id(), 'id' => $itemId, 'archived_at' => null]);
                 if ($item === null) {
                     throw new ApiException('resource.not_found', 404, [
                         ['code' => 'resource.not_found', 'message' => "Inventory item #{$itemId} not found."],
@@ -130,7 +132,7 @@ final class ReorderService extends BaseService
                 return $this->getDto($id);
             }
 
-            $med = $this->selectForUpdate('clinic_medicines', ['id' => $itemId, 'archived_at' => null]);
+            $med = $this->selectForUpdate('clinic_medicines', ['tenant_id' => CurrentTenant::id(), 'id' => $itemId, 'archived_at' => null]);
             if ($med === null) {
                 throw new ApiException('resource.not_found', 404, [
                     ['code' => 'resource.not_found', 'message' => "Medicine #{$itemId} not found."],
@@ -164,6 +166,7 @@ final class ReorderService extends BaseService
 
             $medicines = $this->db->table('clinic_medicines')
                 ->select('id, reorder_threshold, target_stock')
+                ->where('clinic_medicines.tenant_id', CurrentTenant::id())
                 ->where('archived_at', null)
                 ->where('reorder_threshold >', 0)
                 ->get()->getResultArray();
@@ -175,7 +178,7 @@ final class ReorderService extends BaseService
 
                 // Lock the item row so two concurrent auto-checks cannot
                 // both pass the open-request probe and file duplicates.
-                $this->selectForUpdate('clinic_medicines', ['id' => $medicineId]);
+                $this->selectForUpdate('clinic_medicines', ['tenant_id' => CurrentTenant::id(), 'id' => $medicineId]);
 
                 $onHand = $this->onHand($medicineId);
                 if ($onHand > $threshold || $this->hasOpenRequest('medicine', $medicineId)) {
@@ -196,6 +199,7 @@ final class ReorderService extends BaseService
             // Supply items: same heuristic against the ledger counter.
             $items = $this->db->table('clinic_inventory_items')
                 ->select('id, quantity_on_hand, reorder_level, target_stock')
+                ->where('clinic_inventory_items.tenant_id', CurrentTenant::id())
                 ->where('archived_at', null)
                 ->where('reorder_level >', 0)
                 ->get()->getResultArray();
@@ -206,7 +210,7 @@ final class ReorderService extends BaseService
                 $target    = $item['target_stock'] !== null ? (int) $item['target_stock'] : null;
 
                 // Lock the item row (see medicine loop above).
-                $this->selectForUpdate('clinic_inventory_items', ['id' => $itemId]);
+                $this->selectForUpdate('clinic_inventory_items', ['tenant_id' => CurrentTenant::id(), 'id' => $itemId]);
                 $onHand = (int) $item['quantity_on_hand'];
 
                 if ($onHand > $threshold || $this->hasOpenRequest('supply', $itemId)) {
@@ -238,7 +242,7 @@ final class ReorderService extends BaseService
         }
 
         return $this->txn(function () use ($id, $action, $expectedDelivery, $note, $userId): ReorderDto {
-            $row = $this->selectForUpdate('clinic_reorder_requests', ['id' => $id]);
+            $row = $this->selectForUpdate('clinic_reorder_requests', ['tenant_id' => CurrentTenant::id(), 'id' => $id]);
             if ($row === null) {
                 throw new ApiException('resource.not_found', 404, [
                     ['code' => 'resource.not_found', 'message' => "Reorder request #{$id} not found."],
@@ -270,7 +274,7 @@ final class ReorderService extends BaseService
                 $update['procurement_note'] = $note;
             }
 
-            $this->db->table('clinic_reorder_requests')->where('id', $id)->update($update);
+            $this->db->table('clinic_reorder_requests')->where('clinic_reorder_requests.tenant_id', CurrentTenant::id())->where('id', $id)->update($update);
 
             $this->audit->enqueue(
                 'clinic.reorder_' . self::RESULT[$action],
@@ -303,6 +307,7 @@ final class ReorderService extends BaseService
     {
         $now = $this->utcNow();
         $this->db->table('clinic_reorder_requests')->insert([
+            'tenant_id'            => CurrentTenant::id(),
             'item_type'            => $itemType,
             'medicine_id'          => $itemType === 'medicine' ? $itemId : null,
             'supply_item_id'       => $itemType === 'supply' ? $itemId : null,
@@ -334,6 +339,7 @@ final class ReorderService extends BaseService
     private function hasOpenRequest(string $itemType, int $itemId): bool
     {
         return $this->db->table('clinic_reorder_requests')
+            ->where('clinic_reorder_requests.tenant_id', CurrentTenant::id())
             ->where($itemType === 'supply' ? 'supply_item_id' : 'medicine_id', $itemId)
             ->whereIn('status', self::OPEN_STATUSES)
             ->get()->getRowArray() !== null;
@@ -355,6 +361,7 @@ final class ReorderService extends BaseService
 
         $row = $this->db->table('clinic_medicine_batches')
             ->select('SUM(quantity_remaining) AS on_hand')
+            ->where('clinic_medicine_batches.tenant_id', CurrentTenant::id())
             ->where('medicine_id', $medicineId)
             ->where('status', 'active')
             ->where('quantity_remaining >', 0)
@@ -368,6 +375,7 @@ final class ReorderService extends BaseService
     {
         $row = $this->db->table('clinic_reorder_requests r')
             ->select('r.*, m.generic_name, COALESCE(m.generic_name, i.name) AS item_name, COALESCE(m.unit, i.unit) AS unit')
+            ->where('r.tenant_id', CurrentTenant::id())
             ->join('clinic_medicines m', 'm.id = r.medicine_id', 'left')
             ->join('clinic_inventory_items i', 'i.id = r.supply_item_id', 'left')
             ->where('r.id', $id)

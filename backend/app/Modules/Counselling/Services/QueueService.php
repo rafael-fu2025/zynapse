@@ -8,6 +8,7 @@ use App\Exceptions\ApiException;
 use App\Modules\Shared\BaseService;
 use App\Modules\Shared\StateMachineException;
 use App\Services\Audit\AuditOutboxService;
+use App\Services\CurrentTenant;
 use App\Services\Notify\NotificationOutboxService;
 use DateTimeImmutable;
 use DateTimeZone;
@@ -52,6 +53,7 @@ final class QueueService extends BaseService
         $cutoff = $localNow->modify('+15 minutes');
         $dates = [$localNow->format('Y-m-d'), $localNow->modify('+1 day')->format('Y-m-d')];
         $rows = $this->db->table('counselling_appointments')
+            ->where('counselling_appointments.tenant_id', CurrentTenant::id())
             ->select('id, patient_user_id, patient_school_id, counsellor_user_id, appointment_date, start_time, reason')
             ->whereIn('appointment_date', $dates)
             ->whereIn('status', ['scheduled', 'confirmed'])
@@ -64,9 +66,9 @@ final class QueueService extends BaseService
             if ($start > $cutoff) continue;
             try {
                 $count += $this->txn(function () use ($row): int {
-                    $locked = $this->selectForUpdate('counselling_appointments', ['id' => (int) $row['id']]);
+                    $locked = $this->selectForUpdate('counselling_appointments', ['tenant_id' => CurrentTenant::id(), 'id' => (int) $row['id']]);
                     if ($locked === null || ! in_array((string) $locked['status'], ['scheduled', 'confirmed'], true)) return 0;
-                    $existing = $this->db->table('counselling_queue_entries')->where('counselling_appointment_id', (int) $row['id'])->countAllResults();
+                    $existing = $this->db->table('counselling_queue_entries')->where('counselling_queue_entries.tenant_id', CurrentTenant::id())->where('counselling_appointment_id', (int) $row['id'])->countAllResults();
                     if ($existing > 0) return 0;
                     $this->enqueue(
                         (int) $row['patient_user_id'],
@@ -88,12 +90,14 @@ final class QueueService extends BaseService
     public function myStatus(int $patientUserId): ?array
     {
         $row = $this->db->table('counselling_queue_entries')
+            ->where('counselling_queue_entries.tenant_id', CurrentTenant::id())
             ->where('queue_date', $this->businessToday())
             ->where('patient_user_id', $patientUserId)
             ->whereIn('status', ['waiting', 'called', 'in_session'])
             ->orderBy('position', 'ASC')->get()->getRowArray();
         if ($row === null) return null;
         $ahead = (string) $row['status'] === 'waiting' ? $this->db->table('counselling_queue_entries')
+            ->where('counselling_queue_entries.tenant_id', CurrentTenant::id())
             ->where('queue_date', $this->businessToday())->whereIn('status', ['waiting', 'called', 'in_session'])
             ->where('position <', (int) $row['position'])->countAllResults() : 0;
         return [
@@ -176,7 +180,7 @@ final class QueueService extends BaseService
             }
 
             $now = $this->utcNow();
-            $this->db->table('counselling_queue_entries')->where('id', (int) $next['id'])->update([
+            $this->db->table('counselling_queue_entries')->where('counselling_queue_entries.tenant_id', CurrentTenant::id())->where('id', (int) $next['id'])->update([
                 'status' => 'called',
                 'called_at' => $now,
                 'called_by_user_id' => $userId,
@@ -201,7 +205,7 @@ final class QueueService extends BaseService
         }
 
         return $this->txn(function () use ($id, $action, $userId): array {
-            $row = $this->selectForUpdate('counselling_queue_entries', ['id' => $id]);
+            $row = $this->selectForUpdate('counselling_queue_entries', ['tenant_id' => CurrentTenant::id(), 'id' => $id]);
             if ($row === null) {
                 throw new ApiException('resource.not_found', 404, [
                     ['code' => 'resource.not_found', 'message' => "Guidance queue entry #{$id} not found."],
@@ -230,7 +234,7 @@ final class QueueService extends BaseService
                 $update['finished_at'] = $now;
             }
 
-            $this->db->table('counselling_queue_entries')->where('id', $id)->update($update);
+            $this->db->table('counselling_queue_entries')->where('counselling_queue_entries.tenant_id', CurrentTenant::id())->where('id', $id)->update($update);
             $this->audit->enqueue(
                 'counselling.queue_' . self::RESULT[$action],
                 'counselling_queue_entries',
@@ -252,7 +256,7 @@ final class QueueService extends BaseService
         $userId = \App\Auth\CurrentUser::assert();
 
         return $this->txn(function () use ($sessionId, $userId): ?SessionDto {
-            $session = $this->selectForUpdate('counselling_sessions', ['id' => $sessionId, 'archived_at' => null]);
+            $session = $this->selectForUpdate('counselling_sessions', ['tenant_id' => CurrentTenant::id(), 'id' => $sessionId, 'archived_at' => null]);
             if ($session === null) {
                 throw new ApiException('resource.not_found', 404, [
                     ['code' => 'resource.not_found', 'message' => "Session #{$sessionId} not found."],
@@ -279,7 +283,7 @@ final class QueueService extends BaseService
 
             $now = $this->utcNow();
             $this->completeLinkedRecords($queue, $userId, $now);
-            $this->db->table('counselling_queue_entries')->where('id', (int) $queue['id'])->update([
+            $this->db->table('counselling_queue_entries')->where('counselling_queue_entries.tenant_id', CurrentTenant::id())->where('id', (int) $queue['id'])->update([
                 'status' => 'done',
                 'finished_at' => $now,
                 'updated_at' => $now,
@@ -290,7 +294,7 @@ final class QueueService extends BaseService
                 'reason_code' => 'session_workspace_complete',
             ]);
 
-            $fresh = $this->db->table('counselling_sessions')->where('id', $sessionId)->get()->getRowArray();
+            $fresh = $this->db->table('counselling_sessions')->where('counselling_sessions.tenant_id', CurrentTenant::id())->where('id', $sessionId)->get()->getRowArray();
             return SessionDto::fromRow($fresh);
         });
     }
@@ -302,7 +306,7 @@ final class QueueService extends BaseService
         $userId = \App\Auth\CurrentUser::assert();
 
         return $this->txn(function () use ($id, $userId): array {
-            $queue = $this->selectForUpdate('counselling_queue_entries', ['id' => $id]);
+            $queue = $this->selectForUpdate('counselling_queue_entries', ['tenant_id' => CurrentTenant::id(), 'id' => $id]);
             if ($queue === null) {
                 throw new ApiException('resource.not_found', 404, [[
                     'code' => 'resource.not_found', 'message' => "Guidance queue entry #{$id} not found.",
@@ -316,6 +320,7 @@ final class QueueService extends BaseService
             }
             if ($queue['counselling_session_id'] !== null) {
                 $existing = $this->db->table('counselling_sessions')
+                    ->where('counselling_sessions.tenant_id', CurrentTenant::id())
                     ->where('id', (int) $queue['counselling_session_id'])
                     ->where('archived_at', null)->get()->getRowArray();
                 if ($existing !== null) return $this->getRow($id);
@@ -323,7 +328,7 @@ final class QueueService extends BaseService
 
             $now = $this->utcNow();
             $sessionId = $this->openSessionForQueue($queue, $userId, $now);
-            $this->db->table('counselling_queue_entries')->where('id', $id)->update([
+            $this->db->table('counselling_queue_entries')->where('counselling_queue_entries.tenant_id', CurrentTenant::id())->where('id', $id)->update([
                 'counselling_session_id' => $sessionId,
                 'updated_at' => $now,
             ]);
@@ -387,6 +392,7 @@ final class QueueService extends BaseService
         $position = ($last !== null ? (int) $last['position'] : 0) + 1;
         $now = $this->utcNow();
         $this->db->table('counselling_queue_entries')->insert([
+            'tenant_id' => CurrentTenant::id(),
             'patient_user_id' => $patientUserId,
             'patient_school_id' => $patientSchoolId,
             'counselling_appointment_id' => $appointmentId,
@@ -410,6 +416,7 @@ final class QueueService extends BaseService
             ? (int) $queue['assigned_counsellor_user_id']
             : $userId;
         $this->db->table('counselling_sessions')->insert([
+            'tenant_id' => CurrentTenant::id(),
             'patient_user_id' => (int) $queue['patient_user_id'],
             'patient_school_id' => (string) $queue['patient_school_id'],
             'counsellor_user_id' => $owner,
@@ -429,7 +436,7 @@ final class QueueService extends BaseService
     {
         if ($queue['counselling_session_id'] !== null) {
             $sessionId = (int) $queue['counselling_session_id'];
-            $this->db->table('counselling_sessions')->where('id', $sessionId)->where('ended_at', null)->update([
+            $this->db->table('counselling_sessions')->where('counselling_sessions.tenant_id', CurrentTenant::id())->where('id', $sessionId)->where('ended_at', null)->update([
                 'ended_at' => $now,
                 'updated_at' => $now,
             ]);
@@ -441,7 +448,7 @@ final class QueueService extends BaseService
         }
         if ($queue['counselling_appointment_id'] !== null) {
             $appointmentId = (int) $queue['counselling_appointment_id'];
-            $this->db->table('counselling_appointments')->where('id', $appointmentId)->where('status', 'confirmed')->update([
+            $this->db->table('counselling_appointments')->where('counselling_appointments.tenant_id', CurrentTenant::id())->where('id', $appointmentId)->where('status', 'confirmed')->update([
                 'status' => 'completed',
                 'updated_at' => $now,
             ]);
@@ -450,7 +457,7 @@ final class QueueService extends BaseService
 
     private function notifyCalled(int $id, int $actor): void
     {
-        $row = $this->db->table('counselling_queue_entries')->select('patient_user_id, position')->where('id', $id)->get()->getRowArray();
+        $row = $this->db->table('counselling_queue_entries')->where('counselling_queue_entries.tenant_id', CurrentTenant::id())->select('patient_user_id, position')->where('id', $id)->get()->getRowArray();
         $patientId = (int) ($row['patient_user_id'] ?? 0);
         if ($patientId > 0 && $patientId !== $actor) {
             $this->notify->enqueue($patientId, 'counselling.queue_called', [
@@ -464,6 +471,7 @@ final class QueueService extends BaseService
     private function todayRows(): array
     {
         return $this->db->table('counselling_queue_entries q')
+            ->where('q.tenant_id', CurrentTenant::id())
             ->select('q.*, u.first_name, u.last_name')
             ->join('users u', 'u.id = q.patient_user_id', 'left')
             ->where('q.queue_date', $this->businessToday())
@@ -475,6 +483,7 @@ final class QueueService extends BaseService
     private function getRow(int $id): array
     {
         $row = $this->db->table('counselling_queue_entries q')
+            ->where('q.tenant_id', CurrentTenant::id())
             ->select('q.*, u.first_name, u.last_name')
             ->join('users u', 'u.id = q.patient_user_id', 'left')
             ->where('q.id', $id)

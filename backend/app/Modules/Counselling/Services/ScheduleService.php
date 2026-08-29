@@ -10,6 +10,7 @@ use App\Modules\Shared\StateMachineException;
 use App\Pagination\KeysetPaginator;
 use App\Services\Analytics\SchedulingAnalytics;
 use App\Services\Audit\AuditOutboxService;
+use App\Services\CurrentTenant;
 use DateTimeImmutable;
 use DateTimeZone;
 use Modules\Counselling\Policies\CounsellingPolicy;
@@ -61,6 +62,7 @@ final class ScheduleService extends BaseService
     {
         $this->policy->check('scheduleRead');
         $rows = $this->db->table('users u')->select('u.id,u.first_name,u.last_name,u.username')
+            ->where('u.tenant_id', CurrentTenant::id())
             ->join('auth_groups_users gu','gu.user_id=u.id')->join('auth_groups g','g.id=gu.group_id')
             ->where('g.name','counsellor')->where('u.archived_at',null)->orderBy('u.last_name','ASC')->get()->getResultArray();
         return array_map(static fn(array $r):array=>['id'=>(int)$r['id'],'name'=>trim($r['first_name'].' '.$r['last_name'])?:$r['username']],$rows);
@@ -75,6 +77,7 @@ final class ScheduleService extends BaseService
 
         $counsellorUserId = $this->scheduleScope($counsellorUserId);
         $builder = $this->db->table('counselling_availability')
+            ->where('counselling_availability.tenant_id', CurrentTenant::id())
             ->select('id, counsellor_user_id, day_of_week, start_time, end_time, max_slots, is_active')
             ->where('is_active', 1)
             ->orderBy('counsellor_user_id', 'ASC')
@@ -115,6 +118,7 @@ final class ScheduleService extends BaseService
 
             $now = $this->utcNow();
             $this->db->table('counselling_availability')->insert([
+                'tenant_id'          => CurrentTenant::id(),
                 'counsellor_user_id' => $counsellorId,
                 'day_of_week'        => (int) $input['day_of_week'],
                 'start_time'         => $start,
@@ -138,14 +142,14 @@ final class ScheduleService extends BaseService
         $userId = \App\Auth\CurrentUser::assert();
 
         $this->txn(function () use ($id, $userId): void {
-            $row = $this->selectForUpdate('counselling_availability', ['id' => $id, 'is_active' => 1]);
+            $row = $this->selectForUpdate('counselling_availability', ['tenant_id' => CurrentTenant::id(), 'id' => $id, 'is_active' => 1]);
             if ($row === null) {
                 throw new ApiException('resource.not_found', 404, [
                     ['code' => 'resource.not_found', 'message' => "Availability slot #{$id} not found."],
                 ]);
             }
             $this->assertScheduleMutation((int) $row['counsellor_user_id']);
-            $this->db->table('counselling_availability')->where('id', $id)->update([
+            $this->db->table('counselling_availability')->where('counselling_availability.tenant_id', CurrentTenant::id())->where('id', $id)->update([
                 'is_active'  => 0,
                 'updated_at' => $this->utcNow(),
             ]);
@@ -164,6 +168,7 @@ final class ScheduleService extends BaseService
 
         $scope = $this->scheduleScope(null);
         $builder = $this->db->table('counselling_appointments')
+            ->where('counselling_appointments.tenant_id', CurrentTenant::id())
             ->select('*')
             ->orderBy('created_at', 'DESC')
             ->orderBy('id', 'DESC');
@@ -241,6 +246,7 @@ final class ScheduleService extends BaseService
             $now = $this->utcNow();
             [, $patient] = (new \Modules\Clinic\Services\PatientLookupService())->findByIdentifier((string) $input['patient_school_id']);
             $this->db->table('counselling_appointments')->insert([
+                'tenant_id'          => CurrentTenant::id(),
                 'patient_user_id'    => $patient !== null ? (int) $patient['id'] : null,
                 'patient_school_id'  => (string) $input['patient_school_id'],
                 'counsellor_user_id' => $counsellorId,
@@ -264,7 +270,7 @@ final class ScheduleService extends BaseService
                 \Config\Services::notificationOutbox()->enqueue($recipient, 'appointment.scheduled', ['resource_code'=>'appointment#'.$id,'appointment_at'=>$appointmentAt,'appointment_status'=>'scheduled','destination'=>'counselling']);
             }
 
-            $row = $this->db->table('counselling_appointments')->where('id', $id)->get()->getRowArray();
+            $row = $this->db->table('counselling_appointments')->where('counselling_appointments.tenant_id', CurrentTenant::id())->where('id', $id)->get()->getRowArray();
             return $this->appointmentRow($row);
         });
     }
@@ -286,7 +292,7 @@ final class ScheduleService extends BaseService
         }
 
         return $this->txn(function () use ($id, $action, $cancellationReason, $userId): array {
-            $row = $this->selectForUpdate('counselling_appointments', ['id' => $id]);
+            $row = $this->selectForUpdate('counselling_appointments', ['tenant_id' => CurrentTenant::id(), 'id' => $id]);
             if ($row === null) {
                 throw new ApiException('resource.not_found', 404, [
                     ['code' => 'resource.not_found', 'message' => "Appointment #{$id} not found."],
@@ -304,9 +310,9 @@ final class ScheduleService extends BaseService
             if ($action === 'cancel' && $cancellationReason !== null && $cancellationReason !== '') {
                 $update['cancellation_reason'] = $cancellationReason;
             }
-            $this->db->table('counselling_appointments')->where('id', $id)->update($update);
+            $this->db->table('counselling_appointments')->where('counselling_appointments.tenant_id', CurrentTenant::id())->where('id', $id)->update($update);
             if (in_array($action, ['cancel', 'no_show'], true)) {
-                $this->db->table('counselling_queue_entries')->where('counselling_appointment_id', $id)->whereIn('status', ['waiting','called'])->update(['status'=>'skipped','finished_at'=>$now,'updated_at'=>$now]);
+                $this->db->table('counselling_queue_entries')->where('counselling_queue_entries.tenant_id', CurrentTenant::id())->where('counselling_appointment_id', $id)->whereIn('status', ['waiting','called'])->update(['status'=>'skipped','finished_at'=>$now,'updated_at'=>$now]);
             }
 
             // Three-strike no-show counter (consolidated `users`
@@ -339,7 +345,7 @@ final class ScheduleService extends BaseService
                 \Config\Services::notificationOutbox()->enqueue($recipient, 'appointment.'.self::RESULT[$action], ['resource_code'=>'appointment#'.$id,'appointment_at'=>$appointmentAt,'appointment_status'=>self::RESULT[$action],'destination'=>'counselling']);
             }
 
-            $fresh = $this->db->table('counselling_appointments')->where('id', $id)->get()->getRowArray();
+            $fresh = $this->db->table('counselling_appointments')->where('counselling_appointments.tenant_id', CurrentTenant::id())->where('id', $id)->get()->getRowArray();
             return $this->appointmentRow($fresh);
         });
     }

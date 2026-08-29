@@ -29,6 +29,23 @@ final class ApiExceptionHandler extends BaseExceptionHandler implements Exceptio
         int $statusCode,
         int $exitCode,
     ): void {
+        $this->renderToResponse($exception, $response);
+        $response->send();
+
+        exit($exitCode);
+    }
+
+    /**
+     * Map a throwable onto the canonical failure envelope and stage it on
+     * the response WITHOUT sending or exiting.
+     *
+     * `handle()` is the production edge (send + exit, unwritable in a
+     * test process); this method carries the actual status/error mapping
+     * so the feature suite can render controller exceptions through the
+     * exact same rules instead of duplicating them.
+     */
+    public function renderToResponse(Throwable $exception, ResponseInterface $response): ResponseInterface
+    {
         if ($exception instanceof ApiException) {
             $status = $exception->httpStatus;
             $errors = $exception->errors ?? [[
@@ -46,11 +63,11 @@ final class ApiExceptionHandler extends BaseExceptionHandler implements Exceptio
 
         $payload = ApiResponse::failure($errors, $status);
 
-        $response->setStatusCode($status)
-            ->setHeader('Content-Type', 'application/json; charset=UTF-8')
-            ->setBody(json_encode($payload['body'], JSON_UNESCAPED_SLASHES))
-            ->send();
-
-        exit($exitCode);
+        // setJSON (not setBody) — ResponseTrait::getJSON() re-encodes the
+        // body through the JSON formatter unless bodyFormat === 'json',
+        // which setBody never sets.
+        return $response
+            ->setStatusCode($status)
+            ->setJSON($payload['body']);
     }
 }

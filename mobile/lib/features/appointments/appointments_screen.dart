@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:hugeicons/hugeicons.dart';
@@ -91,8 +92,9 @@ class _AppointmentsScreenState extends State<AppointmentsScreen>
         _items = page.items;
         _nextCursor = page.meta?.nextCursor;
       });
-    } catch (_) {
+    } catch (e) {
       // Keep the current list on transient errors.
+      if (kDebugMode) debugPrint('AppointmentsScreen.poll failed: $e');
     }
   }
 
@@ -146,8 +148,9 @@ class _AppointmentsScreenState extends State<AppointmentsScreen>
         _items = [..._items, ...page.items];
         _nextCursor = page.meta?.nextCursor;
       });
-    } catch (_) {
+    } catch (e) {
       // keep current list; the user can pull to refresh.
+      if (kDebugMode) debugPrint('AppointmentsScreen.loadMore failed: $e');
     } finally {
       setState(() => _loadingMore = false);
     }

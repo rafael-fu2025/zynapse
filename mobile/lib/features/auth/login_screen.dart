@@ -7,9 +7,10 @@ import '../../core/services/auth_controller.dart';
 
 /// Login screen — mirrors `frontend/src/pages/LoginPage.tsx`.
 ///
-/// Demo accounts (all password `DevPassw0rd!`):
-///   * admin@synapse.dev
-///   * students/employees: firstname.lastname@foundationu.edu.ph
+/// No credentials are prefilled: the demo/dev accounts are seeded by
+/// `DevUserSeeder` on the backend and must not ship inside the app
+/// binary (a prefilled admin password is a credential leak for anyone
+/// who installs the APK against a reachable dev backend).
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
 
@@ -19,8 +20,8 @@ class LoginScreen extends StatefulWidget {
 
 class _LoginScreenState extends State<LoginScreen> {
   final _formKey = GlobalKey<FormState>();
-  final _emailController = TextEditingController(text: 'admin@synapse.dev');
-  final _passwordController = TextEditingController(text: 'DevPassw0rd!');
+  final _emailController = TextEditingController();
+  final _passwordController = TextEditingController();
   bool _obscure = true;
   String? _error;
 

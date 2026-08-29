@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:hugeicons/hugeicons.dart';
 import 'package:provider/provider.dart';
@@ -145,9 +146,10 @@ class _ShellState extends State<_Shell> {
       final unread =
           page.items.where((n) => n.readAt == null || n.readAt!.isEmpty).length;
       if (unread != _unread) setState(() => _unread = unread);
-    } catch (_) {
+    } catch (e) {
       // Best effort — the next 60 s poll will retry. A 401/expiry here is
       // handled by the auth layer (silent refresh), so don't spam.
+      if (kDebugMode) debugPrint('HomeShell.refreshUnread failed: $e');
     }
   }
 

@@ -12,17 +12,14 @@
  * Use `playwright.config.ts` to point at the right baseURL.
  */
 import { expect, test } from '@playwright/test';
+import { signInLive } from './helpers/auth';
 
 const RUN = process.env['SYNAPSE_E2E'] === '1';
 
 test.skip(!RUN, 'SYNAPSE_E2E=1 not set — skipping live smoke.');
 
 test('facilities page renders the BMG units table', async ({ page }) => {
-  await page.goto('/login');
-  await page.getByLabel(/email/i).fill(process.env['SYNAPSE_E2E_EMAIL'] ?? 'admin@synapse.dev');
-  await page.locator('input[name="password"]').fill(process.env['SYNAPSE_E2E_PASSWORD'] ?? 'DevPassw0rd!');
-  await page.getByRole('button', { name: /sign in/i }).click();
-  await page.waitForURL(/\/$/);
+  await signInLive(page);
 
   // Client-side navigation — hard reload drops the in-memory token.
   await page.getByRole('link', { name: /facilities/i }).first().click();
@@ -51,11 +48,7 @@ test('facilities page renders the BMG units table', async ({ page }) => {
  * E2E environment is shared and we must not assume seed ordering.
  */
 test('Move to curing action is available for awaiting_output units', async ({ page, request }) => {
-  await page.goto('/login');
-  await page.getByLabel(/email/i).fill(process.env['SYNAPSE_E2E_EMAIL'] ?? 'admin@synapse.dev');
-  await page.locator('input[name="password"]').fill(process.env['SYNAPSE_E2E_PASSWORD'] ?? 'DevPassw0rd!');
-  await page.getByRole('button', { name: /sign in/i }).click();
-  await page.waitForURL(/\/$/);
+  await signInLive(page);
 
   const baseURL = page.url().replace(/\/$/, '');
   const cookies = await page.context().cookies();

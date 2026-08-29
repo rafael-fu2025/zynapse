@@ -4,23 +4,36 @@
  * Setup via API: admin resets the nurse's password (temp + force_reset).
  * UI: nurse logs in with the temp password, is locked to
  * /change-password, rotates it, and lands on the dashboard.
+ *
+ * Credentials come from the environment (see helpers/auth) — nothing is
+ * hardcoded. The nurse account is resolved by email search rather than
+ * an assumed row id, so re-seeded dev databases don't silently retarget
+ * the test at whichever user happens to be #2.
  */
 import { expect, test } from '@playwright/test';
+import { apiOrigin, livePassword } from './helpers/auth';
 
 const RUN = process.env['SYNAPSE_E2E'] === '1';
 
 test.skip(!RUN, 'SYNAPSE_E2E=1 not set — skipping live force-reset flow.');
 test.setTimeout(90_000);
 
+const ADMIN_EMAIL = 'admin@synapse.dev';
+const NURSE_EMAIL = 'nurse@synapse.dev';
+
 test('admin reset forces nurse into change-password, rotation unlocks', async ({ page, request }) => {
-  // --- API setup: admin login + reset nurse (#2) password.
-  const login = await request.post('http://localhost:8090/api/v1/auth/login', {
-    data: { email: 'admin@synapse.dev', password: 'DevPassw0rd!' },
+  const api = apiOrigin();
+
+  // --- API setup: admin login + reset the nurse's password.
+  const login = await request.post(`${api}/api/v1/auth/login`, {
+    data: { email: ADMIN_EMAIL, password: livePassword() },
   });
   expect(login.ok()).toBeTruthy();
   const adminTok = (await login.json()).data.access_token as string;
 
-  const reset = await request.post('http://localhost:8090/api/v1/admin/users/2/reset-password', {
+  const nurseId = await resolveNurseId(request, api, adminTok);
+
+  const reset = await request.post(`${api}/api/v1/admin/users/${nurseId}/reset-password`, {
     headers: { Authorization: `Bearer ${adminTok}` },
   });
   expect(reset.ok()).toBeTruthy();
@@ -31,7 +44,7 @@ test('admin reset forces nurse into change-password, rotation unlocks', async ({
     await page.goto('/login', { waitUntil: 'domcontentloaded', timeout: 15_000 });
     await expect(page.getByLabel(/email/i)).toBeVisible({ timeout: 10_000 });
   }).toPass({ timeout: 30_000 });
-  await page.getByLabel(/email/i).fill('nurse@synapse.dev');
+  await page.getByLabel(/email/i).fill(NURSE_EMAIL);
   await page.locator('input[name="password"]').fill(temp);
   const loginResponsePromise = page.waitForResponse(
     (response) => response.url().endsWith('/api/v1/auth/login') && response.request().method() === 'POST',
@@ -45,7 +58,7 @@ test('admin reset forces nurse into change-password, rotation unlocks', async ({
   await page.waitForURL(/\/change-password$/, { timeout: 15_000 });
   await expect(page.getByText(/reset by an administrator/i)).toBeVisible();
   // A direct API client is restricted too; this is not merely a SPA redirect.
-  const blockedApi = await request.get('http://localhost:8090/api/v1/dashboard/counters', {
+  const blockedApi = await request.get(`${api}/api/v1/dashboard/counters`, {
     headers: { Authorization: `Bearer ${forcedToken}` },
   });
   expect(blockedApi.status()).toBe(403);
@@ -62,3 +75,24 @@ test('admin reset forces nurse into change-password, rotation unlocks', async ({
   await page.waitForURL(/\/$/, { timeout: 15_000 });
   await expect(page.getByRole('region', { name: /modules/i })).toBeVisible({ timeout: 15_000 });
 });
+
+/**
+ * The admin users list is keyset-paginated with a free-text search; one
+ * page is enough because the search targets a unique email. Failing
+ * loudly here beats resetting the wrong account.
+ */
+async function resolveNurseId(
+  request: import('@playwright/test').APIRequestContext,
+  api: string,
+  adminTok: string,
+): Promise<number> {
+  const list = await request.get(
+    `${api}/api/v1/admin/users?search=${encodeURIComponent(NURSE_EMAIL)}`,
+    { headers: { Authorization: `Bearer ${adminTok}` } },
+  );
+  expect(list.ok(), `admin users search status was ${list.status()}`).toBeTruthy();
+  const body = (await list.json()) as { data?: Array<{ id: number; email: string }> };
+  const nurse = (body.data ?? []).find((u) => u.email.toLowerCase() === NURSE_EMAIL);
+  expect(nurse, `no admin user found with email ${NURSE_EMAIL} — is the seed loaded?`).toBeTruthy();
+  return nurse!.id;
+}

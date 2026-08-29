@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { signInMocked } from './helpers/auth';
 
 const encounter = {
   id: 91,
@@ -54,14 +55,10 @@ const queueEntry = {
 
 async function signIn(page: Page) {
   const permissions = ['clinic.queue.read', 'clinic.queue.manage', 'clinic.encounters.read', 'clinic.encounters.write', 'referrals.create'];
-  await page.route('**/api/v1/auth/refresh', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ success: true, data: { access_token: 'test-token', expires_in: 900 }, errors: [], meta: null }) }));
-  await page.route('**/api/v1/auth/login', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ success: true, data: { access_token: 'test-token', expires_in: 900 }, errors: [], meta: null }) }));
-  await page.route('**/api/v1/auth/me', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ success: true, data: { id: 8, email: 'nurse@example.test', username: 'clinic-nurse', is_active: true, force_reset: false, permissions }, errors: [], meta: null }) }));
-  await page.goto('/login');
-  await page.getByLabel(/email/i).fill('nurse@example.test');
-  await page.getByRole('textbox', { name: 'Password' }).fill('DevPassw0rd!');
-  await page.getByRole('button', { name: /sign in/i }).click();
-  await page.waitForURL('/');
+  await signInMocked(page, {
+    id: 8, email: 'nurse@example.test', username: 'clinic-nurse',
+    is_active: true, force_reset: false, permissions,
+  }, { mockRefresh: true });
 }
 
 async function mockClinicApis(page: Page, queue = [queueEntry]) {

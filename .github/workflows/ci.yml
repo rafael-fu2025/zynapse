@@ -1,0 +1,133 @@
+# Zynapse CI
+#
+# Three independent jobs, cheapest-first. There was no pipeline here at
+# all before 2026-08; playwright.config.ts already branched on $CI for a
+# pipeline that did not exist.
+#
+# Backend notes:
+#   - The schema is MySQL/MariaDB-only (SIGNAL SQLSTATE triggers, ENUM,
+#     ADD CONSTRAINT CHECK), so SQLite is not an option for feature tests.
+#   - phpunit.feature.xml self-provisions the test schema; the composer
+#     scripts are `test` (unit), `test:feature`, `test:all`.
+#   - The two PHPUnit bootstraps are mutually exclusive, which is why
+#     there are two configs (phpunit.xml / phpunit.feature.xml).
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend (unit + feature)
+    runs-on: ubuntu-latest
+
+    services:
+      mariadb:
+        # Matches the dev box (MariaDB 10.4.x). Do not bump to MySQL 8
+        # casually — migrations are written against MariaDB DDL.
+        image: mariadb:10.4
+        env:
+          MYSQL_ROOT_PASSWORD: ci-root-password
+          MYSQL_DATABASE: synapse_zcode_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mariadb-admin ping --silent"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: mysqli, mbstring, json, curl
+          coverage: none
+
+      - name: Composer install
+        working-directory: backend
+        run: composer install --prefer-dist --no-progress --no-interaction
+
+      - name: Unit suite
+        working-directory: backend
+        run: composer test
+
+      - name: Feature suite (boots kernel against MariaDB)
+        working-directory: backend
+        env:
+          # Config\Database hydrates `database.tests.*` from the
+          # environment; the schema itself is created by the bootstrap.
+          database.tests.username: root
+          database.tests.password: ci-root-password
+          database.tests.hostname: 127.0.0.1
+        run: composer test:feature
+
+  frontend:
+    name: Frontend (typecheck + lint + unit + mocked e2e)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: npm ci
+        working-directory: frontend
+        run: npm ci
+
+      - name: Typecheck
+        working-directory: frontend
+        run: npm run typecheck
+
+      - name: Lint
+        working-directory: frontend
+        run: npm run lint
+
+      - name: Unit tests (Vitest)
+        working-directory: frontend
+        run: npm test
+
+      - name: Playwright (mocked specs only)
+        working-directory: frontend
+        run: |
+          npx playwright install chromium --with-deps
+          npx playwright test \
+            e2e/clinic-session-workflow.spec.ts \
+            e2e/destination-queues.spec.ts \
+            e2e/guidance-session-workflow.spec.ts \
+            e2e/login-errors.spec.ts \
+            e2e/portal-appointments.spec.ts \
+            e2e/queue-display-media.spec.ts
+
+      # The remaining 7 specs (21 tests) are gated behind SYNAPSE_E2E=1 and
+      # need a live PHP backend + shared dev account; they run locally, not
+      # here. See Phase 0.4 of the remediation roadmap.
+
+  mobile:
+    name: Mobile (flutter test)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Flutter test
+        working-directory: mobile
+        run: flutter test

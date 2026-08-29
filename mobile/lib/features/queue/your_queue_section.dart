@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:hugeicons/hugeicons.dart';
 
@@ -52,8 +53,9 @@ class _YourQueueSectionState extends State<YourQueueSection> {
         _queues = s;
         _loading = false;
       });
-    } catch (_) {
+    } catch (e) {
       // Transient network errors: keep the last known value, stop loading.
+      if (kDebugMode) debugPrint('YourQueueSection.fetch failed: $e');
       if (!mounted) return;
       setState(() => _loading = false);
     }

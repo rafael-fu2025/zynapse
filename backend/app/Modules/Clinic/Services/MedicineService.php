@@ -8,6 +8,7 @@ use App\Exceptions\ApiException;
 use App\Modules\Shared\BaseService;
 use App\Pagination\KeysetPaginator;
 use App\Services\Audit\AuditOutboxService;
+use App\Services\CurrentTenant;
 use App\Services\Inventory\StockLevelPolicy;
 use DateTimeImmutable;
 use DateTimeZone;
@@ -47,6 +48,7 @@ final class MedicineService extends BaseService
         $this->policy->check('inventoryRead');
 
         $builder = $this->db->table('clinic_medicines')
+            ->where('clinic_medicines.tenant_id', CurrentTenant::id())
             ->select(self::MED_COLS)
             ->orderBy('created_at', 'DESC')
             ->orderBy('id', 'DESC');
@@ -93,7 +95,7 @@ final class MedicineService extends BaseService
     {
         $this->policy->check('inventoryRead');
 
-        $row = $this->db->table('clinic_medicines')->select(self::MED_COLS)->where('id', $id)->get()->getRowArray();
+        $row = $this->db->table('clinic_medicines')->where('clinic_medicines.tenant_id', CurrentTenant::id())->select(self::MED_COLS)->where('id', $id)->get()->getRowArray();
         if ($row === null) {
             throw new ApiException('resource.not_found', 404, [
                 ['code' => 'resource.not_found', 'message' => "Medicine #{$id} not found."],
@@ -101,6 +103,7 @@ final class MedicineService extends BaseService
         }
 
         $batches = $this->db->table('clinic_medicine_batches')
+            ->where('clinic_medicine_batches.tenant_id', CurrentTenant::id())
             ->select(self::BATCH_COLS)
             ->where('medicine_id', $id)
             ->orderBy('expiration_date', 'ASC')
@@ -137,6 +140,7 @@ final class MedicineService extends BaseService
             $now = $this->utcNow();
 
             $this->db->table('clinic_medicines')->insert([
+                'tenant_id'         => CurrentTenant::id(),
                 'generic_name'      => (string) $input['generic_name'],
                 'brand_name'        => $this->strOrNull($input, 'brand_name'),
                 'category'          => $this->strOrNull($input, 'category'),
@@ -159,7 +163,7 @@ final class MedicineService extends BaseService
                 ['resource_code' => 'medicine#' . (string) $input['generic_name']],
             );
 
-            $row = $this->db->table('clinic_medicines')->select(self::MED_COLS)->where('id', $id)->get()->getRowArray();
+            $row = $this->db->table('clinic_medicines')->where('clinic_medicines.tenant_id', CurrentTenant::id())->select(self::MED_COLS)->where('id', $id)->get()->getRowArray();
             return MedicineDto::fromRow($row, 0, null);
         });
     }
@@ -180,7 +184,7 @@ final class MedicineService extends BaseService
         $userId = \App\Auth\CurrentUser::assert();
 
         return $this->txn(function () use ($medicineId, $input, $userId): MedicineDto {
-            $med = $this->selectForUpdate('clinic_medicines', ['id' => $medicineId, 'archived_at' => null]);
+            $med = $this->selectForUpdate('clinic_medicines', ['tenant_id' => CurrentTenant::id(), 'id' => $medicineId, 'archived_at' => null]);
             if ($med === null) {
                 throw new ApiException('resource.not_found', 404, [
                     ['code' => 'resource.not_found', 'message' => "Medicine #{$medicineId} not found."],
@@ -191,6 +195,7 @@ final class MedicineService extends BaseService
             // tab has marked `received`. Locked so two clerks can't both
             // consume the same request.
             $reorder = $this->selectForUpdate('clinic_reorder_requests', [
+                'tenant_id'   => CurrentTenant::id(),
                 'medicine_id' => $medicineId,
                 'item_type'   => 'medicine',
                 'status'      => 'received',
@@ -203,6 +208,7 @@ final class MedicineService extends BaseService
 
             $batchNumber = (string) $input['batch_number'];
             $dup = $this->db->table('clinic_medicine_batches')
+                ->where('clinic_medicine_batches.tenant_id', CurrentTenant::id())
                 ->where(['medicine_id' => $medicineId, 'batch_number' => $batchNumber])
                 ->get()->getRowArray();
             if ($dup !== null) {
@@ -236,6 +242,7 @@ final class MedicineService extends BaseService
 
             $now = $this->utcNow();
             $this->db->table('clinic_medicine_batches')->insert([
+                'tenant_id'          => CurrentTenant::id(),
                 'medicine_id'        => $medicineId,
                 'batch_number'       => $batchNumber,
                 'quantity_received'  => $qty,
@@ -262,6 +269,7 @@ final class MedicineService extends BaseService
             $ledgerNote = ($baseNote ?? '') . $shortageSuffix;
 
             $this->db->table('clinic_medicine_transactions')->insert([
+                'tenant_id'            => CurrentTenant::id(),
                 'medicine_id'          => $medicineId,
                 'batch_id'             => $batchId,
                 'type'                 => 'received',
@@ -279,6 +287,7 @@ final class MedicineService extends BaseService
             // `received` rows from re-creating.)
             if ($isPartial) {
                 $this->db->table('clinic_reorder_requests')
+                    ->where('clinic_reorder_requests.tenant_id', CurrentTenant::id())
                     ->where('id', (int) $reorder['id'])
                     ->update([
                         'status'              => 'received',
@@ -299,6 +308,7 @@ final class MedicineService extends BaseService
                 );
             } else {
                 $this->db->table('clinic_reorder_requests')
+                    ->where('clinic_reorder_requests.tenant_id', CurrentTenant::id())
                     ->where('id', (int) $reorder['id'])
                     ->update(['status' => 'completed', 'fulfilled_at' => $now, 'updated_at' => $now]);
                 $this->audit->enqueue(
@@ -336,7 +346,7 @@ final class MedicineService extends BaseService
         $userId = \App\Auth\CurrentUser::assert();
 
         return $this->txn(function () use ($medicineId, $quantity, $note, $encounterId, $userId): MedicineDto {
-            $med = $this->selectForUpdate('clinic_medicines', ['id' => $medicineId, 'archived_at' => null]);
+            $med = $this->selectForUpdate('clinic_medicines', ['tenant_id' => CurrentTenant::id(), 'id' => $medicineId, 'archived_at' => null]);
             if ($med === null) {
                 throw new ApiException('resource.not_found', 404, [
                     ['code' => 'resource.not_found', 'message' => "Medicine #{$medicineId} not found."],
@@ -344,7 +354,7 @@ final class MedicineService extends BaseService
             }
 
             // The anchoring encounter must exist and still be open.
-            $enc = $this->selectForUpdate('clinic_encounters', ['id' => $encounterId, 'archived_at' => null]);
+            $enc = $this->selectForUpdate('clinic_encounters', ['tenant_id' => CurrentTenant::id(), 'id' => $encounterId, 'archived_at' => null]);
             if ($enc === null) {
                 throw new ApiException('resource.not_found', 404, [
                     ['code' => 'resource.not_found', 'message' => "Encounter #{$encounterId} not found.", 'field' => 'encounter_id'],
@@ -386,6 +396,7 @@ final class MedicineService extends BaseService
                 $newQty  = (int) $batch['quantity_remaining'] - $take;
 
                 $this->db->table('clinic_medicine_batches')
+                    ->where('clinic_medicine_batches.tenant_id', CurrentTenant::id())
                     ->where('id', (int) $batch['id'])
                     ->update([
                         'quantity_remaining' => $newQty,
@@ -394,6 +405,7 @@ final class MedicineService extends BaseService
 
                 $balance -= $take;
                 $this->db->table('clinic_medicine_transactions')->insert([
+                    'tenant_id'            => CurrentTenant::id(),
                     'medicine_id'          => $medicineId,
                     'batch_id'             => (int) $batch['id'],
                     'type'                 => 'dispensed',
@@ -432,6 +444,7 @@ final class MedicineService extends BaseService
         $this->policy->check('inventoryRead');
 
         $rows = $this->db->table('clinic_medicines')
+            ->where('clinic_medicines.tenant_id', CurrentTenant::id())
             ->select(self::MED_COLS)
             ->where('archived_at', null)
             ->orderBy('generic_name', 'ASC')
@@ -468,6 +481,7 @@ final class MedicineService extends BaseService
         $until = $today->modify('+' . max(1, min($days, 365)) . ' days')->format('Y-m-d');
 
         $rows = $this->db->table('clinic_medicine_batches b')
+            ->where('b.tenant_id', CurrentTenant::id())
             ->select('b.' . str_replace(', ', ', b.', self::BATCH_COLS) . ', m.generic_name, m.unit')
             ->join('clinic_medicines m', 'm.id = b.medicine_id')
             ->where('b.status', 'active')
@@ -528,6 +542,7 @@ final class MedicineService extends BaseService
             ->modify('-' . max(1, min($days, 365)) . ' days')->format('Y-m-d H:i:s');
 
         $rows = $this->db->table('clinic_medicine_batches b')
+            ->where('b.tenant_id', CurrentTenant::id())
             ->select('b.id, b.medicine_id, b.batch_number, b.quantity_received, b.expiration_date, b.received_date, b.supplier, b.status, m.generic_name, m.unit, t.quantity AS written_off, t.created_at AS written_off_at')
             ->join('clinic_medicines m', 'm.id = b.medicine_id')
             ->join('clinic_medicine_transactions t', "t.batch_id = b.id AND t.type IN ('expired', 'recalled')", 'left')
@@ -571,6 +586,7 @@ final class MedicineService extends BaseService
         // second COUNT() (COUNT(COUNT(...))) — invalid SQL. Use one
         // explicit aggregate select instead.
         $row = $this->db->table('clinic_medicine_transactions')
+            ->where('clinic_medicine_transactions.tenant_id', CurrentTenant::id())
             ->select('SUM(quantity) AS total, COUNT(DISTINCT medicine_id) AS medicines')
             ->where('type', 'dispensed')
             ->where('created_at >=', $since)
@@ -599,7 +615,7 @@ final class MedicineService extends BaseService
     {
         $this->policy->check('inventoryRead');
 
-        $med = $this->db->table('clinic_medicines')->select('id')->where('id', $medicineId)->get()->getRowArray();
+        $med = $this->db->table('clinic_medicines')->where('clinic_medicines.tenant_id', CurrentTenant::id())->select('id')->where('id', $medicineId)->get()->getRowArray();
         if ($med === null) {
             throw new ApiException('resource.not_found', 404, [
                 ['code' => 'resource.not_found', 'message' => "Medicine #{$medicineId} not found."],
@@ -610,6 +626,7 @@ final class MedicineService extends BaseService
         // The actor's email/username is joined so the ledger shows WHO
         // moved the stock (inventory audit gap).
         $rows = $this->db->table('clinic_medicine_transactions t')
+            ->where('t.tenant_id', CurrentTenant::id())
             ->select('t.id, t.batch_id, t.type, t.quantity, t.balance_after, t.reference_type, t.reference_id, t.performed_by_user_id, t.note, t.created_at, COALESCE(NULLIF(ai.secret, \'\'), u.username) AS user_email')
             ->join('users u', 'u.id = t.performed_by_user_id', 'left')
             ->join('auth_identities ai', "ai.user_id = u.id AND ai.type = 'email_password'", 'left')
@@ -661,7 +678,7 @@ final class MedicineService extends BaseService
         $userId = \App\Auth\CurrentUser::assert();
 
         return $this->txn(function () use ($batchId, $status, $txnType, $auditCode, $note, $userId): array {
-            $batch = $this->selectForUpdate('clinic_medicine_batches', ['id' => $batchId]);
+            $batch = $this->selectForUpdate('clinic_medicine_batches', ['tenant_id' => CurrentTenant::id(), 'id' => $batchId]);
             if ($batch === null) {
                 throw new ApiException('resource.not_found', 404, [
                     ['code' => 'resource.not_found', 'message' => "Batch #{$batchId} not found."],
@@ -685,12 +702,13 @@ final class MedicineService extends BaseService
 
             // Zero the batch + flip status. NOTE: this table has no
             // updated_at column — do not write one.
-            $this->db->table('clinic_medicine_batches')->where('id', $batchId)->update([
+            $this->db->table('clinic_medicine_batches')->where('clinic_medicine_batches.tenant_id', CurrentTenant::id())->where('id', $batchId)->update([
                 'quantity_remaining' => 0,
                 'status'             => $status,
             ]);
 
             $this->db->table('clinic_medicine_transactions')->insert([
+                'tenant_id'            => CurrentTenant::id(),
                 'medicine_id'          => $medicineId,
                 'batch_id'             => $batchId,
                 'type'                 => $txnType,
@@ -712,7 +730,7 @@ final class MedicineService extends BaseService
                 ],
             );
 
-            $row = $this->db->table('clinic_medicine_batches')->where('id', $batchId)->get()->getRowArray();
+            $row = $this->db->table('clinic_medicine_batches')->where('clinic_medicine_batches.tenant_id', CurrentTenant::id())->where('id', $batchId)->get()->getRowArray();
             $dto = MedicineBatchDto::fromRow($row)->toArray();
             $dto['quantity_written_off'] = $remaining;
 
@@ -732,6 +750,7 @@ final class MedicineService extends BaseService
         $userId = \App\Auth\CurrentUser::assert();
 
         $med = $this->db->table('clinic_medicines')
+            ->where('clinic_medicines.tenant_id', CurrentTenant::id())
             ->select('id, category, reorder_threshold')
             ->where('id', $medicineId)->where('archived_at', null)
             ->get()->getRowArray();
@@ -745,6 +764,7 @@ final class MedicineService extends BaseService
 
         $since = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->modify('-30 days')->format('Y-m-d H:i:s');
         $disp  = $this->db->table('clinic_medicine_transactions')
+            ->where('clinic_medicine_transactions.tenant_id', CurrentTenant::id())
             ->selectSum('quantity', 'total')
             ->where('medicine_id', $medicineId)
             ->where('type', 'dispensed')
@@ -765,8 +785,10 @@ final class MedicineService extends BaseService
 
         return $this->txn(function () use ($medicineId, $result, $today, $now, $userId): array {
             $this->db->table('clinic_medicine_forecasts')
+                ->where('clinic_medicine_forecasts.tenant_id', CurrentTenant::id())
                 ->where('medicine_id', $medicineId)->where('forecast_date', $today)->delete();
             $this->db->table('clinic_medicine_forecasts')->insert([
+                'tenant_id'                 => CurrentTenant::id(),
                 'medicine_id'               => $medicineId,
                 'forecast_date'             => $today,
                 'forecast_period_start'     => $today,
@@ -803,6 +825,7 @@ final class MedicineService extends BaseService
         $this->policy->check('inventoryForecast');
 
         $row = $this->db->table('clinic_medicine_forecasts')
+            ->where('clinic_medicine_forecasts.tenant_id', CurrentTenant::id())
             ->where('medicine_id', $medicineId)
             ->orderBy('forecast_date', 'DESC')->orderBy('id', 'DESC')
             ->limit(1)->get()->getRowArray();
@@ -840,6 +863,7 @@ final class MedicineService extends BaseService
         $today = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d');
 
         $rows = $this->db->table('clinic_medicine_batches')
+            ->where('clinic_medicine_batches.tenant_id', CurrentTenant::id())
             ->select('medicine_id, SUM(quantity_remaining) AS on_hand, MIN(expiration_date) AS earliest_expiry')
             ->whereIn('medicine_id', $ids)
             ->where('status', 'active')
@@ -930,7 +954,7 @@ final class MedicineService extends BaseService
         $userId = \App\Auth\CurrentUser::assert();
 
         return $this->txn(function () use ($medicineId, $input, $userId): MedicineDto {
-            $med = $this->selectForUpdate('clinic_medicines', ['id' => $medicineId, 'archived_at' => null]);
+            $med = $this->selectForUpdate('clinic_medicines', ['tenant_id' => CurrentTenant::id(), 'id' => $medicineId, 'archived_at' => null]);
             if ($med === null) {
                 throw new ApiException('resource.not_found', 404, [
                     ['code' => 'resource.not_found', 'message' => "Medicine #{$medicineId} not found."],
@@ -944,7 +968,7 @@ final class MedicineService extends BaseService
             $this->assertTargetStock($threshold, $target);
 
             $now = $this->utcNow();
-            $this->db->table('clinic_medicines')->where('id', $medicineId)->update([
+            $this->db->table('clinic_medicines')->where('clinic_medicines.tenant_id', CurrentTenant::id())->where('id', $medicineId)->update([
                 'reorder_threshold' => $threshold,
                 'target_stock'      => $target,
                 'updated_at'        => $now,
@@ -985,7 +1009,7 @@ final class MedicineService extends BaseService
         $userId = \App\Auth\CurrentUser::assert();
 
         return $this->txn(function () use ($medicineId, $userId): MedicineDto {
-            $med = $this->selectForUpdate('clinic_medicines', ['id' => $medicineId]);
+            $med = $this->selectForUpdate('clinic_medicines', ['tenant_id' => CurrentTenant::id(), 'id' => $medicineId]);
             if ($med === null) {
                 throw new ApiException('resource.not_found', 404, [
                     ['code' => 'resource.not_found', 'message' => "Medicine #{$medicineId} not found."],
@@ -998,6 +1022,7 @@ final class MedicineService extends BaseService
 
             $now = $this->utcNow();
             $this->db->table('clinic_medicines')
+                ->where('clinic_medicines.tenant_id', CurrentTenant::id())
                 ->where('id', $medicineId)
                 ->update(['archived_at' => $now, 'updated_at' => $now]);
 
@@ -1025,7 +1050,7 @@ final class MedicineService extends BaseService
         $userId = \App\Auth\CurrentUser::assert();
 
         return $this->txn(function () use ($medicineId, $userId): MedicineDto {
-            $med = $this->selectForUpdate('clinic_medicines', ['id' => $medicineId]);
+            $med = $this->selectForUpdate('clinic_medicines', ['tenant_id' => CurrentTenant::id(), 'id' => $medicineId]);
             if ($med === null) {
                 throw new ApiException('resource.not_found', 404, [
                     ['code' => 'resource.not_found', 'message' => "Medicine #{$medicineId} not found."],
@@ -1038,6 +1063,7 @@ final class MedicineService extends BaseService
 
             $now = $this->utcNow();
             $this->db->table('clinic_medicines')
+                ->where('clinic_medicines.tenant_id', CurrentTenant::id())
                 ->where('id', $medicineId)
                 ->update(['archived_at' => null, 'updated_at' => $now]);
 

@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:hugeicons/hugeicons.dart';
@@ -59,8 +60,9 @@ class _MedicinesScreenState extends State<MedicinesScreen>
         _items = page.items;
         _nextCursor = page.meta?.nextCursor;
       });
-    } catch (_) {
+    } catch (e) {
       // Keep the current list on transient errors.
+      if (kDebugMode) debugPrint('MedicinesScreen.poll failed: $e');
     }
   }
 
@@ -94,8 +96,9 @@ class _MedicinesScreenState extends State<MedicinesScreen>
         _items = [..._items, ...page.items];
         _nextCursor = page.meta?.nextCursor;
       });
-    } catch (_) {
+    } catch (e) {
       // ignore
+      if (kDebugMode) debugPrint('MedicinesScreen.loadMore failed: $e');
     } finally {
       setState(() => _loadingMore = false);
     }
@@ -181,8 +184,9 @@ class _MedicinesScreenState extends State<MedicinesScreen>
     List<Map<String, dynamic>> encounters = [];
     try {
       encounters = await ApiService.I.openEncounters();
-    } catch (_) {
+    } catch (e) {
       // fall through with empty list
+      if (kDebugMode) debugPrint('MedicinesScreen.dispense failed: $e');
     }
     if (!mounted) return;
     final ok = await showModalBottomSheet<bool>(
@@ -229,7 +233,9 @@ class _MedicinesScreenState extends State<MedicinesScreen>
     List<Map<String, dynamic>> batches = [];
     try {
       batches = await ApiService.I.medicineBatches(m.id);
-    } catch (_) {}
+    } catch (e) {
+      if (kDebugMode) debugPrint('MedicinesScreen.writeOffBatch failed: $e');
+    }
     if (!mounted) return;
     final active = batches
         .where((b) => b['status'] == 'active' || b['status'] == null)

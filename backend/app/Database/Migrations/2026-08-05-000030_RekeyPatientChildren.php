@@ -27,6 +27,11 @@ final class RekeyPatientChildren extends Migration
 
     public function up(): void
     {
+        // See ClinicalPatientUserId::up() — the fieldExists checks below
+        // must not read a field cache left stale by earlier migrations in
+        // the same process.
+        $this->db->resetDataCache();
+
         foreach (self::TABLES as $table) {
             if (! $this->db->tableExists($table)) {
                 continue;

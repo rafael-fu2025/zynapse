@@ -6,6 +6,7 @@ import 'package:cookie_jar/cookie_jar.dart';
 import 'package:dio/dio.dart';
 import 'package:dio_cookie_manager/dio_cookie_manager.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -168,22 +169,42 @@ class ApiClient {
     _onSessionExpired = callback;
   }
 
-  /// Replaces the bearer token (also persists across launches for the
-  /// demo). Pass `null` to clear.
+  /// Replaces the bearer token and persists it in the platform
+  /// keystore/Keychain (flutter_secure_storage) — SharedPreferences is
+  /// plaintext XML and this token is a live credential for a clinical
+  /// system. Pass `null` to clear.
+  ///
+  /// Also performs a one-time migration: installs predating secure
+  /// storage kept the token in SharedPreferences; it is read once,
+  /// moved, and the plaintext copy is deleted.
   Future<void> setAccessToken(String? token) async {
     _accessToken = token;
-    final prefs = await SharedPreferences.getInstance();
+    // flutter_secure_storage 10+ encrypts Android storage by default
+    // (the old EncryptedSharedPreferences opt-in was removed upstream).
+    const storage = FlutterSecureStorage();
     if (token == null) {
-      await prefs.remove(AppConfig.accessTokenPrefKey);
-    } else {
-      await prefs.setString(AppConfig.accessTokenPrefKey, token);
+      await storage.delete(key: AppConfig.accessTokenPrefKey);
+      return;
     }
+    await storage.write(key: AppConfig.accessTokenPrefKey, value: token);
   }
 
   /// Restores a previously persisted token (app cold start).
   Future<String?> restoreToken() async {
+    // flutter_secure_storage 10+ encrypts Android storage by default
+    // (the old EncryptedSharedPreferences opt-in was removed upstream).
+    const storage = FlutterSecureStorage();
+    _accessToken = await storage.read(key: AppConfig.accessTokenPrefKey);
+    if (_accessToken != null) return _accessToken;
+
+    // One-time migration from the old plaintext SharedPreferences copy.
     final prefs = await SharedPreferences.getInstance();
-    _accessToken = prefs.getString(AppConfig.accessTokenPrefKey);
+    final legacy = prefs.getString(AppConfig.accessTokenPrefKey);
+    if (legacy != null && legacy.isNotEmpty) {
+      _accessToken = legacy;
+      await storage.write(key: AppConfig.accessTokenPrefKey, value: legacy);
+      await prefs.remove(AppConfig.accessTokenPrefKey);
+    }
     return _accessToken;
   }
 
@@ -205,7 +226,8 @@ class ApiClient {
       if (exp is! int) return false;
       final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
       return exp <= now + 30;
-    } catch (_) {
+    } catch (e) {
+      if (kDebugMode) debugPrint('ApiClient.isTokenExpired failed: $e');
       return false;
     }
   }
@@ -238,9 +260,10 @@ class ApiClient {
       // is attached before the auth/Bearer wrapper runs (same ordering as
       // the original in-memory jar, which sat at index 0).
       _dio.interceptors.insert(0, CookieManager(jar));
-    } catch (_) {
+    } catch (e) {
       // path_provider failure — fall back to a best-effort in-memory jar
       // so the app still works within a single run (same as before).
+      if (kDebugMode) debugPrint('ApiClient.initCookieJar failed: $e');
       final jar = PersistCookieJar(persistSession: true);
       _cookieJar = jar;
       _dio.interceptors.insert(0, CookieManager(jar));
@@ -253,8 +276,9 @@ class ApiClient {
     if (jar == null) return;
     try {
       await jar.deleteAll();
-    } catch (_) {
+    } catch (e) {
       // best effort
+      if (kDebugMode) debugPrint('ApiClient.clearRefreshCookie failed: $e');
     }
   }
 
@@ -285,7 +309,8 @@ class ApiClient {
         }
       }
       return false;
-    } catch (_) {
+    } catch (e) {
+      if (kDebugMode) debugPrint('ApiClient.refreshAccessToken failed: $e');
       return false;
     }
   }

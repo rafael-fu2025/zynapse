@@ -8,6 +8,7 @@ use App\Exceptions\ApiException;
 use App\Modules\Shared\BaseService;
 use App\Services\Audit\AuditOutboxService;
 use App\Pagination\KeysetPaginator;
+use App\Services\CurrentTenant;
 use CodeIgniter\Database\Exceptions\DatabaseException;
 use Config\Services;
 use DateTimeImmutable;
@@ -40,6 +41,7 @@ final class UserAdminService extends BaseService
         $builder = $this->db->table('users u')
             ->select("u.id, u.username, u.status, u.active, u.created_at, u.updated_at, u.last_active, i.secret AS email, COALESCE(i.force_reset, 0) AS force_reset, u.kind AS person_kind, u.first_name AS person_first_name, u.last_name AS person_last_name", false)
             ->join("auth_identities i", "i.user_id = u.id AND i.type = 'email_password'", 'left')
+            ->where('u.tenant_id', CurrentTenant::id())
             ->where('u.deleted_at', null);
 
         if ($search !== '') {
@@ -126,6 +128,7 @@ final class UserAdminService extends BaseService
             $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
 
             $this->db->table('users')->insert([
+                'tenant_id'  => CurrentTenant::id(),
                 'username'   => $username,
                 'status'     => 'active',
                 'active'     => 1,
@@ -181,13 +184,13 @@ final class UserAdminService extends BaseService
         }
 
         return $this->txn(function () use ($userId, $active, $actorId): array {
-            $row = $this->selectForUpdate('users', ['id' => $userId, 'deleted_at' => null]);
+            $row = $this->selectForUpdate('users', ['id' => $userId, 'tenant_id' => CurrentTenant::id(), 'deleted_at' => null]);
             if ($row === null) {
                 throw ApiException::notFound('resource.not_found');
             }
 
             $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
-            $this->db->table('users')->where('id', $userId)->update([
+            $this->db->table('users')->where('tenant_id', CurrentTenant::id())->where('id', $userId)->update([
                 'active'     => $active ? 1 : 0,
                 'status'     => $active ? 'active' : 'disabled',
                 'updated_at' => $now,
@@ -214,7 +217,7 @@ final class UserAdminService extends BaseService
         $actorId = \App\Auth\CurrentUser::assert();
 
         return $this->txn(function () use ($userId, $groups, $actorId): array {
-            $row = $this->selectForUpdate('users', ['id' => $userId, 'deleted_at' => null]);
+            $row = $this->selectForUpdate('users', ['id' => $userId, 'tenant_id' => CurrentTenant::id(), 'deleted_at' => null]);
             if ($row === null) {
                 throw ApiException::notFound('resource.not_found');
             }

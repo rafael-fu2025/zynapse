@@ -1,5 +1,5 @@
 import 'package:flutter/foundation.dart'
-    show TargetPlatform, defaultTargetPlatform, kIsWeb;
+    show TargetPlatform, defaultTargetPlatform, kDebugMode, kIsWeb;
 
 /// App-wide configuration.
 ///
@@ -9,13 +9,24 @@ import 'package:flutter/foundation.dart'
 class AppConfig {
   AppConfig._();
 
-  /// Optional compile-time override, e.g. for a physical device:
+  /// Required compile-time override, e.g. for a physical device:
   /// `--dart-define=API_BASE_URL=http://192.168.1.10:8090/api/v1`
   static const String _definedBaseUrl = String.fromEnvironment('API_BASE_URL');
 
   /// Base URL for the SYNAPSE API (including the `/api/v1` prefix).
+  ///
+  /// Release builds MUST point at a real deployment via
+  /// `--dart-define=API_BASE_URL=...`; the loopback defaults below exist
+  /// only for development. Silently shipping a build that talks to
+  /// `127.0.0.1` would look installed-but-broken — fail fast instead.
   static String get apiBaseUrl {
     if (_definedBaseUrl.isNotEmpty) return _definedBaseUrl;
+    if (!kDebugMode && !kIsWeb) {
+      throw StateError(
+        'API_BASE_URL is not set. Release builds require '
+        '--dart-define=API_BASE_URL=https://<host>/api/v1',
+      );
+    }
     if (kIsWeb) return 'http://127.0.0.1:8090/api/v1';
     // Android emulators reach the host machine via 10.0.2.2.
     if (defaultTargetPlatform == TargetPlatform.android) {

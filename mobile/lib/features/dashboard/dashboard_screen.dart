@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:hugeicons/hugeicons.dart';
 import 'package:intl/intl.dart';
@@ -76,8 +77,9 @@ class _DashboardScreenState extends State<DashboardScreen>
       final c = await ApiService.I.dashboardCounters();
       if (!mounted) return;
       setState(() => _data = c);
-    } catch (_) {
+    } catch (e) {
       // Keep the last known counters.
+      if (kDebugMode) debugPrint('DashboardScreen.poll failed: $e');
     }
   }
 

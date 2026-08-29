@@ -7,6 +7,7 @@ namespace Modules\Clinic\Services;
 use App\Exceptions\ApiException;
 use App\Modules\Shared\BaseService;
 use App\Services\Audit\AuditOutboxService;
+use App\Services\CurrentTenant;
 use App\Services\Kiosk\CheckinPurposeCatalog;
 use Config\Services;
 use DateTimeImmutable;
@@ -164,6 +165,7 @@ final class CheckinService extends BaseService
                     $window = substr((string) $appointment['start_time'], 0, 5) . '–' . substr((string) $appointment['end_time'], 0, 5);
                     if ((string) $appointment['status'] === 'scheduled') {
                         $this->db->table('counselling_appointments')
+                            ->where('counselling_appointments.tenant_id', CurrentTenant::id())
                             ->where('id', $appointmentId)
                             ->update(['status' => 'confirmed', 'updated_at' => $this->utcNow()]);
                         $outcome = 'counselling_confirmed';
@@ -253,6 +255,7 @@ final class CheckinService extends BaseService
 
                     $enc = $this->db->table('clinic_encounters')
                         ->select('id')
+                        ->where('clinic_encounters.tenant_id', CurrentTenant::id())
                         ->where('appointment_id', $apptId)
                         ->get()->getRowArray();
                     $encounterId = $enc !== null ? (int) $enc['id'] : null;
@@ -260,6 +263,7 @@ final class CheckinService extends BaseService
                     if ($encounterId !== null) {
                         $q = $this->db->table('clinic_queue_entries')
                             ->select('position')
+                            ->where('clinic_queue_entries.tenant_id', CurrentTenant::id())
                             ->where('encounter_id', $encounterId)
                             ->get()->getRowArray();
                         if ($q !== null) {
@@ -282,6 +286,7 @@ final class CheckinService extends BaseService
 
                     $enc = $this->db->table('clinic_encounters')
                         ->select('id')
+                        ->where('clinic_encounters.tenant_id', CurrentTenant::id())
                         ->where('appointment_id', $apptId)
                         ->get()->getRowArray();
                     $encounterId = $enc !== null ? (int) $enc['id'] : null;
@@ -289,6 +294,7 @@ final class CheckinService extends BaseService
                     if ($encounterId !== null) {
                         $q = $this->db->table('clinic_queue_entries')
                             ->select('position')
+                            ->where('clinic_queue_entries.tenant_id', CurrentTenant::id())
                             ->where('encounter_id', $encounterId)
                             ->get()->getRowArray();
                         if ($q !== null) {
@@ -328,6 +334,7 @@ final class CheckinService extends BaseService
             // 5. Fallback: open a pending-triage walk-in encounter + queue it.
             $now = $this->utcNow();
             $this->db->table('clinic_encounters')->insert([
+                'tenant_id'         => CurrentTenant::id(),
                 'patient_user_id'   => $patientUserId,
                 'patient_school_id' => $schoolId,
                 'chief_complaint'   => "Kiosk check-in (pending triage) — station {$stationId}",
@@ -368,6 +375,7 @@ final class CheckinService extends BaseService
         $this->policy->check('checkinRead');
 
         $rows = $this->db->table('clinic_checkins')
+            ->where('clinic_checkins.tenant_id', CurrentTenant::id())
             ->where('scanned_at >=', substr($this->utcNow(), 0, 10) . ' 00:00:00')
             ->orderBy('scanned_at', 'DESC')
             ->orderBy('id', 'DESC')
@@ -405,6 +413,7 @@ final class CheckinService extends BaseService
         $now = $this->utcNow();
 
         $this->db->table('clinic_encounters')->insert([
+            'tenant_id'         => CurrentTenant::id(),
             'patient_user_id'   => null,
             'patient_school_id' => null,
             'guest_name'        => $name,
@@ -448,6 +457,7 @@ final class CheckinService extends BaseService
         $now = $this->utcNow();
 
         $this->db->table('clinic_queue_entries')->insert([
+            'tenant_id' => CurrentTenant::id(),
             'encounter_id' => $encounterId,
             'queue_date'   => $date,
             'position'     => $position,
@@ -474,6 +484,7 @@ final class CheckinService extends BaseService
         string $destination = 'clinic',
     ): int {
         $this->db->table('clinic_checkins')->insert([
+            'tenant_id'                  => CurrentTenant::id(),
             'patient_user_id'            => $patientUserId,
             'patient_school_id'          => $schoolId,
             'method'                     => $method,
@@ -528,6 +539,7 @@ final class CheckinService extends BaseService
         if ($kind === 'student' && $patient !== null) {
             $severe = $this->db->table('patient_allergies')
                 ->select('id')
+                ->where('patient_allergies.tenant_id', CurrentTenant::id())
                 ->where('user_id', (int) $patient['id'])
                 ->where('severity', 'severe')
                 ->get()->getRowArray();

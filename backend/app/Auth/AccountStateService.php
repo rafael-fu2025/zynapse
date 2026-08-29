@@ -24,12 +24,12 @@ final class AccountStateService
     {
     }
 
-    /** @return array{active:bool, force_reset:bool}|null */
+    /** @return array{active:bool, force_reset:bool, tenant_id:int}|null */
     public function forUser(int $userId): ?array
     {
         $db = $this->connection ?? Services::database();
         $row = $db->table('users u')
-            ->select('u.active, u.deleted_at, COALESCE(i.force_reset, 0) AS force_reset', false)
+            ->select('u.active, u.deleted_at, u.tenant_id, COALESCE(i.force_reset, 0) AS force_reset', false)
             ->join('auth_identities i', "i.user_id = u.id AND i.type = 'email_password'", 'left')
             ->where('u.id', $userId)
             ->get()
@@ -42,6 +42,7 @@ final class AccountStateService
         return [
             'active'      => (bool) $row['active'],
             'force_reset' => (bool) $row['force_reset'],
+            'tenant_id'   => (int) ($row['tenant_id'] ?? 1),
         ];
     }
 

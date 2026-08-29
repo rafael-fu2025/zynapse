@@ -6,17 +6,14 @@
  * grouped links, and topbar render for an authenticated admin.
  */
 import { expect, test } from '@playwright/test';
+import { signInLive } from './helpers/auth';
 
 const RUN = process.env['SYNAPSE_E2E'] === '1';
 
 test.skip(!RUN, 'SYNAPSE_E2E=1 not set — skipping live layout check.');
 
 test('authenticated shell shows the sidebar navigation and topbar', async ({ page }) => {
-  await page.goto('/login');
-  await page.getByLabel(/email/i).fill('admin@synapse.dev');
-  await page.getByLabel(/password/i).fill('DevPassw0rd!');
-  await page.getByRole('button', { name: /sign in/i }).click();
-  await page.waitForURL(/\/$/, { timeout: 20_000 });
+  await signInLive(page);
 
   // Primary sidebar landmark + representative grouped links.
   const sidebar = page.getByRole('navigation', { name: /primary/i });

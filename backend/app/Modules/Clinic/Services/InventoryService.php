@@ -8,6 +8,7 @@ use App\Exceptions\ApiException;
 use App\Modules\Shared\BaseService;
 use App\Pagination\KeysetPaginator;
 use App\Services\Audit\AuditOutboxService;
+use App\Services\CurrentTenant;
 use App\Services\Inventory\StockLevelPolicy;
 use DateTimeImmutable;
 use DateTimeZone;
@@ -39,6 +40,7 @@ final class InventoryService extends BaseService
         $this->policy->check('inventoryRead');
 
         $builder = $this->db->table('clinic_inventory_items')
+            ->where('clinic_inventory_items.tenant_id', CurrentTenant::id())
             ->select('id, sku, name, unit, quantity_on_hand, reorder_level, target_stock, archived_at, created_at')
             ->orderBy('created_at', 'DESC')
             ->orderBy('id', 'DESC');
@@ -90,6 +92,7 @@ final class InventoryService extends BaseService
 
         return $this->txn(function () use ($sku, $name, $unit, $reorderLevel, $targetStock, $userId): InventoryItemDto {
             $existing = $this->db->table('clinic_inventory_items')
+                ->where('clinic_inventory_items.tenant_id', CurrentTenant::id())
                 ->where('sku', $sku)
                 ->get()->getRowArray();
             if ($existing !== null) {
@@ -101,6 +104,7 @@ final class InventoryService extends BaseService
             $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
 
             $this->db->table('clinic_inventory_items')->insert([
+                'tenant_id'        => CurrentTenant::id(),
                 'sku'              => $sku,
                 'name'             => $name,
                 'unit'             => $unit,
@@ -121,7 +125,7 @@ final class InventoryService extends BaseService
                 ['resource_code' => 'sku#' . $sku],
             );
 
-            $row = $this->db->table('clinic_inventory_items')->where('id', $id)->get()->getRowArray();
+            $row = $this->db->table('clinic_inventory_items')->where('clinic_inventory_items.tenant_id', CurrentTenant::id())->where('id', $id)->get()->getRowArray();
             return InventoryItemDto::fromRow($row);
         });
     }
@@ -138,7 +142,7 @@ final class InventoryService extends BaseService
         $userId = \App\Auth\CurrentUser::assert();
 
         return $this->txn(function () use ($itemId, $name, $unit, $reorderLevel, $targetStock, $userId): InventoryItemDto {
-            $item = $this->selectForUpdate('clinic_inventory_items', ['id' => $itemId, 'archived_at' => null]);
+            $item = $this->selectForUpdate('clinic_inventory_items', ['tenant_id' => CurrentTenant::id(), 'id' => $itemId, 'archived_at' => null]);
             if ($item === null) {
                 throw new ApiException('resource.not_found', 404, [
                     ['code' => 'resource.not_found', 'message' => "Inventory item #{$itemId} not found."],
@@ -149,7 +153,7 @@ final class InventoryService extends BaseService
             $this->assertTargetStock($reorderLevel, $targetStock);
 
             $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
-            $this->db->table('clinic_inventory_items')->where('id', $itemId)->update([
+            $this->db->table('clinic_inventory_items')->where('clinic_inventory_items.tenant_id', CurrentTenant::id())->where('id', $itemId)->update([
                 'name'          => $name,
                 'unit'          => $unit,
                 'reorder_level' => $reorderLevel,
@@ -165,7 +169,7 @@ final class InventoryService extends BaseService
                 ['resource_code' => 'sku#' . (string) $item['sku']],
             );
 
-            $row = $this->db->table('clinic_inventory_items')->where('id', $itemId)->get()->getRowArray();
+            $row = $this->db->table('clinic_inventory_items')->where('clinic_inventory_items.tenant_id', CurrentTenant::id())->where('id', $itemId)->get()->getRowArray();
             return InventoryItemDto::fromRow($row);
         });
     }
@@ -193,7 +197,7 @@ final class InventoryService extends BaseService
         $userId = \App\Auth\CurrentUser::assert();
 
         return $this->txn(function () use ($itemId, $userId): InventoryItemDto {
-            $item = $this->selectForUpdate('clinic_inventory_items', ['id' => $itemId]);
+            $item = $this->selectForUpdate('clinic_inventory_items', ['tenant_id' => CurrentTenant::id(), 'id' => $itemId]);
             if ($item === null) {
                 throw new ApiException('resource.not_found', 404, [
                     ['code' => 'resource.not_found', 'message' => "Inventory item #{$itemId} not found."],
@@ -206,6 +210,7 @@ final class InventoryService extends BaseService
 
             $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
             $this->db->table('clinic_inventory_items')
+                ->where('clinic_inventory_items.tenant_id', CurrentTenant::id())
                 ->where('id', $itemId)
                 ->update(['archived_at' => $now, 'updated_at' => $now]);
 
@@ -217,7 +222,7 @@ final class InventoryService extends BaseService
                 ['resource_code' => 'sku#' . (string) $item['sku']],
             );
 
-            $row = $this->db->table('clinic_inventory_items')->where('id', $itemId)->get()->getRowArray();
+            $row = $this->db->table('clinic_inventory_items')->where('clinic_inventory_items.tenant_id', CurrentTenant::id())->where('id', $itemId)->get()->getRowArray();
             return InventoryItemDto::fromRow($row);
         });
     }
@@ -234,7 +239,7 @@ final class InventoryService extends BaseService
         $userId = \App\Auth\CurrentUser::assert();
 
         return $this->txn(function () use ($itemId, $userId): InventoryItemDto {
-            $item = $this->selectForUpdate('clinic_inventory_items', ['id' => $itemId]);
+            $item = $this->selectForUpdate('clinic_inventory_items', ['tenant_id' => CurrentTenant::id(), 'id' => $itemId]);
             if ($item === null) {
                 throw new ApiException('resource.not_found', 404, [
                     ['code' => 'resource.not_found', 'message' => "Inventory item #{$itemId} not found."],
@@ -247,6 +252,7 @@ final class InventoryService extends BaseService
 
             $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
             $this->db->table('clinic_inventory_items')
+                ->where('clinic_inventory_items.tenant_id', CurrentTenant::id())
                 ->where('id', $itemId)
                 ->update(['archived_at' => null, 'updated_at' => $now]);
 
@@ -258,7 +264,7 @@ final class InventoryService extends BaseService
                 ['resource_code' => 'sku#' . (string) $item['sku']],
             );
 
-            $row = $this->db->table('clinic_inventory_items')->where('id', $itemId)->get()->getRowArray();
+            $row = $this->db->table('clinic_inventory_items')->where('clinic_inventory_items.tenant_id', CurrentTenant::id())->where('id', $itemId)->get()->getRowArray();
             return InventoryItemDto::fromRow($row);
         });
     }
@@ -283,7 +289,7 @@ final class InventoryService extends BaseService
         }
 
         return $this->txn(function () use ($itemId, $qtyDelta, $reasonCode, $note, $encounterId, $userId): InventoryItemDto {
-            $item = $this->selectForUpdate('clinic_inventory_items', ['id' => $itemId, 'archived_at' => null]);
+            $item = $this->selectForUpdate('clinic_inventory_items', ['tenant_id' => CurrentTenant::id(), 'id' => $itemId, 'archived_at' => null]);
 
             if ($item === null) {
                 throw new ApiException('resource.not_found', 404, [
@@ -303,7 +309,7 @@ final class InventoryService extends BaseService
                         ['code' => 'validation.field', 'message' => 'A dispense must be tied to an open encounter.', 'field' => 'encounter_id'],
                     ]);
                 }
-                $enc = $this->selectForUpdate('clinic_encounters', ['id' => $encounterId, 'archived_at' => null]);
+                $enc = $this->selectForUpdate('clinic_encounters', ['tenant_id' => CurrentTenant::id(), 'id' => $encounterId, 'archived_at' => null]);
                 if ($enc === null) {
                     throw new ApiException('resource.not_found', 404, [
                         ['code' => 'resource.not_found', 'message' => "Encounter #{$encounterId} not found.", 'field' => 'encounter_id'],
@@ -328,10 +334,12 @@ final class InventoryService extends BaseService
             $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
 
             $this->db->table('clinic_inventory_items')
+                ->where('clinic_inventory_items.tenant_id', CurrentTenant::id())
                 ->where('id', $itemId)
                 ->update(['quantity_on_hand' => $newQty, 'updated_at' => $now]);
 
             $this->db->table('clinic_inventory_movements')->insert([
+                'tenant_id'        => CurrentTenant::id(),
                 'item_id'          => $itemId,
                 'qty_delta'        => $qtyDelta,
                 'reason_code'      => $reasonCode,
@@ -351,7 +359,7 @@ final class InventoryService extends BaseService
                 ['reason_code' => $reasonCode],
             );
 
-            $row = $this->db->table('clinic_inventory_items')->where('id', $itemId)->get()->getRowArray();
+            $row = $this->db->table('clinic_inventory_items')->where('clinic_inventory_items.tenant_id', CurrentTenant::id())->where('id', $itemId)->get()->getRowArray();
             return InventoryItemDto::fromRow($row);
         });
     }
@@ -374,7 +382,7 @@ final class InventoryService extends BaseService
         $userId = \App\Auth\CurrentUser::assert();
 
         return $this->txn(function () use ($itemId, $note, $quantity, $shortageNote, $userId): InventoryItemDto {
-            $item = $this->selectForUpdate('clinic_inventory_items', ['id' => $itemId, 'archived_at' => null]);
+            $item = $this->selectForUpdate('clinic_inventory_items', ['tenant_id' => CurrentTenant::id(), 'id' => $itemId, 'archived_at' => null]);
             if ($item === null) {
                 throw new ApiException('resource.not_found', 404, [
                     ['code' => 'resource.not_found', 'message' => "Inventory item #{$itemId} not found."],
@@ -384,6 +392,7 @@ final class InventoryService extends BaseService
             // Gate: a delivery must have been marked `received` on the
             // Reorders tab. Locked so the request is consumed exactly once.
             $reorder = $this->selectForUpdate('clinic_reorder_requests', [
+                'tenant_id'      => CurrentTenant::id(),
                 'supply_item_id' => $itemId,
                 'item_type'      => 'supply',
                 'status'         => 'received',
@@ -407,6 +416,7 @@ final class InventoryService extends BaseService
             $now       = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
 
             $this->db->table('clinic_inventory_items')
+                ->where('clinic_inventory_items.tenant_id', CurrentTenant::id())
                 ->where('id', $itemId)
                 ->update(['quantity_on_hand' => $newQty, 'updated_at' => $now]);
 
@@ -421,6 +431,7 @@ final class InventoryService extends BaseService
             $ledgerNote = ($note ?? '') . $shortageSuffix;
 
             $this->db->table('clinic_inventory_movements')->insert([
+                'tenant_id'        => CurrentTenant::id(),
                 'item_id'          => $itemId,
                 'qty_delta'        => $qty,
                 'reason_code'      => 'receive',
@@ -437,6 +448,7 @@ final class InventoryService extends BaseService
             // can chase the supplier or raise a follow-up.
             if ($isPartial) {
                 $this->db->table('clinic_reorder_requests')
+                    ->where('clinic_reorder_requests.tenant_id', CurrentTenant::id())
                     ->where('id', (int) $reorder['id'])
                     ->update([
                         'status'               => 'received',
@@ -457,6 +469,7 @@ final class InventoryService extends BaseService
                 );
             } else {
                 $this->db->table('clinic_reorder_requests')
+                    ->where('clinic_reorder_requests.tenant_id', CurrentTenant::id())
                     ->where('id', (int) $reorder['id'])
                     ->update(['status' => 'completed', 'fulfilled_at' => $now, 'updated_at' => $now]);
                 $this->audit->enqueue(
@@ -476,7 +489,7 @@ final class InventoryService extends BaseService
                 ['reason_code' => 'receive'],
             );
 
-            $row = $this->db->table('clinic_inventory_items')->where('id', $itemId)->get()->getRowArray();
+            $row = $this->db->table('clinic_inventory_items')->where('clinic_inventory_items.tenant_id', CurrentTenant::id())->where('id', $itemId)->get()->getRowArray();
             return InventoryItemDto::fromRow($row);
         });
     }
@@ -492,7 +505,7 @@ final class InventoryService extends BaseService
     {
         $this->policy->check('inventoryRead');
 
-        $item = $this->db->table('clinic_inventory_items')->select('id')->where('id', $itemId)->get()->getRowArray();
+        $item = $this->db->table('clinic_inventory_items')->where('clinic_inventory_items.tenant_id', CurrentTenant::id())->select('id')->where('id', $itemId)->get()->getRowArray();
         if ($item === null) {
             throw new ApiException('resource.not_found', 404, [
                 ['code' => 'resource.not_found', 'message' => "Inventory item #{$itemId} not found."],
@@ -504,6 +517,7 @@ final class InventoryService extends BaseService
         // moved the stock (inventory audit gap); reference_* records
         // which encounter / reorder the movement belonged to.
         $rows = $this->db->table('clinic_inventory_movements m')
+            ->where('m.tenant_id', CurrentTenant::id())
             ->select('m.id, m.qty_delta, m.reason_code, m.reference_type, m.reference_id, m.balance_after, m.moved_by_user_id, m.note, m.created_at, COALESCE(NULLIF(ai.secret, \'\'), u.username) AS user_email')
             ->join('users u', 'u.id = m.moved_by_user_id', 'left')
             ->join('auth_identities ai', "ai.user_id = u.id AND ai.type = 'email_password'", 'left')

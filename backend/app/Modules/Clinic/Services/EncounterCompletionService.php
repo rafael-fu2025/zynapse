@@ -7,6 +7,7 @@ namespace Modules\Clinic\Services;
 use App\Exceptions\ApiException;
 use App\Modules\Shared\BaseService;
 use App\Services\Audit\AuditOutboxService;
+use App\Services\CurrentTenant;
 
 /** Shared in-transaction completion coordinator for Clinic queue and encounter actions. */
 final class EncounterCompletionService extends BaseService
@@ -19,7 +20,7 @@ final class EncounterCompletionService extends BaseService
     /** @return array<string, mixed> */
     public function complete(int $encounterId, int $userId, string $now, string $reasonCode): array
     {
-        $encounter = $this->selectForUpdate('clinic_encounters', ['id' => $encounterId, 'archived_at' => null]);
+        $encounter = $this->selectForUpdate('clinic_encounters', ['tenant_id' => CurrentTenant::id(), 'id' => $encounterId, 'archived_at' => null]);
         if ($encounter === null) {
             throw new ApiException('resource.not_found', 404, [[
                 'code' => 'resource.not_found', 'message' => "Encounter #{$encounterId} not found.",
@@ -32,7 +33,7 @@ final class EncounterCompletionService extends BaseService
         }
 
         if ((string) $encounter['status'] === 'open') {
-            $this->db->table('clinic_encounters')->where('id', $encounterId)->update([
+            $this->db->table('clinic_encounters')->where('clinic_encounters.tenant_id', CurrentTenant::id())->where('id', $encounterId)->update([
                 'status' => 'closed', 'closed_at' => $now, 'updated_at' => $now,
             ]);
             $this->audit->enqueue('clinic.encounter_closed', 'clinic_encounters', $encounterId, $userId, [
@@ -45,7 +46,7 @@ final class EncounterCompletionService extends BaseService
             [$encounterId],
         )->getRowArray();
         if ($queue !== null && in_array((string) $queue['status'], ['waiting', 'called', 'in_session'], true)) {
-            $this->db->table('clinic_queue_entries')->where('id', (int) $queue['id'])->update([
+            $this->db->table('clinic_queue_entries')->where('clinic_queue_entries.tenant_id', CurrentTenant::id())->where('id', (int) $queue['id'])->update([
                 'status' => 'done', 'finished_at' => $now, 'updated_at' => $now,
             ]);
             $this->audit->enqueue('clinic.queue_done', 'clinic_queue_entries', (int) $queue['id'], $userId, [
@@ -54,9 +55,9 @@ final class EncounterCompletionService extends BaseService
         }
 
         if ($encounter['appointment_id'] !== null) {
-            $appointment = $this->selectForUpdate('clinic_appointments', ['id' => (int) $encounter['appointment_id'], 'archived_at' => null]);
+            $appointment = $this->selectForUpdate('clinic_appointments', ['tenant_id' => CurrentTenant::id(), 'id' => (int) $encounter['appointment_id'], 'archived_at' => null]);
             if ($appointment !== null && (string) $appointment['status'] === 'checked_in') {
-                $this->db->table('clinic_appointments')->where('id', (int) $appointment['id'])->update([
+                $this->db->table('clinic_appointments')->where('clinic_appointments.tenant_id', CurrentTenant::id())->where('id', (int) $appointment['id'])->update([
                     'status' => 'completed', 'updated_at' => $now,
                 ]);
                 $this->audit->enqueue('clinic.appointment_completed', 'clinic_appointments', (int) $appointment['id'], $userId, [
@@ -65,6 +66,6 @@ final class EncounterCompletionService extends BaseService
             }
         }
 
-        return $this->db->table('clinic_encounters')->where('id', $encounterId)->get()->getRowArray();
+        return $this->db->table('clinic_encounters')->where('clinic_encounters.tenant_id', CurrentTenant::id())->where('id', $encounterId)->get()->getRowArray();
     }
 }
