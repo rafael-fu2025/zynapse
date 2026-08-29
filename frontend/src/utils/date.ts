@@ -3,7 +3,7 @@
  *
  * Centralized so we never accidentally render UTC directly.
  */
-import { format, formatDistanceToNow, parseISO } from 'date-fns';
+import { formatDistanceToNow, parseISO } from 'date-fns';
 import { formatInTimeZone, fromZonedTime } from 'date-fns-tz';
 import { useAuthStore } from '@/store/auth';
 
@@ -39,8 +39,16 @@ export function fmtRelative(isoUtc: string): string {
   return formatDistanceToNow(parseUtc(isoUtc), { addSuffix: true });
 }
 
+/**
+ * `yyyy-MM-dd` in the APP timezone — never the host zone. date-fns' bare
+ * `format()` renders in the host locale, which silently shifted the day
+ * boundary for anyone whose OS clock isn't set to Asia/Manila (caught by
+ * CI, where the runner runs UTC). The two call sites render `DATE`-column
+ * values; parsing those as UTC midnight and formatting in the (east-of-UTC)
+ * app zone preserves the calendar day while instants roll over correctly.
+ */
 export function fmtShort(isoUtc: string): string {
-  return format(parseUtc(isoUtc), 'yyyy-MM-dd');
+  return formatInTimeZone(parseUtc(isoUtc), useAuthStore.getState().timezone ?? DEFAULT_TZ, 'yyyy-MM-dd');
 }
 
 /**

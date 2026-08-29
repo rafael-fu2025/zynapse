@@ -89,6 +89,29 @@ if ($testDatabase === '' || $testDatabase === $devDatabase) {
 }
 
 /*
+ * Mirror `database.tests.*` process-env overrides into the config and the
+ * superglobals. CI4's BaseConfig hydrates dotted env vars into array
+ * properties ONLY from $_ENV/$_SERVER, and PHP's default `variables_order`
+ * ('GPCS') leaves $_ENV empty on CI runners — so GitHub Actions step env
+ * (`database.tests.username: …`) is visible to getenv() but never reaches
+ * the config, and the suite dies with "Access denied (using password: NO)".
+ * getenv() always sees the real process environment, so read from there and
+ * publish into $_ENV/$_SERVER (putenv for good measure) so that BOTH this
+ * bootstrap's mysqli_connect() below AND the framework's own connection
+ * (a fresh Config\Database hydrating from the superglobals) get the creds.
+ */
+foreach (['hostname', 'username', 'password', 'port', 'database'] as $envKey) {
+    $envValue = getenv("database.tests.{$envKey}");
+    if ($envValue === false || $envValue === '') {
+        continue;
+    }
+    $dbConfig->tests[$envKey] = $envKey === 'port' ? (int) $envValue : $envValue;
+    $_ENV["database.tests.{$envKey}"]    = $envValue;
+    $_SERVER["database.tests.{$envKey}"] = $envValue;
+    putenv("database.tests.{$envKey}={$envValue}");
+}
+
+/*
  * Self-provision the test schema when it does not exist, so a fresh
  * checkout (or a CI container) can run `composer test:feature` without a
  * manual CREATE DATABASE. Connecting WITHOUT a database name keeps this
@@ -105,7 +128,7 @@ $provision = mysqli_connect(
 if ($provision === false) {
     fwrite(STDERR, sprintf(
         "\n[feature-bootstrap] Cannot reach MySQL/MariaDB for the feature suite (%s:%s as '%s').\n"
-        . "  Start the database (scripts/_start-mariadb.ps1 locally, or a CI service container)\n"
+        . "  Start the database (a local MariaDB service or a CI service container)\n"
         . "  and re-run.\n\n",
         (string) ($dbConfig->tests['hostname'] ?? '127.0.0.1'),
         (string) ($dbConfig->tests['port'] ?? 3306),
