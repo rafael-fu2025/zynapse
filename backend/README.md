@@ -32,8 +32,12 @@ Stateless REST API. CodeIgniter 4.7+ on PHP 8.3+, MySQL 8.4 LTS (`synapse_zcode`
 ## Bootstrap
 
 ```bash
-cd backend
-cp .env.example .env
+# One-time: create the dev schema (utf8mb4_unicode_ci is portable across
+# MySQL 5.7+/8.4 and MariaDB 10.4+; utf8mb4_0900_ai_ci is MySQL-8-only)
+mysql -u root -e "CREATE DATABASE IF NOT EXISTS synapse_zcode CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
+
+cp .env.example .env    # then generate: JWT_SECRET, REFERRAL_HMAC_KEY,
+                        # COUNSELLING_KEY (each: openssl rand -hex 32)
 composer install
 php spark migrate --all
 php spark db:seed App\\Database\\Seeds\\PermissionsAndGroupsSeeder
@@ -43,8 +47,13 @@ php spark synapse:audit-drain
 php spark synapse:audit-verify
 php spark synapse:reports-drain --limit=10
 php spark synapse:appointments-enqueue-due
-composer test
+composer test           # unit suite (no DB needed)
+composer test:feature   # HTTP suite — self-provisions synapse_zcode_test
 ```
+
+After changing `Config/*` classes or routes, run `php spark cache:clear` —
+stale entries in `writable/cache/` (config factories, file-locator listings)
+can 500 every route or silently hide new migrations.
 
 Run `synapse:reports-drain` and `synapse:appointments-enqueue-due` every minute in production. The appointment worker is idempotent and promotes Clinic and Guidance bookings into their destination queues at T−15. The reports worker claims queued
 generated reports, writes aggregate rows without holding a database

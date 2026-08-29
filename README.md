@@ -43,32 +43,62 @@ Decoupled. **CodeIgniter 4.7+** stateless REST API + **React 18 / Vite / TypeScr
 - Login lockout keys are HMAC digests — attempted emails are never stored, logged, or audited.
 - `counselling_key_versions` stores env var NAMES only — key material never enters the DB.
 
-## Bootstrap
+## Quick Start (local)
+
+Prerequisites: **PHP 8.3+** with `mysqli`/`mbstring`, **Composer**, **Node 22+**, **MariaDB 10.4+ / MySQL 8** (`utf8mb4_unicode_ci` — the MySQL-8-only `0900` collation is not portable), and optionally **Flutter 3.27+** for `mobile/`.
 
 ```bash
-# Backend
+# 1. Database (dev schema)
+mysql -u root -e "CREATE DATABASE IF NOT EXISTS synapse_zcode CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
+
+# 2. Backend
 cd backend
-cp .env.example .env
+cp .env.example .env            # then fill in the secrets (below)
 composer install
-php spark migrate -n App
+php spark migrate --all
 php spark db:seed App\\Database\\Seeds\\PermissionsAndGroupsSeeder
-php spark db:seed App\\Database\\Seeds\\DevUserSeeder   # dev only
-php spark synapse:smoke
-php spark synapse:audit-drain
-php spark synapse:audit-verify
-php spark synapse:reports-drain --limit=10
-composer test
+php spark db:seed App\\Database\\Seeds\\DevUserSeeder   # admin@synapse.dev (dev only)
 php spark serve --port 8090
 
-# Frontend
+# 3. Frontend (Vite proxies /api -> :8090)
 cd ../frontend
 cp .env.example .env
 npm install
-npm run dev
-
-# Optional E2E (requires both stacks running)
-SYNAPSE_E2E=1 npx playwright test
+npm run dev                     # http://localhost:5173
 ```
+
+`.env` secrets — generate each with `openssl rand -hex 32`:
+`JWT_SECRET`, `REFERRAL_HMAC_KEY`, `COUNSELLING_KEY` (keep `COUNSELLING_KEY_VERSION=1`).
+Check `CORS_ALLOWED_ORIGINS` matches your frontend origin (`http://localhost:5173`).
+
+For the full demo dataset (patients, appointments, counselling, referrals,
+inventory, BMG units) additionally seed `PatientRegistrySeeder`,
+`SeedDemoUsersSeeder`, `AppointmentsSeeder`, `CounsellingSeeder`,
+`ReferralsSeeder`, `InventoryItemsSeeder`, `FacilitiesSeeder` — the account
+matrix and passwords live in [`CREDENTIALS.md`](CREDENTIALS.md).
+
+Mobile app: see [`mobile/README.md`](mobile/README.md).
+
+## Tests
+
+| Suite | Command | Needs |
+|---|---|---|
+| Backend unit (220) | `cd backend && composer test` | nothing |
+| Backend feature/HTTP (25) | `cd backend && composer test:feature` | MariaDB running — the bootstrap self-provisions the `synapse_zcode_test` schema (never your dev data) |
+| Both | `composer test:all` | |
+| Frontend unit (Vitest) | `cd frontend && npm test` | nothing |
+| Frontend gates | `npm run typecheck && npm run lint` | |
+| Frontend mocked e2e | `npx playwright test` (the 6 specs that stub the API) | dev server (auto-started) |
+| Frontend live e2e | `SYNAPSE_E2E=1 SYNAPSE_E2E_EMAIL=… SYNAPSE_E2E_PASSWORD=… npx playwright test` | backend on :8090; credentials from env only |
+| Mobile | `cd mobile && flutter test` | |
+
+CI runs every suite except live e2e per push/PR — see [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
+
+> **After changing `Config/*` classes or routes**, run `php spark cache:clear`.
+> CI4 disk-caches config factories and file-locator listings in
+> `backend/writable/cache/`; a stale `FactoriesCache_config` 500s every route
+> after a Config property change, and a stale `FileLocatorCache` silently
+> hides NEW migration files from `spark migrate`.
 
 ## Background jobs
 
@@ -90,26 +120,21 @@ the queue claim is upgraded to `SKIP LOCKED` for multi-worker processing.
 
 ## Performance Notes (dev)
 
-- **Fast Windows launcher**: run `.\dev-fast.ps1` from PowerShell. It starts
-  both stacks, maps the bracketed repository through a safe temporary drive,
-  and points Vite directly at the backend. Press Ctrl+C to stop both.
 - **After changing routes/config or adding classes**: run
   `cd backend; php spark cache:clear` once so CodeIgniter rebuilds its config
-  and file-locator caches.
-- **Measured bottleneck**: the trivial `GET /api/v1/health` route took
-  **~3–13 s** through the bracketed XAMPP/Apache path, while raw PHP was
-  **~13–85 ms**. The safe-path launcher reduced CodeIgniter requests to
-  roughly **~0.2–1.3 s** on this Windows machine. The remaining cost is
-  framework boot on the single-threaded development server, not React.
-- **Decisive fix (server-side)**: run PHP with **OPcache enabled** and serve `backend/public` via **XAMPP Apache** (mod_php or FastCGI) instead of the single-threaded built-in server; keep the Vite proxy target on that origin. `PHP_CLI_SERVER_WORKERS` is not supported on Windows, so Apache is the practical route to parallel + compiled requests.
-- **Frontend wins already shipped**: route-level **code-splitting** (`React.lazy`) shrinks the initial bundle; the cold-load **`/auth/me` is de-duplicated** (bootstrap seeds the shared `['me']` query cache) — one fewer serialized round-trip.
-- Production builds (`npm run build`) emit hashed per-route chunks; dev mode is always slower than a built bundle.
+  and file-locator caches (see the Tests section caveat).
+- **Measured bottleneck (Windows)**: the single-threaded PHP built-in server
+  (`spark serve`) is the slow link — the trivial `GET /api/v1/health` measured
+  ~13–85 ms raw versus seconds through some Apache paths. Serving
+  `backend/public` via Apache/PHP-FPM with OPcache enabled (keeping the Vite
+  proxy target on that origin) is the practical fix; `PHP_CLI_SERVER_WORKERS`
+  is not supported on Windows.
+- **Frontend**: route-level code-splitting (`React.lazy`) and the de-duplicated
+  cold-load `/auth/me` are already in; production builds (`npm run build`) emit
+  hashed per-route chunks. Dev mode is always slower than a built bundle.
 
 ## Out of Phase Scope
 
-- Inventory & Appointments SPA pages (backend shipped in Phase 8).
-- User management CRUD / password reset (Phase 9).
-- Clinic bulk import (Phase 9).
+- Clinic bulk import.
 - Real-time push (WebSocket).
-- File upload / object storage.
 - Internationalization beyond English.
