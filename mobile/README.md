@@ -35,7 +35,7 @@ backend DTOs (`backend/app/Modules/*/DTOs`).
 
 - Flutter SDK (>= 3.6, tested on 3.44) — https://docs.flutter.dev/get-started/install
 - The backend running on `http://localhost:8090` (see `../backend/README.md`;
-  `php spark serve` or the `../scripts/dev-up.ps1` helper).
+  `php spark serve`).
 - Demo account: `admin@synapse.dev` / `DevPassw0rd!`
   (students: `firstname.lastname@foundationu.edu.ph` / `DevPassw0rd!`).
 

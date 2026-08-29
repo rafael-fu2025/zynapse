@@ -4,8 +4,6 @@ Stateless REST API. CodeIgniter 4.7+ on PHP 8.3+, MySQL 8.4 LTS (`synapse_zcode`
 
 ## Phase 6 Additions (Integrity Verification & Security Hardening)
 
-Full detail in [`../docs/PHASE6.md`](../docs/PHASE6.md).
-
 - **GCM tag fix** — `EncryptionService` now appends/verifies the 16-byte auth tag (`notes_cipher = ciphertext || tag`); decryption previously always failed. Cipher columns widened to `VARBINARY(16400)`.
 - **`counselling_key_versions`** — key-rotation lookup (version → env key_ref; names only, never material) with env fallback.
 - **`KeysetPaginator` rewrite** — cursor predicates now use bound builder groups; `tsColumn`/`idColumn`/`maxLimit` params fix audit (`commited_at`), BMG (aliased join), and 5,000-row CSV export.

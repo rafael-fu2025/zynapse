@@ -4,8 +4,6 @@ Decoupled. **CodeIgniter 4.7+** stateless REST API + **React 18 / Vite / TypeScr
 
 ## Phase 6 Deliverables (Integrity Verification & Security Hardening)
 
-Full detail in [`docs/PHASE6.md`](docs/PHASE6.md). **Phase 7 (runtime retrofit — the backend now boots and is HTTP-verified end-to-end): [`docs/PHASE7.md`](docs/PHASE7.md).** **Phase 8 (Inventory + Appointments + Notifications outbox, browser-verified): [`docs/PHASE8.md`](docs/PHASE8.md).** **Phase 9 (User management + notification bell, browser-verified): [`docs/PHASE9.md`](docs/PHASE9.md).**
-
 ### P0 defect fixes
 - **AES-256-GCM tag** — the auth tag is now stored (appended to `notes_cipher`) and verified on decrypt; previously decryption always failed. Cipher columns widened to fit 16 KiB notes.
 - **Keyset cursors** — `KeysetPaginator::apply()` emitted invalid SQL for every page-2+ request; rewritten with bound builder predicates + `tsColumn`/`idColumn`/`maxLimit` params (`commited_at` for audit, aliased columns for BMG, 5,000-row export).
