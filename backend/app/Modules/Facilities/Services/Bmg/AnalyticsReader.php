@@ -69,7 +69,15 @@ final class AnalyticsReader extends BaseService
             ->where('b.archived_at', null)
             ->where('b.tenant_id', CurrentTenant::id())
             ->where('u.tenant_id', CurrentTenant::id())
-            ->where('c.tenant_id', CurrentTenant::id())
+            // `c` is LEFT-JOINed: a bare c.tenant_id = X predicate turns
+            // the join into an INNER JOIN and silently drops every batch
+            // whose category_id is NULL. Keep NULL-category batches
+            // visible (they belong to this tenant by construction — the
+            // batch row itself is tenant-scoped above).
+            ->groupStart()
+                ->where('c.tenant_id', CurrentTenant::id())
+                ->orWhere('c.id', null)
+            ->groupEnd()
             ->whereIn('b.status', [BMG_STATE_PROCESSING, BMG_STATE_AWAITING_OUTPUT])
             ->orderBy('b.started_at', 'ASC')
             ->get()->getResultArray();
