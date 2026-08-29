@@ -85,7 +85,8 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { useDebouncedValue } from '@/hooks/useDebouncedValue';
+import { useTabParam } from '@/hooks/useTabParam';
+import { useUrlFilter } from '@/hooks/useUrlFilter';
 import {
   useAppointment,
   useAppointments,
@@ -114,7 +115,6 @@ const STATUS_VARIANT: Record<Appointment['status'], 'info' | 'success' | 'warnin
   no_show: 'destructive',
 };
 
-type FilterTab = 'all' | 'upcoming' | 'past';
 const STATUS_OPTIONS: ReadonlyArray<{ value: Appointment['status'] | 'all'; label: string }> = [
   { value: 'all',        label: 'All statuses' },
   { value: 'scheduled',  label: 'Scheduled' },
@@ -625,26 +625,31 @@ function AppointmentRow({
 export default function AppointmentsPage() {
   const [cursor, setCursor] = useState<string | null>(null);
   const [history, setHistory] = useState<Array<string | null>>([null]);
-  const [tab, setTab] = useState<FilterTab>('all');
-  const [statusFilter, setStatusFilter] = useState<Appointment['status'] | 'all'>('all');
+  // Filters live in the URL (PRODUCT principle 5): ?tab=, ?status= and
+  // the debounced ?q= survive a refresh and can be shared as links.
+  const [tab, setTab] = useTabParam('all');
+  const [statusFilter, setStatusFilter] = useUrlFilter('status', { default: 'all' });
   const [openSchedule, setOpenSchedule] = useState(false);
   const [editing, setEditing] = useState<Appointment | null>(null);
   const [viewing, setViewing] = useState<Appointment | null>(null);
   const [qrAppt, setQrAppt] = useState<Appointment | null>(null);
   const [confirm, setConfirm] = useState<ConfirmAction | null>(null);
-  // Live search (2026-08-05) — mirrors the Patients page: `search` is
-  // the raw input, debounced 300ms, and only terms >= 2 chars trigger a
-  // dedicated search query which REPLACES the paged list while active.
-  const [search, setSearch] = useState('');
-  const debouncedSearch = useDebouncedValue(search, 300);
+  // Live search — `searchDraft` is the raw input, the URL carries the
+  // debounced term, and only terms >= 2 chars trigger a dedicated
+  // search query which REPLACES the paged list while active.
+  const [debouncedSearch, setSearch, searchDraft] = useUrlFilter('q', { debounceMs: 300 });
   const searching = debouncedSearch.trim().length >= 2;
 
   // Status filter pushes a `?status=` query param to the backend;
   // the tabs are client-side over the loaded rows. This keeps the
   // list stable as the user clicks between Upcoming / Past without
   // a refetch, while a status change does refetch the canonical list.
-  const list = useAppointments(cursor, 25, statusFilter === 'all' ? null : statusFilter);
-  const searchQuery = useAppointmentSearch(debouncedSearch, statusFilter);
+  const list = useAppointments(
+    cursor,
+    25,
+    statusFilter === 'all' ? null : (statusFilter as Appointment['status']),
+  );
+  const searchQuery = useAppointmentSearch(debouncedSearch, statusFilter as Appointment['status'] | 'all');
   const transition = useTransitionAppointment();
   const providerName = useProviderNameLookup();
 
@@ -715,7 +720,7 @@ export default function AppointmentsPage() {
               aria-label="Search appointments"
               placeholder="Search number, name, ID, provider, date…"
               className="pl-9"
-              value={search}
+              value={searchDraft}
               onChange={(e) => setSearch(e.target.value)}
             />
           </div>
@@ -729,7 +734,7 @@ export default function AppointmentsPage() {
             <Label id="appt-status-label" className="text-xs">Status</Label>
             <Select
               value={statusFilter}
-              onValueChange={(v) => { setStatusFilter(v as Appointment['status'] | 'all'); setCursor(null); setHistory([null]); }}
+              onValueChange={(v) => { setStatusFilter(v); setCursor(null); setHistory([null]); }}
             >
               <SelectTrigger aria-labelledby="appt-status-label" className="w-44">
                 <SelectValue />
@@ -756,7 +761,7 @@ export default function AppointmentsPage() {
         </div>
       </section>
 
-      <Tabs value={tab} onValueChange={(v) => setTab(v as FilterTab)}>
+      <Tabs value={tab} onValueChange={(v) => setTab(v)}>
         <TabsList>
           <TabsTrigger value="all">All ({counts.all})</TabsTrigger>
           <TabsTrigger value="upcoming">Upcoming ({counts.upcoming})</TabsTrigger>

@@ -9,7 +9,6 @@
 import { Archive, ArchiveRestore, ArrowLeft, Boxes, Check, ChevronDown, LineChart, Loader2, Pencil, Plus, Save, Trash2 as TrashIcon, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -234,13 +233,15 @@ export default function WasteCategoriesPage() {
   const [refDays, setRefDays] = useState('');
 
   function submit() {
-    if (code.trim() === '' || name.trim() === '') {
-      toast.error('Code and name are required.');
-      return;
-    }
+    // The schema enforces the lowercase-slug rule and already surfaces
+    // a 'Required' toast from the mutation's onError — a page-level
+    // pre-check here used to double-toast with a stale message.
+    if (code.trim() === '' || name.trim() === '') return;
     create.mutate(
       {
-        code: code.trim(),
+        // Normalize case so "VEG-SCRP" becomes a valid slug instead of
+        // bouncing off the regex with the placeholder's own casing.
+        code: code.trim().toLowerCase(),
         name: name.trim(),
         ...(yieldPct !== '' ? { expected_yield_pct: Number(yieldPct) } : {}),
         ...(refDays !== '' ? { reference_duration_days: Number(refDays) } : {}),
@@ -285,7 +286,7 @@ export default function WasteCategoriesPage() {
         </CardHeader>
         <CardContent>
           <div className="flex flex-wrap items-end gap-2">
-            <div className="space-y-1"><Label htmlFor="wc-code" className="text-xs">Code *</Label><Input id="wc-code" className="h-8 w-28" value={code} onChange={(e) => setCode(e.target.value)} placeholder="VEG-SCRP" /></div>
+            <div className="space-y-1"><Label htmlFor="wc-code" className="text-xs">Code *</Label><Input id="wc-code" className="h-8 w-28" value={code} onChange={(e) => setCode(e.target.value)} placeholder="veg-scrp" /></div>
             <div className="space-y-1"><Label htmlFor="wc-name" className="text-xs">Name *</Label><Input id="wc-name" className="h-8 w-48" value={name} onChange={(e) => setName(e.target.value)} placeholder="Vegetable Scraps" /></div>
             <div className="space-y-1"><Label htmlFor="wc-yield" className="text-xs">Exp. yield %</Label><Input id="wc-yield" type="number" className="h-8 w-24" value={yieldPct} onChange={(e) => setYieldPct(e.target.value)} /></div>
             <div className="space-y-1"><Label htmlFor="wc-days" className="text-xs">Ref. days</Label><Input id="wc-days" type="number" className="h-8 w-20" value={refDays} onChange={(e) => setRefDays(e.target.value)} /></div>

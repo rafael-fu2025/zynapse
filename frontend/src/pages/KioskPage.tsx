@@ -61,6 +61,7 @@ import {
   useKioskController,
 } from '@/components/KioskCheckin';
 import { useCheckinsToday } from '@/hooks/useCheckin';
+import { KIOSK_DESTINATIONS, KIOSK_PURPOSES } from '@/lib/kioskPurposes';
 import { SCAN_METHODS, type ScanMethod } from '@/schemas/checkin';
 import { fmtUtcToApp } from '@/utils/date';
 
@@ -173,12 +174,59 @@ export default function KioskPage() {
                 aria-describedby={k.scanError !== null ? 'kiosk-id-error' : undefined}
                 className="h-12 text-lg"
               />
-              <Button className="h-12" onClick={k.submit} disabled={k.scanPending || k.identifier.trim() === ''}>
+              <Button
+                className="h-12"
+                onClick={k.submit}
+                disabled={k.scanPending || k.identifier.trim() === '' || k.purpose === ''}
+                title={k.purpose === '' ? 'Pick a purpose to check in.' : undefined}
+              >
                 {k.scanPending ? <Loader2 className="animate-spin" /> : <ScanLine />}
                 Check in
               </Button>
             </div>
             <ScanErrorBanner message={k.scanError} errorId="kiosk-id-error" />
+          </div>
+          {/* Destination + purpose are part of the check-in contract (the
+              backend rejects scans without them); the staff form must
+              collect the same fields as the fullscreen station. */}
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label id="kiosk-destination-label">Destination</Label>
+              <div className="flex gap-2" role="group" aria-labelledby="kiosk-destination-label">
+                {KIOSK_DESTINATIONS.map((d) => (
+                  <Button
+                    key={d.value}
+                    type="button"
+                    size="sm"
+                    variant={k.destination === d.value ? 'default' : 'outline'}
+                    aria-pressed={k.destination === d.value}
+                    onClick={() => k.setDestination(d.value)}
+                  >
+                    {d.label}
+                  </Button>
+                ))}
+              </div>
+            </div>
+            <div className="space-y-1.5">
+              <Label id="kiosk-purpose-label">Purpose</Label>
+              <div className="flex flex-wrap gap-1.5" role="group" aria-labelledby="kiosk-purpose-label">
+                {k.destination !== null && KIOSK_PURPOSES[k.destination].map((p) => (
+                  <Button
+                    key={p}
+                    type="button"
+                    size="sm"
+                    variant={k.purpose === p ? 'default' : 'outline'}
+                    aria-pressed={k.purpose === p}
+                    onClick={() => k.setPurpose(p)}
+                  >
+                    {p}
+                  </Button>
+                ))}
+              </div>
+              {k.purpose === '' && (
+                <p className="text-xs text-muted-foreground">Pick a purpose to enable check-in.</p>
+              )}
+            </div>
           </div>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div className="space-y-1.5">
@@ -294,7 +342,7 @@ export default function KioskPage() {
         {openCamera && (
           <KioskCameraDialog
             onClose={() => setOpenCamera(false)}
-            onDecoded={(value) => k.submitIdentifier(value, 'qr')}
+            onDecoded={(value) => k.submitIdentifier(value, 'qr', k.purpose)}
           />
         )}
       </Dialog>

@@ -6,6 +6,7 @@ namespace Modules\Clinic\Services;
 
 use App\Exceptions\ApiException;
 use App\Modules\Shared\BaseService;
+use App\Modules\Shared\ManilaDay;
 use App\Services\Audit\AuditOutboxService;
 use App\Services\CurrentTenant;
 use App\Services\Kiosk\CheckinPurposeCatalog;
@@ -262,7 +263,7 @@ final class CheckinService extends BaseService
 
                     if ($encounterId !== null) {
                         $q = $this->db->table('clinic_queue_entries')
-                            ->select('position')
+                            ->select('position, queue_date')
                             ->where('clinic_queue_entries.tenant_id', CurrentTenant::id())
                             ->where('encounter_id', $encounterId)
                             ->get()->getRowArray();
@@ -270,7 +271,7 @@ final class CheckinService extends BaseService
                             $queue = [
                                 'encounter_id'           => $encounterId,
                                 'position'               => (int) $q['position'],
-                                'estimated_wait_minutes' => $this->estimatedWaitMinutes((int) $q['position']),
+                                'estimated_wait_minutes' => $this->estimatedWaitMinutes((int) $q['position'], (string) $q['queue_date']),
                             ];
                         }
                     }
@@ -293,7 +294,7 @@ final class CheckinService extends BaseService
 
                     if ($encounterId !== null) {
                         $q = $this->db->table('clinic_queue_entries')
-                            ->select('position')
+                            ->select('position, queue_date')
                             ->where('clinic_queue_entries.tenant_id', CurrentTenant::id())
                             ->where('encounter_id', $encounterId)
                             ->get()->getRowArray();
@@ -301,7 +302,7 @@ final class CheckinService extends BaseService
                             $queue = [
                                 'encounter_id'           => $encounterId,
                                 'position'               => (int) $q['position'],
-                                'estimated_wait_minutes' => $this->estimatedWaitMinutes((int) $q['position']),
+                                'estimated_wait_minutes' => $this->estimatedWaitMinutes((int) $q['position'], (string) $q['queue_date']),
                             ];
                             $message = "Clinic appointment #{$apptId} is already in the queue at position {$queue['position']}.";
                         } else {
@@ -349,9 +350,15 @@ final class CheckinService extends BaseService
             ]);
             $encounterId = (int) $this->db->insertID();
 
-            $position = $this->enqueue($encounterId, substr($now, 0, 10));
+            // Queue day partitions follow the Manila business calendar
+            // of the SCAN (the visit's business time), not the UTC
+            // storage clock — 23:30 UTC is 07:30 the NEXT Manila day,
+            // and offline-buffered replays carry their original
+            // `scanned_at`, so the entry lands on the day it happened.
+            $queueDate = ManilaDay::fromUtcSql($scannedAt);
+            $position  = $this->enqueue($encounterId, $queueDate);
 
-            $wait = $this->estimatedWaitMinutes($position);
+            $wait = $this->estimatedWaitMinutes($position, $queueDate);
             $checkinId = $this->insertCheckin($patientUserId, $schoolId, $method, $stationId, 'clinic_queued', null, $encounterId, $userId, $scannedAt, $purpose);
             return $this->result(
                 $checkinId,
@@ -376,7 +383,7 @@ final class CheckinService extends BaseService
 
         $rows = $this->db->table('clinic_checkins')
             ->where('clinic_checkins.tenant_id', CurrentTenant::id())
-            ->where('scanned_at >=', substr($this->utcNow(), 0, 10) . ' 00:00:00')
+            ->where('scanned_at >=', ManilaDay::startOfDayUtcSql())
             ->orderBy('scanned_at', 'DESC')
             ->orderBy('id', 'DESC')
             ->get()->getResultArray();
@@ -427,8 +434,9 @@ final class CheckinService extends BaseService
         ]);
         $encounterId = (int) $this->db->insertID();
 
-        $position = $this->enqueue($encounterId, substr($now, 0, 10));
-        $wait     = $this->estimatedWaitMinutes($position);
+        $queueDate = ManilaDay::fromUtcSql($scannedAt);
+        $position  = $this->enqueue($encounterId, $queueDate);
+        $wait      = $this->estimatedWaitMinutes($position, $queueDate);
         $checkinId = $this->insertCheckin(null, null, $method, $stationId, 'clinic_queued', null, $encounterId, $userId, $scannedAt, $purpose, $name);
 
         return $this->result(
@@ -586,9 +594,9 @@ final class CheckinService extends BaseService
      * completed sessions), falling back to a fixed default while the
      * day has no history (kiosk gap #3).
      */
-    private function estimatedWaitMinutes(int $position): int
+    private function estimatedWaitMinutes(int $position, string $queueDate): int
     {
-        $today = substr($this->utcNow(), 0, 10);
+        $today = $queueDate;
 
         $avg = $this->db->query(
             'SELECT AVG(TIMESTAMPDIFF(MINUTE, `started_at`, `finished_at`)) AS avg_min'

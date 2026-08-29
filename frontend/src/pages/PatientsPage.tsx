@@ -33,7 +33,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { ConfirmDialog, type ConfirmAction } from '@/components/ConfirmDialog';
 import { QueryErrorRow } from '@/components/QueryErrorState';
 import { MobileCardList, MobileCard, MobileCardField, MobileCardActions } from '@/components/MobileCardList';
-import { useDebouncedValue } from '@/hooks/useDebouncedValue';
+import { useUrlFilter } from '@/hooks/useUrlFilter';
 import { useTabParam } from '@/hooks/useTabParam';
 import {
   Dialog,
@@ -1048,8 +1048,11 @@ export default function PatientsPage() {
   const [empCursor, setEmpCursor] = useState<string | null>(null);
   const [empHistory, setEmpHistory] = useState<Array<string | null>>([null]);
   const [tab, setTab] = useTabParam('students');
-  const [query, setQuery] = useState('');
-  const [empQuery, setEmpQuery] = useState('');
+  // Filters live in the URL (PRODUCT principle 5): ?q=, ?archived=1 and
+  // ?teaching= survive a refresh and can be shared as links. Each tab
+  // keeps its own search key so switching tabs re-seeds from the URL.
+  const [query, setQuery, queryDraft] = useUrlFilter('q', { debounceMs: 300 });
+  const [empQuery, setEmpQuery, empQueryDraft] = useUrlFilter('emp_q', { debounceMs: 300 });
   const [openCreate, setOpenCreate] = useState(false);
   const [openCreateEmp, setOpenCreateEmp] = useState(false);
   const [detailId, setDetailId] = useState<number | null>(null);
@@ -1057,23 +1060,19 @@ export default function PatientsPage() {
   const [editStudent, setEditStudent] = useState<Student | null>(null);
   const [editEmp, setEditEmp] = useState<Employee | null>(null);
   const [confirm, setConfirm] = useState<ConfirmAction | null>(null);
-  const [showArchived, setShowArchived] = useState(false);
-  const [showArchivedEmp, setShowArchivedEmp] = useState(false);
+  const [showArchived, setShowArchived] = useUrlFilter('archived', { default: '' });
+  const [showArchivedEmp, setShowArchivedEmp] = useUrlFilter('emp_archived', { default: '' });
   // Teaching / non-teaching triage (audit fix) — only teaching
   // employees (faculty) can refer students to counselling.
-  const [empTeaching, setEmpTeaching] = useState<'all' | 'teaching' | 'non_teaching'>('all');
+  const [empTeaching, setEmpTeaching] = useUrlFilter('teaching', { default: 'all' });
   const archiveEmp = useSetEmployeeArchived();
 
-  // Debounce the search text so a request fires only after the user
-  // pauses — previously every keystroke created a fresh query key.
-  const debouncedQuery = useDebouncedValue(query, 300);
-  const debouncedEmpQuery = useDebouncedValue(empQuery, 300);
-  const searching = debouncedQuery.trim().length >= 2;
-  const empSearching = debouncedEmpQuery.trim().length >= 2;
-  const list = useStudents(cursor, 25, showArchived);
-  const search = useStudentSearch(debouncedQuery);
-  const employees = useEmployees(empCursor, 25, showArchivedEmp, empTeaching);
-  const empSearch = useEmployeeSearch(debouncedEmpQuery);
+  const searching = query.trim().length >= 2;
+  const empSearching = empQuery.trim().length >= 2;
+  const list = useStudents(cursor, 25, showArchived === '1');
+  const search = useStudentSearch(query);
+  const employees = useEmployees(empCursor, 25, showArchivedEmp === '1', empTeaching as 'all' | 'teaching' | 'non_teaching');
+  const empSearch = useEmployeeSearch(empQuery);
   const setArchived = useSetStudentArchived();
 
   function nextPage() {
@@ -1221,17 +1220,17 @@ export default function PatientsPage() {
                 aria-label="Search students"
                 placeholder="Search number or name (min 2 chars)…"
                 className="pl-9"
-                value={query}
+                value={queryDraft}
                 onChange={(e) => setQuery(e.target.value)}
               />
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <Button
-                variant={showArchived ? 'secondary' : 'outline'}
-                aria-pressed={showArchived}
-                onClick={() => { setShowArchived((v) => !v); setCursor(null); setHistory([null]); }}
+                variant={showArchived === '1' ? 'secondary' : 'outline'}
+                aria-pressed={showArchived === '1'}
+                onClick={() => { setShowArchived(showArchived === '1' ? '' : '1'); setCursor(null); setHistory([null]); }}
               >
-                <Archive /> {showArchived ? 'Hide archived' : 'Show archived'}
+                <Archive /> {showArchived === '1' ? 'Hide archived' : 'Show archived'}
               </Button>
               <Dialog open={openCreate} onOpenChange={setOpenCreate}>
                 <Button onClick={() => setOpenCreate(true)}>
@@ -1363,14 +1362,14 @@ export default function PatientsPage() {
                 aria-label="Search employees"
                 placeholder="Search number, name, department (min 2 chars)…"
                 className="pl-9"
-                value={empQuery}
+                value={empQueryDraft}
                 onChange={(e) => setEmpQuery(e.target.value)}
               />
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <Select
                 value={empTeaching}
-                onValueChange={(v) => { setEmpTeaching(v as typeof empTeaching); setEmpCursor(null); setEmpHistory([null]); }}
+                onValueChange={(v) => { setEmpTeaching(v); setEmpCursor(null); setEmpHistory([null]); }}
               >
                 <SelectTrigger aria-label="Filter by teaching type" className="h-10 w-44 md:h-9">
                   <SelectValue />
@@ -1382,11 +1381,11 @@ export default function PatientsPage() {
                 </SelectContent>
               </Select>
               <Button
-                variant={showArchivedEmp ? 'secondary' : 'outline'}
-                aria-pressed={showArchivedEmp}
-                onClick={() => { setShowArchivedEmp((v) => !v); setEmpCursor(null); setEmpHistory([null]); }}
+                variant={showArchivedEmp === '1' ? 'secondary' : 'outline'}
+                aria-pressed={showArchivedEmp === '1'}
+                onClick={() => { setShowArchivedEmp(showArchivedEmp === '1' ? '' : '1'); setEmpCursor(null); setEmpHistory([null]); }}
               >
-                <Archive /> {showArchivedEmp ? 'Hide archived' : 'Show archived'}
+                <Archive /> {showArchivedEmp === '1' ? 'Hide archived' : 'Show archived'}
               </Button>
               <Dialog open={openCreateEmp} onOpenChange={setOpenCreateEmp}>
                 <Button onClick={() => setOpenCreateEmp(true)}>

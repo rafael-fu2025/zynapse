@@ -42,6 +42,7 @@ import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { ComboboxField } from '@/components/ComboboxField';
+import type { TaxonomyEntry } from '@/data/taxonomy';
 import { ConfirmDialog, type ConfirmAction } from '@/components/ConfirmDialog';
 import { QueryErrorRow } from '@/components/QueryErrorState';
 import { SessionProgressTracker, type SessionProgressStep } from '@/components/SessionProgressTracker';
@@ -98,6 +99,7 @@ import {
   useTreatments,
 } from '@/hooks/useClinic';
 import { useCreateContextualReferral } from '@/hooks/useReferrals';
+import { useEmployees } from '@/hooks/usePatients';
 import { hasPermission, useAuthStore } from '@/store/auth';
 import { useMedicines } from '@/hooks/useMedicines';
 import { useCallNext, useQueueToday, useQueueTransition } from '@/hooks/useQueue';
@@ -1144,6 +1146,20 @@ function StaffSchedulesTab({
 /** Create a shift template (modal) — mirrors the former inline form. */
 function AddShiftDialog({ onClose }: { onClose: () => void }) {
   const create = useCreateStaffSchedule();
+  // Staff picker — the backend resolves user ids, but no operator knows
+  // a user id; offer the employee registry by name instead. The
+  // keyset endpoint rejects limit > ~200, and staff lists are small.
+  const staff = useEmployees(null, 100);
+  const staffOptions: ReadonlyArray<TaxonomyEntry> = (staff.data?.data ?? []).map((e) => {
+    const hint = [e.employee_number, e.department]
+      .filter((x): x is string => x !== null && x !== '')
+      .join(' · ');
+    return {
+      value: String(e.id),
+      label: `${e.first_name} ${e.last_name}`,
+      ...(hint !== '' ? { hint } : {}),
+    };
+  });
   const [userId, setUserId] = useState('');
   const [dow, setDow] = useState('1');
   const [start, setStart] = useState('09:00');
@@ -1182,9 +1198,16 @@ function AddShiftDialog({ onClose }: { onClose: () => void }) {
         <DialogTitle>Add staff shift</DialogTitle>
       </DialogHeader>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <div className="space-y-1.5">
-          <Label htmlFor="ss-user" className="text-xs">User ID</Label>
-          <Input id="ss-user" className="h-8 w-full" value={userId} onChange={(e) => setUserId(e.target.value)} />
+        <div className="space-y-1.5 sm:col-span-2">
+          <Label htmlFor="ss-user" className="text-xs">Staff member</Label>
+          <ComboboxField
+            id="ss-user"
+            value={userId}
+            onChange={setUserId}
+            sourceKey="clinic-staff"
+            options={staffOptions}
+            placeholder="Search staff by name or number…"
+          />
         </div>
         <div className="space-y-1.5">
           <Label id="ss-dow-label" className="text-xs">Day</Label>

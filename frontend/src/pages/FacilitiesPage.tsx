@@ -119,6 +119,7 @@ function StartBatchDialog({ unit, onClose }: { unit: BmgUnit; onClose: () => voi
     { category_id: '', weight_kg: '' },
   ]);
   const totalId = useId();
+  const weightBaseId = useId();
 
   // Audit #8: suggest an idle drum matching the selected waste category.
   const firstCat = rows.find((r) => r.category_id !== '')?.category_id ?? null;
@@ -147,6 +148,13 @@ function StartBatchDialog({ unit, onClose }: { unit: BmgUnit; onClose: () => voi
     const composition = rows
       .filter((r) => r.category_id !== '' && r.weight_kg !== '')
       .map((r) => ({ category_id: Number(r.category_id), weight_kg: Number(r.weight_kg) }));
+    // Empty rows used to be silently dropped and the schema's
+    // min(1, 'Add at least one waste component') got masked by the
+    // total>0 failure — surface the real reason instead.
+    if (composition.length === 0) {
+      toast.error('Add at least one waste component with a weight.');
+      return;
+    }
     const parsed = startBatchSchema.safeParse({
       total_input_weight_kg: Number(total.toFixed(2)),
       composition,
@@ -174,6 +182,7 @@ function StartBatchDialog({ unit, onClose }: { unit: BmgUnit; onClose: () => voi
         <div className="space-y-2">
           {rows.map((r, i) => {
             const ratio = total > 0 && r.weight_kg !== '' ? ((Number(r.weight_kg) / total) * 100) : null;
+            const weightId = `${weightBaseId}-${i}`;
             return (
               <div key={i} className="flex items-end gap-2">
                 <div className="flex-1 space-y-1">
@@ -188,8 +197,16 @@ function StartBatchDialog({ unit, onClose }: { unit: BmgUnit; onClose: () => voi
                   </Select>
                 </div>
                 <div className="w-28 space-y-1">
-                  {i === 0 && <Label className="text-xs">Weight (kg)</Label>}
-                  <Input type="number" min={0} step={0.01} value={r.weight_kg} onChange={(e) => setRow(i, { weight_kg: e.target.value })} />
+                  {i === 0 && <Label htmlFor={weightId} className="text-xs">Weight (kg)</Label>}
+                  <Input
+                    id={i === 0 ? weightId : undefined}
+                    type="number"
+                    min={0}
+                    step={0.01}
+                    aria-label={i === 0 ? undefined : 'Weight (kg)'}
+                    value={r.weight_kg}
+                    onChange={(e) => setRow(i, { weight_kg: e.target.value })}
+                  />
                 </div>
                 <div className="w-14 pb-2 text-right font-mono text-xs text-muted-foreground">
                   {ratio !== null ? `${ratio.toFixed(0)}%` : '—'}

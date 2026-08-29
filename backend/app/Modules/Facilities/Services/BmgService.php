@@ -6,6 +6,7 @@ namespace Modules\Facilities\Services;
 
 use App\Exceptions\ApiException;
 use App\Modules\Shared\BaseService;
+use App\Modules\Shared\ManilaDay;
 use App\Modules\Shared\StateMachineException;
 use App\Pagination\KeysetPaginator;
 use App\Services\Analytics\BmgAnalytics;
@@ -1254,7 +1255,9 @@ final class BmgService extends BaseService
             $this->db->table('facilities_bmg_process_logs')->insert([
                 'batch_id'            => $batchId,
                 'tenant_id'           => CurrentTenant::id(),
-                'log_date'            => (string) ($input['log_date'] ?? substr($now, 0, 10)),
+                // Day-grouping column: the Manila business calendar the
+                // drum surface displays, not the UTC storage clock.
+                'log_date'            => (string) ($input['log_date'] ?? ManilaDay::fromUtcSql($now)),
                 // Tier 2.2/audit: record WHAT was done (turning, aeration,
                 // moisture adjustment, observation) so the aeration action
                 // is tracked, not just the sensor reading.

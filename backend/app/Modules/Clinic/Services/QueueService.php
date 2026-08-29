@@ -6,6 +6,7 @@ namespace Modules\Clinic\Services;
 
 use App\Exceptions\ApiException;
 use App\Modules\Shared\BaseService;
+use App\Modules\Shared\ManilaDay;
 use App\Modules\Shared\StateMachineException;
 use App\Services\Audit\AuditOutboxService;
 use App\Services\CurrentTenant;
@@ -136,14 +137,14 @@ final class QueueService extends BaseService
             $last = $this->db->query(
                 'SELECT `position` FROM `clinic_queue_entries` WHERE `queue_date` = ?'
                 . ' ORDER BY `position` DESC LIMIT 1 FOR UPDATE',
-                [$this->utcToday()],
+                [$this->manilaToday()],
             )->getRowArray();
             $position = ($last !== null ? (int) $last['position'] : 0) + 1;
             $this->db->table('clinic_queue_entries')->insert([
                 'tenant_id' => CurrentTenant::id(),
                 'encounter_id' => $encounterId,
                 'referral_id' => $referralId,
-                'queue_date' => $this->utcToday(),
+                'queue_date' => $this->manilaToday(),
                 'position' => $position,
                 'status' => 'waiting',
                 'created_at' => $now,
@@ -166,15 +167,15 @@ final class QueueService extends BaseService
 
     /**
      * End-of-day sweep — close every `open` encounter whose
-     * `started_at` predates today (UTC) using the same cascade as
-     * `ClinicService::autoCloseStaleEncounter()`. Best-effort: a
-     * stale row that fails (e.g. encounter vanished mid-sweep) is
-     * logged + skipped so the staff `today()` read still succeeds.
+     * `started_at` predates the Manila business day using the same
+     * cascade as `ClinicService::autoCloseStaleEncounter()`.
+     * Best-effort: a stale row that fails (e.g. encounter vanished
+     * mid-sweep) is logged + skipped so the staff `today()` read
+     * still succeeds.
      */
     private function autoCloseEarlierOpenEncounters(): int
     {
-        $dayStart = (new DateTimeImmutable('today', new DateTimeZone('UTC')))
-            ->format('Y-m-d H:i:s');
+        $dayStart = ManilaDay::startOfDayUtcSql();
 
         $ids = $this->db->table('clinic_encounters')
             ->select('id')
@@ -216,7 +217,7 @@ final class QueueService extends BaseService
         $userId = \App\Auth\CurrentUser::assert();
 
         return $this->txn(function () use ($userId): array {
-            $today = $this->utcToday();
+            $today = $this->manilaToday();
 
             // Lock today's active entries and waiting FIFO in one pass.
             $rows = $this->db->query(
@@ -272,7 +273,7 @@ final class QueueService extends BaseService
             ->select('q.id, q.position, q.status, q.called_at, q.started_at, q.finished_at, q.encounter_id')
             ->where('q.tenant_id', CurrentTenant::id())
             ->join('clinic_encounters e', 'e.id = q.encounter_id')
-            ->where('q.queue_date', $this->utcToday())
+            ->where('q.queue_date', $this->manilaToday())
             ->where('e.patient_user_id', $patientUserId)
             ->where('e.archived_at', null)
             ->whereIn('q.status', ['waiting', 'called', 'in_session'])
@@ -289,7 +290,7 @@ final class QueueService extends BaseService
         // being served (mirrors the publicState estimate).
         $ahead = $waiting ? (int) $this->db->table('clinic_queue_entries')
             ->where('clinic_queue_entries.tenant_id', CurrentTenant::id())
-            ->where('queue_date', $this->utcToday())
+            ->where('queue_date', $this->manilaToday())
             ->whereIn('status', ['waiting', 'called', 'in_session'])
             ->where('position <', (int) $row['position'])
             ->countAllResults() : 0;
@@ -467,7 +468,7 @@ final class QueueService extends BaseService
                 .     ' OR u.employee_number = e.patient_school_id))',
                 'left',
             )
-            ->where('q.queue_date', $this->utcToday())
+            ->where('q.queue_date', $this->manilaToday())
             ->orderBy('q.position', 'ASC')
             ->get()->getResultArray();
     }
@@ -600,15 +601,21 @@ final class QueueService extends BaseService
             'SELECT AVG(TIMESTAMPDIFF(MINUTE, `started_at`, `finished_at`)) AS avg_min'
             . ' FROM `clinic_queue_entries`'
             . ' WHERE `queue_date` = ? AND `started_at` IS NOT NULL AND `finished_at` IS NOT NULL',
-            [$this->utcToday()],
+            [$this->manilaToday()],
         )->getRowArray();
 
         return $row !== null && $row['avg_min'] !== null ? max(1.0, (float) $row['avg_min']) : 10.0;
     }
 
-    private function utcToday(): string
+    /**
+     * The queue's business day (Asia/Manila) — what staff mean by
+     * "today". Writers (CheckinService, AppointmentService) partition
+     * `queue_date` on the same calendar via the shared ManilaDay
+     * helper; keep both sides aligned.
+     */
+    private function manilaToday(): string
     {
-        return (new DateTimeImmutable('now', new DateTimeZone('Asia/Manila')))->format('Y-m-d');
+        return ManilaDay::today();
     }
 
     private function utcNow(): string
