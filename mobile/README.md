@@ -1,13 +1,10 @@
-# SYNAPSE Mobile (Flutter demo)
+# SYNAPSE Mobile
 
-A cross-platform Flutter client that talks to the **existing CodeIgniter 4
-backend** (`../backend`) over its JSON API (`/api/v1`). No backend changes are
-required — this app consumes the same endpoints as the React SPA in `../frontend`.
+The Flutter client. It consumes the existing CodeIgniter 4 backend (`../backend`) over the same `/api/v1` endpoints as the React SPA (`../frontend`) — no backend changes required. Every request/response shape mirrors `frontend/src/schemas/*` (Zod) and the backend DTOs (`backend/app/Modules/*/DTOs`); most methods carry a comment citing the SPA file or backend route they mirror, which keeps the two clients honest against each other.
 
-## Module coverage
+Kiosk check-in and kiosk stations intentionally stay on the web app — everything else is here.
 
-All SYNAPSE modules are covered except **kiosk check-in / kiosk stations**,
-which intentionally stay on the web app.
+## What it covers
 
 | Feature | Endpoint(s) | Notes |
 |---|---|---|
@@ -23,38 +20,58 @@ which intentionally stay on the web app.
 | Counselling | `GET /counselling/sessions` | open/closed status |
 | Referrals | `GET /referrals` | status filter + module flow + QR state |
 | Facilities (BMG) | `GET /facilities/units` | status + utilization bars |
-| Reports | `GET /reports/summary` | selectable date range |
+| Reports | `GET /reports/summary` | selectable date range; chart-rich PDF export |
 | Audit trail | `GET /audit/events` | search + keyset pagination |
 | Notifications | `GET /notifications`, `POST /notifications/{id}/read` | bell in the app bar + module tile |
 | Admin users | `GET /admin/users` | role badges + active status |
+| Kiosk media admin (admin only) | `GET/POST /kiosk-*` | settings + media library upload |
 
-All request/response shapes mirror `frontend/src/schemas/*` (Zod) and the
-backend DTOs (`backend/app/Modules/*/DTOs`).
+## How it's built
 
-## Prerequisites
+- **Auth mirrors the browser exactly.** Access token in `flutter_secure_storage` (keystore/Keychain, with a one-time migration from legacy plaintext). Refresh token in a persistent `PersistCookieJar`. Single-replay silent refresh on 401, proactive refresh when the JWT `exp` approaches, and one in-flight refresh future to deduplicate concurrent 401s. `AuthController.bootstrap()` restores the session before the first frame — splash screen instead of a login flash.
+- **State is deliberately boring.** Only `AuthController` is a ChangeNotifier; screens are StatefulWidgets managing their own fetch/loading/error state, with a shared `AutoPolling` mixin (14 screens) gated by tab visibility so hidden tabs skip polls.
+- **Three-layer API stack** — `core/config.dart` (URL resolution) → `core/api/api_client.dart` (Dio + interceptors) → `core/services/api_service.dart` (one method per endpoint) → typed models in `core/models/` mirroring the SPA schemas.
+- **Navigation** — auth gate in `RootGate`, bottom-nav `IndexedStack` shell, imperative pushes for module screens. Permission gating mirrors the SPA sidebar (wildcard `*` for admins, student-vs-staff variants).
 
-- Flutter SDK (>= 3.6, tested on 3.44) — https://docs.flutter.dev/get-started/install
-- The backend running on `http://localhost:8090` (see `../backend/README.md`;
-  `php spark serve`).
-- Demo account: `admin@synapse.dev` / `DevPassw0rd!`
-  (students: `firstname.lastname@foundationu.edu.ph` / `DevPassw0rd!`).
+Stack: Flutter (Dart ≥ 3.6, tested on 3.44) · dio 5 + cookie_jar · flutter_secure_storage · provider · Material 3 with a hand-tuned maroon theme and Figtree variable font · pdf + share_plus · image_picker (kiosk media upload) · qr_flutter.
+
+```
+lib/
+├── main.dart                     app root + theme + RootGate (login vs shell)
+├── core/
+│   ├── config.dart               API base URL resolution (release requires --dart-define)
+│   ├── api/
+│   │   ├── api_envelope.dart     {success,data,errors,meta} models + ApiException
+│   │   └── api_client.dart       Dio + cookie jar + token + silent refresh
+│   ├── models/                   typed DTOs mirroring frontend/src/schemas
+│   ├── services/
+│   │   ├── auth_controller.dart  ChangeNotifier: session, login/logout/bootstrap
+│   │   └── api_service.dart      endpoint methods per module
+│   └── utils/                    date (UTC -> Asia/Manila) + notification labels
+└── features/
+    ├── auth/login_screen.dart
+    ├── home/                     home_shell (bottom nav) + home_tab (staff vs student)
+    ├── modules/module_hub_screen.dart   grid of all other modules (kiosk excluded)
+    ├── dashboard/ · appointments/ · queue/ · notifications/ · portal/
+    ├── patients/ · inventory/ · medicines/ · counselling/
+    ├── referrals/ · facilities/ · reports/ · audit/ · admin/
+    └── common/                   shared cards, error/loading states, AutoPolling
+```
 
 ## Setup
+
+Prerequisites: Flutter SDK (≥ 3.6, tested on 3.44); the backend on `http://localhost:8090` ([`../backend/README.md`](../backend/README.md)); a demo account — `admin@synapse.dev` / `DevPassw0rd!` (students: `firstname.lastname@foundationu.edu.ph`), full matrix in [`../CREDENTIALS.md`](../CREDENTIALS.md).
 
 ```powershell
 cd mobile
 powershell -ExecutionPolicy Bypass -File setup.ps1
 ```
 
-This generates the platform folders (`flutter create .`), fetches deps, and
-patches the Android manifest for cleartext HTTP (dev only).
+`setup.ps1` generates the platform folders (`flutter create .`), fetches deps, and patches the Android manifest for cleartext HTTP (dev only).
 
-> Windows note: native (Android/Windows) builds that bundle plugins may ask
-> for **Developer Mode** ("Building with plugins requires symlink support").
-> Enable it once in Settings → For developers (`start ms-settings:developers`).
-> The web build does not require it.
+> Windows note: native (Android/Windows) builds that bundle plugins may ask for **Developer Mode** ("Building with plugins requires symlink support"). Enable it once in Settings → For developers (`start ms-settings:developers`). The web build doesn't need it.
 
-## Run
+## Running
 
 ```bash
 flutter run -d windows     # desktop, backend on localhost:8090
@@ -65,39 +82,24 @@ flutter run -d chrome      # web, backend on localhost:8090
 flutter run -d <device> --dart-define=API_BASE_URL=http://192.168.1.x:8090/api/v1
 ```
 
-## Layout
+API base URL resolution lives in `lib/core/config.dart`: dev defaults cover `10.0.2.2` (Android emulator) and `127.0.0.1` (desktop/web), and **release builds throw** unless `API_BASE_URL` is provided via `--dart-define` — no hardcoded URLs ship in release.
 
+## Tests
+
+```bash
+flutter test
 ```
-lib/
-  main.dart                     app root + theme + RootGate (login vs shell)
-  core/
-    config.dart                 API base URL resolution
-    api/
-      api_envelope.dart         {success,data,errors,meta} models + ApiException
-      api_client.dart           Dio + cookie jar + token + silent refresh
-    models/                     typed DTOs mirroring frontend/src/schemas
-    services/
-      auth_controller.dart      ChangeNotifier: session, login/logout/bootstrap
-      api_service.dart          endpoint methods per module
-    utils/                      date (UTC -> Asia/Manila) + notification labels
-  features/
-    auth/login_screen.dart
-    home/home_shell.dart        bottom-nav shell (Home / Appointments / Queue / My Portal / Modules)
-    home/home_tab.dart          staff -> Dashboard, students -> portal
-    modules/module_hub_screen.dart   grid of all other modules (kiosk excluded)
-    dashboard/dashboard_screen.dart
-    appointments/appointments_screen.dart
-    queue/queue_screen.dart
-    notifications/notifications_screen.dart
-    portal/portal_screen.dart
-    patients/patients_screen.dart
-    inventory/inventory_screen.dart
-    medicines/medicines_screen.dart
-    counselling/counselling_screen.dart
-    referrals/referrals_screen.dart
-    facilities/facilities_screen.dart
-    reports/reports_screen.dart
-    audit/audit_screen.dart
-    admin/admin_users_screen.dart
-    common/widgets.dart         shared cards, error/loading states
-```
+
+Model JSON-parsing tests (session, appointment, queue, notification) plus `SessionProgressTracker` unit/widget tests. CI runs this on every push/PR ([`../.github/workflows/ci.yml`](../.github/workflows/ci.yml)).
+
+## Platform notes
+
+- **Android** — dev builds allow cleartext HTTP to the dev backend only. `MainActivity` pins a high refresh rate and applies the maroon edge-to-edge treatment (ColorOS-specific workarounds). Release signing is still debug-key with a placeholder `com.example.*` applicationId — **do not distribute release builds as-is**.
+- **iOS** — stock template; add photo/camera usage strings before using kiosk media upload.
+- **Web / Windows** — supported run targets; the web target is an uncustomized template shell.
+
+## Troubleshooting
+
+- **401 loops** — check `API_BASE_URL` for the device: emulators need `10.0.2.2`, physical devices need the LAN IP.
+- **Cleartext HTTP blocked (Android)** — dev-only manifest patch applied by `setup.ps1`; release builds must use HTTPS.
+- **Symlink / Developer Mode error on Windows builds** — see the note in [Setup](#setup).
