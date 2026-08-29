@@ -711,7 +711,7 @@ export default function AppointmentsPage() {
           left and the actions on the right. Typing >= 2 chars searches
           as you type (debounced); clearing restores the paged list. */}
       <section className="flex flex-wrap items-end justify-between gap-3 rounded-xl border bg-card p-3">
-        <div className="w-full space-y-1 sm:w-72">
+        <div className="w-full space-y-1 sm:w-80 lg:flex-1 lg:max-w-md">
           <Label htmlFor="appt-search" className="text-xs">Search</Label>
           <div className="relative">
             <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />

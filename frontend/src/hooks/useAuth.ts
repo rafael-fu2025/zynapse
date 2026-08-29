@@ -8,6 +8,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { apiClient } from '@/api/client';
+import { humanizeCode } from '@/api/errorCodes';
 import type { ApiEnvelopeError } from '@/api/envelope';
 import { sessionSchema, type ChangePasswordInput, type LoginInput, type Session } from '@/schemas/auth';
 import { useAuthStore } from '@/store/auth';
@@ -98,7 +99,13 @@ export function useChangePassword() {
       navigate('/', { replace: true });
     },
     onError: (err) => {
-      toast.error(err.errors[0]?.message ?? 'Password change failed.');
+      // The backend sends code-as-message for auth errors; map through
+      // the catalog so "auth.credentials_invalid" reads as a sentence.
+      const primary = err.errors[0]?.code;
+      toast.error(
+        (primary !== undefined && primary !== '' ? humanizeCode(primary) : err.errors[0]?.message)
+          ?? 'Password change failed.',
+      );
     },
   });
 }

@@ -1674,7 +1674,7 @@ export default function FacilitiesPage() {
         <div>
           <h1 className="text-xl font-semibold text-foreground">Facilities — BMG</h1>
           <p className="text-sm text-muted-foreground">
-            State machine: Idle → Processing → Awaiting output → Idle (or Cancelled). Units can be set to Maintenance.
+            Drums move Idle → Processing → Awaiting output → Idle (or Cancelled), and can be placed in Maintenance.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">

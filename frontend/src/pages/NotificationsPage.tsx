@@ -36,10 +36,21 @@ export default function NotificationsPage() {
   const visible = onlyUnread ? rows.filter((n) => n.read_at === null) : rows;
   function openNotification(template: string, context: NotificationContext | null, id: number, unread: boolean) {
     if (unread) markRead.mutate(id);
-    if (!template.startsWith('appointment.')) return;
-    if (hasPermission(auth, 'portal.appointments.read')) navigate('/me');
-    else if (context?.destination === 'counselling' && hasPermission(auth, 'counselling.schedule.read')) navigate('/counselling?tab=scheduling');
-    else if (hasPermission(auth, 'clinic.appointments.read')) navigate('/appointments');
+    // Deep-link to the surface the notification is about (never just
+    // mark-and-stay); permission-gated like the sidebar.
+    if (template.startsWith('appointment.')) {
+      if (hasPermission(auth, 'portal.appointments.read')) navigate('/me');
+      else if (context?.destination === 'counselling' && hasPermission(auth, 'counselling.schedule.read')) navigate('/counselling?tab=scheduling');
+      else if (hasPermission(auth, 'clinic.appointments.read')) navigate('/appointments');
+      return;
+    }
+    if (template.startsWith('referral.') && hasPermission(auth, 'referrals.read')) {
+      navigate('/referrals');
+      return;
+    }
+    if (template.startsWith('reorder.') && hasPermission(auth, 'clinic.inventory.read')) {
+      navigate('/inventory?tab=reorders');
+    }
   }
 
   function nextPage() {

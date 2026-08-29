@@ -704,7 +704,7 @@ export default function ReferralsPage() {
         <div>
           <h1 className="text-xl font-semibold text-foreground">Referrals</h1>
           <p className="text-sm text-muted-foreground">
-            Bridge contract between clinic and counselling modules. No SQL joins across them.
+            Referrals hand off care between Clinic and Counselling — each side keeps its own records.
           </p>
         </div>
         <div className="flex items-center gap-2">

@@ -35,7 +35,7 @@ export default function InventoryPage() {
         <h1 className="text-xl font-semibold text-foreground">Inventory</h1>
         <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
           <CalendarClock className="size-3.5" aria-hidden />
-          Medicines are batch-tracked with expiry (FEFO dispensing); supplies use signed stock transactions.
+          Medicines are tracked by batch with expiry — earliest expiring dispensed first; supplies use signed stock movements.
         </p>
       </header>
 

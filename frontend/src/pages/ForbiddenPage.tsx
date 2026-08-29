@@ -1,12 +1,13 @@
 /**
- * ForbiddenPage — friendly 403 with a return-home link.
+ * ForbiddenPage — friendly 403 with a return-home link. Rendered
+ * inside the app shell so navigation stays available.
  */
 import { Link } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 
 export default function ForbiddenPage() {
   return (
-    <main className="grid min-h-dvh place-items-center p-6">
+    <main className="grid min-h-[60vh] place-items-center p-6">
       <section className="max-w-md text-center">
         <h1 className="text-3xl font-semibold text-foreground">403 — Forbidden</h1>
         <p className="mt-2 text-sm text-muted-foreground">

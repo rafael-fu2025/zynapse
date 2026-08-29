@@ -7,8 +7,12 @@
 import { z } from 'zod';
 
 export const loginSchema = z.object({
-  email: z.string().email().max(255),
-  password: z.string().min(8).max(256),
+  email: z
+    .string()
+    .min(1, 'Enter your email address.')
+    .email('Enter a valid email address.')
+    .max(255),
+  password: z.string().min(8, 'Password must be at least 8 characters.').max(256),
 });
 
 export type LoginInput = z.infer<typeof loginSchema>;
@@ -31,9 +35,9 @@ export type Session = z.infer<typeof sessionSchema>;
 
 export const changePasswordSchema = z
   .object({
-    current_password: z.string().min(8).max(256),
-    new_password: z.string().min(12).max(256),
-    confirm_password: z.string(),
+    current_password: z.string().min(1, 'Enter your current password.').max(256),
+    new_password: z.string().min(12, 'New password must be at least 12 characters.').max(256),
+    confirm_password: z.string().min(1, 'Re-enter the new password.'),
   })
   .refine((v) => v.new_password === v.confirm_password, {
     message: 'Passwords do not match',

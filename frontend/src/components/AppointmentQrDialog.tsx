@@ -179,7 +179,11 @@ export function AppointmentQrDialog({
           )}
           {token !== null && (
             <div className="flex items-center gap-2">
-              <p className="max-w-60 truncate font-mono text-[10px] text-muted-foreground">{token}</p>
+              {/* Mask the token — the QR already carries it, and the
+                  copy button hands out the full value when needed. */}
+              <p className="font-mono text-[10px] text-muted-foreground" title={token}>
+                {token.slice(0, 4)}…{token.slice(-4)}
+              </p>
               <CopyButton value={token} label="Copy QR token" successMessage="QR token copied." />
             </div>
           )}

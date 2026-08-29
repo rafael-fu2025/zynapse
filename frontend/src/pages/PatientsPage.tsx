@@ -1214,7 +1214,7 @@ export default function PatientsPage() {
 
         <TabsContent value="students" className="space-y-4">
           <section className="flex flex-wrap items-end justify-between gap-3 rounded-xl border bg-card p-3">
-            <div className="relative w-full sm:w-72">
+            <div className="relative w-full sm:w-80 lg:flex-1 lg:max-w-md">
               <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
               <Input
                 aria-label="Search students"
@@ -1356,7 +1356,7 @@ export default function PatientsPage() {
 
         <TabsContent value="employees" className="space-y-4">
           <section className="flex flex-wrap items-end justify-between gap-3 rounded-xl border bg-card p-3">
-            <div className="relative w-full sm:w-72">
+            <div className="relative w-full sm:w-80 lg:flex-1 lg:max-w-md">
               <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
               <Input
                 aria-label="Search employees"

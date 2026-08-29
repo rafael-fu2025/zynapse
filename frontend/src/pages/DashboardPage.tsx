@@ -35,8 +35,11 @@ import { useClinicReport } from '@/hooks/useReports';
 import { hasPermission, useAuthStore } from '@/store/auth';
 
 interface Module {
+  /** Permission code gating the module — surfaced via title, not copy. */
   code: string;
   label: string;
+  /** Plain-language line for the card (what you'll find inside). */
+  blurb: string;
   href: string;
   icon: LucideIcon;
   summary: (c: ReturnType<typeof useDashboardCounters>['data']) => string;
@@ -46,6 +49,7 @@ const MODULES: ReadonlyArray<Module> = [
   {
     code: 'clinic.encounters.read',
     label: 'Clinic',
+    blurb: 'Encounters, vitals and treatments',
     href: '/clinic',
     icon: HeartPulse,
     summary: (c) => {
@@ -57,6 +61,7 @@ const MODULES: ReadonlyArray<Module> = [
   {
     code: 'counselling.records.read',
     label: 'Counselling',
+    blurb: 'Guidance sessions and encrypted notes',
     href: '/counselling',
     icon: MessagesSquare,
     summary: (c) => {
@@ -68,6 +73,7 @@ const MODULES: ReadonlyArray<Module> = [
   {
     code: 'facilities.units.read',
     label: 'Facilities',
+    blurb: 'Composting drums and batch tracking',
     href: '/facilities',
     icon: Factory,
     summary: (c) => {
@@ -79,6 +85,7 @@ const MODULES: ReadonlyArray<Module> = [
   {
     code: 'clinic.patients.read',
     label: 'Patients',
+    blurb: 'Student and employee registry',
     href: '/patients',
     icon: ContactRound,
     summary: () => 'Students · employees · allergies',
@@ -86,6 +93,7 @@ const MODULES: ReadonlyArray<Module> = [
   {
     code: 'clinic.inventory.read',
     label: 'Inventory',
+    blurb: 'Supplies, medicines and stock levels',
     href: '/inventory',
     icon: Boxes,
     summary: () => 'Clinic supplies · stock transactions',
@@ -93,6 +101,7 @@ const MODULES: ReadonlyArray<Module> = [
   {
     code: 'clinic.appointments.read',
     label: 'Appointments',
+    blurb: 'Scheduling, check-in and visit history',
     href: '/appointments',
     icon: CalendarClock,
     summary: () => 'Scheduling · check-in · lifecycle',
@@ -100,6 +109,7 @@ const MODULES: ReadonlyArray<Module> = [
   {
     code: 'referrals.read',
     label: 'Referrals',
+    blurb: 'Clinic ↔ counselling handoffs',
     href: '/referrals',
     icon: Share2,
     summary: (c) => {
@@ -110,6 +120,7 @@ const MODULES: ReadonlyArray<Module> = [
   {
     code: 'audit.read',
     label: 'Audit',
+    blurb: 'Tamper-evident activity record',
     href: '/audit',
     icon: ScrollText,
     summary: (c) => `${c?.audit?.events_last_24h ?? 0} events in 24h`,
@@ -117,6 +128,7 @@ const MODULES: ReadonlyArray<Module> = [
   {
     code: 'rbac.manage',
     label: 'Users',
+    blurb: 'Accounts, roles and password resets',
     href: '/admin/users',
     icon: Users,
     summary: () => 'Accounts · groups · password resets',
@@ -215,8 +227,8 @@ export default function DashboardPage() {
                       <div className="min-w-0 space-y-1">
                         <CardTitle className="text-sm">{m.label}</CardTitle>
                         <CardDescription className="text-xs">{m.summary(counters.data)}</CardDescription>
-                        <p className="pt-1 text-[10px] uppercase tracking-wide text-muted-foreground">
-                          {m.code}
+                        <p className="pt-1 text-xs text-muted-foreground" title={m.code}>
+                          {m.blurb}
                         </p>
                       </div>
                       <m.icon

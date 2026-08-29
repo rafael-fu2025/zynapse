@@ -28,6 +28,7 @@ import { QueryErrorState } from '@/components/QueryErrorState';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { YourQueueCard } from '@/components/YourQueueCard';
+import { useTabParam } from '@/hooks/useTabParam';
 import { PortalAppointments } from '@/components/PortalAppointments';
 import { useMe } from '@/hooks/useAuth';
 import { useNotifications } from '@/hooks/useNotifications';
@@ -69,6 +70,9 @@ export default function StudentPortalPage() {
   const visits = useMyStudentClinicVisits();
   const notifications = useNotifications(5);
   const me = useMe();
+  // ?tab= so a booked-appointment or history view survives a refresh
+  // and can be linked (matches the employee portal and other pages).
+  const [tab, setTab] = useTabParam('overview');
 
   if (profile.error?.httpStatus === 404) {
     return <NotOnRegistry />;
@@ -94,7 +98,7 @@ export default function StudentPortalPage() {
 
       {profile.data !== undefined && (
         <>
-          <Tabs defaultValue="overview">
+          <Tabs value={tab} onValueChange={setTab}>
             <TabsList>
               <TabsTrigger value="overview">Overview</TabsTrigger>
               <TabsTrigger value="appointments">Appointments</TabsTrigger>
@@ -340,9 +344,6 @@ export default function StudentPortalPage() {
               <Mail className="size-3" aria-hidden />
               Need to update your contact details? See the registrar — the portal is read-only by design.
             </p>
-            <Button asChild size="sm" variant="ghost">
-              <Link to="/change-password">Change password</Link>
-            </Button>
           </footer>
         </>
       )}
