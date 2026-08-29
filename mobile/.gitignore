@@ -1,0 +1,14 @@
+# Dart / Flutter
+.dart_tool/
+.packages
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+
+# Local visual QA captures kept beside the Flutter project.
+/*.png
+
+# IDE
+.idea/
+*.iml
+.vscode/

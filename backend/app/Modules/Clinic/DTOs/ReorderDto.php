@@ -28,6 +28,9 @@ final class ReorderDto extends BaseDTO
             'requested_quantity'     => (int)    $this->row['requested_quantity'],
             'current_stock'          => (int)    $this->row['current_stock'],
             'reorder_level'          => (int)    $this->row['reorder_level'],
+            'target_stock'           => isset($this->row['target_stock']) && $this->row['target_stock'] !== null
+                ? (int) $this->row['target_stock']
+                : null,
             'urgency'                => (string) $this->row['urgency'],
             'status'                 => (string) $this->row['status'],
             'auto_triggered'         => (bool)   $this->row['auto_triggered'],

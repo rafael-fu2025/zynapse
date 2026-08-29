@@ -54,6 +54,7 @@ final class InventoryController extends ApiController
             'name'          => 'required|max_length[128]',
             'unit'          => 'permit_empty|max_length[32]',
             'reorder_level' => 'permit_empty|is_natural',
+            'target_stock'  => 'permit_empty|is_natural_no_zero',
         ];
         if (! $this->makeValidation($rules)->run($payload)) {
             throw ApiException::validationFailure($this->collectErrors());
@@ -64,6 +65,7 @@ final class InventoryController extends ApiController
             (string) $payload['name'],
             (string) ($payload['unit'] ?? 'pc'),
             (int)    ($payload['reorder_level'] ?? 0),
+            isset($payload['target_stock']) && $payload['target_stock'] !== '' ? (int) $payload['target_stock'] : null,
         );
         return $this->ok($dto->toArray(), null, 201);
     }
@@ -81,6 +83,7 @@ final class InventoryController extends ApiController
             'name'          => 'required|max_length[128]',
             'unit'          => 'permit_empty|max_length[32]',
             'reorder_level' => 'permit_empty|is_natural',
+            'target_stock'  => 'permit_empty|is_natural_no_zero',
         ];
         if (! $this->makeValidation($rules)->run($payload)) {
             throw ApiException::validationFailure($this->collectErrors());
@@ -91,6 +94,7 @@ final class InventoryController extends ApiController
             (string) $payload['name'],
             (string) ($payload['unit'] ?? 'pc'),
             (int)    ($payload['reorder_level'] ?? 0),
+            isset($payload['target_stock']) && $payload['target_stock'] !== '' ? (int) $payload['target_stock'] : null,
         );
         return $this->ok($dto->toArray());
     }

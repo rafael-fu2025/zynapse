@@ -34,6 +34,7 @@ SYNAPSE_E2E=1 npx playwright test
 | Var | Purpose |
 |---|---|
 | `VITE_API_BASE_URL` | Backend base path (default `/api/v1`). Vite dev-server proxies this to the configured upstream. |
+| `VITE_KIOSK_UPLOAD_BASE_URL` | Optional direct backend API base for large kiosk-media uploads. Development defaults to `VITE_API_PROXY_TARGET` plus `/api/v1`, bypassing Vite's file relay. |
 
 ## Auth model (recap)
 

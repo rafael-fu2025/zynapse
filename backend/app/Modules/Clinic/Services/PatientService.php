@@ -723,7 +723,7 @@ final class PatientService extends BaseService
      */
     public function lookupForKiosk(string $q, int $limit = 8): array
     {
-        $this->policy->check('patientsRead');
+        $this->policy->check('kioskPatientLookup');
         $limit = max(1, min($limit, 12));
 
         $rows = $this->db->table('users')

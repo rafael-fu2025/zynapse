@@ -14,6 +14,7 @@ use DateTimeZone;
 use Modules\Counselling\DTOs\NoteDto;
 use Modules\Counselling\DTOs\SessionDto;
 use Modules\Counselling\Policies\CounsellingPolicy;
+use Modules\Referrals\DTOs\ReferralDto;
 
 final class CounsellingService extends BaseService
 {
@@ -48,6 +49,49 @@ final class CounsellingService extends BaseService
             'next'  => $final['nextCursor'],
             'count' => $limit,
         ];
+    }
+
+    /**
+     * Exact, authorization-checked session lookup used by deep links and the
+     * active Guidance workspace. Queue/referral context is staff-only and is
+     * deliberately absent from the public queue DTO.
+     *
+     * @return array<string, mixed>
+     */
+    public function getSession(int $sessionId): array
+    {
+        $row = $this->db->table('counselling_sessions AS s')
+            ->select('s.*, u.first_name, u.last_name, q.id AS queue_entry_id, q.position AS queue_position, q.status AS queue_status, q.purpose AS queue_purpose, q.counselling_appointment_id, q.referral_id')
+            ->join('users AS u', 'u.id = s.patient_user_id', 'left')
+            ->join('counselling_queue_entries AS q', 'q.counselling_session_id = s.id', 'left')
+            ->where('s.id', $sessionId)
+            ->where('s.archived_at', null)
+            ->get()->getRowArray();
+        if ($row === null) {
+            throw new ApiException('resource.not_found', 404, [
+                ['code' => 'resource.not_found', 'message' => "Session #{$sessionId} not found."],
+            ]);
+        }
+        $this->policy->check('list', $row);
+
+        $first = trim((string) ($row['first_name'] ?? ''));
+        $last = trim((string) ($row['last_name'] ?? ''));
+        $queuePosition = $row['queue_position'] !== null ? (int) $row['queue_position'] : null;
+        $noteCount = (int) $this->db->table('counselling_notes')->where('session_id', $sessionId)->countAllResults();
+        $outgoing = $this->db->table('referral_referrals')->where('source_session_id', $sessionId)
+            ->where('archived_at', null)->orderBy('id', 'DESC')->limit(1)->get()->getRowArray();
+
+        return array_merge(SessionDto::fromRow($row)->toArray(), [
+            'patient_display_name' => trim($last . ($first !== '' ? ', ' . $first : '')) ?: (string) $row['patient_school_id'],
+            'queue_entry_id' => $row['queue_entry_id'] !== null ? (int) $row['queue_entry_id'] : null,
+            'queue_number' => $queuePosition !== null ? sprintf('G-%03d', $queuePosition) : null,
+            'queue_status' => $row['queue_status'] !== null ? (string) $row['queue_status'] : null,
+            'purpose' => $row['queue_purpose'] !== null ? (string) $row['queue_purpose'] : null,
+            'appointment_id' => $row['counselling_appointment_id'] !== null ? (int) $row['counselling_appointment_id'] : null,
+            'incoming_referral_id' => $row['referral_id'] !== null ? (int) $row['referral_id'] : null,
+            'note_count' => $noteCount,
+            'outgoing_referral' => $outgoing !== null ? ReferralDto::fromRow($outgoing)->toArray() : null,
+        ]);
     }
 
     /**
@@ -253,6 +297,10 @@ final class CounsellingService extends BaseService
             }
 
             $this->policy->check('close', $session);
+
+            if ($session['ended_at'] !== null) {
+                return SessionDto::fromRow($session);
+            }
 
             $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
 

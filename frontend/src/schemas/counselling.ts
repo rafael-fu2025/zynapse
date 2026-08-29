@@ -2,6 +2,7 @@
  * Zod schemas — Counselling module.
  */
 import { z } from 'zod';
+import { referralSchema } from '@/schemas/referrals';
 
 export const sessionSchema = z.object({
   id: z.number().int().positive(),
@@ -11,6 +12,19 @@ export const sessionSchema = z.object({
   ended_at: z.string().nullable(),
 });
 export type Session = z.infer<typeof sessionSchema>;
+
+export const sessionDetailSchema = sessionSchema.extend({
+  patient_display_name: z.string(),
+  queue_entry_id: z.number().int().positive().nullable(),
+  queue_number: z.string().nullable(),
+  queue_status: z.enum(['waiting', 'called', 'in_session', 'done', 'skipped']).nullable(),
+  purpose: z.string().nullable(),
+  appointment_id: z.number().int().positive().nullable(),
+  incoming_referral_id: z.number().int().positive().nullable(),
+  note_count: z.number().int().min(0),
+  outgoing_referral: referralSchema.nullable(),
+});
+export type SessionDetail = z.infer<typeof sessionDetailSchema>;
 
 export const noteSchema = z.object({
   session_id: z.number().int().positive(),

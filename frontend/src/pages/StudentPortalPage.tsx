@@ -28,7 +28,7 @@ import { QueryErrorState } from '@/components/QueryErrorState';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { YourQueueCard } from '@/components/YourQueueCard';
-import { StudentBookingSection } from '@/components/StudentBooking';
+import { PortalAppointments } from '@/components/PortalAppointments';
 import { useMe } from '@/hooks/useAuth';
 import { useNotifications } from '@/hooks/useNotifications';
 import { useMyStudentClinicVisits, useMyStudentProfile } from '@/hooks/useStudentPortal';
@@ -231,7 +231,7 @@ export default function StudentPortalPage() {
           </TabsContent>
 
           <TabsContent value="appointments" className="space-y-6 pt-4">
-            <StudentBookingSection />
+            <PortalAppointments />
           </TabsContent>
 
           <TabsContent value="history" className="space-y-6 pt-4">

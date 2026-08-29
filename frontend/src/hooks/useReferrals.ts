@@ -74,6 +74,7 @@ export function useCreateReferral() {
     },
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['referrals'] });
+      void qc.invalidateQueries({ queryKey: ['notifications'] });
       toast.success('Referral created.');
     },
     onError: (err) => {
@@ -115,6 +116,42 @@ function useTransition(action: 'acknowledge' | 'review' | 'close') {
 export const useAcknowledgeReferral = () => useTransition('acknowledge');
 export const useReviewReferral = () => useTransition('review');
 export const useCloseReferral = () => useTransition('close');
+
+export function useQueueHandoff() {
+  const qc = useQueryClient();
+  return useMutation<Referral, ApiEnvelopeError, number>({
+    mutationFn: async (id) => {
+      const res = await apiClient.post<unknown>(`/referrals/${id}/queue-handoff`, {});
+      return referralSchema.parse(z.object({ referral: referralSchema }).parse(res.data).referral);
+    },
+    onSuccess: (referral) => {
+      void qc.invalidateQueries({ queryKey: ['referrals'] });
+      void qc.invalidateQueries({ queryKey: [referral.target_module === 'clinic' ? 'queue' : 'counselling-queue'] });
+      toast.success(`Patient added to the ${referral.target_module === 'clinic' ? 'Clinic' : 'Guidance'} queue.`);
+    },
+    onError: (err) => toast.error(err.errors[0]?.message ?? 'Queue handoff failed.'),
+  });
+}
+
+export function useCreateContextualReferral(context: { module: 'clinic'; encounterId: number } | { module: 'counselling'; sessionId: number }) {
+  const qc = useQueryClient();
+  return useMutation<Referral, ApiEnvelopeError, { reason_code?: string; notes_plaintext?: string }>({
+    mutationFn: async (input) => {
+      const path = context.module === 'clinic'
+        ? `/clinic/encounters/${context.encounterId}/referrals`
+        : `/counselling/sessions/${context.sessionId}/referrals`;
+      return referralSchema.parse((await apiClient.post<unknown>(path, input)).data);
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['referrals'] });
+      void qc.invalidateQueries({ queryKey: ['notifications'] });
+      void qc.invalidateQueries({ queryKey: ['clinic'] });
+      void qc.invalidateQueries({ queryKey: ['counselling'] });
+      toast.success('Referral submitted.');
+    },
+    onError: (error) => toast.error(error.errors[0]?.message ?? 'Failed to submit referral.'),
+  });
+}
 
 interface IssuedQr {
   referral_id: number;

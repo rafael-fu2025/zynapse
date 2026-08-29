@@ -30,6 +30,11 @@ final class ScheduleController extends ApiController
         return $this->ok($this->service->listAvailability($counsellor !== '' ? (int) $counsellor : null));
     }
 
+    public function counsellors(): ResponseInterface
+    {
+        return $this->ok($this->service->counsellors());
+    }
+
     public function addSlot(): ResponseInterface
     {
         $payload = $this->request->getJSON(true) ?? [];

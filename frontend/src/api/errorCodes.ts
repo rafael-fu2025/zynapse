@@ -11,6 +11,8 @@ export const ApiErrorCode = {
   AUTH_REFRESH_INVALID: 'auth.refresh_invalid_or_replayed',
   AUTH_CREDENTIALS_INVALID: 'auth.credentials_invalid',
   AUTH_USER_NOT_FOUND: 'auth.user_not_found',
+  AUTH_LOGIN_LOCKED: 'auth.login_locked',
+  AUTH_ACCOUNT_DISABLED: 'auth.account_disabled',
 
   RBAC_FORBIDDEN: 'rbac.forbidden',
   RBAC_PERMISSION_DENIED: 'rbac.permission_denied',
@@ -77,6 +79,10 @@ export function humanizeCode(code: string): string {
       return 'No active session. Please sign in.';
     case ApiErrorCode.AUTH_CREDENTIALS_INVALID:
       return 'Email or password is incorrect.';
+    case ApiErrorCode.AUTH_LOGIN_LOCKED:
+      return 'Too many failed attempts. Wait a few minutes, then try again.';
+    case ApiErrorCode.AUTH_ACCOUNT_DISABLED:
+      return 'This account is disabled. Contact your system administrator.';
     case ApiErrorCode.RBAC_FORBIDDEN:
     case ApiErrorCode.RBAC_PERMISSION_DENIED:
       return 'You do not have permission for this action.';

@@ -9,6 +9,8 @@ export type ReferralStatus = (typeof REFERRAL_STATUSES)[number];
 export const referralSchema = z.object({
   id: z.number().int().positive(),
   patient_school_id: z.string(),
+  source_encounter_id: z.number().int().positive().nullable().optional(),
+  source_session_id: z.number().int().positive().nullable().optional(),
   source_module: z.enum(['clinic', 'counselling']),
   target_module: z.enum(['clinic', 'counselling']),
   artifact_type: z.string(),
@@ -18,6 +20,9 @@ export const referralSchema = z.object({
   // receiving side acknowledges the referral (panel revision).
   provider_user_id: z.number().int().positive().nullable().optional(),
   provider_name: z.string().nullable().optional(),
+  queue_handoff_destination: z.enum(['clinic', 'counselling']).nullable().optional(),
+  queue_handoff_entry_id: z.number().int().positive().nullable().optional(),
+  queue_handoff_at: z.string().nullable().optional(),
   created_at: z.string(),
   updated_at: z.string(),
   qr_expires_at: z.string().nullable(),

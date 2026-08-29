@@ -7,6 +7,7 @@
  */
 import { ChevronLeft, ChevronRight, Inbox, Loader2 } from 'lucide-react';
 import { useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { QueryErrorState } from '@/components/QueryErrorState';
@@ -15,10 +16,13 @@ import {
   useMarkNotificationRead,
   useNotificationsPage,
 } from '@/hooks/useNotifications';
-import { notificationDetail, notificationLabel } from '@/utils/notifications';
+import { notificationDetail, notificationLabel, type NotificationContext } from '@/utils/notifications';
 import { fmtRelative, fmtUtcToApp } from '@/utils/date';
+import { hasPermission, useAuthStore } from '@/store/auth';
 
 export default function NotificationsPage() {
+  const navigate = useNavigate();
+  const auth = useAuthStore();
   const [cursor, setCursor] = useState<string | null>(null);
   const [history, setHistory] = useState<Array<string | null>>([null]);
   const [onlyUnread, setOnlyUnread] = useState(false);
@@ -30,6 +34,13 @@ export default function NotificationsPage() {
   const rows = useMemo(() => list.data?.data ?? [], [list.data]);
   const pageHasUnread = rows.some((n) => n.read_at === null);
   const visible = onlyUnread ? rows.filter((n) => n.read_at === null) : rows;
+  function openNotification(template: string, context: NotificationContext | null, id: number, unread: boolean) {
+    if (unread) markRead.mutate(id);
+    if (!template.startsWith('appointment.')) return;
+    if (hasPermission(auth, 'portal.appointments.read')) navigate('/me');
+    else if (context?.destination === 'counselling' && hasPermission(auth, 'counselling.schedule.read')) navigate('/counselling?tab=scheduling');
+    else if (hasPermission(auth, 'clinic.appointments.read')) navigate('/appointments');
+  }
 
   function nextPage() {
     if (list.data?.next !== null && list.data?.next !== undefined) {
@@ -93,7 +104,7 @@ export default function NotificationsPage() {
                 <li key={n.id}>
                   <button
                     type="button"
-                    onClick={() => unread && markRead.mutate(n.id)}
+                    onClick={() => openNotification(n.template_code, n.context, n.id, unread)}
                     className={`flex w-full items-start gap-3 px-4 py-3 text-left transition-colors hover:bg-accent/60 ${
                       unread ? 'bg-accent/40' : ''
                     }`}

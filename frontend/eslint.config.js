@@ -14,8 +14,22 @@ export default tseslint.config(
   // Plain JS files (this config, postcss.config.js) and TS files outside
   // the tsconfig project (Playwright e2e) cannot use typed rules.
   {
-    files: ['**/*.js', 'e2e/**/*.ts', 'playwright.config.ts'],
+    files: ['**/*.{js,cjs,mjs}', 'e2e/**/*.ts', 'playwright.config.ts'],
     ...tseslint.configs.disableTypeChecked,
+    languageOptions: {
+      globals: {
+        __dirname: 'readonly',
+        console: 'readonly',
+        fetch: 'readonly',
+        module: 'readonly',
+        process: 'readonly',
+        require: 'readonly',
+      },
+    },
+    rules: {
+      ...tseslint.configs.disableTypeChecked.rules,
+      '@typescript-eslint/no-require-imports': 'off',
+    },
   },
   {
     files: ['**/*.{ts,tsx}'],

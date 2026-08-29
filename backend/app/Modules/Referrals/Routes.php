@@ -22,6 +22,7 @@ final class Routes implements BaseRoutes
             $r->post('(:num)/acknowledge',               'ReferralController::acknowledge/$1');
             $r->post('(:num)/review',                    'ReferralController::review/$1');
             $r->post('(:num)/close',                     'ReferralController::close/$1');
+            $r->post('(:num)/queue-handoff',             'ReferralController::handoffToQueue/$1');
             $r->post('(:num)/issue-qr',                  'ReferralController::issueQr/$1');
             $r->post('(:num)/revoke-qr',                 'ReferralController::revokeQr/$1');
         });

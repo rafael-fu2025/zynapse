@@ -7,10 +7,13 @@ namespace Modules\Clinic\Services;
 use App\Exceptions\ApiException;
 use App\Modules\Shared\BaseService;
 use App\Services\Audit\AuditOutboxService;
+use App\Services\Kiosk\CheckinPurposeCatalog;
 use Config\Services;
 use DateTimeImmutable;
 use DateTimeZone;
 use Modules\Clinic\Policies\ClinicPolicy;
+use Modules\Counselling\Policies\CounsellingPolicy;
+use Modules\Counselling\Services\QueueService as CounsellingQueueService;
 
 /**
  * CheckinService — kiosk self-service check-in (Phase 17, recycled
@@ -23,10 +26,8 @@ use Modules\Clinic\Policies\ClinicPolicy;
  *   2. Duplicate guard: a non-duplicate check-in for the same patient
  *      within ±5 minutes of `scanned_at` short-circuits to a
  *      `duplicate` outcome (the legacy checkDuplicateSync window).
- *   3. A counselling appointment TODAY (scheduled/confirmed) wins:
- *      `scheduled` is confirmed in place; `confirmed` reports
- *      "already checked in". counselling_appointments is touched as
- *      shared reference data (UPDATE by logical key, never a JOIN).
+ *   3. The selected destination dispatches exclusively. Guidance checks
+ *      counselling appointments and its own queue; Clinic never does.
  *   4. A CLINIC appointment today in `scheduled` is checked in via the
  *      existing AppointmentService transition — the same path the
  *      Appointments screen uses — which auto-opens the linked
@@ -66,14 +67,19 @@ final class CheckinService extends BaseService
         $userId = \App\Auth\CurrentUser::assert();
 
         $method    = (string) ($input['method'] ?? 'manual');
+        $destination = (string) ($input['destination'] ?? '');
         $stationId = isset($input['station_id']) && $input['station_id'] !== '' ? (string) $input['station_id'] : 'Kiosk-01';
-        $purpose   = isset($input['purpose']) && $input['purpose'] !== '' ? mb_substr((string) $input['purpose'], 0, 120) : null;
+        $purpose   = CheckinPurposeCatalog::validate(
+            $destination,
+            (string) ($input['purpose'] ?? ''),
+            filter_var($input['custom_purpose'] ?? false, FILTER_VALIDATE_BOOL),
+        );
         $guestName = isset($input['guest_name']) ? trim((string) $input['guest_name']) : '';
         $scannedAt = isset($input['scanned_at']) && $input['scanned_at'] !== ''
             ? (string) $input['scanned_at']
             : $this->utcNow();
 
-        return $this->txn(function () use ($input, $method, $stationId, $purpose, $guestName, $scannedAt, $userId): array {
+        return $this->txn(function () use ($input, $destination, $method, $stationId, $purpose, $guestName, $scannedAt, $userId): array {
             // 0. Guest walk-in: a person with NO account / patient record
             //    checks in directly by name. patient_user_id + school id
             //    stay NULL; the name is recorded in guest_name.
@@ -86,18 +92,23 @@ final class CheckinService extends BaseService
             //    Names are normalized (case + whitespace) before
             //    comparison so "juan dela cruz" == "Juan Dela Cruz".
             if ($guestName !== '') {
+                if ($destination === 'counselling') {
+                    throw ApiException::validationFailure([
+                        ['code' => 'validation.field', 'message' => 'Guidance check-in requires a registered student or employee ID.', 'field' => 'guest_name'],
+                    ]);
+                }
                 $from = $this->shift($scannedAt, -self::DUPLICATE_WINDOW_SECONDS);
                 $to   = $this->shift($scannedAt, +self::DUPLICATE_WINDOW_SECONDS);
                 $dup  = $this->db->query(
                     'SELECT `id` FROM `clinic_checkins`'
-                    . ' WHERE `guest_name` IS NOT NULL AND `outcome` != ?'
+                    . ' WHERE `destination` = ? AND `guest_name` IS NOT NULL AND `outcome` != ?'
                     . ' AND LOWER(REPLACE(`guest_name`, \' \', \'\')) = LOWER(REPLACE(?, \' \', \'\'))'
                     . ' AND `scanned_at` BETWEEN ? AND ? LIMIT 1 FOR UPDATE',
-                    ['duplicate', $guestName, $from, $to],
+                    [$destination, 'duplicate', $guestName, $from, $to],
                 )->getRowArray();
                 if ($dup !== null) {
-                    $checkinId = $this->insertCheckin(null, null, $method, $stationId, 'duplicate', null, null, $userId, $scannedAt, $purpose, $guestName);
-                    return $this->result($checkinId, 'duplicate', null, 'guest', 'Already checked in within the last 5 minutes.', null, null, $guestName);
+                    $checkinId = $this->insertCheckin(null, null, $method, $stationId, 'duplicate', null, null, $userId, $scannedAt, $purpose, $guestName, $destination);
+                    return $this->result($checkinId, 'duplicate', null, 'guest', 'Already checked in within the last 5 minutes.', null, null, $guestName, $destination);
                 }
                 return $this->guestWalkIn($guestName, $method, $stationId, $purpose, $scannedAt, $userId);
             }
@@ -114,42 +125,94 @@ final class CheckinService extends BaseService
             $patientUserId = (int) $patient['id'];
             $schoolId = (string) ($kind === 'student' ? $patient['student_number'] : $patient['employee_number']);
 
+            // Serialize concurrent submissions for the same registered user;
+            // the subsequent duplicate/active-queue checks then see the first
+            // transaction's committed row instead of racing through a gap.
+            $this->db->query('SELECT `id` FROM `users` WHERE `id` = ? FOR UPDATE', [$patientUserId]);
+
             // 2. Legacy ±5-minute duplicate window (locked so two kiosks
             //    replaying the same buffered scan cannot both pass).
             $from = $this->shift($scannedAt, -self::DUPLICATE_WINDOW_SECONDS);
             $to   = $this->shift($scannedAt, +self::DUPLICATE_WINDOW_SECONDS);
             $dup  = $this->db->query(
                 'SELECT `id` FROM `clinic_checkins`'
-                . ' WHERE `patient_school_id` = ? AND `outcome` != ?'
+                . ' WHERE `destination` = ? AND `patient_school_id` = ? AND `outcome` != ?'
                 . ' AND `scanned_at` BETWEEN ? AND ? LIMIT 1 FOR UPDATE',
-                [$schoolId, 'duplicate', $from, $to],
+                [$destination, $schoolId, 'duplicate', $from, $to],
             )->getRowArray();
             if ($dup !== null) {
-                $checkinId = $this->insertCheckin($patientUserId, $schoolId, $method, $stationId, 'duplicate', null, null, $userId, $scannedAt, $purpose);
-                return $this->result($checkinId, 'duplicate', $patient, $kind, 'Already checked in within the last 5 minutes.', null, null);
+                $checkinId = $this->insertCheckin($patientUserId, $schoolId, $method, $stationId, 'duplicate', null, null, $userId, $scannedAt, $purpose, null, $destination);
+                return $this->result($checkinId, 'duplicate', $patient, $kind, 'Already checked in within the last 5 minutes.', null, null, null, $destination);
             }
 
-            // 3. Counselling appointment today wins (shared reference
-            //    data — UPDATE by logical key, never a JOIN).
-            $scanDate = substr($scannedAt, 0, 10);
-            $appt = $this->db->query(
-                'SELECT `id`, `status`, `start_time`, `end_time` FROM `counselling_appointments`'
-                . ' WHERE `patient_school_id` = ? AND `appointment_date` = ?'
-                . ' AND `status` IN (?, ?) ORDER BY `start_time` ASC LIMIT 1 FOR UPDATE',
-                [$schoolId, $scanDate, 'scheduled', 'confirmed'],
-            )->getRowArray();
+            $scanDate = (new \DateTimeImmutable($scannedAt, new \DateTimeZone('UTC')))
+                ->setTimezone(new \DateTimeZone('Asia/Manila'))->format('Y-m-d');
+            if ($destination === 'counselling') {
+                // Guidance dispatch is exclusive: only Counselling scheduling
+                // and queue tables are touched; no Clinic encounter exists.
+                $appointment = $this->db->query(
+                    'SELECT `id`, `status`, `start_time`, `end_time`, `counsellor_user_id` FROM `counselling_appointments`'
+                    . ' WHERE `patient_school_id` = ? AND `appointment_date` = ?'
+                    . ' AND `status` IN (?, ?) ORDER BY `start_time` ASC LIMIT 1 FOR UPDATE',
+                    [$schoolId, $scanDate, 'scheduled', 'confirmed'],
+                )->getRowArray();
+                $appointmentId = $appointment !== null ? (int) $appointment['id'] : null;
+                $outcome = 'counselling_queued';
+                $message = 'Added to the Guidance queue.';
 
-            if ($appt !== null) {
-                $window = substr((string) $appt['start_time'], 0, 5) . '–' . substr((string) $appt['end_time'], 0, 5);
-                if ((string) $appt['status'] === 'scheduled') {
-                    $this->db->table('counselling_appointments')
-                        ->where('id', (int) $appt['id'])
-                        ->update(['status' => 'confirmed', 'updated_at' => $this->utcNow()]);
-                    $checkinId = $this->insertCheckin($patientUserId, $schoolId, $method, $stationId, 'counselling_confirmed', (int) $appt['id'], null, $userId, $scannedAt, $purpose);
-                    return $this->result($checkinId, 'counselling_confirmed', $patient, $kind, "Counselling booking {$window} confirmed.", (int) $appt['id'], null);
+                if ($appointment !== null) {
+                    $window = substr((string) $appointment['start_time'], 0, 5) . '–' . substr((string) $appointment['end_time'], 0, 5);
+                    if ((string) $appointment['status'] === 'scheduled') {
+                        $this->db->table('counselling_appointments')
+                            ->where('id', $appointmentId)
+                            ->update(['status' => 'confirmed', 'updated_at' => $this->utcNow()]);
+                        $outcome = 'counselling_confirmed';
+                        $message = "Guidance booking {$window} confirmed and queued.";
+                    } else {
+                        $outcome = 'counselling_already';
+                        $message = "Guidance appointment {$window} was already confirmed; queue assignment retained.";
+                    }
                 }
-                $checkinId = $this->insertCheckin($patientUserId, $schoolId, $method, $stationId, 'counselling_already', (int) $appt['id'], null, $userId, $scannedAt, $purpose);
-                return $this->result($checkinId, 'counselling_already', $patient, $kind, "Counselling appointment {$window} already checked in.", (int) $appt['id'], null);
+
+                $checkinId = $this->insertCheckin(
+                    $patientUserId,
+                    $schoolId,
+                    $method,
+                    $stationId,
+                    $outcome,
+                    $appointmentId,
+                    null,
+                    $userId,
+                    $scannedAt,
+                    $purpose,
+                    null,
+                    $destination,
+                );
+                $guidance = new CounsellingQueueService(
+                    new CounsellingPolicy(),
+                    $this->audit,
+                    Services::notificationOutbox(),
+                );
+                $queue = $guidance->enqueueFromKiosk(
+                    $patientUserId,
+                    $schoolId,
+                    $appointmentId,
+                    $checkinId,
+                    $purpose,
+                    $appointment !== null ? (int) $appointment['counsellor_user_id'] : null,
+                );
+                $message .= " Queue number {$queue['queue_number']}.";
+                return $this->result(
+                    $checkinId,
+                    $outcome,
+                    $patient,
+                    $kind,
+                    $message,
+                    $appointmentId,
+                    $queue,
+                    null,
+                    $destination,
+                );
             }
 
             // 4. CLINIC appointment today (kiosk gap #1, panel revision):
@@ -316,6 +379,7 @@ final class CheckinService extends BaseService
             'guest_name'                 => $r['guest_name'] !== null ? (string) $r['guest_name'] : null,
             'method'                     => (string) $r['method'],
             'station_id'                 => $r['station_id'] !== null ? (string) $r['station_id'] : null,
+            'destination'                => (string) ($r['destination'] ?? 'clinic'),
             'outcome'                    => (string) $r['outcome'],
             'purpose'                    => $r['purpose'] !== null ? (string) $r['purpose'] : null,
             'counselling_appointment_id' => $r['counselling_appointment_id'] !== null ? (int) $r['counselling_appointment_id'] : null,
@@ -407,12 +471,14 @@ final class CheckinService extends BaseService
         string $scannedAt,
         ?string $purpose = null,
         ?string $guestName = null,
+        string $destination = 'clinic',
     ): int {
         $this->db->table('clinic_checkins')->insert([
             'patient_user_id'            => $patientUserId,
             'patient_school_id'          => $schoolId,
             'method'                     => $method,
             'station_id'                 => $stationId,
+            'destination'                => $destination,
             'outcome'                    => $outcome,
             'purpose'                    => $purpose,
             'guest_name'                 => $guestName,
@@ -429,6 +495,7 @@ final class CheckinService extends BaseService
         // never in the append-only audit context.
         $this->audit->enqueue('clinic.checkin_recorded', 'clinic_checkins', $id, $userId, [
             'outcome' => $outcome,
+            'destination' => $destination,
         ]);
 
         return $id;
@@ -440,7 +507,17 @@ final class CheckinService extends BaseService
      * @param array<string, int>|null   $queue
      * @return array<string, mixed>
      */
-    private function result(int $checkinId, string $outcome, ?array $patient, string $kind, string $message, ?int $appointmentId, ?array $queue, ?string $guestName = null): array
+    private function result(
+        int $checkinId,
+        string $outcome,
+        ?array $patient,
+        string $kind,
+        string $message,
+        ?int $appointmentId,
+        ?array $queue,
+        ?string $guestName = null,
+        string $destination = 'clinic',
+    ): array
     {
         // Severe-allergy alert (legacy hasSevereAllergy) — student
         // registry only (patient_allergies keys on student_id). The
@@ -473,6 +550,7 @@ final class CheckinService extends BaseService
 
         return [
             'id'      => $checkinId,
+            'destination' => $destination,
             'outcome' => $outcome,
             'message' => $message,
             'student' => [

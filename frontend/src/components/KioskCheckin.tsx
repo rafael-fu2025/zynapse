@@ -32,7 +32,7 @@ import {
 import { playChime, type ChimeKind } from '@/lib/chime';
 import { useScan } from '@/hooks/useCheckin';
 import type { ApiEnvelopeError } from '@/api/envelope';
-import { scanResultSchema, type BufferedScan, type CheckinOutcome, type ScanMethod, type ScanResult } from '@/schemas/checkin';
+import { scanResultSchema, type BufferedScan, type CheckinDestination, type CheckinOutcome, type ScanMethod, type ScanResult } from '@/schemas/checkin';
 
 const BUFFER_KEY = 'kiosk_offline_scans';
 const STATION_KEY = 'kiosk_station_id';
@@ -74,29 +74,33 @@ export function dashlessFallback(value: string): string | null {
 /** A scan outcome carries a queue assignment we can show in the modal. */
 export function hasQueueAssignment(result: ScanResult | null): boolean {
   if (result === null) return false;
-  if (result.outcome !== 'clinic_queued' && result.outcome !== 'clinic_appointment_confirmed') return false;
   if (result.queue === null) return false;
   return Number.isInteger(result.queue.position) && result.queue.position > 0;
 }
 
-/** Format a queue position as `C-001` (zero-padded to 3 digits). */
-export function formatQueueNumber(position: number): string {
-  if (!Number.isInteger(position) || position <= 0) return 'C-???';
-  return `C-${String(position).padStart(3, '0')}`;
+/** Format an unambiguous destination queue number. */
+export function formatQueueNumber(position: number, destination: CheckinDestination = 'clinic'): string {
+  const prefix = destination === 'counselling' ? 'G' : 'C';
+  if (!Number.isInteger(position) || position <= 0) return `${prefix}-???`;
+  return `${prefix}-${String(position).padStart(3, '0')}`;
 }
 
 export const OUTCOME_VARIANT: Record<CheckinOutcome, 'success' | 'info' | 'warning' | 'secondary'> = {
   counselling_confirmed: 'success',
+  counselling_queued: 'info',
   clinic_appointment_confirmed: 'success',
+  clinic_appointment_already: 'secondary',
   clinic_queued: 'info',
   counselling_already: 'secondary',
   duplicate: 'warning',
 };
 
 export const OUTCOME_LABEL: Record<CheckinOutcome, string> = {
-  counselling_confirmed: 'Counselling confirmed',
+  counselling_confirmed: 'Guidance appointment confirmed',
   counselling_already: 'Already checked in',
+  counselling_queued: 'Guidance queue',
   clinic_appointment_confirmed: 'Appointment checked in',
+  clinic_appointment_already: 'Already in Clinic queue',
   clinic_queued: 'Clinic queue',
   duplicate: 'Duplicate scan',
 };
@@ -104,7 +108,17 @@ export const OUTCOME_LABEL: Record<CheckinOutcome, string> = {
 function readBuffer(): BufferedScan[] {
   try {
     const raw = localStorage.getItem(BUFFER_KEY);
-    return raw !== null ? (JSON.parse(raw) as BufferedScan[]) : [];
+    if (raw === null) return [];
+    const rows = JSON.parse(raw) as Array<Partial<BufferedScan>>;
+    // Pre-destination buffered scans were Clinic-only. Preserve them by
+    // explicitly upgrading the local payload before replay.
+    return rows.map((row): BufferedScan => ({
+      ...row,
+      destination: row.destination ?? 'clinic',
+      method: row.method ?? 'manual',
+      station_id: row.station_id ?? 'Kiosk-01',
+      scanned_at: row.scanned_at ?? utcNowSql(),
+    }));
   } catch {
     return [];
   }
@@ -133,6 +147,8 @@ export interface ResolvedPatient {
 }
 
 export interface KioskController {
+  destination: CheckinDestination | null;
+  setDestination: (destination: CheckinDestination | null) => void;
   identifier: string;
   setIdentifier: (v: string) => void;
   method: ScanMethod;
@@ -151,7 +167,7 @@ export interface KioskController {
   clearError: () => void;
   submit: () => void;
   /** Submit a decoded value directly (camera scan path, gap #8). */
-  submitIdentifier: (id: string, method: ScanMethod, purpose?: string, asGuest?: boolean) => void;
+  submitIdentifier: (id: string, method: ScanMethod, purpose?: string, asGuest?: boolean, customPurpose?: boolean) => void;
   /** Submit a guest walk-in by name (no account / patient record). */
   submitGuest: (name: string, purpose?: string) => void;
   scanPending: boolean;
@@ -171,10 +187,16 @@ export interface KioskController {
   /** Selected check-in purpose (station mode). */
   purpose: string;
   setPurpose: (p: string) => void;
+  customPurpose: boolean;
+  setCustomPurpose: (custom: boolean) => void;
 }
 
-export function useKioskController(autoClearSeconds = 15): KioskController {
+export function useKioskController(
+  autoClearSeconds = 15,
+  initialDestination: CheckinDestination | null = 'clinic',
+): KioskController {
   const scan = useScan();
+  const [destination, setDestinationState] = useState<CheckinDestination | null>(initialDestination);
   const [identifier, setIdentifierState] = useState('');
   const [method, setMethod] = useState<ScanMethod>('manual');
   // Station id persists across sessions (gap #7).
@@ -191,6 +213,7 @@ export function useKioskController(autoClearSeconds = 15): KioskController {
   const [focused, setFocused] = useState(false);
   const [resolvedPatient, setResolvedPatient] = useState<ResolvedPatient | null>(null);
   const [purpose, setPurpose] = useState('');
+  const [customPurpose, setCustomPurpose] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const flashTimer = useRef<ReturnType<typeof setTimeout>>();
 
@@ -225,18 +248,34 @@ export function useKioskController(autoClearSeconds = 15): KioskController {
         if (s <= 1) {
           clearInterval(iv);
           setResult(null);
+          setDestinationState(initialDestination);
+          setIdentifierState('');
+          setResolvedPatient(null);
+          setPurpose('');
+          setCustomPurpose(false);
           return 0;
         }
         return s - 1;
       });
     }, 1000);
     return () => clearInterval(iv);
-  }, [result, autoClearSeconds]);
+  }, [result, autoClearSeconds, initialDestination]);
+
+  const setDestination = useCallback((next: CheckinDestination | null) => {
+    setDestinationState(next);
+    setPurpose('');
+    setCustomPurpose(false);
+    setScanError(null);
+  }, []);
 
   const submitIdentifier = useCallback(
-    (rawId: string, m: ScanMethod, purposeOverride?: string, asGuest = false) => {
+    (rawId: string, m: ScanMethod, purposeOverride?: string, asGuest = false, customPurposeOverride = customPurpose) => {
       const id = normalizeKioskIdentifier(rawId, m);
       if (id === '') return;
+      if (destination === null) {
+        setScanError('Choose Guidance or Clinic before checking in.');
+        return;
+      }
       // Clear any prior inline error so a fresh attempt starts clean.
       setScanError(null);
       const runAttempt = (attemptId: string): Promise<unknown> =>
@@ -244,15 +283,19 @@ export function useKioskController(autoClearSeconds = 15): KioskController {
           asGuest
             ? {
                 guest_name: attemptId,
+                destination,
                 method: m,
                 station_id: station,
                 purpose: purposeOverride ?? undefined,
+                custom_purpose: customPurposeOverride,
               }
             : {
                 identifier: attemptId,
+                destination,
                 method: m,
                 station_id: station,
                 purpose: purposeOverride ?? undefined,
+                custom_purpose: customPurposeOverride,
               },
         );
       const attempt = async (first: string, retry: string | null): Promise<unknown> => {
@@ -303,16 +346,20 @@ export function useKioskController(autoClearSeconds = 15): KioskController {
               asGuest
                 ? {
                     guest_name: id,
+                    destination,
                     method: m,
                     station_id: station,
                     ...(purposeOverride !== undefined ? { purpose: purposeOverride } : {}),
+                    custom_purpose: customPurposeOverride,
                     scanned_at: utcNowSql(),
                   }
                 : {
                     identifier: id,
+                    destination,
                     method: m,
                     station_id: station,
                     ...(purposeOverride !== undefined ? { purpose: purposeOverride } : {}),
+                    custom_purpose: customPurposeOverride,
                     scanned_at: utcNowSql(),
                   },
             );
@@ -321,6 +368,8 @@ export function useKioskController(autoClearSeconds = 15): KioskController {
             setIdentifierState('');
             setResolvedPatient(null);
             setPurpose('');
+            setCustomPurpose(false);
+            setDestinationState(initialDestination);
             toast.warning('Offline — scan buffered locally.');
             return;
           }
@@ -333,7 +382,7 @@ export function useKioskController(autoClearSeconds = 15): KioskController {
           inputRef.current?.focus();
         });
     },
-    [scan, station, feedback],
+    [scan, station, feedback, destination, customPurpose, initialDestination],
   );
 
   const submit = useCallback(
@@ -343,22 +392,22 @@ export function useKioskController(autoClearSeconds = 15): KioskController {
       // check in by name. The scan path falls through to the raw input.
       if (resolvedPatient !== null) {
         if (resolvedPatient.kind === 'guest') {
-          submitIdentifier(resolvedPatient.name, 'manual', purpose, true);
+          submitIdentifier(resolvedPatient.name, 'manual', purpose, true, customPurpose);
         } else {
-          submitIdentifier(resolvedPatient.schoolId ?? '', 'manual', purpose);
+          submitIdentifier(resolvedPatient.schoolId ?? '', 'manual', purpose, false, customPurpose);
         }
       } else {
-        submitIdentifier(identifier, method, purpose);
+        submitIdentifier(identifier, method, purpose, false, customPurpose);
       }
     },
-    [submitIdentifier, identifier, method, purpose, resolvedPatient],
+    [submitIdentifier, identifier, method, purpose, resolvedPatient, customPurpose],
   );
 
   const submitGuest = useCallback(
     (name: string, purposeOverride?: string) => {
-      submitIdentifier(name, 'manual', purposeOverride, true);
+      submitIdentifier(name, 'manual', purposeOverride, true, customPurpose);
     },
-    [submitIdentifier],
+    [submitIdentifier, customPurpose],
   );
 
   const syncBuffer = useCallback(async () => {
@@ -378,11 +427,13 @@ export function useKioskController(autoClearSeconds = 15): KioskController {
         if (s.guest_name !== undefined && s.guest_name !== '') {
           await scan.mutateAsync({
             ...s,
+            custom_purpose: s.custom_purpose ?? false,
             guest_name: normalizeKioskIdentifier(s.guest_name, 'manual'),
           });
         } else {
           await scan.mutateAsync({
             ...s,
+            custom_purpose: s.custom_purpose ?? false,
             identifier: normalizeKioskIdentifier(s.identifier ?? '', s.method),
           });
         }
@@ -420,6 +471,8 @@ export function useKioskController(autoClearSeconds = 15): KioskController {
   }, []);
 
   return {
+    destination,
+    setDestination,
     identifier,
     setIdentifier,
     method,
@@ -431,6 +484,11 @@ export function useKioskController(autoClearSeconds = 15): KioskController {
     clearResult: () => {
       setResult(null);
       setScanError(null);
+      setDestinationState(initialDestination);
+      setIdentifierState('');
+      setResolvedPatient(null);
+      setPurpose('');
+      setCustomPurpose(false);
     },
     scanError,
     clearError: () => setScanError(null),
@@ -451,6 +509,8 @@ export function useKioskController(autoClearSeconds = 15): KioskController {
     setResolvedPatient,
     purpose,
     setPurpose,
+    customPurpose,
+    setCustomPurpose,
   };
 }
 
@@ -501,7 +561,7 @@ export function ScanErrorBanner({
 /**
  * Queue assignment dialog — shown after a successful walk-in or
  * appointment check-in so the patient walks away with their assigned
- * queue number (formatted `C-001`). The "Done" button hands control
+ * destination queue number (for example `C-001` or `G-001`). The "Done" button hands control
  * back to the next kiosk user.
  */
 export function QueueAssignmentDialog({
@@ -519,6 +579,8 @@ export function QueueAssignmentDialog({
     result !== null && result.queue !== null && result.queue.estimated_wait_minutes !== undefined
       ? result.queue.estimated_wait_minutes
       : null;
+  const queueNumber = result?.queue?.queue_number
+    ?? formatQueueNumber(position, result?.destination ?? 'clinic');
   return (
     <Dialog
       open={open}
@@ -547,12 +609,12 @@ export function QueueAssignmentDialog({
                 {result.student.name}
               </p>
               <p
-                aria-label={`Queue number ${formatQueueNumber(position)}`}
+                aria-label={`Queue number ${queueNumber}`}
                 className={`font-mono font-bold tabular-nums text-primary ${
                   large ? 'text-8xl leading-none' : 'text-6xl leading-none'
                 }`}
               >
-                {formatQueueNumber(position)}
+                {queueNumber}
               </p>
               {waitMinutes !== null && (
                 <p className={large ? 'text-base text-muted-foreground' : 'text-sm text-muted-foreground'}>

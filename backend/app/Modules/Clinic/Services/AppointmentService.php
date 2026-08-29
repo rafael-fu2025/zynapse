@@ -37,7 +37,7 @@ final class AppointmentService extends BaseService
         'checked_in' => ['scheduled'],
         'completed'  => ['checked_in'],
         'cancelled'  => ['scheduled', 'checked_in'],
-        'no_show'    => ['scheduled'],
+        'no_show'    => ['scheduled', 'checked_in'],
     ];
 
     public function __construct(
@@ -333,8 +333,11 @@ final class AppointmentService extends BaseService
             $this->notify->enqueue(
                 $providerUserId,
                 'appointment.assigned',
-                ['resource_code' => 'appointment#' . $id, 'scheduled_at' => $scheduledAtUtc],
+                ['resource_code' => 'appointment#' . $id, 'scheduled_at' => $scheduledAtUtc, 'appointment_at' => $scheduledAtUtc, 'appointment_status' => 'scheduled', 'destination' => 'clinic'],
             );
+            if ($patientUserId !== null && $patientUserId !== $providerUserId) {
+                $this->notify->enqueue($patientUserId, 'appointment.scheduled', ['resource_code' => 'appointment#' . $id, 'appointment_at' => $scheduledAtUtc, 'appointment_status' => 'scheduled', 'destination' => 'clinic']);
+            }
 
             $row = $this->db->table('clinic_appointments')->where('id', $id)->get()->getRowArray();
             return AppointmentDto::fromRow($this->decorate([$row])[0])->withQrToken($plain);
@@ -415,8 +418,11 @@ final class AppointmentService extends BaseService
             $this->notify->enqueue(
                 $providerUserId,
                 'appointment.assigned',
-                ['resource_code' => 'appointment#' . $id, 'scheduled_at' => $scheduledAtUtc],
+                ['resource_code' => 'appointment#' . $id, 'scheduled_at' => $scheduledAtUtc, 'appointment_at' => $scheduledAtUtc, 'appointment_status' => 'scheduled', 'destination' => 'clinic'],
             );
+            if ($patientUserId !== $providerUserId) {
+                $this->notify->enqueue($patientUserId, 'appointment.scheduled', ['resource_code' => 'appointment#' . $id, 'appointment_at' => $scheduledAtUtc, 'appointment_status' => 'scheduled', 'destination' => 'clinic']);
+            }
 
             $row = $this->db->table('clinic_appointments')->where('id', $id)->get()->getRowArray();
             return AppointmentDto::fromRow($this->decorate([$row])[0])->withQrToken($plain);
@@ -631,6 +637,12 @@ final class AppointmentService extends BaseService
             if ($nextStatus === 'checked_in') {
                 $this->openEncounterForAppointment($row, $userId, $now);
             }
+            if (in_array($nextStatus, ['cancelled', 'no_show'], true)) {
+                $encounter = $this->db->table('clinic_encounters')->select('id')->where('appointment_id', $appointmentId)->get()->getRowArray();
+                if ($encounter !== null) {
+                    $this->db->table('clinic_queue_entries')->where('encounter_id', (int) $encounter['id'])->whereIn('status', ['waiting','called'])->update(['status'=>'skipped','finished_at'=>$now,'updated_at'=>$now]);
+                }
+            }
 
             $this->audit->enqueue(
                 'clinic.appointment_' . strtolower($nextStatus),
@@ -639,6 +651,9 @@ final class AppointmentService extends BaseService
                 $userId,
                 ['previous_status' => (string) $row['status'], 'next_status' => $nextStatus],
             );
+            foreach (array_unique(array_filter([(int) ($row['patient_user_id'] ?? 0), (int) $row['provider_user_id']])) as $recipient) {
+                $this->notify->enqueue($recipient, 'appointment.' . $nextStatus, ['resource_code'=>'appointment#'.$appointmentId,'appointment_at'=>(string)$row['scheduled_at'],'appointment_status'=>$nextStatus,'destination'=>'clinic']);
+            }
 
             $fresh = $this->db->table('clinic_appointments')->where('id', $appointmentId)->get()->getRowArray();
             return AppointmentDto::fromRow($this->decorate([$fresh])[0]);
@@ -685,14 +700,16 @@ final class AppointmentService extends BaseService
 
         // Row-locked MAX(position) — same discipline as QueueService /
         // CheckinService so kiosk and desk check-ins never collide.
+        $queueDate = (new DateTimeImmutable((string) $appt['scheduled_at'], new DateTimeZone('UTC')))
+            ->setTimezone(new DateTimeZone('Asia/Manila'))->format('Y-m-d');
         $last = $this->db->query(
             'SELECT `position` FROM `clinic_queue_entries` WHERE `queue_date` = ? ORDER BY `position` DESC LIMIT 1 FOR UPDATE',
-            [substr($now, 0, 10)],
+            [$queueDate],
         )->getRowArray();
         $position = ($last !== null ? (int) $last['position'] : 0) + 1;
         $this->db->table('clinic_queue_entries')->insert([
             'encounter_id' => $encounterId,
-            'queue_date'   => substr($now, 0, 10),
+            'queue_date'   => $queueDate,
             'position'     => $position,
             'status'       => 'waiting',
             'created_at'   => $now,
@@ -811,14 +828,20 @@ final class AppointmentService extends BaseService
             // changed. Same-transaction guarantee: the row in the
             // notification matches the row the user just saved.
             if (in_array('provider_user_id', $changed, true) || in_array('scheduled_at', $changed, true)) {
+                $slot = (string) ($update['scheduled_at'] ?? $row['scheduled_at']);
                 $this->notify->enqueue(
                     (int) ($update['provider_user_id'] ?? $row['provider_user_id']),
-                    'appointment.assigned',
+                    'appointment.rescheduled',
                     [
                         'resource_code' => 'appointment#' . $appointmentId,
-                        'scheduled_at'   => (string) ($update['scheduled_at'] ?? $row['scheduled_at']),
+                        'scheduled_at' => $slot, 'appointment_at' => $slot,
+                        'appointment_status' => 'scheduled', 'destination' => 'clinic',
                     ],
                 );
+                $patientId = (int) ($update['patient_user_id'] ?? $row['patient_user_id'] ?? 0);
+                if ($patientId > 0) {
+                    $this->notify->enqueue($patientId, 'appointment.rescheduled', ['resource_code'=>'appointment#'.$appointmentId,'appointment_at'=>$slot,'appointment_status'=>'scheduled','destination'=>'clinic']);
+                }
             }
 
             $fresh = $this->db->table('clinic_appointments')->where('id', $appointmentId)->get()->getRowArray();
@@ -849,17 +872,17 @@ final class AppointmentService extends BaseService
     public function autoCheckInTodaysPending(): int
     {
         $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
-        $today = substr($now, 0, 10);
-        $tomorrow = (new DateTimeImmutable('today', new DateTimeZone('UTC')))
-            ->modify('+1 day')
-            ->format('Y-m-d');
+        $dueAt = (new DateTimeImmutable('now', new DateTimeZone('UTC')))
+            ->modify('+15 minutes')->format('Y-m-d H:i:s');
+        $localStartUtc = (new DateTimeImmutable('today', new DateTimeZone('Asia/Manila')))
+            ->setTimezone(new DateTimeZone('UTC'))->format('Y-m-d H:i:s');
 
         $ids = $this->db->table('clinic_appointments')
             ->select('id')
             ->where('status', 'scheduled')
             ->where('archived_at', null)
-            ->where('scheduled_at >=', $today . ' 00:00:00')
-            ->where('scheduled_at <',  $tomorrow . ' 00:00:00')
+            ->where('scheduled_at >=', $localStartUtc)
+            ->where('scheduled_at <=', $dueAt)
             ->orderBy('id', 'ASC')
             ->get()
             ->getResultArray();

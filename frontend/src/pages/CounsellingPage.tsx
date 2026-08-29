@@ -10,6 +10,7 @@
  */
 import { zodResolver } from '@hookform/resolvers/zod';
 import {
+  ArrowRight,
   ArrowDown,
   ArrowUp,
   ArrowUpDown,
@@ -30,14 +31,19 @@ import {
   UserX,
   X,
 } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useForm } from 'react-hook-form';
+import { Link, useSearchParams } from 'react-router-dom';
+import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { ConfirmDialog, type ConfirmAction } from '@/components/ConfirmDialog';
 import { CounsellingPatientPicker } from '@/components/CounsellingPatientPicker';
+import { SessionProgressTracker, type SessionProgressStep } from '@/components/SessionProgressTracker';
 import { QueryErrorRow } from '@/components/QueryErrorState';
-import { useTabParam } from '@/hooks/useTabParam';
+import { useGuidanceCallNext, useGuidanceQueueToday, useGuidanceQueueTransition, useGuidanceRepairSession } from '@/hooks/useQueue';
+import { useCreateContextualReferral } from '@/hooks/useReferrals';
+import { hasPermission, useAuthStore } from '@/store/auth';
 import { DatePicker } from '@/components/ui/date-picker';
 import { TimePicker } from '@/components/ui/time-picker';
 import {
@@ -77,6 +83,7 @@ import {
   useCloseSession,
   useNotes,
   useOpenSession,
+  useSession,
   useSessions,
   useWriteNotes,
 } from '@/hooks/useCounselling';
@@ -85,6 +92,7 @@ import {
   useAppointments,
   useAppointmentTransition,
   useAvailability,
+  useCounsellors,
   useBookAppointment,
   useRecomputeAnalytics,
   useRemoveSlot,
@@ -95,8 +103,10 @@ import {
   writeNotesSchema,
   type OpenSessionInput,
   type Session,
+  type SessionDetail,
   type WriteNotesInput,
 } from '@/schemas/counselling';
+import { referralSchema, type Referral } from '@/schemas/referrals';
 import {
   addSlotSchema,
   APPOINTMENT_STATUSES,
@@ -232,7 +242,67 @@ function WriteNotesDialog({ session, onClose }: { session: Session; onClose: () 
   );
 }
 
-function SessionsTab() {
+function GuidanceClinicReferralDialog({ session, onClose }: { session: SessionDetail; onClose: () => void }) {
+  const create = useCreateContextualReferral({ module: 'counselling', sessionId: session.id });
+  const [result, setResult] = useState<Referral | null>(null);
+  const [duplicate, setDuplicate] = useState<Referral | null>(null);
+  const { register, handleSubmit, formState: { errors } } = useForm<{ reason_code?: string; notes_plaintext?: string }>({
+    defaultValues: {
+      reason_code: '',
+      notes_plaintext: '',
+    },
+  });
+
+  const submit = handleSubmit((values) => {
+    create.mutate(values, {
+      onSuccess: (created) => setResult(created),
+      onError: (error) => {
+        const candidate = error.errors[0]?.details?.referral;
+        const parsed = referralSchema.safeParse(candidate);
+        if (parsed.success) setDuplicate(parsed.data);
+      },
+    });
+  });
+  const shown = result ?? duplicate;
+
+  return <DialogContent>
+    <DialogHeader><DialogTitle>Refer patient to Clinic</DialogTitle></DialogHeader>
+    {shown !== null ? <div className="space-y-4">
+      <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-4">
+        <p className="font-medium">Referral #{shown.id}</p>
+        <p className="text-sm text-muted-foreground">Status: {shown.status.replace('_', ' ')}</p>
+        <p className="mt-2 text-sm">The Guidance session remains active. Clinic acknowledgement, review, and queue handoff remain separate actions.</p>
+      </div>
+      <DialogFooter>
+        <Button asChild variant="outline"><Link to="/referrals">Open Referrals</Link></Button>
+        <Button onClick={onClose}>Continue session</Button>
+      </DialogFooter>
+    </div> : <form noValidate onSubmit={(event) => void submit(event)} className="space-y-4">
+      <div className="rounded-lg border bg-muted/30 p-3 text-sm">
+        <p className="font-medium">{session.patient_display_name}</p>
+        <p className="font-mono text-xs text-muted-foreground">{session.patient_school_id}</p>
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        <div className="space-y-1.5"><Label htmlFor="guidance-referral-from">From</Label><Input id="guidance-referral-from" value="Guidance" readOnly disabled /></div>
+        <div className="space-y-1.5"><Label htmlFor="guidance-referral-to">To</Label><Input id="guidance-referral-to" value="Clinic" readOnly disabled /></div>
+      </div>
+      <div className="space-y-1.5"><Label htmlFor="guidance-referral-artifact">Artifact</Label><Input id="guidance-referral-artifact" value="Referral letter" readOnly disabled /></div>
+      <div className="space-y-1.5">
+        <Label htmlFor="guidance-referral-reason">Reason (optional)</Label>
+        <Input id="guidance-referral-reason" {...register('reason_code', { maxLength: 64 })} aria-invalid={errors.reason_code !== undefined} />
+        {errors.reason_code !== undefined && <p role="alert" className="text-xs text-destructive">Reason is too long.</p>}
+      </div>
+      <div className="space-y-1.5">
+        <Label htmlFor="guidance-referral-notes">Referral notes (optional)</Label>
+        <Textarea id="guidance-referral-notes" {...register('notes_plaintext', { maxLength: 8192 })} placeholder="Share only information needed by Clinic. Session notes are not copied." />
+        {errors.notes_plaintext !== undefined && <p role="alert" className="text-xs text-destructive">Referral notes are too long.</p>}
+      </div>
+      <DialogFooter><Button type="button" variant="outline" onClick={onClose}>Cancel</Button><Button type="submit" disabled={create.isPending}>{create.isPending && <Loader2 className="animate-spin" />}Submit referral</Button></DialogFooter>
+    </form>}
+  </DialogContent>;
+}
+
+function SessionsTab({ selectedId, onSelect }: { selectedId: number | null; onSelect: (id: number | null) => void }) {
   const [cursor, setCursor] = useState<string | null>(null);
   const [history, setHistory] = useState<Array<string | null>>([null]);
   const [openOpen, setOpenOpen] = useState(false);
@@ -240,12 +310,30 @@ function SessionsTab() {
   // the write dialog: clicking a row selects it, and the explicit
   // "Write" button opens the dialog. Closing the dialog keeps the
   // selection so the decrypted history stays visible.
-  const [selected, setSelected] = useState<Session | null>(null);
   const [writeOpen, setWriteOpen] = useState(false);
+  const [referOpen, setReferOpen] = useState(false);
+  const [progressStep, setProgressStep] = useState('notes');
   const [closingId, setClosingId] = useState<number | null>(null);
   const sessions = useSessions(cursor, 25);
-  const notes = useNotes(selected?.id ?? 0);
+  const detail = useSession(selectedId);
+  const selected = detail.data ?? null;
+  const notes = useNotes(selectedId ?? 0);
   const close = useCloseSession();
+  const workspaceRef = useRef<HTMLElement>(null);
+  const authState = useAuthStore();
+  const canRefer = hasPermission(authState, 'referrals.create');
+
+  useEffect(() => {
+    if (detail.data !== undefined) workspaceRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, [detail.data]);
+  useEffect(() => { setProgressStep('notes'); }, [selectedId]);
+
+  const progressSteps: SessionProgressStep[] = selected === null ? [] : [
+    { id: 'started', label: 'Session Started', state: 'complete', summary: selected.queue_number ?? `Session #${selected.id}` },
+    { id: 'notes', label: 'Session Notes', state: selected.note_count > 0 ? 'complete' : selected.ended_at === null ? 'current' : 'available', summary: selected.note_count > 0 ? `${selected.note_count} note${selected.note_count === 1 ? '' : 's'}` : 'No notes yet' },
+    { id: 'referral', label: 'Referral', state: !canRefer ? 'unavailable' : selected.outgoing_referral !== null ? 'complete' : 'optional', summary: selected.outgoing_referral !== null ? `#${selected.outgoing_referral.id} · ${selected.outgoing_referral.status.replace('_', ' ')}` : canRefer ? 'When Clinic care is needed' : 'Permission required' },
+    { id: 'complete', label: 'Complete', state: selected.ended_at !== null ? 'complete' : 'available', summary: selected.ended_at !== null ? fmtUtcToApp(selected.ended_at) : 'Finish session' },
+  ];
 
   function nextPage() {
     if (sessions.data?.next !== null && sessions.data?.next !== undefined) {
@@ -306,8 +394,8 @@ function SessionsTab() {
               {sessions.data?.data.map((s) => (
                 <TableRow
                   key={s.id}
-                  className={`cursor-pointer ${selected?.id === s.id ? 'bg-accent/40' : ''}`}
-                  onClick={() => setSelected(s)}
+                  className={`cursor-pointer ${selectedId === s.id ? 'bg-accent/40' : ''}`}
+                  onClick={() => onSelect(s.id)}
                 >
                   <TableCell className="px-3 font-mono text-xs">{s.id}</TableCell>
                   <TableCell className="px-3 font-mono text-xs">{s.patient_school_id}</TableCell>
@@ -319,11 +407,10 @@ function SessionsTab() {
                     <Button
                       size="sm"
                       variant="outline"
-                      aria-label={`Close session #${s.id}`}
-                      disabled={s.ended_at !== null || close.isPending}
-                      onClick={(ev) => { ev.stopPropagation(); setClosingId(s.id); }}
+                      aria-label={`${s.ended_at === null ? 'Open' : 'View'} session #${s.id}`}
+                      onClick={(ev) => { ev.stopPropagation(); onSelect(s.id); }}
                     >
-                      Close
+                      Open
                     </Button>
                   </TableCell>
                 </TableRow>
@@ -348,31 +435,45 @@ function SessionsTab() {
           </nav>
         </article>
 
-        <article className="overflow-hidden rounded-xl border bg-card">
+        <article ref={workspaceRef} className="overflow-hidden rounded-xl border bg-card scroll-mt-6">
           <header className="flex items-center justify-between border-b px-3 py-2">
             <p className="text-sm font-semibold text-foreground">
-              Notes {selected !== null ? `— session #${selected.id}` : ''}
+              Active Session {selected !== null ? `— #${selected.id}` : ''}
             </p>
-            {selected !== null && (
-              <Dialog open={writeOpen} onOpenChange={setWriteOpen}>
-                <Button size="sm" onClick={() => setWriteOpen(true)}>
-                  <Plus /> Write
-                </Button>
-                {writeOpen && <WriteNotesDialog session={selected} onClose={() => setWriteOpen(false)} />}
-              </Dialog>
-            )}
+            {selectedId !== null && <Button size="sm" variant="ghost" onClick={() => onSelect(null)}><X /> Close workspace</Button>}
           </header>
-          <div className="max-h-[480px] space-y-3 overflow-auto p-3">
-            {selected === null && (
+          <div className="space-y-3 p-3">
+            {selectedId === null && (
               <p className="text-sm text-muted-foreground">Select a session to view its encrypted notes.</p>
             )}
-            {selected !== null && notes.isLoading && (
+            {selectedId !== null && detail.isLoading && <Loader2 className="mx-auto size-4 animate-spin text-muted-foreground" />}
+            {selectedId !== null && detail.isError && <div role="alert" className="rounded-lg border border-destructive/40 p-3 text-sm"><p>{detail.error.errors[0]?.message ?? 'This session could not be opened.'}</p><div className="mt-2 flex gap-2"><Button size="sm" variant="outline" onClick={() => void detail.refetch()}>Retry</Button><Button size="sm" variant="ghost" onClick={() => onSelect(null)}>Clear selection</Button></div></div>}
+            {selected !== null && <>
+              <SessionProgressTracker steps={progressSteps} selected={progressStep} onSelect={setProgressStep} />
+              <div className="rounded-lg border bg-muted/20 p-3">
+                <div className="flex flex-wrap items-start justify-between gap-2"><div><p className="font-medium">{selected.patient_display_name}</p><p className="font-mono text-xs text-muted-foreground">{selected.patient_school_id}</p></div><Badge variant={selected.ended_at === null ? 'success' : 'secondary'}>{selected.ended_at === null ? 'Active' : 'Closed'}</Badge></div>
+                <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 text-xs">
+                  <div><dt className="text-muted-foreground">Queue</dt><dd>{selected.queue_number ?? 'Manual session'}</dd></div>
+                  <div><dt className="text-muted-foreground">Started</dt><dd>{fmtUtcToApp(selected.started_at)}</dd></div>
+                  <div><dt className="text-muted-foreground">Purpose</dt><dd>{selected.purpose ?? '—'}</dd></div>
+                  <div><dt className="text-muted-foreground">Appointment</dt><dd>{selected.appointment_id !== null ? `#${selected.appointment_id}` : '—'}</dd></div>
+                  <div><dt className="text-muted-foreground">Incoming referral</dt><dd>{selected.incoming_referral_id !== null ? `#${selected.incoming_referral_id}` : '—'}</dd></div>
+                  <div><dt className="text-muted-foreground">Session</dt><dd>#{selected.id}</dd></div>
+                </dl>
+              </div>
+              {selected.ended_at === null && progressStep === 'notes' && <div className="flex flex-wrap gap-2">
+                <Dialog open={writeOpen} onOpenChange={setWriteOpen}><Button size="sm" onClick={() => setWriteOpen(true)}><Plus /> Write Note</Button>{writeOpen && <WriteNotesDialog session={selected} onClose={() => setWriteOpen(false)} />}</Dialog>
+              </div>}
+              {progressStep === 'referral' && <div className="rounded-lg border p-3"><p className="text-sm font-medium">Clinic referral</p>{selected.outgoing_referral !== null ? <p className="mt-1 text-sm text-muted-foreground">Referral #{selected.outgoing_referral.id} is {selected.outgoing_referral.status.replace('_', ' ')}. The session remains independent from its handoff lifecycle.</p> : <p className="mt-1 text-sm text-muted-foreground">Optional. Refer only when Clinic follow-up is needed.</p>}{selected.ended_at === null && canRefer && selected.outgoing_referral === null && <Dialog open={referOpen} onOpenChange={setReferOpen}><Button className="mt-3" size="sm" variant="outline" onClick={() => setReferOpen(true)}><ArrowRight /> Refer Clinic</Button>{referOpen && <GuidanceClinicReferralDialog session={selected} onClose={() => setReferOpen(false)} />}</Dialog>}</div>}
+              {progressStep === 'complete' && <div className="rounded-lg border p-3"><p className="text-sm font-medium">Finish this session</p><p className="mt-1 text-sm text-muted-foreground">Review the session record before completing. Referral is optional and remains open after session completion.</p>{selected.ended_at === null && <Button className="mt-3" size="sm" variant="destructive" onClick={() => setClosingId(selected.id)}>{selected.queue_entry_id !== null ? 'Complete Session' : 'Close Session'}</Button>}</div>}
+            </>}
+            {selected !== null && progressStep === 'notes' && notes.isLoading && (
               <Loader2 className="mx-auto size-4 animate-spin text-muted-foreground" />
             )}
-            {selected !== null && !notes.isLoading && (notes.data?.length ?? 0) === 0 && (
+            {selected !== null && progressStep === 'notes' && !notes.isLoading && (notes.data?.length ?? 0) === 0 && (
               <p className="text-sm text-muted-foreground">No notes yet.</p>
             )}
-            {selected !== null && notes.data?.map((n) => (
+            {selected !== null && progressStep === 'notes' && notes.data?.map((n) => (
               <section key={n.created_at} className="rounded-md border p-3">
                 <header className="flex items-center justify-between">
                   <p className="text-[10px] text-muted-foreground">{fmtUtcToApp(n.created_at)}</p>
@@ -387,12 +488,12 @@ function SessionsTab() {
 
       <ConfirmDialog
         open={closingId !== null}
-        title={closingId !== null ? `Close session #${closingId}?` : ''}
-        description="Closing a session is final and cannot be reopened."
-        confirmLabel="Close session"
+        title={closingId !== null ? `${selected?.queue_entry_id !== null ? 'Complete' : 'Close'} session #${closingId}?` : ''}
+        description={selected?.queue_entry_id !== null ? 'This completes the Guidance queue entry, closes the session, and completes its linked confirmed appointment.' : 'Closing a session is final and cannot be reopened.'}
+        confirmLabel={selected?.queue_entry_id !== null ? 'Complete session' : 'Close session'}
         pending={close.isPending}
         onConfirm={() => {
-          if (closingId !== null) close.mutate(closingId, { onSuccess: () => setClosingId(null) });
+          if (closingId !== null) close.mutate(closingId, { onSuccess: () => { setClosingId(null); onSelect(null); } });
         }}
         onCancel={() => setClosingId(null)}
       />
@@ -404,6 +505,9 @@ function SessionsTab() {
 
 function AddSlotDialog({ onClose }: { onClose: () => void }) {
   const add = useAddSlot();
+  const counsellors = useCounsellors();
+  const auth = useAuthStore();
+  const team = hasPermission(auth, 'counselling.schedule.team_manage');
   const { register, handleSubmit, formState: { errors }, reset, setValue, watch } =
     useForm<AddSlotInput>({
       resolver: zodResolver(addSlotSchema),
@@ -427,6 +531,7 @@ function AddSlotDialog({ onClose }: { onClose: () => void }) {
         <DialogTitle>Add availability window</DialogTitle>
       </DialogHeader>
       <form noValidate onSubmit={(e) => void onSubmit(e)} className="space-y-3">
+        {team && <div className="space-y-1.5"><Label>Counsellor</Label><Select value={watch('counsellor_user_id') ? String(watch('counsellor_user_id')) : ''} onValueChange={(v)=>setValue('counsellor_user_id',Number(v),{shouldValidate:true})}><SelectTrigger><SelectValue placeholder="Select counsellor" /></SelectTrigger><SelectContent>{(counsellors.data??[]).map(c=><SelectItem key={c.id} value={String(c.id)}>{c.name}</SelectItem>)}</SelectContent></Select></div>}
         <div className="space-y-1.5">
           <Label id="slot-dow-label">Day of week</Label>
           <Select
@@ -478,6 +583,7 @@ function AddSlotDialog({ onClose }: { onClose: () => void }) {
 function BookAppointmentDialog({ onClose }: { onClose: () => void }) {
   const book = useBookAppointment();
   const availability = useAvailability();
+  const counsellors = useCounsellors();
   const { register, handleSubmit, formState: { errors }, reset, setValue, watch } =
     useForm<BookAppointmentInput>({
       resolver: zodResolver(bookAppointmentSchema),
@@ -539,7 +645,7 @@ function BookAppointmentDialog({ onClose }: { onClose: () => void }) {
             </SelectTrigger>
             <SelectContent>
               {counsellorIds.map((id) => (
-                <SelectItem key={id} value={String(id)}>Counsellor #{id}</SelectItem>
+                <SelectItem key={id} value={String(id)}>{counsellors.data?.find(c=>c.id===id)?.name ?? `Counsellor #${id}`}</SelectItem>
               ))}
             </SelectContent>
           </Select>
@@ -777,6 +883,8 @@ function AvailabilityCalendar({
 }
 
 function SchedulingTab() {
+  const auth = useAuthStore();
+  const canMutate = hasPermission(auth, 'counselling.schedule.manage') || hasPermission(auth, 'counselling.schedule.team_manage');
   const [statusFilter, setStatusFilter] = useState<AppointmentStatus | null>(null);
   const [openAddSlot, setOpenAddSlot] = useState(false);
   const [openBook, setOpenBook] = useState(false);
@@ -835,10 +943,10 @@ function SchedulingTab() {
                   <CalendarDays /> Calendar
                 </Button>
               </div>
-              <Dialog open={openAddSlot} onOpenChange={setOpenAddSlot}>
+              {canMutate && <Dialog open={openAddSlot} onOpenChange={setOpenAddSlot}>
                 <Button size="sm" onClick={() => setOpenAddSlot(true)}><Plus /> Add</Button>
                 {openAddSlot && <AddSlotDialog onClose={() => setOpenAddSlot(false)} />}
-              </Dialog>
+              </Dialog>}
             </div>
           </header>
           {availabilityView === 'list' && (
@@ -877,7 +985,7 @@ function SchedulingTab() {
                   </TableCell>
                   <TableCell className="px-3 text-xs">{w.max_slots}</TableCell>
                   <TableCell className="px-3 text-right">
-                    <Button
+                    {canMutate && <Button
                       size="sm"
                       variant="outline"
                       aria-label={`Remove window #${w.id}`}
@@ -885,7 +993,7 @@ function SchedulingTab() {
                       onClick={() => confirmRemove(w)}
                     >
                       <Trash2 /> Remove
-                    </Button>
+                    </Button>}
                   </TableCell>
                 </TableRow>
               ))}
@@ -915,7 +1023,7 @@ function SchedulingTab() {
               {!availability.isLoading && !availability.isError && (availability.data?.length ?? 0) > 0 && (
                 <AvailabilityCalendar
                   windows={availability.data ?? []}
-                  onRemove={confirmRemove}
+                  onRemove={canMutate ? confirmRemove : () => undefined}
                   removing={removeSlot.isPending}
                 />
               )}
@@ -943,10 +1051,10 @@ function SchedulingTab() {
                   ))}
                 </SelectContent>
               </Select>
-              <Dialog open={openBook} onOpenChange={setOpenBook}>
+              {canMutate && <Dialog open={openBook} onOpenChange={setOpenBook}>
                 <Button size="sm" onClick={() => setOpenBook(true)}><CalendarPlus /> Book</Button>
                 {openBook && <BookAppointmentDialog onClose={() => setOpenBook(false)} />}
-              </Dialog>
+              </Dialog>}
             </div>
           </header>
           <Table>
@@ -992,7 +1100,7 @@ function SchedulingTab() {
                       <Badge variant={STATUS_VARIANT[a.status]}>{titleCase(a.status)}</Badge>
                     </TableCell>
                     <TableCell className="px-3 text-right">
-                      {active && (
+                      {active && canMutate && (
                         <div className="flex justify-end gap-1">
                           {a.status === 'scheduled' && (
                             <Button
@@ -1082,6 +1190,8 @@ function SchedulingTab() {
 // ---------------------------------------------------------- analytics
 
 function AnalyticsTab() {
+  const auth = useAuthStore();
+  const canMutate = hasPermission(auth, 'counselling.schedule.manage') || hasPermission(auth, 'counselling.schedule.team_manage');
   const analytics = useSchedulingAnalytics();
   const recompute = useRecomputeAnalytics();
 
@@ -1130,9 +1240,9 @@ function AnalyticsTab() {
           Deterministic no-show optimizer. Recompute aggregates the appointment history into per-slot
           no-show rates and an overbooking recommendation.
         </p>
-        <Button size="sm" onClick={() => recompute.mutate()} disabled={recompute.isPending}>
+        {canMutate && <Button size="sm" onClick={() => recompute.mutate()} disabled={recompute.isPending}>
           {recompute.isPending ? <Loader2 className="animate-spin" /> : <LineChart />} Recompute
-        </Button>
+        </Button>}
       </div>
       <section className="overflow-hidden rounded-xl border bg-card">
         <Table>
@@ -1193,12 +1303,89 @@ function AnalyticsTab() {
 
 // ---------------------------------------------------------------- page
 
+function GuidanceQueueTab({ onOpenSession }: { onOpenSession: (id: number) => void }) {
+  const queue = useGuidanceQueueToday();
+  const callNext = useGuidanceCallNext();
+  const transition = useGuidanceQueueTransition();
+  const repair = useGuidanceRepairSession();
+  const active = queue.data?.find((entry) => entry.status === 'called' || entry.status === 'in_session');
+  const waiting = queue.data?.filter((entry) => entry.status === 'waiting') ?? [];
+  const authState = useAuthStore();
+  const canManage = hasPermission(authState, 'counselling.queue.manage');
+
+  return <section className="space-y-4 rounded-xl border bg-card p-4">
+    <div className="flex flex-wrap items-center justify-between gap-3">
+      <div><h2 className="font-semibold">Today’s Guidance queue</h2><p className="text-sm text-muted-foreground">Independent FIFO queue for Guidance check-ins and accepted handoffs.</p></div>
+      {canManage && <Button onClick={() => callNext.mutate()} disabled={callNext.isPending || active !== undefined || waiting.length === 0}>Call next</Button>}
+    </div>
+    {queue.isError ? <div role="alert" className="rounded-lg border border-destructive/40 p-4 text-destructive">Failed to load the Guidance queue. <Button size="sm" variant="outline" onClick={() => void queue.refetch()} disabled={queue.isFetching}>Retry</Button></div> : (
+      <Table><TableHeader><TableRow><TableHead>Queue</TableHead><TableHead>Patient</TableHead><TableHead>Purpose</TableHead><TableHead>Status</TableHead><TableHead>Called</TableHead><TableHead className="text-right">Actions</TableHead></TableRow></TableHeader>
+      <TableBody>
+        {queue.isLoading && <TableRow><TableCell colSpan={6} className="py-8 text-center text-muted-foreground"><Loader2 className="mr-2 inline size-4 animate-spin" />Loading queue…</TableCell></TableRow>}
+        {!queue.isLoading && (queue.data?.length ?? 0) === 0 && <TableRow><TableCell colSpan={6} className="py-8 text-center text-muted-foreground">No Guidance check-ins today.</TableCell></TableRow>}
+        {queue.data?.map((entry) => <TableRow key={entry.id}>
+          <TableCell className="font-mono font-semibold text-primary">{entry.queue_number ?? `G-${String(entry.position).padStart(3, '0')}`}</TableCell>
+          <TableCell><p className="font-medium">{entry.display_name}</p><p className="font-mono text-xs text-muted-foreground">{entry.patient_school_id}</p></TableCell>
+          <TableCell>{entry.purpose}</TableCell><TableCell><Badge variant={entry.status === 'in_session' ? 'success' : entry.status === 'called' ? 'info' : 'secondary'}>{entry.status.replace('_', ' ')}</Badge></TableCell>
+          <TableCell className="text-sm text-muted-foreground">{entry.called_at ?? '—'}</TableCell>
+          <TableCell className="text-right">
+            {canManage && entry.status === 'called' && <div className="flex justify-end gap-2"><Button size="sm" variant="outline" disabled={transition.isPending && transition.variables?.id === entry.id} onClick={() => transition.mutate({ id: entry.id, action: 'skip' }, { onSuccess: () => toast.success(`${entry.queue_number} skipped.`) })}>Skip</Button><Button size="sm" disabled={transition.isPending && transition.variables?.id === entry.id} onClick={() => transition.mutate({ id: entry.id, action: 'start' }, { onSuccess: (started) => {
+              if (started.counselling_session_id === null || started.counselling_session_id === undefined) { toast.error('The queue started, but its linked session is missing. Refresh and retry opening it.'); return; }
+              toast.success(`${started.queue_number ?? `G-${String(started.position).padStart(3, '0')}`} started — Session #${started.counselling_session_id} is now active.`);
+              onOpenSession(started.counselling_session_id);
+            } })}>{transition.isPending && transition.variables?.id === entry.id ? <Loader2 className="animate-spin" /> : null}Start Session</Button></div>}
+            {entry.status === 'in_session' && <div className="flex justify-end gap-2">
+              {entry.counselling_session_id !== null && entry.counselling_session_id !== undefined
+                ? <Button size="sm" variant="outline" onClick={() => onOpenSession(entry.counselling_session_id as number)}>Open Session &amp; Notes</Button>
+                : <div className="flex items-center gap-2"><span className="text-xs text-destructive">Linked session missing.</span>{canManage && <Button size="sm" variant="outline" disabled={repair.isPending} onClick={() => repair.mutate(entry.id, { onSuccess: (repaired) => {
+                  if (repaired.counselling_session_id !== null && repaired.counselling_session_id !== undefined) { toast.success(`Session #${repaired.counselling_session_id} linked.`); onOpenSession(repaired.counselling_session_id); }
+                } })}>Repair link</Button>}</div>}
+              {canManage && <Button size="sm" disabled={transition.isPending && transition.variables?.id === entry.id} onClick={() => transition.mutate({ id: entry.id, action: 'complete' }, { onSuccess: () => toast.success(`${entry.queue_number} completed.`) })}>Complete Session</Button>}
+            </div>}
+          </TableCell>
+        </TableRow>)}
+      </TableBody></Table>
+    )}
+  </section>;
+}
+
 export default function CounsellingPage() {
-  const [tab, setTab] = useTabParam('sessions');
+  const [params, setParams] = useSearchParams();
+  const canReadQueue = useAuthStore((state) => hasPermission(state, 'counselling.queue.read'));
+  const allowedTabs = canReadQueue ? ['queue', 'sessions', 'scheduling', 'analytics'] : ['sessions', 'scheduling', 'analytics'];
+  const requestedTab = params.get('tab') ?? 'sessions';
+  const tab = allowedTabs.includes(requestedTab) ? requestedTab : 'sessions';
+  const rawSessionId = params.get('session');
+  const parsedSessionId = rawSessionId !== null && /^\d+$/.test(rawSessionId) ? Number(rawSessionId) : null;
+  const selectedId = parsedSessionId !== null && parsedSessionId > 0 ? parsedSessionId : null;
+  const queue = useGuidanceQueueToday(canReadQueue);
+  const active = queue.data?.find((entry) => entry.status === 'called' || entry.status === 'in_session');
+
+  useEffect(() => {
+    if ((requestedTab !== tab) || (rawSessionId !== null && selectedId === null) || (tab !== 'sessions' && rawSessionId !== null)) {
+      const next = new URLSearchParams(params);
+      if (tab === 'sessions') next.delete('tab'); else next.set('tab', tab);
+      if (tab !== 'sessions' || selectedId === null) next.delete('session');
+      setParams(next, { replace: true });
+    }
+  }, [params, rawSessionId, requestedTab, selectedId, setParams, tab]);
+
+  function setTab(nextTab: string) {
+    const next = new URLSearchParams(params);
+    if (nextTab === 'sessions') next.delete('tab'); else next.set('tab', nextTab);
+    if (nextTab !== 'sessions') next.delete('session');
+    setParams(next, { replace: true });
+  }
+  function selectSession(id: number | null) {
+    const next = new URLSearchParams(params);
+    next.delete('tab');
+    if (id === null) next.delete('session'); else next.set('session', String(id));
+    setParams(next, { replace: false });
+  }
   return (
     <main className="mx-auto max-w-7xl space-y-4 p-6">
       <header>
-        <h1 className="text-xl font-semibold text-foreground">Counselling</h1>
+        <h1 className="text-xl font-semibold text-foreground">Guidance</h1>
         <p className="text-sm text-muted-foreground">
           Notes are encrypted with AES-256-GCM. Bookings must fit an active availability window;
           no-shows drive the three-strike counter.
@@ -1207,12 +1394,14 @@ export default function CounsellingPage() {
 
       <Tabs value={tab} onValueChange={setTab}>
         <TabsList>
+          {canReadQueue && <TabsTrigger value="queue">Queue {active !== undefined && <Badge className="ml-1" variant="info">{active.queue_number}</Badge>}</TabsTrigger>}
           <TabsTrigger value="sessions">Sessions & Notes</TabsTrigger>
           <TabsTrigger value="scheduling">Scheduling</TabsTrigger>
           <TabsTrigger value="analytics">Analytics</TabsTrigger>
         </TabsList>
+        {canReadQueue && <TabsContent value="queue" className="mt-4"><GuidanceQueueTab onOpenSession={selectSession} /></TabsContent>}
         <TabsContent value="sessions" className="mt-4">
-          <SessionsTab />
+          <SessionsTab selectedId={selectedId} onSelect={selectSession} />
         </TabsContent>
         <TabsContent value="scheduling" className="mt-4">
           <SchedulingTab />

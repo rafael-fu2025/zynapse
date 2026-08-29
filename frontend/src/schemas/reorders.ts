@@ -14,6 +14,7 @@ export const reorderSchema = z.object({
   requested_quantity: z.number().int().min(1),
   current_stock: z.number().int().min(0),
   reorder_level: z.number().int().min(0),
+  target_stock: z.number().int().positive().nullable(),
   urgency: z.enum(['low', 'medium', 'high', 'critical']),
   status: z.enum(['pending', 'approved', 'ordered', 'received', 'completed', 'cancelled']),
   auto_triggered: z.boolean(),

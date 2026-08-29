@@ -60,7 +60,9 @@ export const apiClient: AxiosInstance = axios.create({
   baseURL: API_BASE_URL,
   withCredentials: true, // HttpOnly refresh cookie
   timeout: 15_000,
-  headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+  // Axios selects JSON or multipart per request. A global JSON content type
+  // prevents browsers from adding the multipart boundary required by PHP.
+  headers: { Accept: 'application/json' },
 });
 
 apiClient.interceptors.request.use((config) => {
@@ -70,6 +72,12 @@ apiClient.interceptors.request.use((config) => {
   }
   // Per-request id lets the backend log lines correlate with the SPA.
   config.headers.set('X-Request-Id', crypto.randomUUID());
+  // Never force a multipart Content-Type in the browser. The browser must
+  // append its generated boundary; a bare `multipart/form-data` header makes
+  // PHP treat an otherwise valid upload as if no file was submitted.
+  if (config.data instanceof FormData) {
+    config.headers.delete('Content-Type');
+  }
   return config;
 });
 
@@ -91,9 +99,12 @@ apiClient.interceptors.response.use(
   async (error: AxiosError<ApiEnvelope<unknown>>) => {
     const original = error.config as RetryConfig | undefined;
     const env = error.response?.data;
+    const isLoginRequest = original?.url?.replace(/\?.*$/, '').endsWith('/auth/login') === true;
 
     // 401 — try silent refresh once and replay.
-    if (error.response?.status === 401 && original !== undefined && original._synapseRetried !== true) {
+    // Invalid login credentials are not an expired session: preserve that
+    // response so the login page can show its exact reason immediately.
+    if (error.response?.status === 401 && !isLoginRequest && original !== undefined && original._synapseRetried !== true) {
       original._synapseRetried = true;
       const refreshed = await refreshAccessToken();
       if (refreshed !== null) {

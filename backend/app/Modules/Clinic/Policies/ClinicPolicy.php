@@ -29,6 +29,7 @@ final class ClinicPolicy extends BasePolicy
             'vitalsRead'     => 'clinic.encounters.read',
             'recordVitals'   => 'clinic.encounters.write',
             'close'          => 'clinic.encounters.write',
+            'refer'          => 'clinic.encounters.write',
             'addTreatment'   => 'clinic.encounters.write',
             'setAssessment'  => 'clinic.encounters.write',
             'treatmentsRead' => 'clinic.treatments.read',
@@ -40,6 +41,9 @@ final class ClinicPolicy extends BasePolicy
             'appointmentsRead'  => 'clinic.appointments.read',
             'appointmentsWrite' => 'clinic.appointments.write',
             'patientsRead'      => 'clinic.patients.read',
+            'kioskPatientLookup'=> $this->can('kiosk.checkin.submit')
+                ? 'kiosk.checkin.submit'
+                : 'clinic.patients.read',
             'patientsWrite'     => 'clinic.patients.write',
             'departmentsManage' => 'clinic.departments.manage',
             'schedulesManage'   => 'clinic.schedules.manage',
@@ -47,7 +51,9 @@ final class ClinicPolicy extends BasePolicy
             'reordersManage'    => 'clinic.reorders.manage',
             'queueRead'         => 'clinic.queue.read',
             'queueManage'       => 'clinic.queue.manage',
-            'checkinRecord'     => 'clinic.checkin.record',
+            'checkinRecord'     => $this->can('kiosk.checkin.submit')
+                ? 'kiosk.checkin.submit'
+                : 'clinic.checkin.record',
             'checkinRead'       => 'clinic.checkin.read',
             'markNoShow'        => 'clinic.encounters.write',
             default          => null,

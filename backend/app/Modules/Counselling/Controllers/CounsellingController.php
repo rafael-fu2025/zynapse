@@ -8,20 +8,53 @@ use App\Controllers\Api\ApiController;
 use App\Exceptions\ApiException;
 use CodeIgniter\HTTP\ResponseInterface;
 use Modules\Counselling\Services\CounsellingService;
+use Modules\Counselling\Services\QueueService;
 use Modules\Counselling\Policies\CounsellingPolicy;
+use Modules\Referrals\Policies\ReferralPolicy;
+use Modules\Referrals\Services\ReferralService;
 use Config\Services;
 
 final class CounsellingController extends ApiController
 {
     private readonly CounsellingService $service;
+    private readonly QueueService $queueService;
+    private readonly ReferralService $referrals;
 
-    public function __construct(?CounsellingService $service = null)
+    public function __construct(?CounsellingService $service = null, ?QueueService $queueService = null, ?ReferralService $referrals = null)
     {
         $this->service = $service ?? new CounsellingService(
             new CounsellingPolicy(),
             Services::auditOutbox(),
             Services::encryptionService(),
         );
+        $this->queueService = $queueService ?? new QueueService(
+            new CounsellingPolicy(),
+            Services::auditOutbox(),
+            Services::notificationOutbox(),
+        );
+        $this->referrals = $referrals ?? new ReferralService(new ReferralPolicy(), Services::auditOutbox(), Services::encryptionService(), Services::notificationOutbox());
+    }
+
+    public function createReferral(int $sessionId): ResponseInterface
+    {
+        $payload = $this->request->getJSON(true) ?? [];
+        if (! $this->makeValidation([
+            'reason_code' => 'permit_empty|max_length[64]',
+            'notes_plaintext' => 'permit_empty|max_length[8192]',
+        ])->run($payload)) {
+            throw ApiException::validationFailure($this->collectErrors());
+        }
+        $dto = $this->referrals->createFromSession(
+            $sessionId,
+            isset($payload['reason_code']) && $payload['reason_code'] !== '' ? (string) $payload['reason_code'] : null,
+            isset($payload['notes_plaintext']) && $payload['notes_plaintext'] !== '' ? (string) $payload['notes_plaintext'] : null,
+        );
+        return $this->ok($dto->toArray(), null, 201);
+    }
+
+    public function getSession(int $sessionId): ResponseInterface
+    {
+        return $this->ok($this->service->getSession($sessionId));
     }
 
     public function listSessions(): ResponseInterface
@@ -84,6 +117,10 @@ final class CounsellingController extends ApiController
 
     public function closeSession(int $sessionId): ResponseInterface
     {
+        $linked = $this->queueService->completeLinkedSession($sessionId);
+        if ($linked !== null) {
+            return $this->ok($linked->toArray());
+        }
         $dto = $this->service->closeSession($sessionId);
         return $this->ok($dto->toArray());
     }

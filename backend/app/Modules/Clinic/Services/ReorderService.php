@@ -9,6 +9,7 @@ use App\Modules\Shared\BaseService;
 use App\Modules\Shared\StateMachineException;
 use App\Pagination\KeysetPaginator;
 use App\Services\Audit\AuditOutboxService;
+use App\Services\Inventory\StockLevelPolicy;
 use App\Services\Notify\NotificationOutboxService;
 use DateTimeImmutable;
 use DateTimeZone;
@@ -123,7 +124,8 @@ final class ReorderService extends BaseService
                     ]);
                 }
                 $this->assertNoOpenRequest('supply', $itemId);
-                $id = $this->insertRequest('supply', $itemId, $quantity, (int) $item['quantity_on_hand'], (int) $item['reorder_level'], $urgency, false, $userId, $note);
+                $target = isset($item['target_stock']) ? (int) $item['target_stock'] : null;
+                $id = $this->insertRequest('supply', $itemId, $quantity, (int) $item['quantity_on_hand'], (int) $item['reorder_level'], $target, $urgency, false, $userId, $note);
 
                 return $this->getDto($id);
             }
@@ -137,7 +139,8 @@ final class ReorderService extends BaseService
 
             $this->assertNoOpenRequest('medicine', $itemId);
 
-            $id = $this->insertRequest('medicine', $itemId, $quantity, $this->onHand($itemId), (int) $med['reorder_threshold'], $urgency, false, $userId, $note);
+            $target = isset($med['target_stock']) ? (int) $med['target_stock'] : null;
+            $id = $this->insertRequest('medicine', $itemId, $quantity, $this->onHand($itemId), (int) $med['reorder_threshold'], $target, $urgency, false, $userId, $note);
             return $this->getDto($id);
         });
     }
@@ -160,7 +163,7 @@ final class ReorderService extends BaseService
             $created = [];
 
             $medicines = $this->db->table('clinic_medicines')
-                ->select('id, reorder_threshold')
+                ->select('id, reorder_threshold, target_stock')
                 ->where('archived_at', null)
                 ->where('reorder_threshold >', 0)
                 ->get()->getResultArray();
@@ -168,6 +171,7 @@ final class ReorderService extends BaseService
             foreach ($medicines as $med) {
                 $medicineId = (int) $med['id'];
                 $threshold  = (int) $med['reorder_threshold'];
+                $target     = $med['target_stock'] !== null ? (int) $med['target_stock'] : null;
 
                 // Lock the item row so two concurrent auto-checks cannot
                 // both pass the open-request probe and file duplicates.
@@ -180,18 +184,18 @@ final class ReorderService extends BaseService
 
                 // Legacy heuristic: restock to twice the threshold — this IS
                 // the quantity that will be ordered and later received.
-                $qty = max($threshold * 2 - $onHand, $threshold);
+                $qty = StockLevelPolicy::proposedQuantity($onHand, $threshold, $target);
                 // Legacy urgency tiers by depletion ratio.
                 $urgency = $onHand === 0 ? 'critical' : ($onHand <= (int) floor($threshold / 2) ? 'high' : 'medium');
 
-                $id        = $this->insertRequest('medicine', $medicineId, $qty, $onHand, $threshold, $urgency, true, $userId, 'Auto-triggered by low-stock check.');
+                $id        = $this->insertRequest('medicine', $medicineId, $qty, $onHand, $threshold, $target, $urgency, true, $userId, 'Auto-triggered by hard stock threshold.');
                 $created[] = $this->getDto($id)->toArray();
                 $this->notifyReorderCreated($id, $urgency);
             }
 
             // Supply items: same heuristic against the ledger counter.
             $items = $this->db->table('clinic_inventory_items')
-                ->select('id, quantity_on_hand, reorder_level')
+                ->select('id, quantity_on_hand, reorder_level, target_stock')
                 ->where('archived_at', null)
                 ->where('reorder_level >', 0)
                 ->get()->getResultArray();
@@ -199,6 +203,7 @@ final class ReorderService extends BaseService
             foreach ($items as $item) {
                 $itemId    = (int) $item['id'];
                 $threshold = (int) $item['reorder_level'];
+                $target    = $item['target_stock'] !== null ? (int) $item['target_stock'] : null;
 
                 // Lock the item row (see medicine loop above).
                 $this->selectForUpdate('clinic_inventory_items', ['id' => $itemId]);
@@ -208,10 +213,10 @@ final class ReorderService extends BaseService
                     continue;
                 }
 
-                $qty     = max($threshold * 2 - $onHand, $threshold);
+                $qty     = StockLevelPolicy::proposedQuantity($onHand, $threshold, $target);
                 $urgency = $onHand === 0 ? 'critical' : ($onHand <= (int) floor($threshold / 2) ? 'high' : 'medium');
 
-                $id        = $this->insertRequest('supply', $itemId, $qty, $onHand, $threshold, $urgency, true, $userId, 'Auto-triggered by low-stock check.');
+                $id        = $this->insertRequest('supply', $itemId, $qty, $onHand, $threshold, $target, $urgency, true, $userId, 'Auto-triggered by hard stock threshold.');
                 $created[] = $this->getDto($id)->toArray();
                 $this->notifyReorderCreated($id, $urgency);
             }
@@ -294,7 +299,7 @@ final class ReorderService extends BaseService
         );
     }
 
-    private function insertRequest(string $itemType, int $itemId, int $qty, int $onHand, int $threshold, string $urgency, bool $auto, int $userId, ?string $note): int
+    private function insertRequest(string $itemType, int $itemId, int $qty, int $onHand, int $threshold, ?int $target, string $urgency, bool $auto, int $userId, ?string $note): int
     {
         $now = $this->utcNow();
         $this->db->table('clinic_reorder_requests')->insert([
@@ -304,6 +309,7 @@ final class ReorderService extends BaseService
             'requested_quantity'   => $qty,
             'current_stock'        => $onHand,
             'reorder_level'        => $threshold,
+            'target_stock'         => $target,
             'urgency'              => $urgency,
             'status'               => 'pending',
             'auto_triggered'       => $auto ? 1 : 0,

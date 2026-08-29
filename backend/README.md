@@ -44,10 +44,11 @@ php spark synapse:smoke
 php spark synapse:audit-drain
 php spark synapse:audit-verify
 php spark synapse:reports-drain --limit=10
+php spark synapse:appointments-enqueue-due
 composer test
 ```
 
-Run `synapse:reports-drain` every minute in production. It claims queued
+Run `synapse:reports-drain` and `synapse:appointments-enqueue-due` every minute in production. The appointment worker is idempotent and promotes Clinic and Guidance bookings into their destination queues at T−15. The reports worker claims queued
 generated reports, writes aggregate rows without holding a database
 transaction open, and removes files after the 30-day retention window.
 Run one reports worker at a time; send command failures and the nightly

@@ -2,6 +2,7 @@
  * Zod schemas — Clinic module.
  */
 import { z } from 'zod';
+import { referralSchema } from '@/schemas/referrals';
 
 export const TRIAGE_PRIORITIES = ['low', 'medium', 'high', 'urgent'] as const;
 export type TriagePriority = (typeof TRIAGE_PRIORITIES)[number];
@@ -47,6 +48,21 @@ export const encounterSchema = z.object({
   closed_at: z.string().nullable(),
 });
 export type Encounter = z.infer<typeof encounterSchema>;
+
+export const encounterDetailSchema = encounterSchema.extend({
+  queue_entry_id: z.number().int().positive().nullable(),
+  queue_number: z.string().nullable(),
+  queue_status: z.enum(['waiting', 'called', 'in_session', 'done', 'skipped']).nullable(),
+  queue_called_at: z.string().nullable(),
+  queue_started_at: z.string().nullable(),
+  queue_finished_at: z.string().nullable(),
+  incoming_referral_id: z.number().int().positive().nullable(),
+  vitals_count: z.number().int().min(0),
+  treatment_count: z.number().int().min(0),
+  assessment_recorded: z.boolean(),
+  outgoing_referral: referralSchema.nullable(),
+});
+export type EncounterDetail = z.infer<typeof encounterDetailSchema>;
 
 export const TREATMENT_TYPES = ['medication', 'first_aid', 'procedure', 'referral', 'other'] as const;
 export type TreatmentType = (typeof TREATMENT_TYPES)[number];
@@ -115,6 +131,14 @@ export type Vitals = z.infer<typeof vitalsSchema>;
 
 export const vitalsListSchema = z.array(vitalsSchema);
 export type VitalsList = z.infer<typeof vitalsListSchema>;
+
+export const previousHeightWeightSchema = z.object({
+  source_encounter_id: z.number().int().positive(),
+  weight_kg: z.number().nullable(),
+  height_cm: z.number().nullable(),
+  recorded_at: z.string(),
+});
+export type PreviousHeightWeight = z.infer<typeof previousHeightWeightSchema>;
 
 export const recordVitalsSchema = z.object({
   bp_systolic:  z.number().int().min(0).max(300).optional(),

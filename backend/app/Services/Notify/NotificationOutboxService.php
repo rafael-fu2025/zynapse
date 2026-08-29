@@ -27,6 +27,7 @@ final class NotificationOutboxService
     private const CONTEXT_KEYS = [
         'resource_code', 'next_status', 'scheduled_at',
         'source_module', 'target_module', 'urgency', 'position',
+        'destination', 'appointment_at', 'appointment_status', 'queue_number',
     ];
 
     /**

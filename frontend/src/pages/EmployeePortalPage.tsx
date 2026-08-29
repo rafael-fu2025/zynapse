@@ -30,6 +30,7 @@ import { CopyButton } from '@/components/CopyButton';
 import { QueryErrorState } from '@/components/QueryErrorState';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { YourQueueCard } from '@/components/YourQueueCard';
+import { PortalAppointments } from '@/components/PortalAppointments';
 import { useMe } from '@/hooks/useAuth';
 import { useMyClinicVisits, useMyEmployeeProfile } from '@/hooks/useEmployeePortal';
 import { useNotifications } from '@/hooks/useNotifications';
@@ -86,6 +87,7 @@ export default function EmployeePortalPage() {
 
       {/* Live queue status — only appears while you're actually queued. */}
       <YourQueueCard kind="employee" />
+      <PortalAppointments />
 
       {profile.isLoading && <ProfileSkeleton />}
 

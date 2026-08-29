@@ -84,7 +84,7 @@ final class BmgService extends BaseService
             $startDate = substr((string) $r['active_batch_started_at'], 0, 10);
             $expected  = $r['active_batch_expected_completion_date'] !== null
                 ? substr((string) $r['active_batch_expected_completion_date'], 0, 10)
-                : $a->expectedCompletionDate($startDate, 45);
+                : $a->expectedCompletionDate($startDate, \App\Services\Analytics\BmgAnalytics::DEFAULT_DURATION_DAYS);
             $r['active_batch_progress_pct'] = $a->progressPercent($startDate, $expected, $today);
         }
         unset($r);
@@ -1245,7 +1245,7 @@ final class BmgService extends BaseService
             }
             $effDays = $expDays ?? ($refDays > 0 ? $refDays : 0);
 
-            // expectedCompletionDate() falls back to 45 days when neither
+            // expectedCompletionDate() falls back to the panel-approved baseline when neither
             // history nor a reference exists, so the progress bar always moves.
             $expected = $a->expectedCompletionDate($startDate, $effDays);
 

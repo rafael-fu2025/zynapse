@@ -109,6 +109,11 @@ final class ReferralController extends ApiController
         return $this->ok($dto->toArray());
     }
 
+    public function handoffToQueue(int $id): ResponseInterface
+    {
+        return $this->ok($this->service->handoffToReceivingQueue($id));
+    }
+
     public function revokeQr(int $id): ResponseInterface
     {
         $dto = $this->service->revokeQr($id);

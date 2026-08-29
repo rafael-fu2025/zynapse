@@ -9,8 +9,9 @@
  *   4. A row that exists ONLY in the legacy patients_students table is
  *      NOT resolved (no legacy fallback — patients ARE `users`).
  *
- * DB-free: this test connects to the local dev MariaDB. If you want a
- * strictly DB-free variant, mock the database connection.
+ * Database-backed: this test uses the local dev MariaDB when available and
+ * skips cleanly when it is not running. A strictly DB-free variant would
+ * inject a mock database connection into the service.
  */
 declare(strict_types=1);
 
@@ -29,7 +30,11 @@ final class PatientLookupServiceTest extends TestCase
 
     public static function setUpBeforeClass(): void
     {
-        self::$m = @mysqli_connect('127.0.0.1', 'root', '', 'synapse_zcode', 3306);
+        try {
+            self::$m = @mysqli_connect('127.0.0.1', 'root', '', 'synapse_zcode', 3306);
+        } catch (\mysqli_sql_exception) {
+            self::markTestSkipped('synapse_zcode not reachable on 127.0.0.1:3306');
+        }
         if (self::$m === false) {
             self::markTestSkipped('synapse_zcode not reachable on 127.0.0.1:3306');
         }

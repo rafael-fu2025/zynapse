@@ -9,6 +9,21 @@
 
 import type { KioskSettings } from '@/lib/kioskSettings';
 
+export const QUEUE_CALL_MEDIA_EVENT = 'synapse:queue-call-media';
+let mediaPrioritySequence = 0;
+
+function mediaPriority(active: boolean): void {
+  if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent(QUEUE_CALL_MEDIA_EVENT, { detail: { active } }));
+}
+
+function beginMediaPriority(): { finish: () => void } {
+  const sequence = ++mediaPrioritySequence;
+  mediaPriority(true);
+  return { finish: () => {
+    if (sequence === mediaPrioritySequence) mediaPriority(false);
+  } };
+}
+
 let ctx: AudioContext | null = null;
 
 function context(): AudioContext | null {
@@ -81,6 +96,10 @@ export function playConfiguredChime(settings: KioskSettings, queueNumber: string
     const utterance = new SpeechSynthesisUtterance(`Now serving ${queueNumber}`);
     utterance.volume = volume;
     utterance.rate = 0.9;
+    const priority = beginMediaPriority();
+    const safety = window.setTimeout(priority.finish, 15_000);
+    utterance.onend = () => { window.clearTimeout(safety); priority.finish(); };
+    utterance.onerror = () => { window.clearTimeout(safety); priority.finish(); };
     window.speechSynthesis.speak(utterance);
     return;
   }
@@ -99,5 +118,7 @@ export function playConfiguredChime(settings: KioskSettings, queueNumber: string
         ? [{ freq: 330, at: 0, dur: 0.22 }]
         : [{ freq: 880, at: 0, dur: 0.12 }, { freq: 1318, at: 0.13, dur: 0.18 }];
 
+  const priority = beginMediaPriority();
   playNotes(ac, notes, volume);
+  window.setTimeout(priority.finish, 700);
 }

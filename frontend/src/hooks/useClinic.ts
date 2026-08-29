@@ -14,8 +14,10 @@ import {
   addTreatmentSchema,
   createEncounterSchema,
   encounterSchema,
+  encounterDetailSchema,
   importEncountersResultSchema,
   recordVitalsSchema,
+  previousHeightWeightSchema,
   setAssessmentSchema,
   treatmentSchema,
   triagePredictionSchema,
@@ -24,8 +26,10 @@ import {
   type AddTreatmentInput,
   type CreateEncounterInput,
   type Encounter,
+  type EncounterDetail,
   type ImportEncountersResult,
   type RecordVitalsInput,
+  type PreviousHeightWeight,
   type SetAssessmentInput,
   type Treatment,
   type TriagePrediction,
@@ -290,6 +294,30 @@ export function useImportEncounters() {
       toast.error(`${first}${err.errors.length > 1 ? ` (+${err.errors.length - 1} more)` : ''}`, {
         duration: 12_000,
       });
+    },
+  });
+}
+
+export function useEncounter(encounterId: number | null) {
+  return useQuery<EncounterDetail, ApiEnvelopeError>({
+    queryKey: ['clinic', 'encounters', 'detail', encounterId],
+    enabled: encounterId !== null,
+    retry: false,
+    queryFn: async () => encounterDetailSchema.parse(
+      (await apiClient.get<unknown>(`/clinic/encounters/${encounterId}`)).data,
+    ),
+  });
+}
+
+export function usePreviousHeightWeight(encounterId: number | null) {
+  return useQuery<PreviousHeightWeight | null, ApiEnvelopeError>({
+    queryKey: ['clinic', 'previous-height-weight', encounterId],
+    enabled: encounterId !== null,
+    queryFn: async () => {
+      const res = await apiClient.get<unknown>(
+        `/clinic/encounters/${encounterId}/previous-height-weight`,
+      );
+      return res.data === null ? null : previousHeightWeightSchema.parse(res.data);
     },
   });
 }

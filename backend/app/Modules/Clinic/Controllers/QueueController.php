@@ -12,6 +12,8 @@ use Modules\Clinic\Policies\ClinicPolicy;
 use Modules\Clinic\Services\AppointmentService;
 use Modules\Clinic\Services\ClinicService;
 use Modules\Clinic\Services\QueueService;
+use Modules\Counselling\Policies\CounsellingPolicy;
+use Modules\Counselling\Services\QueueService as CounsellingQueueService;
 
 /**
  * QueueController — walk-in queue endpoints (Phase 14, recycled from
@@ -64,7 +66,16 @@ final class QueueController extends ApiController
     /** PUBLIC — minimum-disclosure waiting-room feed. */
     public function state(): ResponseInterface
     {
-        return $this->ok($this->service->publicState());
+        $guidance = new CounsellingQueueService(
+            new CounsellingPolicy(),
+            Services::auditOutbox(),
+            Services::notificationOutbox(),
+        );
+        return $this->ok([
+            'guidance' => $guidance->publicState(),
+            'clinic' => $this->service->publicState(),
+            'updated_at' => gmdate('Y-m-d H:i:s'),
+        ]);
     }
 
     private function collectErrors(): array

@@ -8,6 +8,7 @@ use App\Exceptions\ApiException;
 use App\Modules\Shared\BaseService;
 use App\Pagination\KeysetPaginator;
 use App\Services\Audit\AuditOutboxService;
+use App\Services\Inventory\StockLevelPolicy;
 use DateTimeImmutable;
 use DateTimeZone;
 use Modules\Clinic\DTOs\InventoryItemDto;
@@ -38,7 +39,7 @@ final class InventoryService extends BaseService
         $this->policy->check('inventoryRead');
 
         $builder = $this->db->table('clinic_inventory_items')
-            ->select('id, sku, name, unit, quantity_on_hand, reorder_level, archived_at, created_at')
+            ->select('id, sku, name, unit, quantity_on_hand, reorder_level, target_stock, archived_at, created_at')
             ->orderBy('created_at', 'DESC')
             ->orderBy('id', 'DESC');
 
@@ -79,12 +80,15 @@ final class InventoryService extends BaseService
         ];
     }
 
-    public function createItem(string $sku, string $name, string $unit, int $reorderLevel): InventoryItemDto
+    public function createItem(string $sku, string $name, string $unit, int $reorderLevel, ?int $targetStock = null): InventoryItemDto
     {
         $this->policy->check('inventoryWrite');
         $userId = \App\Auth\CurrentUser::assert();
 
-        return $this->txn(function () use ($sku, $name, $unit, $reorderLevel, $userId): InventoryItemDto {
+        $targetStock ??= $reorderLevel > 0 ? $reorderLevel * 2 : null;
+        $this->assertTargetStock($reorderLevel, $targetStock);
+
+        return $this->txn(function () use ($sku, $name, $unit, $reorderLevel, $targetStock, $userId): InventoryItemDto {
             $existing = $this->db->table('clinic_inventory_items')
                 ->where('sku', $sku)
                 ->get()->getRowArray();
@@ -102,6 +106,7 @@ final class InventoryService extends BaseService
                 'unit'             => $unit,
                 'quantity_on_hand' => 0,
                 'reorder_level'    => $reorderLevel,
+                'target_stock'     => $targetStock,
                 'created_at'       => $now,
                 'updated_at'       => $now,
             ]);
@@ -127,12 +132,12 @@ final class InventoryService extends BaseService
      * changes `quantity_on_hand`. SKU is intentionally immutable: the
      * SKU is the foreign key used by the movement ledger.
      */
-    public function updateItem(int $itemId, string $name, string $unit, int $reorderLevel): InventoryItemDto
+    public function updateItem(int $itemId, string $name, string $unit, int $reorderLevel, ?int $targetStock = null): InventoryItemDto
     {
         $this->policy->check('inventoryWrite');
         $userId = \App\Auth\CurrentUser::assert();
 
-        return $this->txn(function () use ($itemId, $name, $unit, $reorderLevel, $userId): InventoryItemDto {
+        return $this->txn(function () use ($itemId, $name, $unit, $reorderLevel, $targetStock, $userId): InventoryItemDto {
             $item = $this->selectForUpdate('clinic_inventory_items', ['id' => $itemId, 'archived_at' => null]);
             if ($item === null) {
                 throw new ApiException('resource.not_found', 404, [
@@ -140,11 +145,15 @@ final class InventoryService extends BaseService
                 ]);
             }
 
+            $targetStock ??= isset($item['target_stock']) ? (int) $item['target_stock'] : null;
+            $this->assertTargetStock($reorderLevel, $targetStock);
+
             $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
             $this->db->table('clinic_inventory_items')->where('id', $itemId)->update([
                 'name'          => $name,
                 'unit'          => $unit,
                 'reorder_level' => $reorderLevel,
+                'target_stock'  => $targetStock,
                 'updated_at'    => $now,
             ]);
 
@@ -159,6 +168,17 @@ final class InventoryService extends BaseService
             $row = $this->db->table('clinic_inventory_items')->where('id', $itemId)->get()->getRowArray();
             return InventoryItemDto::fromRow($row);
         });
+    }
+
+    private function assertTargetStock(int $threshold, ?int $target): void
+    {
+        if (! StockLevelPolicy::validTarget($threshold, $target)) {
+            throw ApiException::validationFailure([[
+                'code' => 'validation.field',
+                'message' => 'Target stock must be greater than the reorder level.',
+                'field' => 'target_stock',
+            ]]);
+        }
     }
 
     /**

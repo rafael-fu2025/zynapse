@@ -42,6 +42,7 @@ export const addSlotSchema = z.object({
   start_time: z.string().regex(TIME_RE, 'Use HH:MM.'),
   end_time: z.string().regex(TIME_RE, 'Use HH:MM.'),
   max_slots: z.coerce.number().int().min(1, 'At least 1 slot.'),
+  counsellor_user_id: z.coerce.number().int().positive().optional(),
 });
 export type AddSlotInput = z.infer<typeof addSlotSchema>;
 

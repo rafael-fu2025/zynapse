@@ -1,13 +1,41 @@
-import { defineConfig } from 'vite';
+import { defineConfig, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
+import fs from 'node:fs';
 import path from 'node:path';
 
 const apiProxyTarget = process.env.VITE_API_PROXY_TARGET ?? 'http://localhost:8090';
 const apiProxyPrefix = process.env.VITE_API_PROXY_PREFIX ?? '';
+const kioskThumbnailDirectory = path.resolve(__dirname, '../backend/public/kiosk-thumbnails');
+
+function serveKioskThumbnailsDirectly(): Plugin {
+  return {
+    name: 'serve-kiosk-thumbnails-directly',
+    configureServer(server) {
+      server.middlewares.use('/kiosk-thumbnails', (request, response, next) => {
+        const filename = path.posix.basename((request.url ?? '').split('?')[0] ?? '');
+        if (!/^[a-f0-9]{32}\.jpg$/i.test(filename)) {
+          next();
+          return;
+        }
+
+        const thumbnailPath = path.join(kioskThumbnailDirectory, filename);
+        if (!fs.existsSync(thumbnailPath)) {
+          next();
+          return;
+        }
+
+        response.statusCode = 200;
+        response.setHeader('Content-Type', 'image/jpeg');
+        response.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+        fs.createReadStream(thumbnailPath).pipe(response);
+      });
+    },
+  };
+}
 
 // https://vitejs.dev/config/
 export default defineConfig({
-  plugins: [react()],
+  plugins: [serveKioskThumbnailsDirectly(), react()],
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),

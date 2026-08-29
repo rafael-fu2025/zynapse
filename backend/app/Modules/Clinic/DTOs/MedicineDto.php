@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Modules\Clinic\DTOs;
 
 use App\Modules\Shared\BaseDTO;
+use App\Services\Inventory\StockLevelPolicy;
 
 final class MedicineDto extends BaseDTO
 {
@@ -45,9 +46,11 @@ final class MedicineDto extends BaseDTO
             'dosage_strength'   => $this->row['dosage_strength'] !== null ? (string) $this->row['dosage_strength'] : null,
             'unit'              => (string) $this->row['unit'],
             'reorder_threshold' => (int)    $this->row['reorder_threshold'],
+            'target_stock'      => isset($this->row['target_stock']) ? (int) $this->row['target_stock'] : null,
             'description'       => $this->row['description'] !== null ? (string) $this->row['description'] : null,
             'quantity_on_hand'  => $this->onHand,
             'low_stock'         => $this->onHand <= (int) $this->row['reorder_threshold'],
+            'stock_status'      => StockLevelPolicy::status($this->onHand, (int) $this->row['reorder_threshold']),
             'earliest_expiry'   => $this->earliestExpiry,
             'archived'          => $this->row['archived_at'] !== null,
             'created_at'        => (string) $this->row['created_at'],

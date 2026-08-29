@@ -8,6 +8,7 @@ use App\Exceptions\ApiException;
 use App\Modules\Shared\BaseService;
 use App\Pagination\KeysetPaginator;
 use App\Services\Audit\AuditOutboxService;
+use App\Services\Inventory\StockLevelPolicy;
 use DateTimeImmutable;
 use DateTimeZone;
 use Modules\Clinic\DTOs\MedicineBatchDto;
@@ -28,7 +29,7 @@ use Modules\Clinic\Policies\ClinicPolicy;
  */
 final class MedicineService extends BaseService
 {
-    private const MED_COLS = 'id, generic_name, brand_name, category, dosage_form, dosage_strength, unit, reorder_threshold, description, archived_at, created_at, updated_at';
+    private const MED_COLS = 'id, generic_name, brand_name, category, dosage_form, dosage_strength, unit, reorder_threshold, target_stock, description, archived_at, created_at, updated_at';
     private const BATCH_COLS = 'id, medicine_id, batch_number, quantity_received, quantity_remaining, expiration_date, received_date, supplier, status, created_at';
 
     public function __construct(
@@ -126,7 +127,13 @@ final class MedicineService extends BaseService
         $this->policy->check('inventoryWrite');
         $userId = \App\Auth\CurrentUser::assert();
 
-        return $this->txn(function () use ($input, $userId): MedicineDto {
+        $threshold = (int) ($input['reorder_threshold'] ?? 10);
+        $target = isset($input['target_stock'])
+            ? (int) $input['target_stock']
+            : ($threshold > 0 ? $threshold * 2 : null);
+        $this->assertTargetStock($threshold, $target);
+
+        return $this->txn(function () use ($input, $userId, $threshold, $target): MedicineDto {
             $now = $this->utcNow();
 
             $this->db->table('clinic_medicines')->insert([
@@ -136,7 +143,8 @@ final class MedicineService extends BaseService
                 'dosage_form'       => $this->strOrNull($input, 'dosage_form'),
                 'dosage_strength'   => $this->strOrNull($input, 'dosage_strength'),
                 'unit'              => (string) ($input['unit'] ?? 'pc'),
-                'reorder_threshold' => (int) ($input['reorder_threshold'] ?? 10),
+                'reorder_threshold' => $threshold,
+                'target_stock'      => $target,
                 'description'       => $this->strOrNull($input, 'description'),
                 'created_at'        => $now,
                 'updated_at'        => $now,
@@ -929,9 +937,16 @@ final class MedicineService extends BaseService
                 ]);
             }
 
+            $threshold = (int) ($input['reorder_threshold'] ?? $med['reorder_threshold']);
+            $target = array_key_exists('target_stock', $input)
+                ? ($input['target_stock'] !== null ? (int) $input['target_stock'] : null)
+                : (isset($med['target_stock']) ? (int) $med['target_stock'] : null);
+            $this->assertTargetStock($threshold, $target);
+
             $now = $this->utcNow();
             $this->db->table('clinic_medicines')->where('id', $medicineId)->update([
-                'reorder_threshold' => (int) ($input['reorder_threshold'] ?? $med['reorder_threshold']),
+                'reorder_threshold' => $threshold,
+                'target_stock'      => $target,
                 'updated_at'        => $now,
             ]);
 
@@ -945,6 +960,17 @@ final class MedicineService extends BaseService
 
             return $this->getMedicine($medicineId);
         });
+    }
+
+    private function assertTargetStock(int $threshold, ?int $target): void
+    {
+        if (! StockLevelPolicy::validTarget($threshold, $target)) {
+            throw ApiException::validationFailure([[
+                'code' => 'validation.field',
+                'message' => 'Target stock must be greater than the reorder threshold.',
+                'field' => 'target_stock',
+            ]]);
+        }
     }
 
     /**

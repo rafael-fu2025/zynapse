@@ -22,6 +22,16 @@ final class ReportRange
     public const MAX_DAYS = 366;
 
     /**
+     * Academic Year (Foundation University): August 1 through July 31 of the following calendar year.
+     * Panel revision, August 2026: charts + report presets now align to AY so staff
+     * can identify peak encounter months across the academic year instead of the
+     * standard calendar year. yearStart is the calendar year of the August 1 that
+     * opens the AY (e.g. 2025 opens AY 2025-2026).
+     */
+    public const ACADEMIC_YEAR_START_MONTH = 8;
+    public const ACADEMIC_YEAR_END_MONTH = 7;
+
+    /**
      * @return array{start: string, end: string}
      */
     public function resolve(?string $start, ?string $end): array

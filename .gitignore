@@ -47,6 +47,7 @@ dev-fast.ps1
 !/backend/writable/uploads/index.html
 /backend/writable/debugbar/
 /backend/writable/reports/
+/backend/public/kiosk-thumbnails/
 /backend/writable/log/lint.txt
 /backend/scripts/
 /backend/build/
@@ -74,8 +75,11 @@ dev-fast.ps1
 
 
 zynapsemobile
-mobile
 workflow
 # docs/ contains committed runbooks (SETUP.md, CREDENTIALS.md, ...); do not
 # blanket-ignore it. Add specific subfolder ignores below if any draft dirs
 # are added later.
+
+# --- AI tool / test runner state at workspace root ---
+.workbuddy-ai/
+/test-results/

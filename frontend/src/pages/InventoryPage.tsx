@@ -193,30 +193,31 @@ function daysUntil(date: string): number {
  * medicines and supplies. Renders one of four states:
  *
  *   - Archived  (secondary)            — soft-deleted, out of the live list
- *   - Out       (destructive, red)     — on_hand === 0
- *   - Low N/T   (warning, yellow)      — on_hand <= threshold, with ratio
- *   - OK        (success, green)       — comfortably above threshold
+ *   - Out of Stock      (destructive)  — on_hand === 0
+ *   - Needs to Reorder  (warning)      — on_hand <= threshold
+ *   - In Stock          (success)      — above threshold
  *
- * Showing the ratio (`3/10`) inside the chip is the key UX bit — the
- * operator doesn't need to count digits in the on-hand column to see
- * how close they are to the reorder line. `threshold` accepts either
+ * The tooltip exposes the threshold and configured target. `threshold` accepts either
  * `reorder_threshold` (medicines) or `reorder_level` (supplies).
  */
 function StockBadge({
   onHand,
   threshold,
-  lowStock,
+  target,
+  stockStatus,
   archived,
 }: {
   onHand: number;
   threshold: number;
-  lowStock: boolean;
+  target: number | null;
+  stockStatus: 'in_stock' | 'needs_to_reorder' | 'out_of_stock';
   archived: boolean;
 }): JSX.Element {
   if (archived) return <Badge variant="secondary">Archived</Badge>;
-  if (onHand === 0) return <Badge variant="destructive">Out</Badge>;
-  if (lowStock) return <Badge variant="warning">Low {onHand}/{threshold}</Badge>;
-  return <Badge variant="success">OK</Badge>;
+  const context = `On hand ${onHand}; reorder at ${threshold}${target !== null ? `; target ${target}` : ''}`;
+  if (stockStatus === 'out_of_stock') return <Badge variant="destructive" title={context}>Out of Stock</Badge>;
+  if (stockStatus === 'needs_to_reorder') return <Badge variant="warning" title={context}>Needs to Reorder</Badge>;
+  return <Badge variant="success" title={context}>In Stock</Badge>;
 }
 
 /**
@@ -370,7 +371,7 @@ function CreateMedicineDialog({ onClose }: { onClose: () => void }) {
   const { register, handleSubmit, formState: { errors }, reset, setValue, watch } =
     useForm<CreateMedicineInput>({
       resolver: zodResolver(createMedicineSchema),
-      defaultValues: { unit: 'pc', reorder_threshold: 10 },
+      defaultValues: { unit: 'pc', reorder_threshold: 10, target_stock: 20 },
     });
 
   const genericName = watch('generic_name') ?? '';
@@ -517,6 +518,19 @@ function CreateMedicineDialog({ onClose }: { onClose: () => void }) {
             aria-invalid={errors.reorder_threshold !== undefined}
             {...register('reorder_threshold', { valueAsNumber: true })}
           />
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="medicine_target_stock">Target stock</Label>
+          <Input
+            id="medicine_target_stock"
+            type="number"
+            min={1}
+            aria-invalid={errors.target_stock !== undefined}
+            {...register('target_stock', { valueAsNumber: true })}
+          />
+          {errors.target_stock !== undefined && (
+            <p role="alert" className="text-xs text-destructive">{errors.target_stock.message}</p>
+          )}
         </div>
         <div className="col-span-2 space-y-1.5">
           <Label htmlFor="description">Notes / indications</Label>
@@ -795,7 +809,7 @@ function LedgerBody({
             <TableHead className="px-3">Reference</TableHead>
             <TableHead className="px-3 text-right">In</TableHead>
             <TableHead className="px-3 text-right">Out</TableHead>
-            <TableHead className="px-3 text-right">Balance</TableHead>
+            <TableHead className="px-3 text-right">Stock after</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -803,7 +817,7 @@ function LedgerBody({
             <TableRow><TableCell colSpan={5} className="px-3 py-6 text-center text-muted-foreground"><Loader2 className="mx-auto size-4 animate-spin" /></TableCell></TableRow>
           )}
           {isError && !isLoading && (
-            <TableRow><TableCell colSpan={5} className="px-3 py-6 text-center text-destructive">Failed to load the ledger.</TableCell></TableRow>
+            <TableRow><TableCell colSpan={5} className="px-3 py-6 text-center text-destructive">Failed to load the transactions.</TableCell></TableRow>
           )}
           {!isLoading && !isError && rows.length === 0 && (
             <TableRow><TableCell colSpan={5} className="px-3 py-6 text-center text-muted-foreground">{emptyLabel}</TableCell></TableRow>
@@ -844,9 +858,9 @@ function MedicineLedgerDialog({ medicine, onClose }: { medicine: Medicine; onClo
   return (
     <DialogContent className="max-w-2xl">
       <DialogHeader>
-        <DialogTitle className="flex items-center gap-2"><ScrollText className="size-4" /> Ledger — {medicine.generic_name}</DialogTitle>
+        <DialogTitle className="flex items-center gap-2"><ScrollText className="size-4" /> Transactions — {medicine.generic_name}</DialogTitle>
       </DialogHeader>
-      <p className="text-xs text-muted-foreground">Every stock movement, oldest first. Balance is the on-hand total after each entry.</p>
+      <p className="text-xs text-muted-foreground">Every stock movement, oldest first. Stock after is the on-hand quantity following each transaction.</p>
       <LedgerBody rows={rows} isLoading={txns.isLoading} isError={txns.isError} emptyLabel="No transactions yet." />
       <DialogFooter><Button variant="outline" onClick={onClose}>Close</Button></DialogFooter>
     </DialogContent>
@@ -868,9 +882,9 @@ function SupplyLedgerDialog({ item, onClose }: { item: InventoryItem; onClose: (
   return (
     <DialogContent className="max-w-2xl">
       <DialogHeader>
-        <DialogTitle className="flex items-center gap-2"><ScrollText className="size-4" /> Ledger — {item.name}</DialogTitle>
+        <DialogTitle className="flex items-center gap-2"><ScrollText className="size-4" /> Transactions — {item.name}</DialogTitle>
       </DialogHeader>
-      <p className="text-xs text-muted-foreground">Every stock movement, oldest first. Balance is the on-hand total after each entry.</p>
+      <p className="text-xs text-muted-foreground">Every stock movement, oldest first. Stock after is the on-hand quantity following each transaction.</p>
       <LedgerBody rows={rows} isLoading={moves.isLoading} isError={moves.isError} emptyLabel="No movements yet." />
       <DialogFooter><Button variant="outline" onClick={onClose}>Close</Button></DialogFooter>
     </DialogContent>
@@ -974,7 +988,10 @@ function EditMedicineDialog({ medicine, onClose }: { medicine: Medicine; onClose
   const { register, handleSubmit, formState: { errors }, reset } =
     useForm<UpdateMedicineInput>({
       resolver: zodResolver(updateMedicineSchema),
-      defaultValues: { reorder_threshold: medicine.reorder_threshold },
+      defaultValues: {
+        reorder_threshold: medicine.reorder_threshold,
+        target_stock: medicine.target_stock ?? Math.max(1, medicine.reorder_threshold * 2),
+      },
     });
 
   const onSubmit = handleSubmit((values) => {
@@ -991,7 +1008,7 @@ function EditMedicineDialog({ medicine, onClose }: { medicine: Medicine; onClose
       </DialogHeader>
       <form noValidate onSubmit={(e) => void onSubmit(e)} className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <p className="col-span-2 text-xs text-muted-foreground">
-          Catalog details are locked after creation — only the reorder threshold can change.
+          Catalog details are locked after creation; stock threshold and target can still change.
         </p>
         <div className="space-y-1.5">
           <Label htmlFor="edit_brand_name">Brand name</Label>
@@ -1026,6 +1043,19 @@ function EditMedicineDialog({ medicine, onClose }: { medicine: Medicine; onClose
             <p role="alert" className="text-xs text-destructive">{errors.reorder_threshold.message}</p>
           )}
         </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="edit_medicine_target_stock">Target stock</Label>
+          <Input
+            id="edit_medicine_target_stock"
+            type="number"
+            min={1}
+            aria-invalid={errors.target_stock !== undefined}
+            {...register('target_stock', { valueAsNumber: true })}
+          />
+          {errors.target_stock !== undefined && (
+            <p role="alert" className="text-xs text-destructive">{errors.target_stock.message}</p>
+          )}
+        </div>
         <DialogFooter className="col-span-2">
           <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
           <Button type="submit" disabled={update.isPending}>
@@ -1050,6 +1080,7 @@ function EditItemDialog({ item, onClose }: { item: InventoryItem; onClose: () =>
         name: item.name,
         unit: item.unit,
         reorder_level: item.reorder_level,
+        target_stock: item.target_stock ?? Math.max(1, item.reorder_level * 2),
       },
     });
 
@@ -1069,7 +1100,7 @@ function EditItemDialog({ item, onClose }: { item: InventoryItem; onClose: () =>
       </DialogHeader>
       <form noValidate onSubmit={(e) => void onSubmit(e)} className="space-y-3">
         <p className="text-xs text-muted-foreground">
-          SKU is immutable (it backs the movement ledger). To rename it, archive and recreate.
+          SKU is immutable because it identifies stock transactions. To rename it, archive and recreate.
         </p>
         <div className="space-y-1.5">
           <Label htmlFor="edit_item_name">Name</Label>
@@ -1102,6 +1133,19 @@ function EditItemDialog({ item, onClose }: { item: InventoryItem; onClose: () =>
               min={0}
               {...register('reorder_level', { valueAsNumber: true })}
             />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="edit_item_target_stock">Target stock</Label>
+            <Input
+              id="edit_item_target_stock"
+              type="number"
+              min={1}
+              aria-invalid={errors.target_stock !== undefined}
+              {...register('target_stock', { valueAsNumber: true })}
+            />
+            {errors.target_stock !== undefined && (
+              <p role="alert" className="text-xs text-destructive">{errors.target_stock.message}</p>
+            )}
           </div>
         </div>
         <DialogFooter>
@@ -1353,7 +1397,7 @@ function MedicinesTab() {
               <Layers /> Batches
             </DropdownMenuItem>
             <DropdownMenuItem onSelect={() => setLedgerFor(m)}>
-              <ScrollText /> Ledger
+              <ScrollText /> Transactions
             </DropdownMenuItem>
             <DropdownMenuItem onSelect={() => setForecastFor(m)}>
               <TrendingUp /> Forecast
@@ -1475,7 +1519,8 @@ function MedicinesTab() {
                     <StockBadge
                       onHand={m.quantity_on_hand}
                       threshold={m.reorder_threshold}
-                      lowStock={m.low_stock}
+                      target={m.target_stock}
+                      stockStatus={m.stock_status}
                       archived={m.archived}
                     />
                   </TableCell>
@@ -1523,7 +1568,8 @@ function MedicinesTab() {
                 <StockBadge
                   onHand={m.quantity_on_hand}
                   threshold={m.reorder_threshold}
-                  lowStock={m.low_stock}
+                  target={m.target_stock}
+                  stockStatus={m.stock_status}
                   archived={m.archived}
                 />
               </div>
@@ -1541,6 +1587,8 @@ function MedicinesTab() {
                 {m.category === null ? '—' : highlightMatch(m.category, debouncedQ)}
               </MobileCardField>
               <MobileCardField label="On hand"><span className="font-mono text-xs">{m.quantity_on_hand} {m.unit}</span></MobileCardField>
+              <MobileCardField label="Reorder threshold"><span className="font-mono text-xs">{m.reorder_threshold}</span></MobileCardField>
+              <MobileCardField label="Target stock"><span className="font-mono text-xs">{m.target_stock ?? 'Not configured'}</span></MobileCardField>
               <MobileCardField label="Earliest expiry">
                 <span className="text-xs">
                   {m.earliest_expiry ?? '—'}
@@ -1634,17 +1682,14 @@ function CreateReorderDialog({ onClose }: { onClose: () => void }) {
   const supplyItemId = watch('supply_item_id');
   const urgency = watch('urgency');
 
-  // Gap 4: when an item is picked (medicine OR supply), prefill the
-  // quantity with a sensible default so the operator doesn't have to
-  // remember the math. Formula: `max(1, 2 × threshold − on_hand)`.
-  // For a low-stock item this lands at ≥ `threshold`, so the
-  // incoming delivery brings on-hand back up to `2 × threshold`.
-  // The operator can still type a different number.
+  // When an item is picked, prefill the quantity needed to reach its
+  // configured target. Legacy records without a target retain the former
+  // `2 × threshold` fallback until they are edited.
   useEffect(() => {
     if (itemType === 'medicine' && medicineId !== undefined) {
       const m = medicines.data?.data?.find((x) => x.id === medicineId);
       if (m !== undefined) {
-        const suggested = Math.max(1, 2 * m.reorder_threshold - m.quantity_on_hand);
+        const suggested = Math.max(1, (m.target_stock ?? 2 * m.reorder_threshold) - m.quantity_on_hand);
         setValue('quantity', suggested, { shouldValidate: true, shouldDirty: true });
       }
       return;
@@ -1652,7 +1697,7 @@ function CreateReorderDialog({ onClose }: { onClose: () => void }) {
     if (itemType === 'supply' && supplyItemId !== undefined) {
       const it = supplies.data?.data?.find((x) => x.id === supplyItemId);
       if (it !== undefined) {
-        const suggested = Math.max(1, 2 * it.reorder_level - it.quantity_on_hand);
+        const suggested = Math.max(1, (it.target_stock ?? 2 * it.reorder_level) - it.quantity_on_hand);
         setValue('quantity', suggested, { shouldValidate: true, shouldDirty: true });
       }
     }
@@ -1664,12 +1709,12 @@ function CreateReorderDialog({ onClose }: { onClose: () => void }) {
   if (itemType === 'medicine' && medicineId !== undefined) {
     const m = medicines.data?.data?.find((x) => x.id === medicineId);
     if (m !== undefined) {
-      qtyHint = `On hand ${m.quantity_on_hand} · threshold ${m.reorder_threshold} · suggested ${Math.max(1, 2 * m.reorder_threshold - m.quantity_on_hand)}`;
+      qtyHint = `On hand ${m.quantity_on_hand} · threshold ${m.reorder_threshold} · target ${m.target_stock ?? 'legacy'} · suggested ${Math.max(1, (m.target_stock ?? 2 * m.reorder_threshold) - m.quantity_on_hand)}`;
     }
   } else if (itemType === 'supply' && supplyItemId !== undefined) {
     const it = supplies.data?.data?.find((x) => x.id === supplyItemId);
     if (it !== undefined) {
-      qtyHint = `On hand ${it.quantity_on_hand} · reorder level ${it.reorder_level} · suggested ${Math.max(1, 2 * it.reorder_level - it.quantity_on_hand)}`;
+      qtyHint = `On hand ${it.quantity_on_hand} · reorder level ${it.reorder_level} · target ${it.target_stock ?? 'legacy'} · suggested ${Math.max(1, (it.target_stock ?? 2 * it.reorder_level) - it.quantity_on_hand)}`;
     }
   }
 
@@ -2154,7 +2199,7 @@ function CreateItemDialog({ onClose }: { onClose: () => void }) {
     watch,
   } = useForm<CreateItemInput>({
     resolver: zodResolver(createItemSchema),
-    defaultValues: { unit: 'pc', reorder_level: 0 },
+    defaultValues: { unit: 'pc', reorder_level: 0, target_stock: 1 },
   });
 
   const unit = watch('unit') ?? 'pc';
@@ -2207,6 +2252,19 @@ function CreateItemDialog({ onClose }: { onClose: () => void }) {
           <div className="space-y-1.5">
             <Label htmlFor="reorder_level">Reorder level</Label>
             <Input id="reorder_level" type="number" {...register('reorder_level', { valueAsNumber: true })} />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="supply_target_stock">Target stock</Label>
+            <Input
+              id="supply_target_stock"
+              type="number"
+              min={1}
+              aria-invalid={errors.target_stock !== undefined}
+              {...register('target_stock', { valueAsNumber: true })}
+            />
+            {errors.target_stock !== undefined && (
+              <p role="alert" className="text-xs text-destructive">{errors.target_stock.message}</p>
+            )}
           </div>
         </div>
         <DialogFooter>
@@ -2528,7 +2586,7 @@ function InsightsTab({ onJumpToTab }: { onJumpToTab: (tab: 'medicines' | 'suppli
       <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
         <StatTile
           icon={<Pill className="size-4" />}
-          label="Low stock"
+          label="Needs to reorder"
           value={lowStockCount}
           tone={lowStockCount === 0 ? 'success' : lowStockCount <= 3 ? 'warning' : 'destructive'}
           loading={lowStock.isLoading}
@@ -2574,7 +2632,7 @@ function InsightsTab({ onJumpToTab }: { onJumpToTab: (tab: 'medicines' | 'suppli
         <Card>
           <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-3">
             <div>
-              <CardTitle className="text-base">Low-stock medicines</CardTitle>
+              <CardTitle className="text-base">Medicines that need reordering</CardTitle>
               <CardDescription>Below the reorder threshold</CardDescription>
             </div>
             <Button variant="ghost" size="sm" onClick={() => onJumpToTab('medicines')}>
@@ -2599,7 +2657,8 @@ function InsightsTab({ onJumpToTab }: { onJumpToTab: (tab: 'medicines' | 'suppli
                     <StockBadge
                       onHand={m.quantity_on_hand}
                       threshold={m.reorder_threshold}
-                      lowStock={m.low_stock}
+                      target={m.target_stock}
+                      stockStatus={m.stock_status}
                       archived={m.archived}
                     />
                   </li>
@@ -2830,7 +2889,7 @@ function SuppliesTab() {
               <ArrowDownUp /> Adjust
             </DropdownMenuItem>
             <DropdownMenuItem onSelect={() => setLedgerItem(it)}>
-              <ScrollText /> Ledger
+              <ScrollText /> Transactions
             </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem onSelect={() => setEditItem(it)}>
@@ -2869,7 +2928,7 @@ function SuppliesTab() {
             aria-pressed={lowStockOnly}
             onClick={() => setLowStockOnly((v) => !v)}
           >
-            <TrendingDown /> {lowStockOnly ? 'Showing low stock' : 'Low stock only'}
+            <TrendingDown /> {lowStockOnly ? 'Showing reorder needs' : 'Needs reorder only'}
           </Button>
           <Button
             variant={showArchived ? 'secondary' : 'outline'}
@@ -2895,6 +2954,7 @@ function SuppliesTab() {
               <TableHead className="px-3">Name</TableHead>
               <TableHead className="px-3">On hand</TableHead>
               <TableHead className="px-3">Reorder level</TableHead>
+              <TableHead className="px-3">Target stock</TableHead>
               <TableHead className="px-3">Stock</TableHead>
               <TableHead className="px-3 text-right">Actions</TableHead>
             </TableRow>
@@ -2902,20 +2962,20 @@ function SuppliesTab() {
           <TableBody>
             {list.isLoading && (
               <TableRow>
-                <TableCell colSpan={6} className="px-3 py-6 text-center text-muted-foreground">
+                <TableCell colSpan={7} className="px-3 py-6 text-center text-muted-foreground">
                   <Loader2 className="mx-auto size-4 animate-spin" />
                 </TableCell>
               </TableRow>
             )}
             {!list.isLoading && rows.length === 0 && (
               <TableRow>
-                <TableCell colSpan={6} className="px-3 py-6 text-center text-muted-foreground">
+                <TableCell colSpan={7} className="px-3 py-6 text-center text-muted-foreground">
                   {debouncedQ !== '' ? `No items match "${debouncedQ}".` : 'No items.'}
                 </TableCell>
               </TableRow>
             )}
             {list.isError && !list.isLoading && (
-              <QueryErrorRow colSpan={6} message="Failed to load supplies." onRetry={() => void list.refetch()} pending={list.isFetching} />
+              <QueryErrorRow colSpan={7} message="Failed to load supplies." onRetry={() => void list.refetch()} pending={list.isFetching} />
             )}
             {rows.map((it, idx) => (
               <TableRow key={it.id} {...supplyRowNav.getRowProps(idx)}>
@@ -2926,11 +2986,13 @@ function SuppliesTab() {
                 </TableCell>
                 <TableCell className="px-3 font-mono text-xs">{it.quantity_on_hand} {it.unit}</TableCell>
                 <TableCell className="px-3 font-mono text-xs text-muted-foreground">{it.reorder_level}</TableCell>
+                <TableCell className="px-3 font-mono text-xs text-muted-foreground">{it.target_stock ?? '—'}</TableCell>
                 <TableCell className="px-3">
                   <StockBadge
                     onHand={it.quantity_on_hand}
                     threshold={it.reorder_level}
-                    lowStock={it.low_stock}
+                    target={it.target_stock}
+                    stockStatus={it.stock_status}
                     archived={it.archived ?? false}
                   />
                 </TableCell>
@@ -2970,7 +3032,8 @@ function SuppliesTab() {
               <StockBadge
                 onHand={it.quantity_on_hand}
                 threshold={it.reorder_level}
-                lowStock={it.low_stock}
+                target={it.target_stock}
+                stockStatus={it.stock_status}
                 archived={it.archived ?? false}
               />
             </div>
@@ -2978,6 +3041,7 @@ function SuppliesTab() {
             <MobileCardField label="SKU"><span className="font-mono text-xs">{highlightMatch(it.sku, debouncedQ)}</span></MobileCardField>
             <MobileCardField label="On hand"><span className="font-mono text-xs">{it.quantity_on_hand} {it.unit}</span></MobileCardField>
             <MobileCardField label="Reorder level"><span className="font-mono text-xs text-muted-foreground">{it.reorder_level}</span></MobileCardField>
+            <MobileCardField label="Target stock"><span className="font-mono text-xs text-muted-foreground">{it.target_stock ?? 'Not configured'}</span></MobileCardField>
             <MobileCardActions>{supplyActions(it)}</MobileCardActions>
           </MobileCard>
         ))}
@@ -3028,7 +3092,7 @@ function SuppliesTab() {
       <ConfirmDialog
         open={archiveItem !== null}
         title={archiveItem !== null ? `Archive ${archiveItem.sku}?` : ''}
-        description="The item will be hidden from the supplies list. Every movement in the ledger is kept for the audit trail. You can re-create the item later with the same SKU."
+        description="The item will be hidden from the supplies list. Every transaction is kept for the audit trail. You can re-create the item later with the same SKU."
         confirmLabel="Archive"
         pending={archive.isPending}
         onConfirm={() => {
@@ -3057,7 +3121,7 @@ export default function InventoryPage() {
         <h1 className="text-xl font-semibold text-foreground">Inventory</h1>
         <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
           <CalendarClock className="size-3.5" aria-hidden />
-          Medicines are batch-tracked with expiry (FEFO dispensing); supplies use the signed movement ledger.
+          Medicines are batch-tracked with expiry (FEFO dispensing); supplies use signed stock transactions.
         </p>
       </header>
 

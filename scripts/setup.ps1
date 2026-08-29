@@ -130,8 +130,24 @@ Step-Required "Portable PHP 8.3" {
     } else {
         $iniContent += "`nextension_dir = `"$extDir`"`n"
     }
+    # Kiosk media has no application size limit. PHP treats post_max_size=0 as
+    # a zero-byte limit for JSON requests, so use a ceiling beyond realistic
+    # local storage instead while leaving slow uploads unrestricted.
+    foreach ($setting in @{
+        upload_max_filesize = '1099511627776'
+        post_max_size       = '1099511627776'
+        max_input_time      = '-1'
+    }.GetEnumerator()) {
+        $pattern = "(?m)^\s*$([regex]::Escape($setting.Key))\s*=.*$"
+        $replacement = "$($setting.Key) = $($setting.Value)"
+        if ($iniContent -match $pattern) {
+            $iniContent = $iniContent -replace $pattern, $replacement
+        } else {
+            $iniContent += "`n$replacement`n"
+        }
+    }
     Set-Content -Path $prodIni -Value $iniContent -Encoding UTF8
-    Write-Ok "php.ini configured (extension_dir = $extDir)"
+    Write-Ok "php.ini configured (extension_dir = $extDir; no practical kiosk upload ceiling)"
 
     Remove-Item $zipPath -Force
     Write-Ok "Portable PHP 8.3 installed at $PhpDir"

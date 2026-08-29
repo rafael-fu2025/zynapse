@@ -7,7 +7,7 @@ namespace App\Services\Analytics;
 use DateTimeImmutable;
 
 /**
- * BmgAnalytics — deterministic composting analytics (Phase P4, recycled
+ * BmgAnalytics - deterministic composting analytics (Phase P4, recycled
  * from legacy synapse_ag BmgYieldCalculator + BmgDurationCalculator).
  *
  * Pure/stateless: yield %, mass reduction, yield & duration
@@ -17,6 +17,15 @@ use DateTimeImmutable;
  */
 final class BmgAnalytics
 {
+    /**
+     * Decomposition-cycle baseline (panel revision, August 2026): the advisor
+     * specified **21 days** as the Foundation University operational baseline for
+     * aerobic composting. Used as the fallback when neither the category's
+     * `reference_duration_days` nor any historical release-batch average is on
+     * file. Per-category overrides still win (see `facilities_waste_categories`).
+     */
+    public const DEFAULT_DURATION_DAYS = 21;
+
     public function computeYield(float $inputKg, float $outputKg): float
     {
         if ($inputKg <= 0) {
@@ -50,11 +59,11 @@ final class BmgAnalytics
         };
     }
 
-    /** Start date + reference duration (fallback 45 days) → Y-m-d. */
+    /** Start date + reference duration (fallback DEFAULT_DURATION_DAYS) -> Y-m-d. */
     public function expectedCompletionDate(string $startDate, int $days): string
     {
         if ($days <= 0) {
-            $days = 45;
+            $days = self::DEFAULT_DURATION_DAYS;
         }
         return (new DateTimeImmutable($startDate))->modify("+{$days} days")->format('Y-m-d');
     }
@@ -71,7 +80,7 @@ final class BmgAnalytics
         return $exp < $now ? -$diff : $diff;
     }
 
-    /** Elapsed / total span, clamped 0–100. */
+    /** Elapsed / total span, clamped 0-100. */
     public function progressPercent(?string $startDate, ?string $expectedDate, ?string $today = null): int
     {
         if ($startDate === null || $startDate === '' || $expectedDate === null || $expectedDate === '') {

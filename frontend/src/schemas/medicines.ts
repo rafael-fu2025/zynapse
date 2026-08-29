@@ -40,9 +40,11 @@ export const medicineSchema = z.object({
   dosage_strength: z.string().nullable(),
   unit: z.string(),
   reorder_threshold: z.number().int().min(0),
+  target_stock: z.number().int().positive().nullable(),
   description: z.string().nullable(),
   quantity_on_hand: z.number().int().min(0),
   low_stock: z.boolean(),
+  stock_status: z.enum(['in_stock', 'needs_to_reorder', 'out_of_stock']),
   earliest_expiry: z.string().nullable(),
   archived: z.boolean(),
   created_at: z.string(),
@@ -59,11 +61,15 @@ export const createMedicineSchema = z.object({
   dosage_strength: z.string().max(100).optional(),
   unit: z.string().min(1).max(50).default('pc'),
   reorder_threshold: z.number().int().min(0).default(10),
+  target_stock: z.number().int().positive().optional(),
   // Free-text notes (indications, storage, supplier quirks, etc.). Optional
   // so existing forms that omit it keep working — backend accepts null.
   // 2000 chars mirrors `MedicineController::create()` validation.
   description: z.string().max(2000).optional(),
-});
+}).refine(
+  (v) => v.target_stock === undefined || v.target_stock > v.reorder_threshold,
+  { message: 'Must be greater than reorder threshold', path: ['target_stock'] },
+);
 export type CreateMedicineInput = z.infer<typeof createMedicineSchema>;
 
 /**
@@ -73,7 +79,11 @@ export type CreateMedicineInput = z.infer<typeof createMedicineSchema>;
  */
 export const updateMedicineSchema = z.object({
   reorder_threshold: z.number().int().min(0),
-});
+  target_stock: z.number().int().positive().optional(),
+}).refine(
+  (v) => v.target_stock === undefined || v.target_stock > v.reorder_threshold,
+  { message: 'Must be greater than reorder threshold', path: ['target_stock'] },
+);
 export type UpdateMedicineInput = z.infer<typeof updateMedicineSchema>;
 
 /**

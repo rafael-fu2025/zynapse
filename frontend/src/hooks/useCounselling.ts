@@ -10,11 +10,13 @@ import { kioskLookupSchema, type KioskLookupResult } from '@/hooks/usePatientLoo
 import {
   noteSchema,
   openSessionSchema,
+  sessionDetailSchema,
   sessionSchema,
   writeNotesSchema,
   type Note,
   type OpenSessionInput,
   type Session,
+  type SessionDetail,
   type WriteNotesInput,
 } from '@/schemas/counselling';
 
@@ -64,6 +66,18 @@ export function useSessions(cursor: string | null, limit = 25) {
   });
 }
 
+export function useSession(sessionId: number | null) {
+  return useQuery<SessionDetail, ApiEnvelopeError>({
+    queryKey: ['counselling', 'sessions', 'detail', sessionId],
+    enabled: sessionId !== null,
+    retry: false,
+    queryFn: async () => {
+      const res = await apiClient.get<unknown>(`/counselling/sessions/${sessionId}`);
+      return sessionDetailSchema.parse(res.data);
+    },
+  });
+}
+
 export function useOpenSession() {
   const qc = useQueryClient();
   return useMutation<Session, ApiEnvelopeError, OpenSessionInput>({
@@ -95,6 +109,7 @@ export function useWriteNotes() {
     },
     onSuccess: (_d, vars) => {
       void qc.invalidateQueries({ queryKey: ['counselling', 'notes', vars.sessionId] });
+      void qc.invalidateQueries({ queryKey: ['counselling', 'sessions', 'detail', vars.sessionId] });
       toast.success('Notes encrypted and saved.');
     },
     onError: (err) => {
@@ -125,6 +140,10 @@ export function useCloseSession() {
     },
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['counselling'] });
+      void qc.invalidateQueries({ queryKey: ['counselling-queue'] });
+      void qc.invalidateQueries({ queryKey: ['schedule', 'appointments'] });
+      void qc.invalidateQueries({ queryKey: ['schedule', 'analytics'] });
+      void qc.invalidateQueries({ queryKey: ['queue', 'public-state'] });
       toast.success('Session closed.');
     },
     onError: (err) => {

@@ -28,8 +28,12 @@ final class CounsellingPolicy extends BasePolicy
             'writeNotes' => 'counselling.records.write',
             'readNotes'  => 'counselling.records.read',
             'close'      => 'counselling.records.write',
+            'refer'      => 'counselling.records.write',
             'scheduleRead'   => 'counselling.schedule.read',
             'scheduleManage' => 'counselling.schedule.manage',
+            'scheduleTeamManage' => 'counselling.schedule.team_manage',
+            'queueRead'      => 'counselling.queue.read',
+            'queueManage'    => 'counselling.queue.manage',
             default      => null,
         };
         if ($code === null) {

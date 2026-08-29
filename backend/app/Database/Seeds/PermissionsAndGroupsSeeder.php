@@ -23,6 +23,10 @@ final class PermissionsAndGroupsSeeder extends Seeder
     private array $basePermissions = [
         'rbac.read'                                  => 'core',
         'rbac.manage'                                => 'core',
+        'portal.appointments.read'                   => 'core',
+        'portal.appointments.manage'                 => 'core',
+        'portal.queue.read'                          => 'core',
+        'kiosk.content.manage'                       => 'core',
 
         // Clinic
         'clinic.encounters.create'                   => 'clinic',
@@ -42,6 +46,7 @@ final class PermissionsAndGroupsSeeder extends Seeder
         'clinic.queue.manage'                        => 'clinic',
         'clinic.checkin.record'                      => 'clinic',
         'clinic.checkin.read'                        => 'clinic',
+        'kiosk.checkin.submit'                       => 'core',
         'clinic.treatments.read'                     => 'clinic',
         'clinic.triage.use'                          => 'clinic',
         'clinic.inventory.forecast'                  => 'clinic',
@@ -58,6 +63,9 @@ final class PermissionsAndGroupsSeeder extends Seeder
         'counselling.records.soft_delete'            => 'counselling',
         'counselling.schedule.read'                  => 'counselling',
         'counselling.schedule.manage'                => 'counselling',
+        'counselling.schedule.team_manage'           => 'counselling',
+        'counselling.queue.read'                     => 'counselling',
+        'counselling.queue.manage'                   => 'counselling',
 
         // Facilities (BMG)
         'facilities.units.read'                      => 'facilities',

@@ -54,6 +54,7 @@ import {
   useCreateReferral,
   useIssueQr,
   useReferralPatientLookup,
+  useQueueHandoff,
   useReferrals,
   useReviewReferral,
   useRevokeReferralQr,
@@ -677,6 +678,7 @@ export default function ReferralsPage() {
   const ack = useAcknowledgeReferral();
   const rev = useReviewReferral();
   const close = useCloseReferral();
+  const handoff = useQueueHandoff();
 
   function nextPage() {
     if (list.data?.next !== null && list.data?.next !== undefined) {
@@ -788,6 +790,18 @@ export default function ReferralsPage() {
                 <TableCell className="px-3 text-xs text-muted-foreground">{fmtUtcToApp(r.updated_at)}</TableCell>
                 <TableCell className="px-3 text-right">
                   <div className="flex justify-end gap-1">
+                    {(r.status === 'acknowledged' || r.status === 'under_review') &&
+                      (me.data?.permissions.includes('*') === true || me.data?.permissions.includes(`${r.target_module}.queue.manage`) === true) && (
+                      <Button
+                        className="min-h-11"
+                        size="sm"
+                        variant="outline"
+                        disabled={handoff.isPending || r.queue_handoff_entry_id != null}
+                        onClick={() => handoff.mutate(r.id)}
+                      >
+                        {r.queue_handoff_entry_id != null ? `In ${r.target_module === 'clinic' ? 'Clinic' : 'Guidance'} Queue` : `Send to ${r.target_module === 'clinic' ? 'Clinic' : 'Guidance'} Queue`}
+                      </Button>
+                    )}
                     {r.status === 'submitted' && (
                       <Button className="min-h-11" size="sm" variant="secondary" disabled={ack.isPending} onClick={() => ack.mutate(r.id)}>Acknowledge</Button>
                     )}

@@ -56,6 +56,16 @@ final class ScheduleService extends BaseService
 
     // --------------------------------------------------- availability
 
+    /** @return list<array{id:int,name:string}> */
+    public function counsellors(): array
+    {
+        $this->policy->check('scheduleRead');
+        $rows = $this->db->table('users u')->select('u.id,u.first_name,u.last_name,u.username')
+            ->join('auth_groups_users gu','gu.user_id=u.id')->join('auth_groups g','g.id=gu.group_id')
+            ->where('g.name','counsellor')->where('u.archived_at',null)->orderBy('u.last_name','ASC')->get()->getResultArray();
+        return array_map(static fn(array $r):array=>['id'=>(int)$r['id'],'name'=>trim($r['first_name'].' '.$r['last_name'])?:$r['username']],$rows);
+    }
+
     /**
      * @return array<int, array<string, mixed>>
      */
@@ -63,6 +73,7 @@ final class ScheduleService extends BaseService
     {
         $this->policy->check('scheduleRead');
 
+        $counsellorUserId = $this->scheduleScope($counsellorUserId);
         $builder = $this->db->table('counselling_availability')
             ->select('id, counsellor_user_id, day_of_week, start_time, end_time, max_slots, is_active')
             ->where('is_active', 1)
@@ -89,11 +100,11 @@ final class ScheduleService extends BaseService
      */
     public function addSlot(array $input): array
     {
-        $this->policy->check('scheduleManage');
         $userId = \App\Auth\CurrentUser::assert();
+        $counsellorId = (int) ($input['counsellor_user_id'] ?? $userId);
+        $this->assertScheduleMutation($counsellorId);
 
-        return $this->txn(function () use ($input, $userId): array {
-            $counsellorId = (int) ($input['counsellor_user_id'] ?? $userId);
+        return $this->txn(function () use ($input, $userId, $counsellorId): array {
             $start        = (string) $input['start_time'];
             $end          = (string) $input['end_time'];
             if ($start >= $end) {
@@ -124,7 +135,6 @@ final class ScheduleService extends BaseService
     /** Soft removal — the slot stops accepting bookings. */
     public function removeSlot(int $id): void
     {
-        $this->policy->check('scheduleManage');
         $userId = \App\Auth\CurrentUser::assert();
 
         $this->txn(function () use ($id, $userId): void {
@@ -134,6 +144,7 @@ final class ScheduleService extends BaseService
                     ['code' => 'resource.not_found', 'message' => "Availability slot #{$id} not found."],
                 ]);
             }
+            $this->assertScheduleMutation((int) $row['counsellor_user_id']);
             $this->db->table('counselling_availability')->where('id', $id)->update([
                 'is_active'  => 0,
                 'updated_at' => $this->utcNow(),
@@ -151,10 +162,14 @@ final class ScheduleService extends BaseService
     {
         $this->policy->check('scheduleRead');
 
+        $scope = $this->scheduleScope(null);
         $builder = $this->db->table('counselling_appointments')
             ->select('*')
             ->orderBy('created_at', 'DESC')
             ->orderBy('id', 'DESC');
+        if ($scope !== null) {
+            $builder->where('counsellor_user_id', $scope);
+        }
         if ($status !== null && $status !== '') {
             $builder->where('status', $status);
         }
@@ -179,11 +194,11 @@ final class ScheduleService extends BaseService
      */
     public function book(array $input): array
     {
-        $this->policy->check('scheduleManage');
         $userId = \App\Auth\CurrentUser::assert();
+        $counsellorId = (int) ($input['counsellor_user_id'] ?? $userId);
+        $this->assertScheduleMutation($counsellorId);
 
-        return $this->txn(function () use ($input, $userId): array {
-            $counsellorId = (int) ($input['counsellor_user_id'] ?? $userId);
+        return $this->txn(function () use ($input, $userId, $counsellorId): array {
             $date         = (string) $input['appointment_date'];
             $start        = (string) $input['start_time'];
             $end          = (string) $input['end_time'];
@@ -244,6 +259,10 @@ final class ScheduleService extends BaseService
             $this->audit->enqueue('counselling.appointment_booked', 'counselling_appointments', $id, $userId, [
                 'resource_code' => 'appt#' . (string) $id,
             ]);
+            $appointmentAt = (new DateTimeImmutable($date . ' ' . $start, new DateTimeZone('Asia/Manila')))->setTimezone(new DateTimeZone('UTC'))->format(DATE_ATOM);
+            foreach (array_unique(array_filter([$patient !== null ? (int) $patient['id'] : 0, $counsellorId])) as $recipient) {
+                \Config\Services::notificationOutbox()->enqueue($recipient, 'appointment.scheduled', ['resource_code'=>'appointment#'.$id,'appointment_at'=>$appointmentAt,'appointment_status'=>'scheduled','destination'=>'counselling']);
+            }
 
             $row = $this->db->table('counselling_appointments')->where('id', $id)->get()->getRowArray();
             return $this->appointmentRow($row);
@@ -258,7 +277,6 @@ final class ScheduleService extends BaseService
      */
     public function transition(int $id, string $action, ?string $cancellationReason): array
     {
-        $this->policy->check('scheduleManage');
         $userId = \App\Auth\CurrentUser::assert();
 
         if (! isset(self::TRANSITIONS[$action])) {
@@ -274,6 +292,7 @@ final class ScheduleService extends BaseService
                     ['code' => 'resource.not_found', 'message' => "Appointment #{$id} not found."],
                 ]);
             }
+            $this->assertScheduleMutation((int) $row['counsellor_user_id']);
 
             $current = (string) $row['status'];
             if (! in_array($current, self::TRANSITIONS[$action], true)) {
@@ -286,6 +305,9 @@ final class ScheduleService extends BaseService
                 $update['cancellation_reason'] = $cancellationReason;
             }
             $this->db->table('counselling_appointments')->where('id', $id)->update($update);
+            if (in_array($action, ['cancel', 'no_show'], true)) {
+                $this->db->table('counselling_queue_entries')->where('counselling_appointment_id', $id)->whereIn('status', ['waiting','called'])->update(['status'=>'skipped','finished_at'=>$now,'updated_at'=>$now]);
+            }
 
             // Three-strike no-show counter (consolidated `users`
             // column; UPDATE by patient_user_id, never a JOIN).
@@ -312,6 +334,10 @@ final class ScheduleService extends BaseService
                 $userId,
                 ['outcome' => self::RESULT[$action]],
             );
+            $appointmentAt = (new DateTimeImmutable((string) $row['appointment_date'].' '.(string) $row['start_time'], new DateTimeZone('Asia/Manila')))->setTimezone(new DateTimeZone('UTC'))->format(DATE_ATOM);
+            foreach (array_unique(array_filter([$patientUserId ?? 0, (int) $row['counsellor_user_id']])) as $recipient) {
+                \Config\Services::notificationOutbox()->enqueue($recipient, 'appointment.'.self::RESULT[$action], ['resource_code'=>'appointment#'.$id,'appointment_at'=>$appointmentAt,'appointment_status'=>self::RESULT[$action],'destination'=>'counselling']);
+            }
 
             $fresh = $this->db->table('counselling_appointments')->where('id', $id)->get()->getRowArray();
             return $this->appointmentRow($fresh);
@@ -330,8 +356,11 @@ final class ScheduleService extends BaseService
      */
     public function recomputeAnalytics(?int $counsellorUserId): array
     {
-        $this->policy->check('scheduleManage');
         $userId = \App\Auth\CurrentUser::assert();
+        $counsellorUserId = $this->scheduleScope($counsellorUserId);
+        if (! $this->canTeamManage()) {
+            $this->policy->check('scheduleManage');
+        }
 
         return $this->txn(function () use ($counsellorUserId, $userId): array {
             // DAYOFWEEK() is 1=Sun..7=Sat; -1 normalises to the 0=Sun..6=Sat
@@ -403,6 +432,7 @@ final class ScheduleService extends BaseService
     public function listAnalytics(?int $counsellorUserId): array
     {
         $this->policy->check('scheduleRead');
+        $counsellorUserId = $this->scheduleScope($counsellorUserId);
 
         $builder = $this->db->table('counselling_scheduling_analytics')
             ->select('id, counsellor_user_id, day_of_week, time_slot, total_appointments, total_no_shows, no_show_rate, avg_utilization, recommended_overbooking, last_calculated_at')
@@ -454,5 +484,34 @@ final class ScheduleService extends BaseService
     private function utcNow(): string
     {
         return (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
+    }
+
+    private function canTeamManage(): bool
+    {
+        return \Config\Services::permissionService()->userHas(
+            \App\Auth\CurrentUser::assert(),
+            'counselling.schedule.team_manage',
+        );
+    }
+
+    /** Team managers may choose a counsellor; everyone else is self-scoped. */
+    private function scheduleScope(?int $requested): ?int
+    {
+        if ($this->canTeamManage()) {
+            return $requested;
+        }
+        $this->policy->check('scheduleRead');
+        return \App\Auth\CurrentUser::assert();
+    }
+
+    private function assertScheduleMutation(int $counsellorId): void
+    {
+        if ($this->canTeamManage()) {
+            return;
+        }
+        $this->policy->check('scheduleManage');
+        if ($counsellorId !== \App\Auth\CurrentUser::assert()) {
+            throw ApiException::forbidden('rbac.record.forbidden');
+        }
     }
 }

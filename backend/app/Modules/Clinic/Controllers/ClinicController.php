@@ -9,15 +9,19 @@ use App\Exceptions\ApiException;
 use CodeIgniter\HTTP\ResponseInterface;
 use Config\Services;
 use Modules\Clinic\Policies\ClinicPolicy;
+use Modules\Referrals\Policies\ReferralPolicy;
+use Modules\Referrals\Services\ReferralService;
 use Modules\Clinic\Services\ClinicService;
 
 final class ClinicController extends ApiController
 {
     private readonly ClinicService $service;
+    private readonly ReferralService $referrals;
 
-    public function __construct(?ClinicService $service = null)
+    public function __construct(?ClinicService $service = null, ?ReferralService $referrals = null)
     {
         $this->service = $service ?? new ClinicService(new ClinicPolicy(), Services::auditOutbox(), Services::notificationOutbox());
+        $this->referrals = $referrals ?? new ReferralService(new ReferralPolicy(), Services::auditOutbox(), Services::encryptionService(), Services::notificationOutbox());
     }
 
     public function listEncounters(): ResponseInterface
@@ -75,6 +79,33 @@ final class ClinicController extends ApiController
     public function listVitals(int $encounterId): ResponseInterface
     {
         return $this->ok($this->service->listVitals($encounterId));
+    }
+
+    public function getEncounter(int $encounterId): ResponseInterface
+    {
+        return $this->ok($this->service->getEncounter($encounterId));
+    }
+
+    public function createReferral(int $encounterId): ResponseInterface
+    {
+        $payload = $this->request->getJSON(true) ?? [];
+        if (! $this->makeValidation([
+            'reason_code' => 'permit_empty|max_length[64]',
+            'notes_plaintext' => 'permit_empty|max_length[8192]',
+        ])->run($payload)) {
+            throw ApiException::validationFailure($this->collectErrors());
+        }
+        $dto = $this->referrals->createFromEncounter(
+            $encounterId,
+            isset($payload['reason_code']) && $payload['reason_code'] !== '' ? (string) $payload['reason_code'] : null,
+            isset($payload['notes_plaintext']) && $payload['notes_plaintext'] !== '' ? (string) $payload['notes_plaintext'] : null,
+        );
+        return $this->ok($dto->toArray(), null, 201);
+    }
+
+    public function previousHeightWeight(int $encounterId): ResponseInterface
+    {
+        return $this->ok($this->service->previousHeightWeight($encounterId));
     }
 
     public function closeEncounter(int $encounterId): ResponseInterface

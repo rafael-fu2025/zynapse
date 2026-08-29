@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 12+ system splash icon (v26+ adaptive icon). The maroon crest is
+     rendered inside the mask's safe zone (no cropping). Background is WHITE
+     (not the launcher's maroon ic_launcher_background) so the maroon crest
+     is visible, matching the login screen and launch_background splash. -->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@color/splash_icon_background" />
+    <foreground android:drawable="@drawable/splash_icon_foreground" />
+</adaptive-icon>

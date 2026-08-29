@@ -105,7 +105,12 @@ final class InventoryItemsSeeder extends Seeder
         $now = (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))->format('Y-m-d H:i:s');
         $rows = [];
         foreach ($this->items() as $i) {
-            $rows[] = $i + ['archived_at' => null, 'created_at' => $now, 'updated_at' => $now];
+            $rows[] = $i + [
+                'target_stock' => max(1, $i['reorder_level'] * 2),
+                'archived_at' => null,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ];
         }
         $this->db->table('clinic_inventory_items')->insertBatch($rows);
 

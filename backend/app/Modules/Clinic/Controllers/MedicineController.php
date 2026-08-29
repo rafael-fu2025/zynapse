@@ -76,6 +76,7 @@ final class MedicineController extends ApiController
             'dosage_strength'   => 'permit_empty|max_length[100]',
             'unit'              => 'permit_empty|max_length[50]',
             'reorder_threshold' => 'permit_empty|is_natural',
+            'target_stock'      => 'permit_empty|is_natural_no_zero',
             'description'       => 'permit_empty|max_length[2000]',
         ];
         if (! $this->makeValidation($rules)->run($payload)) {
@@ -128,12 +129,17 @@ final class MedicineController extends ApiController
 
         $rules = [
             'reorder_threshold' => 'required|is_natural',
+            'target_stock'      => 'permit_empty|is_natural_no_zero',
         ];
         if (! $this->makeValidation($rules)->run($payload)) {
             throw ApiException::validationFailure($this->collectErrors());
         }
 
-        return $this->ok($this->service->updateMedicine($id, ['reorder_threshold' => (int) $payload['reorder_threshold']])->toArray());
+        $input = ['reorder_threshold' => (int) $payload['reorder_threshold']];
+        if (array_key_exists('target_stock', $payload) && $payload['target_stock'] !== '') {
+            $input['target_stock'] = (int) $payload['target_stock'];
+        }
+        return $this->ok($this->service->updateMedicine($id, $input)->toArray());
     }
 
     /**

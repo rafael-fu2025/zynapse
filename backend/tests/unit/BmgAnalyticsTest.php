@@ -59,8 +59,9 @@ final class BmgAnalyticsTest extends TestCase
 
     public function testExpectedCompletionFallbackWhenZero(): void
     {
-        // 0 → fallback 45 days.
-        $this->assertSame('2026-02-15', $this->a->expectedCompletionDate('2026-01-01', 0));
+        // 0 -> panel-approved fallback of 21 days.
+        $this->assertSame(21, BmgAnalytics::DEFAULT_DURATION_DAYS);
+        $this->assertSame('2026-01-22', $this->a->expectedCompletionDate('2026-01-01', 0));
     }
 
     public function testDaysUntilExpectedFuture(): void
@@ -80,7 +81,7 @@ final class BmgAnalyticsTest extends TestCase
 
     public function testProgressPercent(): void
     {
-        // start 01-01, expected 01-11 (10-day span), today 01-06 → 50%.
+        // start 01-01, expected 01-11 (10-day span), today 01-06 -> 50%.
         $this->assertSame(50, $this->a->progressPercent('2026-01-01', '2026-01-11', '2026-01-06'));
     }
 

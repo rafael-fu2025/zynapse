@@ -26,6 +26,8 @@ export function useScan() {
       const valid = scanInputSchema.parse(input);
       const payload: Record<string, unknown> = {
         method: valid.method,
+        destination: valid.destination,
+        custom_purpose: valid.custom_purpose,
       };
       if (valid.identifier !== undefined && valid.identifier !== '') payload['identifier'] = valid.identifier;
       if (valid.guest_name !== undefined && valid.guest_name !== '') payload['guest_name'] = valid.guest_name;

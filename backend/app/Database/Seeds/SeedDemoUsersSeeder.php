@@ -36,6 +36,7 @@ final class SeedDemoUsersSeeder extends Seeder
     private const USERS = [
         ['first' => 'Nina',  'last' => 'Reyes',      'username' => 'synapse-clinic-staff',        'group' => 'clinic_staff'],
         ['first' => 'Liza',  'last' => 'Santos',     'username' => 'synapse-counsellor',          'group' => 'counsellor'],
+        ['first' => 'Kiosk', 'last' => 'Station',    'username' => 'synapse-kiosk',               'group' => 'kiosk'],
         ['first' => 'Mark',  'last' => 'Villanueva', 'username' => 'synapse-facilities-op',       'group' => 'facilities_op'],
         ['first' => 'Tina',  'last' => 'Aquino',     'username' => 'synapse-audit-reader',        'group' => 'audit_reader'],
         // Phase 19 (ACTOR_ACCESS_ANALYSIS): read-only analytics role.

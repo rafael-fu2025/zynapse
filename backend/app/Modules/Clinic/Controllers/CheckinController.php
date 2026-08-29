@@ -29,10 +29,12 @@ final class CheckinController extends ApiController
         $payload = $this->request->getJSON(true) ?? [];
 
         $rules = [
+            'destination'=> 'required|in_list[clinic,counselling]',
             'identifier' => 'permit_empty|max_length[255]',
             'method'     => 'permit_empty|in_list[qr,rfid,manual]',
             'station_id' => 'permit_empty|max_length[64]',
             'purpose'    => 'permit_empty|max_length[120]',
+            'custom_purpose' => 'permit_empty',
             'guest_name' => 'permit_empty|max_length[120]',
             'scanned_at' => 'permit_empty|valid_date[Y-m-d H:i:s]',
         ];
@@ -43,6 +45,11 @@ final class CheckinController extends ApiController
         if (($payload['identifier'] ?? '') === '' && ($payload['guest_name'] ?? '') === '') {
             throw ApiException::validationFailure([
                 ['code' => 'validation.field', 'message' => 'Either identifier or guest_name is required.', 'field' => 'identifier'],
+            ]);
+        }
+        if (trim((string) ($payload['purpose'] ?? '')) === '') {
+            throw ApiException::validationFailure([
+                ['code' => 'validation.field', 'message' => 'Purpose is required.', 'field' => 'purpose'],
             ]);
         }
 

@@ -122,7 +122,7 @@ const NAV_SECTIONS: ReadonlyArray<{ title: string; items: ReadonlyArray<NavItem>
       { label: 'Reports', href: '/reports', icon: BarChart3, permission: 'reports.read' },
       { label: 'Audit', href: '/audit', icon: ScrollText, permission: 'audit.read' },
       { label: 'Users', href: '/admin/users', icon: Users, permission: 'rbac.manage' },
-      { label: 'Kiosk Settings', href: '/admin/kiosk-settings', icon: Settings, permission: 'rbac.manage' },
+      { label: 'Kiosk Settings', href: '/admin/kiosk-settings', icon: Settings, permission: 'kiosk.content.manage' },
     ],
   },
 ];

@@ -14,13 +14,23 @@ final class Routes implements BaseRoutes
         $routes->group('api/v1/counselling', ['namespace' => 'Modules\\Counselling\\Controllers', 'filter' => 'api_auth'], static function (RouteCollection $r): void {
             $r->get('sessions',                       'CounsellingController::listSessions');
             $r->post('sessions',                      'CounsellingController::openSession');
+            $r->get('sessions/(:num)',                'CounsellingController::getSession/$1');
+            $r->post('sessions/(:num)/referrals',     'CounsellingController::createReferral/$1');
             $r->get('patient-lookup',                 'CounsellingController::lookupPatient');
             $r->post('sessions/(:num)/notes',         'CounsellingController::writeNotes/$1');
             $r->get('sessions/(:num)/notes',          'CounsellingController::readNotes/$1');
             $r->post('sessions/(:num)/close',         'CounsellingController::closeSession/$1');
 
+            // Guidance queue (user-facing label); counselling remains the
+            // internal module and route namespace.
+            $r->get('queue',                          'QueueController::today');
+            $r->post('queue/call-next',               'QueueController::callNext');
+            $r->post('queue/(:num)/transition',       'QueueController::transition/$1');
+            $r->post('queue/(:num)/repair-session',   'QueueController::repairSession/$1');
+
             // Scheduling (Phase 15 — recycled from synapse_ag).
             $r->get('availability',                   'ScheduleController::listAvailability');
+            $r->get('counsellors',                    'ScheduleController::counsellors');
             $r->post('availability',                  'ScheduleController::addSlot');
             $r->post('availability/(:num)/remove',    'ScheduleController::removeSlot/$1');
             $r->get('appointments',                   'ScheduleController::listAppointments');

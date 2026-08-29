@@ -18,6 +18,11 @@ use CodeIgniter\Router\RouteCollection;
 $routes->get('api/v1/health', static fn () => service('response')
     ->setJSON(['success' => true, 'data' => ['status' => 'ok'], 'errors' => null, 'meta' => null]));
 
+// A matching route is required before CodeIgniter can run its CORS filter for
+// browser preflight requests. The filter validates the origin and completes
+// valid OPTIONS requests before this fallback closure is invoked.
+$routes->options('api/v1/(:any)', static fn () => service('response')->setStatusCode(204));
+
 // ---------------------------------------------------------------------
 // Auth (Shield-adapted). Login/refresh carry a strict `auth`
 // rate-limit bucket on top of the global `api/*` bucket.
@@ -48,6 +53,12 @@ Modules\Facilities\Routes::register($routes);
 Modules\Referrals\Routes::register($routes);
 Modules\Reports\Routes::register($routes);
 
+// Public media content uses an unguessable UUID and contains no gallery
+// metadata. Management remains authenticated under /admin below.
+$routes->get('api/v1/kiosk-media/(:segment)/content', 'Api\\Admin\\KioskMediaController::content/$1');
+$routes->get('api/v1/kiosk-media/(:segment)/thumbnail', 'Api\\Admin\\KioskMediaController::thumbnail/$1');
+$routes->get('api/v1/kiosk-settings', 'Api\\Admin\\KioskSettingsController::show');
+
 // ---------------------------------------------------------------------
 // Audit reader — append-only, hash-chained, DB-driven RBAC.
 // ---------------------------------------------------------------------
@@ -69,6 +80,11 @@ $routes->group('api/v1/admin', ['namespace' => 'App\Controllers\Api\Admin', 'fil
     $r->post('users/(:num)/status',        'UserController::setStatus/$1');
     $r->post('users/(:num)/groups',        'UserController::setGroups/$1');
     $r->post('users/(:num)/reset-password','UserController::resetPassword/$1');
+    $r->get('kiosk-media',                     'KioskMediaController::index');
+    $r->post('kiosk-media',                    'KioskMediaController::upload');
+    $r->post('kiosk-media/(:num)/archive',     'KioskMediaController::archive/$1');
+    $r->post('kiosk-media/(:num)/unarchive',   'KioskMediaController::restore/$1');
+    $r->post('kiosk-settings',                 'KioskSettingsController::update');
 });
 
 // ---------------------------------------------------------------------

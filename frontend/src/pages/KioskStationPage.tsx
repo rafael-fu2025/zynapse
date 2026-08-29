@@ -21,7 +21,7 @@
  * station screen is bystander-readable, so results only show in the
  * auto-clearing queue modal.
  */
-import { CloudOff, Loader2, ScanLine } from 'lucide-react';
+import { CloudOff, HeartHandshake, Loader2, ScanLine, Stethoscope } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -38,17 +38,7 @@ import {
 import { usePatientLookup, type KioskLookupResult } from '@/hooks/usePatientLookup';
 import { cn } from '@/lib/utils';
 import { unlockAudio } from '@/lib/chime';
-
-const PURPOSE_OPTIONS = [
-  'Consultation',
-  'Medical Certificate',
-  'Dental',
-  'Physical Exam',
-  'Vaccination',
-  'Laboratory',
-  'Pharmacy',
-  'Injury',
-] as const;
+import { KIOSK_DESTINATIONS, KIOSK_PURPOSES, destinationLabel } from '@/lib/kioskPurposes';
 
 // The three physical check-in stations. The selected value is persisted
 // (localStorage via the controller) and sent as `station_id` on every
@@ -76,6 +66,7 @@ function StationSuggestions({
   lookup,
   onSelectPatient,
   onSelectGuest,
+  allowGuest,
 }: {
   id: string;
   visible: boolean;
@@ -83,6 +74,7 @@ function StationSuggestions({
   lookup: ReturnType<typeof usePatientLookup>;
   onSelectPatient: (p: KioskLookupResult) => void;
   onSelectGuest: (name: string) => void;
+  allowGuest: boolean;
 }) {
   if (!visible) return null;
   return (
@@ -128,8 +120,8 @@ function StationSuggestions({
           </button>
         </li>
       ))}
-      {/* Guest walk-in — no account / patient record. */}
-      <li>
+      {/* Guidance records require a registered patient identity. */}
+      {allowGuest && <li>
         <button
           type="button"
           role="option"
@@ -146,13 +138,13 @@ function StationSuggestions({
           </span>
           <Badge variant="outline">Guest</Badge>
         </button>
-      </li>
+      </li>}
     </ul>
   );
 }
 
 export default function KioskStationPage() {
-  const k = useKioskController();
+  const k = useKioskController(15, null);
   const nameInputRef = useRef<HTMLInputElement>(null);
   // In-flight guard: blocks a rapid double-trigger (double-tap, or Enter
   // followed by a click) from submitting the same check-in twice. Released
@@ -228,8 +220,8 @@ export default function KioskStationPage() {
 
   const isNumericId = /^\d+$/.test(k.identifier.trim());
   const patientReady =
-    k.resolvedPatient !== null || isNumericId || nameValue.trim() !== '';
-  const canCheckIn = patientReady && k.purpose.trim() !== '' && !k.scanPending;
+    k.resolvedPatient !== null || isNumericId || (k.destination === 'clinic' && nameValue.trim() !== '');
+  const canCheckIn = k.destination !== null && patientReady && k.purpose.trim() !== '' && !k.scanPending;
 
   function handleIdChange(v: string): void {
     // ID field accepts integers only; the combobox then matches by number.
@@ -279,7 +271,7 @@ export default function KioskStationPage() {
       return;
     }
     // 3) The name field holds a guest name (no account / patient record).
-    if (nameValue.trim() !== '') {
+    if (nameValue.trim() !== '' && k.destination === 'clinic') {
       submitLockRef.current = true;
       k.submitGuest(nameValue.trim(), k.purpose);
     }
@@ -321,12 +313,45 @@ export default function KioskStationPage() {
             />
           </span>
           <div>
-            <h1 className="text-2xl font-semibold tracking-tight">Clinic Check-in</h1>
+            <h1 className="text-2xl font-semibold tracking-tight">SYNAPSE Check-in</h1>
             <p className="text-sm text-muted-foreground">SYNAPSE self-service station</p>
           </div>
         </header>
 
+        {k.destination === null ? (
+          <section className="space-y-6 rounded-2xl border bg-card p-6 shadow-sm">
+            <div className="text-center">
+              <h2 className="text-2xl font-semibold">Where are you going?</h2>
+              <p className="mt-1 text-muted-foreground">Choose a destination to begin check-in.</p>
+            </div>
+            <div className="grid gap-4 sm:grid-cols-2">
+              {KIOSK_DESTINATIONS.map((destination) => {
+                const Icon = destination.value === 'counselling' ? HeartHandshake : Stethoscope;
+                return (
+                  <button
+                    key={destination.value}
+                    type="button"
+                    onClick={() => k.setDestination(destination.value)}
+                    className="flex min-h-48 flex-col items-center justify-center gap-4 rounded-2xl border-2 border-input bg-background p-6 text-center transition hover:border-primary hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    <Icon className="size-12 text-primary" aria-hidden />
+                    <span className="text-2xl font-semibold">{destination.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </section>
+        ) : (
         <section className="space-y-4 rounded-2xl border bg-card p-6 shadow-sm">
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-muted/50 px-4 py-3">
+            <div>
+              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Destination</p>
+              <p className="text-lg font-semibold">{destinationLabel(k.destination)}</p>
+            </div>
+            <Button type="button" variant="outline" onClick={() => k.setDestination(null)}>
+              Change destination
+            </Button>
+          </div>
           {/* Which station this device is — Kiosk 1 / 2 / 3. The choice
               persists and flows into every check-in + encounter. */}
           <div className="flex flex-wrap items-center justify-between gap-2">
@@ -388,6 +413,7 @@ export default function KioskStationPage() {
                 lookup={lookup}
                 onSelectPatient={selectPatient}
                 onSelectGuest={selectGuest}
+                allowGuest={k.destination === 'clinic'}
               />
             </div>
 
@@ -424,18 +450,20 @@ export default function KioskStationPage() {
                 lookup={nameLookup}
                 onSelectPatient={selectPatient}
                 onSelectGuest={selectGuest}
+                allowGuest={k.destination === 'clinic'}
               />
             </div>
           </div>
 
           {/* Purpose cards — one tap, plus "Other" for a custom reason. */}
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
-              {PURPOSE_OPTIONS.map((p) => (
+              {KIOSK_PURPOSES[k.destination].map((p) => (
                 <button
                   key={p}
                   type="button"
                   onClick={() => {
                     k.setPurpose(p);
+                    k.setCustomPurpose(false);
                     setOtherOpen(false);
                   }}
                   aria-pressed={!otherOpen && k.purpose === p}
@@ -454,6 +482,7 @@ export default function KioskStationPage() {
                 onClick={() => {
                   setOtherOpen(true);
                   k.setPurpose('');
+                  k.setCustomPurpose(true);
                 }}
                 aria-pressed={otherOpen}
                 className={cn(
@@ -498,6 +527,7 @@ export default function KioskStationPage() {
           </div>
           <RejectedScansAlert rejected={k.rejected} onDismiss={k.dismissRejected} />
         </section>
+        )}
       </div>
 
       <QueueAssignmentDialog result={k.result} onDone={k.clearResult} />

@@ -66,6 +66,7 @@ final class ReferralPolicy extends BasePolicy
             'review'      => 'referrals.review',
             'close'       => 'referrals.close',
             'issueQr'     => 'referrals.issue_qr',
+            'handoff'     => 'referrals.acknowledge',
             default       => null,
         };
         if ($code === null) {

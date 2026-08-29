@@ -364,7 +364,7 @@ export default function ReportsPage() {
                 <div>
                   <h2 id="inventory-current-heading" className="text-base font-semibold">Current inventory health</h2>
                   <p className="text-xs text-muted-foreground">
-                    Live snapshot{inventory.data !== undefined ? ' retrieved ' + fmtUtcToApp(inventory.data.snapshot_at) : ''}. It is not a historical balance.
+                    Live stock snapshot{inventory.data !== undefined ? ' retrieved ' + fmtUtcToApp(inventory.data.snapshot_at) : ''}. It is not a historical stock level.
                   </p>
                 </div>
                 <div className="grid min-w-0 gap-4 xl:grid-cols-3">

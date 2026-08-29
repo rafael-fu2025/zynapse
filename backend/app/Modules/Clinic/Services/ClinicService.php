@@ -15,15 +15,20 @@ use DateTimeZone;
 use Modules\Clinic\DTOs\EncounterDto;
 use Modules\Clinic\DTOs\VitalsDto;
 use Modules\Clinic\Policies\ClinicPolicy;
+use Modules\Referrals\DTOs\ReferralDto;
 
 final class ClinicService extends BaseService
 {
+    private readonly EncounterCompletionService $completion;
+
     public function __construct(
         private readonly ClinicPolicy $policy,
         private readonly AuditOutboxService $audit,
         private readonly NotificationOutboxService $notify,
+        ?EncounterCompletionService $completion = null,
     ) {
         parent::__construct();
+        $this->completion = $completion ?? new EncounterCompletionService($this->audit);
     }
 
     /**
@@ -255,6 +260,100 @@ final class ClinicService extends BaseService
         return array_map(static fn (array $r): array => VitalsDto::fromRow($r)->toArray(), $rows);
     }
 
+    /** @return array<string, mixed> */
+    public function getEncounter(int $encounterId): array
+    {
+        $row = $this->db->table('clinic_encounters e')
+            ->select('e.*, u.first_name, u.last_name, q.id AS queue_entry_id, q.position AS queue_position, q.status AS queue_status, q.called_at AS queue_called_at, q.started_at AS queue_started_at, q.finished_at AS queue_finished_at, q.referral_id AS incoming_referral_id')
+            ->join('users u', 'u.id = e.patient_user_id', 'left')
+            ->join('clinic_queue_entries q', 'q.encounter_id = e.id', 'left')
+            ->where('e.id', $encounterId)->where('e.archived_at', null)
+            ->get()->getRowArray();
+        if ($row === null) {
+            throw new ApiException('resource.not_found', 404, [[
+                'code' => 'resource.not_found', 'message' => "Encounter #{$encounterId} not found.",
+            ]]);
+        }
+        $this->policy->check('view', $row);
+
+        $vitalsCount = (int) $this->db->table('clinic_vitals')->where('encounter_id', $encounterId)->countAllResults();
+        $treatmentCount = (int) $this->db->table('clinic_treatments')->where('encounter_id', $encounterId)->countAllResults();
+        $outgoing = $this->db->table('referral_referrals')
+            ->where('source_encounter_id', $encounterId)->where('archived_at', null)
+            ->orderBy('id', 'DESC')->limit(1)->get()->getRowArray();
+        $position = $row['queue_position'] !== null ? (int) $row['queue_position'] : null;
+
+        return array_merge(EncounterDto::fromRow($row)->toArray(), [
+            'queue_entry_id' => $row['queue_entry_id'] !== null ? (int) $row['queue_entry_id'] : null,
+            'queue_number' => $position !== null ? sprintf('C-%03d', $position) : null,
+            'queue_status' => $row['queue_status'] !== null ? (string) $row['queue_status'] : null,
+            'queue_called_at' => $row['queue_called_at'] !== null ? (string) $row['queue_called_at'] : null,
+            'queue_started_at' => $row['queue_started_at'] !== null ? (string) $row['queue_started_at'] : null,
+            'queue_finished_at' => $row['queue_finished_at'] !== null ? (string) $row['queue_finished_at'] : null,
+            'incoming_referral_id' => $row['incoming_referral_id'] !== null ? (int) $row['incoming_referral_id'] : null,
+            'vitals_count' => $vitalsCount,
+            'treatment_count' => $treatmentCount,
+            'assessment_recorded' => $row['triage_priority'] !== null || trim((string) ($row['diagnosis'] ?? '')) !== '',
+            'outgoing_referral' => $outgoing !== null ? ReferralDto::fromRow($outgoing)->toArray() : null,
+        ]);
+    }
+
+    /**
+     * Return only the latest reusable anthropometric measurements from a
+     * previous encounter for the same patient. Visit-specific readings such
+     * as blood pressure, pulse, temperature, and SpO2 are deliberately not
+     * selected or returned.
+     *
+     * @return array{source_encounter_id:int, weight_kg:?float, height_cm:?float, recorded_at:string}|null
+     */
+    public function previousHeightWeight(int $encounterId): ?array
+    {
+        $this->policy->check('vitalsRead');
+
+        $encounter = $this->db->table('clinic_encounters')
+            ->select('id, patient_user_id, patient_school_id')
+            ->where('id', $encounterId)
+            ->where('archived_at', null)
+            ->get()->getRowArray();
+
+        if ($encounter === null) {
+            throw new ApiException('resource.not_found', 404, [
+                ['code' => 'resource.not_found', 'message' => "Encounter #{$encounterId} not found."],
+            ]);
+        }
+
+        $builder = $this->db->table('clinic_vitals v')
+            ->select('v.encounter_id AS source_encounter_id, v.weight_kg, v.height_cm, v.recorded_at')
+            ->join('clinic_encounters e', 'e.id = v.encounter_id', 'inner')
+            ->where('e.archived_at', null)
+            ->where('e.id !=', $encounterId)
+            ->groupStart()
+                ->where('v.weight_kg IS NOT NULL', null, false)
+                ->orWhere('v.height_cm IS NOT NULL', null, false)
+            ->groupEnd()
+            ->orderBy('v.recorded_at', 'DESC')
+            ->orderBy('v.id', 'DESC')
+            ->limit(1);
+
+        if (isset($encounter['patient_user_id']) && $encounter['patient_user_id'] !== null) {
+            $builder->where('e.patient_user_id', (int) $encounter['patient_user_id']);
+        } else {
+            $builder->where('e.patient_school_id', (string) $encounter['patient_school_id']);
+        }
+
+        $row = $builder->get()->getRowArray();
+        if ($row === null) {
+            return null;
+        }
+
+        return [
+            'source_encounter_id' => (int) $row['source_encounter_id'],
+            'weight_kg' => $row['weight_kg'] !== null ? (float) $row['weight_kg'] : null,
+            'height_cm' => $row['height_cm'] !== null ? (float) $row['height_cm'] : null,
+            'recorded_at' => (string) $row['recorded_at'],
+        ];
+    }
+
     public function closeEncounter(int $encounterId): EncounterDto
     {
         $userId = \App\Auth\CurrentUser::assert();
@@ -269,47 +368,8 @@ final class ClinicService extends BaseService
             }
 
             $this->policy->check('close', $enc);
-
             $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
-
-            $this->db->table('clinic_encounters')
-                ->where('id', $encounterId)
-                ->update([
-                    'status'     => 'closed',
-                    'closed_at'  => $now,
-                    'updated_at' => $now,
-                ]);
-
-            // Panel revision: closing the visit completes its linked
-            // appointment (scheduling layer follows the encounter).
-            if (isset($enc['appointment_id']) && $enc['appointment_id'] !== null) {
-                $appt = $this->selectForUpdate('clinic_appointments', [
-                    'id'          => (int) $enc['appointment_id'],
-                    'archived_at' => null,
-                ]);
-                if ($appt !== null && (string) $appt['status'] === 'checked_in') {
-                    $this->db->table('clinic_appointments')
-                        ->where('id', (int) $appt['id'])
-                        ->update(['status' => 'completed', 'updated_at' => $now]);
-                    $this->audit->enqueue(
-                        'clinic.appointment_completed',
-                        'clinic_appointments',
-                        (int) $appt['id'],
-                        $userId,
-                        ['previous_status' => 'checked_in', 'next_status' => 'completed', 'reason_code' => 'encounter_closed'],
-                    );
-                }
-            }
-
-            $this->audit->enqueue(
-                'clinic.encounter_closed',
-                'clinic_encounters',
-                $encounterId,
-                $userId,
-                ['previous_status' => 'open', 'next_status' => 'closed'],
-            );
-
-            $row = $this->db->table('clinic_encounters')->where('id', $encounterId)->get()->getRowArray();
+            $row = $this->completion->complete($encounterId, $userId, $now, 'encounter_workspace_complete');
             return EncounterDto::fromRow($row);
         });
     }

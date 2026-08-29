@@ -18,7 +18,6 @@ import {
   Archive,
   ArchiveRestore,
   CalendarClock,
-  CheckCheck,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
@@ -36,18 +35,19 @@ import {
   UserX,
   X,
 } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { ComboboxField } from '@/components/ComboboxField';
 import { ConfirmDialog, type ConfirmAction } from '@/components/ConfirmDialog';
 import { QueryErrorRow } from '@/components/QueryErrorState';
+import { SessionProgressTracker, type SessionProgressStep } from '@/components/SessionProgressTracker';
 import { MobileCardList, MobileCard, MobileCardField, MobileCardActions } from '@/components/MobileCardList';
 import { PatientIdCell } from '@/components/PatientIdCell';
 import { formatQueueNumber } from '@/components/KioskCheckin';
-import { useTabParam } from '@/hooks/useTabParam';
 import { DatePicker } from '@/components/ui/date-picker';
 import { TimePicker } from '@/components/ui/time-picker';
 import {
@@ -88,13 +88,17 @@ import {
   useCloseEncounter,
   useDecideTriage,
   useEncounterNoShow,
+  useEncounter,
   useEncounters,
   useEncounterVitals,
   useRecordVitals,
+  usePreviousHeightWeight,
   useSetAssessment,
   useSuggestTriage,
   useTreatments,
 } from '@/hooks/useClinic';
+import { useCreateContextualReferral } from '@/hooks/useReferrals';
+import { hasPermission, useAuthStore } from '@/store/auth';
 import { useMedicines } from '@/hooks/useMedicines';
 import { useCallNext, useQueueToday, useQueueTransition } from '@/hooks/useQueue';
 import {
@@ -109,11 +113,12 @@ import {
   TREATMENT_TYPES,
   TRIAGE_PRIORITIES,
   type Encounter,
+  type EncounterDetail,
   type RecordVitalsInput,
   type TreatmentType,
   type TriagePriority,
 } from '@/schemas/clinic';
-import { type QueueEntry } from '@/schemas/queue';
+import { referralSchema, type Referral } from '@/schemas/referrals';
 import { DAY_NAMES } from '@/schemas/schedule';
 import {
   createStaffScheduleSchema,
@@ -165,12 +170,24 @@ function StationBadge({ station, className }: { station?: string | null | undefi
 
 function VitalsDialog({ encounter, onClose }: { encounter: Encounter; onClose: () => void }) {
   const record = useRecordVitals();
+  const previous = usePreviousHeightWeight(encounter.id);
   const {
     register,
     handleSubmit,
-    formState: { errors },
+    formState: { errors, dirtyFields },
     reset,
+    setValue,
   } = useForm<RecordVitalsInput>({ resolver: zodResolver(recordVitalsSchema) });
+
+  useEffect(() => {
+    if (previous.data === null || previous.data === undefined) return;
+    if (!dirtyFields.weight_kg && previous.data.weight_kg !== null) {
+      setValue('weight_kg', previous.data.weight_kg, { shouldDirty: false });
+    }
+    if (!dirtyFields.height_cm && previous.data.height_cm !== null) {
+      setValue('height_cm', previous.data.height_cm, { shouldDirty: false });
+    }
+  }, [dirtyFields.height_cm, dirtyFields.weight_kg, previous.data, setValue]);
 
   const onSubmit = handleSubmit((values) => {
     record.mutate(
@@ -214,10 +231,21 @@ function VitalsDialog({ encounter, onClose }: { encounter: Encounter; onClose: (
         <div className="space-y-1.5">
           <Label htmlFor="weight_kg" className="text-xs">Weight (kg)</Label>
           <Input id="weight_kg" type="number" step={0.1} {...register('weight_kg', { valueAsNumber: true })} />
+          {previous.data !== null && previous.data !== undefined && (
+            <p className="text-xs text-muted-foreground">
+              Auto-filled from encounter #{previous.data.source_encounter_id} ({fmtUtcToApp(previous.data.recorded_at)}); update if needed.
+            </p>
+          )}
         </div>
         <div className="space-y-1.5 sm:col-span-2">
           <Label htmlFor="height_cm" className="text-xs">Height (cm)</Label>
           <Input id="height_cm" type="number" step={0.1} {...register('height_cm', { valueAsNumber: true })} />
+          {previous.isLoading && <p className="text-xs text-muted-foreground">Checking the previous visit…</p>}
+          {previous.data !== null && previous.data !== undefined && (
+            <p className="text-xs text-muted-foreground">
+              Only height and weight are reused; all visit-specific vitals must be measured now.
+            </p>
+          )}
           {Object.keys(errors).length > 0 && (
             <p role="alert" className="text-xs text-destructive">
               One or more fields are out of range.
@@ -298,7 +326,7 @@ function CareDialog({ encounter, onClose }: { encounter: Encounter; onClose: () 
 
       <section className="space-y-3 rounded-md border p-3">
         <div className="flex items-center justify-between">
-          <p className="text-sm font-semibold text-foreground">Assessment</p>
+          <p className="text-sm font-semibold text-foreground">Assessment / Progress</p>
           <Button
             size="sm"
             variant="outline"
@@ -360,12 +388,12 @@ function CareDialog({ encounter, onClose }: { encounter: Encounter; onClose: () 
           </div>
         </div>
         <div className="space-y-1.5">
-          <Label htmlFor="care-dx" className="text-xs">Diagnosis</Label>
+          <Label htmlFor="care-dx" className="text-xs">Diagnosis / progress notes</Label>
           <Textarea id="care-dx" rows={2} maxLength={5000} value={diagnosis} onChange={(e) => setDiagnosis(e.target.value)} />
         </div>
         <div className="flex justify-end">
           <Button size="sm" onClick={saveAssessment} disabled={setAssessment.isPending}>
-            {setAssessment.isPending && <Loader2 className="animate-spin" />} Save assessment
+            {setAssessment.isPending && <Loader2 className="animate-spin" />} Save assessment / progress
           </Button>
         </div>
       </section>
@@ -407,16 +435,23 @@ function CareDialog({ encounter, onClose }: { encounter: Encounter; onClose: () 
             <>
               <div className="space-y-1.5">
                 <Label id="care-med-label" className="text-xs">Medicine</Label>
-                <Select value={medId} onValueChange={setMedId}>
-                  <SelectTrigger aria-labelledby="care-med-label"><SelectValue placeholder="Select…" /></SelectTrigger>
-                  <SelectContent>
-                    {(medicines.data?.data ?? []).map((m) => (
-                      <SelectItem key={m.id} value={String(m.id)}>
-                        {m.generic_name} — {m.quantity_on_hand} {m.unit}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <ComboboxField
+                  id="care-medicine"
+                  sourceKey="clinic.treatments.medicine"
+                  value={medId}
+                  onChange={setMedId}
+                  normalize={false}
+                  disabled={medicines.isLoading}
+                  placeholder={medicines.isLoading ? 'Loading medicines…' : 'Search medicine…'}
+                  emptyHintLabel="No matching available medicine."
+                  options={(medicines.data?.data ?? []).map((m) => ({
+                    value: String(m.id),
+                    label: m.brand_name !== null && m.brand_name !== ''
+                      ? `${m.generic_name} (${m.brand_name})`
+                      : m.generic_name,
+                    hint: `${m.quantity_on_hand} ${m.unit} on hand`,
+                  }))}
+                />
               </div>
               <div className="space-y-1.5">
                 <Label htmlFor="care-qty" className="text-xs">Quantity</Label>
@@ -546,6 +581,82 @@ function EncounterViewDialog({ encounter, onClose }: { encounter: Encounter; onC
   );
 }
 
+function ClinicGuidanceReferralDialog({ encounter, onClose }: { encounter: EncounterDetail; onClose: () => void }) {
+  const create = useCreateContextualReferral({ module: 'clinic', encounterId: encounter.id });
+  const [result, setResult] = useState<Referral | null>(null);
+  const { register, handleSubmit, formState: { errors } } = useForm<{ reason_code?: string; notes_plaintext?: string }>({
+    defaultValues: { reason_code: '', notes_plaintext: '' },
+  });
+  const submit = handleSubmit((values) => create.mutate(values, {
+    onSuccess: setResult,
+    onError: (error) => {
+      const parsed = referralSchema.safeParse(error.errors[0]?.details?.referral);
+      if (parsed.success) setResult(parsed.data);
+    },
+  }));
+
+  return <DialogContent>
+    <DialogHeader><DialogTitle>Refer patient to Guidance</DialogTitle></DialogHeader>
+    {result !== null ? <div className="space-y-4"><div className="rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-4"><p className="font-medium">Referral #{result.id}</p><p className="text-sm text-muted-foreground">Status: {result.status.replace('_', ' ')}</p><p className="mt-2 text-sm">The Clinic encounter remains active. Guidance acknowledgement, review, and queue handoff are separate actions.</p></div><DialogFooter><Button onClick={onClose}>Continue encounter</Button></DialogFooter></div> : <form noValidate onSubmit={(event) => void submit(event)} className="space-y-4">
+      <div className="rounded-lg border bg-muted/30 p-3"><p className="font-medium">{encounter.patient_name ?? encounter.patient_school_id}</p><p className="font-mono text-xs text-muted-foreground">{encounter.patient_school_id}</p></div>
+      <div className="grid grid-cols-2 gap-3"><div className="space-y-1.5"><Label htmlFor="clinic-referral-from">From</Label><Input id="clinic-referral-from" value="Clinic" readOnly disabled /></div><div className="space-y-1.5"><Label htmlFor="clinic-referral-to">To</Label><Input id="clinic-referral-to" value="Guidance" readOnly disabled /></div></div>
+      <div className="space-y-1.5"><Label htmlFor="clinic-referral-artifact">Artifact</Label><Input id="clinic-referral-artifact" value="Intake pass" readOnly disabled /></div>
+      <div className="space-y-1.5"><Label htmlFor="clinic-referral-reason">Reason (optional)</Label><Input id="clinic-referral-reason" {...register('reason_code', { maxLength: 64 })} />{errors.reason_code !== undefined && <p className="text-xs text-destructive">Reason is too long.</p>}</div>
+      <div className="space-y-1.5"><Label htmlFor="clinic-referral-notes">Referral notes (optional)</Label><Textarea id="clinic-referral-notes" {...register('notes_plaintext', { maxLength: 8192 })} placeholder="Share only information Guidance needs. Encounter records are not copied." /></div>
+      <DialogFooter><Button type="button" variant="outline" onClick={onClose}>Cancel</Button><Button type="submit" disabled={create.isPending}>{create.isPending && <Loader2 className="animate-spin" />}Submit referral</Button></DialogFooter>
+    </form>}
+  </DialogContent>;
+}
+
+function ClinicEncounterWorkspace({
+  encounterId,
+  onClose,
+  onOpenVitals,
+  onOpenCare,
+}: {
+  encounterId: number;
+  onClose: () => void;
+  onOpenVitals: (encounter: Encounter) => void;
+  onOpenCare: (encounter: Encounter) => void;
+}) {
+  const detail = useEncounter(encounterId);
+  const encounter = detail.data;
+  const close = useCloseEncounter();
+  const authState = useAuthStore();
+  const canWrite = hasPermission(authState, 'clinic.encounters.write');
+  const canRefer = hasPermission(authState, 'referrals.create') && canWrite;
+  const [step, setStep] = useState('vitals');
+  const [referOpen, setReferOpen] = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+
+  useEffect(() => { setStep('vitals'); }, [encounterId]);
+  if (detail.isLoading) return <section className="rounded-xl border bg-card p-8 text-center"><Loader2 className="mx-auto size-5 animate-spin" /></section>;
+  if (detail.isError || encounter === undefined) return <section role="alert" className="rounded-xl border border-destructive/40 bg-card p-4"><p>{detail.error?.errors[0]?.message ?? 'This encounter could not be opened.'}</p><div className="mt-3 flex gap-2"><Button size="sm" variant="outline" onClick={() => void detail.refetch()}>Retry</Button><Button size="sm" variant="ghost" onClick={onClose}>Close workspace</Button></div></section>;
+
+  const steps: SessionProgressStep[] = [
+    { id: 'started', label: 'Session Started', state: 'complete', summary: encounter.queue_number ?? `Encounter #${encounter.id}` },
+    { id: 'vitals', label: 'Vitals', state: encounter.vitals_count > 0 ? 'complete' : encounter.status === 'open' ? 'current' : 'available', summary: encounter.vitals_count > 0 ? `${encounter.vitals_count} reading${encounter.vitals_count === 1 ? '' : 's'}` : 'Not recorded' },
+    { id: 'assessment', label: 'Assessment', state: encounter.assessment_recorded ? 'complete' : 'available', summary: encounter.assessment_recorded ? titleCase(encounter.triage_priority ?? 'Recorded') : 'Pending' },
+    { id: 'care', label: 'Care / Treatment', state: encounter.treatment_count > 0 ? 'complete' : 'optional', summary: encounter.treatment_count > 0 ? `${encounter.treatment_count} treatment${encounter.treatment_count === 1 ? '' : 's'}` : 'When clinically needed' },
+    { id: 'referral', label: 'Referral', state: !canRefer ? 'unavailable' : encounter.outgoing_referral !== null ? 'complete' : 'optional', summary: encounter.outgoing_referral !== null ? `#${encounter.outgoing_referral.id} · ${encounter.outgoing_referral.status.replace('_', ' ')}` : canRefer ? 'When Guidance support is needed' : 'Permission required' },
+    { id: 'complete', label: 'Complete', state: encounter.status === 'closed' ? 'complete' : 'available', summary: encounter.closed_at !== null ? fmtUtcToApp(encounter.closed_at) : 'Finish encounter' },
+  ];
+
+  return <section className="scroll-mt-6 space-y-3 rounded-xl border bg-card p-4" aria-label={`Encounter #${encounter.id} workspace`}>
+    <header className="flex flex-wrap items-start justify-between gap-2"><div><p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Active Clinic encounter</p><h2 className="text-lg font-semibold">{encounter.patient_name ?? encounter.patient_school_id}</h2><p className="font-mono text-xs text-muted-foreground">{encounter.patient_school_id} · Encounter #{encounter.id}</p></div><div className="flex items-center gap-2"><Badge variant={encounter.status === 'open' ? 'success' : 'secondary'}>{statusLabel(encounter.status)}</Badge><Button size="sm" variant="ghost" onClick={onClose}><X /> Close workspace</Button></div></header>
+    <SessionProgressTracker steps={steps} selected={step} onSelect={setStep} />
+    <div className="rounded-lg border bg-muted/15 p-4">
+      {step === 'started' && <dl className="grid gap-3 text-sm sm:grid-cols-3"><div><dt className="text-xs text-muted-foreground">Queue</dt><dd>{encounter.queue_number ?? 'Manual encounter'}</dd></div><div><dt className="text-xs text-muted-foreground">Complaint</dt><dd>{encounter.chief_complaint}</dd></div><div><dt className="text-xs text-muted-foreground">Started</dt><dd>{fmtUtcToApp(encounter.started_at)}</dd></div><div><dt className="text-xs text-muted-foreground">Appointment</dt><dd>{encounter.appointment_id !== null ? `#${encounter.appointment_id}` : '—'}</dd></div><div><dt className="text-xs text-muted-foreground">Incoming referral</dt><dd>{encounter.incoming_referral_id !== null ? `#${encounter.incoming_referral_id}` : '—'}</dd></div></dl>}
+      {step === 'vitals' && <div><h3 className="font-medium">Vitals</h3><p className="mt-1 text-sm text-muted-foreground">{encounter.vitals_count > 0 ? `${encounter.vitals_count} set of vitals recorded. Height and weight can reuse the previous visit.` : 'Record visit-specific vitals before assessment when possible.'}</p>{encounter.status === 'open' && canWrite && <Button className="mt-3" size="sm" onClick={() => onOpenVitals(encounter)}><Stethoscope />{encounter.vitals_count > 0 ? 'Update vitals' : 'Record vitals'}</Button>}</div>}
+      {step === 'assessment' && <div><h3 className="font-medium">Assessment</h3><p className="mt-1 text-sm text-muted-foreground">{encounter.assessment_recorded ? `Priority: ${titleCase(encounter.triage_priority ?? 'recorded')}. ${encounter.diagnosis ?? ''}` : 'Record triage priority, diagnosis, and progress notes.'}</p>{encounter.status === 'open' && canWrite && <Button className="mt-3" size="sm" onClick={() => onOpenCare(encounter)}><ClipboardPlus />Open assessment</Button>}</div>}
+      {step === 'care' && <div><h3 className="font-medium">Care and treatment</h3><p className="mt-1 text-sm text-muted-foreground">{encounter.treatment_count > 0 ? `${encounter.treatment_count} treatment record${encounter.treatment_count === 1 ? '' : 's'} added.` : 'Optional when no treatment is required. Medication dispensing remains anchored to this encounter.'}</p>{encounter.status === 'open' && canWrite && <Button className="mt-3" size="sm" onClick={() => onOpenCare(encounter)}><ClipboardPlus />Open care record</Button>}</div>}
+      {step === 'referral' && <div><h3 className="font-medium">Guidance referral</h3>{encounter.outgoing_referral !== null ? <p className="mt-1 text-sm text-muted-foreground">Referral #{encounter.outgoing_referral.id} is {encounter.outgoing_referral.status.replace('_', ' ')}. It does not automatically close this encounter.</p> : <p className="mt-1 text-sm text-muted-foreground">Optional. The patient and direction are locked to this encounter.</p>}{encounter.status === 'open' && canRefer && encounter.outgoing_referral === null && <Dialog open={referOpen} onOpenChange={setReferOpen}><Button className="mt-3" size="sm" onClick={() => setReferOpen(true)}>Refer to Guidance</Button>{referOpen && <ClinicGuidanceReferralDialog encounter={encounter} onClose={() => setReferOpen(false)} />}</Dialog>}</div>}
+      {step === 'complete' && <div><h3 className="font-medium">Complete encounter</h3><p className="mt-1 text-sm text-muted-foreground">Completion closes the encounter and synchronizes its queue entry and checked-in appointment. Missing vitals or assessment are shown as warnings, not hard blockers.</p>{encounter.status === 'open' && (encounter.vitals_count === 0 || !encounter.assessment_recorded) && <p className="mt-2 text-sm text-amber-700 dark:text-amber-300">Review recommended steps: {encounter.vitals_count === 0 ? 'vitals' : ''}{encounter.vitals_count === 0 && !encounter.assessment_recorded ? ' and ' : ''}{!encounter.assessment_recorded ? 'assessment' : ''} are not recorded.</p>}{encounter.status === 'open' && canWrite && <Button className="mt-3" size="sm" variant="destructive" onClick={() => setConfirmOpen(true)}>Complete encounter</Button>}</div>}
+    </div>
+    <ConfirmDialog open={confirmOpen} title={`Complete encounter #${encounter.id}?`} description="This closes the encounter, completes its active queue entry, and completes its linked checked-in appointment." confirmLabel="Complete encounter" pending={close.isPending} onConfirm={() => close.mutate(encounter.id, { onSuccess: () => { setConfirmOpen(false); onClose(); } })} onCancel={() => setConfirmOpen(false)} />
+  </section>;
+}
+
 const QUEUE_STATUS_VARIANT = {
   waiting: 'info',
   called: 'warning',
@@ -555,17 +666,13 @@ const QUEUE_STATUS_VARIANT = {
 } as const;
 
 interface QueueTabProps {
-  /** Open the Care dialog for the given encounter. */
-  onOpenCare: (encounter: Encounter) => void;
-  /** Open the Vitals dialog for the given encounter. */
-  onOpenVitals: (encounter: Encounter) => void;
+  onOpenEncounter: (encounterId: number) => void;
 }
 
-function QueueTab({ onOpenCare, onOpenVitals }: QueueTabProps) {
+function QueueTab({ onOpenEncounter }: QueueTabProps) {
   const queue = useQueueToday();
   const callNext = useCallNext();
   const transition = useQueueTransition();
-  const close = useCloseEncounter();
   const noShow = useEncounterNoShow();
   const [confirm, setConfirm] = useState<ConfirmAction | null>(null);
 
@@ -597,32 +704,10 @@ function QueueTab({ onOpenCare, onOpenVitals }: QueueTabProps) {
     });
   }, [rows]);
 
-  /**
-   * Synthesise a minimal `Encounter`-shaped object from the queue row
-   * so the existing `CareDialog` / `VitalsDialog` (which read only
-   * `encounter.id`, `.triage_priority`, `.diagnosis`) can be opened
-   * directly from the queue without a second round-trip.
-   *
-   * `attending_user_id` / `started_at` are placeholders — the dialogs
-   * ignore them; full fields populate on the next encounter list refresh.
-   */
-  function rowEncounter(q: QueueEntry): Encounter {
-    return {
-      id: q.encounter_id,
-      patient_school_id: q.patient_school_id,
-      chief_complaint: q.chief_complaint,
-      status: q.encounter_status,
-      attending_user_id: 0,
-      started_at: '',
-      closed_at: null,
-      station_id: q.station_id,
-    };
-  }
-
   // Destructive actions disable whenever a destructive mutation is
   // already in flight; harmless to share across rows because the
   // spinner only renders on the row that triggered it.
-  const destructivePending = close.isPending || noShow.isPending;
+  const destructivePending = noShow.isPending;
   const anyPending = transition.isPending || destructivePending;
 
   return (
@@ -667,11 +752,7 @@ function QueueTab({ onOpenCare, onOpenVitals }: QueueTabProps) {
               <QueryErrorRow colSpan={5} message="Failed to load the queue." onRetry={() => void queue.refetch()} pending={queue.isFetching} />
             )}
             {sortedRows.map((q) => {
-              const canEncounterAct =
-                q.encounter_status === 'open' &&
-                (q.status === 'waiting' || q.status === 'called' || q.status === 'in_session');
               const canNoShow = q.encounter_status === 'open';
-              const enc = rowEncounter(q);
               return (
                 <TableRow key={q.id}>
                   <TableCell className="px-3 font-mono text-sm font-semibold">{formatQueueNumber(q.position)}</TableCell>
@@ -696,8 +777,8 @@ function QueueTab({ onOpenCare, onOpenVitals }: QueueTabProps) {
                       {q.status === 'called' && (
                         <>
                           <Button size="sm" variant="secondary" disabled={transition.isPending}
-                            onClick={() => transition.mutate({ id: q.id, action: 'start' })}>
-                            <Play /> Start
+                            onClick={() => transition.mutate({ id: q.id, action: 'start' }, { onSuccess: (started) => onOpenEncounter(started.encounter_id) })}>
+                            <Play /> Start Session
                           </Button>
                           <Button size="sm" variant="outline" disabled={transition.isPending}
                             onClick={() => setConfirm({
@@ -711,9 +792,8 @@ function QueueTab({ onOpenCare, onOpenVitals }: QueueTabProps) {
                         </>
                       )}
                       {q.status === 'in_session' && (
-                        <Button size="sm" variant="secondary" disabled={transition.isPending}
-                          onClick={() => transition.mutate({ id: q.id, action: 'complete' })}>
-                          <CheckCheck /> Complete
+                        <Button size="sm" variant="secondary" onClick={() => onOpenEncounter(q.encounter_id)}>
+                          <Stethoscope /> Open Session
                         </Button>
                       )}
                       <DropdownMenu>
@@ -723,25 +803,10 @@ function QueueTab({ onOpenCare, onOpenVitals }: QueueTabProps) {
                           </Button>
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end" className="w-52">
-                          <DropdownMenuItem className="min-h-11" disabled={anyPending} onSelect={() => onOpenCare(enc)}>
-                            <ClipboardPlus /> Care
-                          </DropdownMenuItem>
-                          <DropdownMenuItem className="min-h-11" disabled={anyPending} onSelect={() => onOpenVitals(enc)}>
-                            <Stethoscope /> Record vitals
+                          <DropdownMenuItem className="min-h-11" disabled={anyPending} onSelect={() => onOpenEncounter(q.encounter_id)}>
+                            <Stethoscope /> Open encounter workspace
                           </DropdownMenuItem>
                           <DropdownMenuSeparator />
-                          <DropdownMenuItem
-                            className="min-h-11 text-destructive focus:text-destructive"
-                            disabled={!canEncounterAct || destructivePending}
-                            onSelect={() => setConfirm({
-                              title: `Close encounter #${q.encounter_id}?`,
-                              description: 'Closing an encounter is final; it can no longer be edited or have vitals or treatments added.',
-                              confirmLabel: 'Close encounter',
-                              run: () => close.mutate(q.encounter_id),
-                            })}
-                          >
-                            <X /> Close encounter
-                          </DropdownMenuItem>
                           <DropdownMenuItem
                             className="min-h-11 text-destructive focus:text-destructive"
                             disabled={!canNoShow || destructivePending}
@@ -782,11 +847,7 @@ function QueueTab({ onOpenCare, onOpenVitals }: QueueTabProps) {
       )}
       <MobileCardList>
         {sortedRows.map((q) => {
-          const canEncounterAct =
-            q.encounter_status === 'open' &&
-            (q.status === 'waiting' || q.status === 'called' || q.status === 'in_session');
           const canNoShow = q.encounter_status === 'open';
-          const enc = rowEncounter(q);
           return (
             <MobileCard key={q.id} aria-label={`Queue ${formatQueueNumber(q.position)}`}>
               <div className="mb-1 flex items-center justify-between gap-2">
@@ -806,8 +867,8 @@ function QueueTab({ onOpenCare, onOpenVitals }: QueueTabProps) {
                 {q.status === 'called' && (
                   <>
                     <Button size="sm" variant="secondary" disabled={transition.isPending}
-                      onClick={() => transition.mutate({ id: q.id, action: 'start' })}>
-                      <Play /> Start
+                      onClick={() => transition.mutate({ id: q.id, action: 'start' }, { onSuccess: (started) => onOpenEncounter(started.encounter_id) })}>
+                      <Play /> Start Session
                     </Button>
                     <Button size="sm" variant="outline" disabled={transition.isPending}
                       onClick={() => setConfirm({
@@ -821,9 +882,8 @@ function QueueTab({ onOpenCare, onOpenVitals }: QueueTabProps) {
                   </>
                 )}
                 {q.status === 'in_session' && (
-                  <Button size="sm" variant="secondary" disabled={transition.isPending}
-                    onClick={() => transition.mutate({ id: q.id, action: 'complete' })}>
-                    <CheckCheck /> Complete
+                  <Button size="sm" variant="secondary" onClick={() => onOpenEncounter(q.encounter_id)}>
+                    <Stethoscope /> Open Session
                   </Button>
                 )}
                 <DropdownMenu>
@@ -833,25 +893,10 @@ function QueueTab({ onOpenCare, onOpenVitals }: QueueTabProps) {
                     </Button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end" className="w-52">
-                    <DropdownMenuItem className="min-h-11" disabled={anyPending} onSelect={() => onOpenCare(enc)}>
-                      <ClipboardPlus /> Care
-                    </DropdownMenuItem>
-                    <DropdownMenuItem className="min-h-11" disabled={anyPending} onSelect={() => onOpenVitals(enc)}>
-                      <Stethoscope /> Record vitals
+                    <DropdownMenuItem className="min-h-11" disabled={anyPending} onSelect={() => onOpenEncounter(q.encounter_id)}>
+                      <Stethoscope /> Open encounter workspace
                     </DropdownMenuItem>
                     <DropdownMenuSeparator />
-                    <DropdownMenuItem
-                      className="min-h-11 text-destructive focus:text-destructive"
-                      disabled={!canEncounterAct || destructivePending}
-                      onSelect={() => setConfirm({
-                        title: `Close encounter #${q.encounter_id}?`,
-                        description: 'Closing an encounter is final; it can no longer be edited or have vitals or treatments added.',
-                        confirmLabel: 'Close encounter',
-                        run: () => close.mutate(q.encounter_id),
-                      })}
-                    >
-                      <X /> Close encounter
-                    </DropdownMenuItem>
                     <DropdownMenuItem
                       className="min-h-11 text-destructive focus:text-destructive"
                       disabled={!canNoShow || destructivePending}
@@ -1266,8 +1311,10 @@ export default function ClinicPage() {
   // staff action buttons (Care / Vitals / Close / Mark no-show) live
   // on each queue row. The Closed tab is the only remaining slice that
   // drives from the encounter list.
-  const [tabParam, setTab] = useTabParam('queue');
-  const tab = tabParam as 'queue' | 'closed' | 'staff';
+  const [searchParams, setSearchParams] = useSearchParams();
+  const requestedTab = searchParams.get('tab');
+  const tab: 'queue' | 'closed' | 'staff' =
+    requestedTab === 'closed' || requestedTab === 'staff' ? requestedTab : 'queue';
   const [openVitals, setOpenVitals] = useState<Encounter | null>(null);
   const [openCare, setOpenCare] = useState<Encounter | null>(null);
   const [openView, setOpenView] = useState<Encounter | null>(null);
@@ -1285,16 +1332,29 @@ export default function ClinicPage() {
   // — staff action buttons are per-row in the queue table (panel
   // revision, August 2026). This page shell only manages dialogs.
 
-  // Deep-link from the Appointments page: `/clinic?encounter=<id>`
-  // highlights the auto-opened visit so staff can pick up where the
-  // check-in left off.
-  const [searchParams] = useSearchParams();
-  const focusId = searchParams.get('encounter') !== null ? Number(searchParams.get('encounter')) : null;
+  // Exact deep links keep one clinical session open in this page instead
+  // of sending staff through separate vitals, care, and referral tabs.
+  const requestedEncounterId = Number(searchParams.get('encounter'));
+  const focusId = Number.isSafeInteger(requestedEncounterId) && requestedEncounterId > 0
+    ? requestedEncounterId
+    : null;
 
   function switchTab(next: string) {
-    setTab(next);
+    const params = new URLSearchParams(searchParams);
+    if (next === 'queue') params.delete('tab');
+    else params.set('tab', next);
+    if (next !== 'queue') params.delete('encounter');
+    setSearchParams(params, { replace: true });
     setCursor(null);
     setHistory([null]);
+  }
+
+  function selectEncounter(encounterId: number | null) {
+    const params = new URLSearchParams(searchParams);
+    params.delete('tab');
+    if (encounterId === null) params.delete('encounter');
+    else params.set('encounter', String(encounterId));
+    setSearchParams(params);
   }
 
   function nextPage() {
@@ -1348,10 +1408,17 @@ export default function ClinicPage() {
         </div>
 
         <TabsContent value="queue">
-          <QueueTab
-            onOpenCare={(e) => setOpenCare(e)}
-            onOpenVitals={(e) => setOpenVitals(e)}
-          />
+          <div className="space-y-4">
+            {focusId !== null && (
+              <ClinicEncounterWorkspace
+                encounterId={focusId}
+                onClose={() => selectEncounter(null)}
+                onOpenCare={setOpenCare}
+                onOpenVitals={setOpenVitals}
+              />
+            )}
+            <QueueTab onOpenEncounter={(encounterId) => selectEncounter(encounterId)} />
+          </div>
         </TabsContent>
 
         <TabsContent value="closed">

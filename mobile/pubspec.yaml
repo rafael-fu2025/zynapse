@@ -1,0 +1,73 @@
+name: synapse_mobile
+description: >-
+  SYNAPSE mobile client — a Flutter demo app that consumes the existing
+  CodeIgniter 4 backend (backend/) over its JSON API (/api/v1).
+publish_to: 'none'
+version: 0.1.0
+
+environment:
+  # >= 3.6 because the code uses Color.withValues (Flutter 3.27+ / Dart 3.6+)
+  sdk: '>=3.6.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # HTTP client — mirrors the axios client in frontend/src/api/client.ts
+  dio: ^5.4.0
+  # Cookie jar so the HttpOnly `synapse_rt` refresh cookie set by the
+  # backend (backend/app/Controllers/Api/Auth/AuthController.php) is
+  # stored and replayed on /auth/refresh, exactly like the browser does.
+  cookie_jar: ^4.0.0
+  dio_cookie_manager: ^3.1.1
+  # Persist the access token across launches (demo convenience; the web
+  # app keeps it in memory only, but a mobile app needs it to survive restarts).
+  shared_preferences: ^2.2.2
+  # Save report CSV exports to the app's documents directory.
+  path_provider: ^2.1.4
+  # Lightweight state for the auth/session controller.
+  provider: ^6.1.1
+  # Date/time display formatting (Asia/Manila).
+  intl: ^0.19.0
+  # Icon set (Hugeicons Pro-ish stroke icons).
+  hugeicons: ^0.0.7
+  cupertino_icons: ^1.0.6
+  # Render per-appointment proof-of-booking QR codes (qr_token returned by
+  # the backend at booking/issue time; only the HMAC hash is stored in DB).
+  qr_flutter: ^4.1.0
+  pdf: ^3.13.0
+  share_plus: ^13.3.0
+  # Native multi-select media picker for kiosk photo/video administration.
+  image_picker: ^1.2.3
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.1
+  # Generates Android/iOS launcher icons from a single source image.
+  # Config below under `flutter_launcher_icons:`.
+  flutter_launcher_icons: ^0.13.1
+
+# App launcher icon — regenerates the Android mipmaps from the SYNAPSE
+# brand logo (maroon on transparent), placed on a white background.
+# The adaptive foreground is a PADDED copy (logo ~66%) so Android's icon
+# mask does not crop it. Rebuild icons with:  dart run flutter_launcher_icons
+flutter_launcher_icons:
+  android: true
+  ios: false
+  image_path: "../frontend/public/synapse-maroon.png"
+  adaptive_icon_background: "#FFFFFF"
+  adaptive_icon_foreground: "assets/icon_foreground.png"
+  min_sdk_android: 21
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/synapse-maroon.png
+    - assets/synapse-white.png
+    - assets/FU.png
+    - assets/FUHS.png
+  fonts:
+    - family: Figtree
+      fonts:
+        - asset: assets/fonts/Figtree-Variable.ttf

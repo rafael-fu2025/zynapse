@@ -20,6 +20,8 @@ final class ReferralDto extends BaseDTO
         return [
             'id'                => (int)    $this->row['id'],
             'patient_school_id' => (string) $this->row['patient_school_id'],
+            'source_encounter_id' => ($this->row['source_encounter_id'] ?? null) !== null ? (int) $this->row['source_encounter_id'] : null,
+            'source_session_id' => ($this->row['source_session_id'] ?? null) !== null ? (int) $this->row['source_session_id'] : null,
             'source_module'     => (string) $this->row['source_module'],
             'target_module'     => (string) $this->row['target_module'],
             'artifact_type'     => (string) $this->row['artifact_type'],
@@ -29,6 +31,12 @@ final class ReferralDto extends BaseDTO
             // NULL until the receiving side acknowledges the referral.
             'provider_user_id'  => ($this->row['provider_user_id'] ?? null) !== null ? (int) $this->row['provider_user_id'] : null,
             'provider_name'     => ($this->row['provider_name'] ?? null) !== null ? (string) $this->row['provider_name'] : null,
+            'queue_handoff_destination' => ($this->row['queue_handoff_destination'] ?? null) !== null
+                ? (string) $this->row['queue_handoff_destination'] : null,
+            'queue_handoff_entry_id' => ($this->row['queue_handoff_entry_id'] ?? null) !== null
+                ? (int) $this->row['queue_handoff_entry_id'] : null,
+            'queue_handoff_at' => ($this->row['queue_handoff_at'] ?? null) !== null
+                ? (string) $this->row['queue_handoff_at'] : null,
             'created_at'        => (string) $this->row['created_at'],
             'updated_at'        => (string) $this->row['updated_at'],
             'qr_expires_at'     => $this->row['qr_expires_at'] !== null ? (string) $this->row['qr_expires_at'] : null,

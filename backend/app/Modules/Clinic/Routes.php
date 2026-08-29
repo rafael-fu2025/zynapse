@@ -44,14 +44,22 @@ final class Routes implements BaseRoutes
             $r->get('student-providers', 'StudentSelfController::providers');
             $r->get('student-appointments', 'StudentSelfController::appointments');
             $r->post('student-appointments', 'StudentSelfController::bookAppointment');
+            $r->get('appointments', 'PortalAppointmentController::index');
+            $r->get('appointment-slots', 'PortalAppointmentController::slots');
+            $r->post('appointments', 'PortalAppointmentController::create');
+            $r->post('appointments/(:segment)/(:num)/cancel', 'PortalAppointmentController::cancel/$1/$2');
+            $r->get('queues', 'PortalAppointmentController::queues');
         });
 
         $routes->group('api/v1/clinic', ['namespace' => 'Modules\\Clinic\\Controllers', 'filter' => 'api_auth'], static function (RouteCollection $r): void {
             $r->get('encounters',                            'ClinicController::listEncounters');
             $r->post('encounters',                           'ClinicController::createEncounter');
+            $r->get('encounters/(:num)',                     'ClinicController::getEncounter/$1');
+            $r->post('encounters/(:num)/referrals',          'ClinicController::createReferral/$1');
             $r->post('encounters/import',                    'ClinicController::importEncounters');
             $r->post('encounters/(:num)/vitals',             'ClinicController::recordVitals/$1');
             $r->get('encounters/(:num)/vitals',              'ClinicController::listVitals/$1');
+            $r->get('encounters/(:num)/previous-height-weight', 'ClinicController::previousHeightWeight/$1');
             $r->post('encounters/(:num)/close',              'ClinicController::closeEncounter/$1');
             $r->post('encounters/(:num)/assessment',         'ClinicController::setAssessment/$1');
             $r->get('encounters/(:num)/treatments',          'ClinicController::listTreatments/$1');

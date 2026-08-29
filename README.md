@@ -80,6 +80,7 @@ HTTP request processes:
 ```cron
 * * * * * cd /path/to/zynapse/backend && php spark synapse:audit-drain --batch=500 --max-batches=10
 * * * * * cd /path/to/zynapse/backend && php spark synapse:reports-drain --limit=10
+* * * * * cd /path/to/zynapse/backend && php spark synapse:appointments-enqueue-due
 15 2 * * * cd /path/to/zynapse/backend && php spark synapse:audit-verify
 ```
 

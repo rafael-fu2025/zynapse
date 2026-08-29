@@ -3,11 +3,11 @@
  * Built from shadcn Card / Label / Input / Button primitives.
  */
 import { zodResolver } from '@hookform/resolvers/zod';
-import { Eye, EyeOff, Loader2 } from 'lucide-react';
-import { useState } from 'react';
+import { AlertCircle, Eye, EyeOff, Loader2 } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
 import { useForm } from 'react-hook-form';
-import { toast } from 'sonner';
 import { ApiEnvelopeError } from '@/api/envelope';
+import { humanizeCode } from '@/api/errorCodes';
 import { Button } from '@/components/ui/button';
 import {
   Card,
@@ -30,13 +30,28 @@ export default function LoginPage() {
   } = useForm<LoginInput>({ resolver: zodResolver(loginSchema) });
   const login = useLogin();
   const [showPassword, setShowPassword] = useState(false);
+  const [loginError, setLoginError] = useState<string | null>(null);
+  const loginErrorRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (loginError !== null) loginErrorRef.current?.focus();
+  }, [loginError]);
+
+  function describeLoginError(error: unknown): string {
+    if (!(error instanceof ApiEnvelopeError)) return 'Login failed unexpectedly. Please try again.';
+    if (error.httpStatus === 0) return 'Cannot reach the SYNAPSE server. Check your connection and try again.';
+    if (error.httpStatus >= 500) return 'The SYNAPSE server could not complete the login. Please try again shortly.';
+    const primary = error.errors[0];
+    if (primary === undefined) return 'Login failed. Please try again.';
+    const friendly = humanizeCode(primary.code);
+    return friendly !== primary.code ? friendly : (primary.message !== primary.code ? primary.message : 'Login failed. Please check your credentials and try again.');
+  }
 
   const onSubmit = handleSubmit((data) => {
+    setLoginError(null);
     login.mutate(data, {
       onError: (err) => {
-        const message =
-          err instanceof ApiEnvelopeError ? err.errors[0]?.message ?? 'Login failed.' : 'Login failed.';
-        toast.error(message);
+        setLoginError(describeLoginError(err));
       },
     });
   });
@@ -109,6 +124,18 @@ export default function LoginPage() {
 
         <CardContent>
           <form noValidate onSubmit={(e) => void onSubmit(e)} className="space-y-4">
+            {loginError !== null && (
+              <div
+                ref={loginErrorRef}
+                role="alert"
+                aria-live="assertive"
+                tabIndex={-1}
+                className="flex gap-3 rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive outline-none focus-visible:ring-2 focus-visible:ring-destructive/40"
+              >
+                <AlertCircle aria-hidden className="mt-0.5 size-4 shrink-0" />
+                <div><p className="font-semibold">Unable to sign in</p><p className="mt-0.5">{loginError}</p></div>
+              </div>
+            )}
             <div className="space-y-1.5">
               <Label htmlFor="email">Email</Label>
               <Input
@@ -117,7 +144,7 @@ export default function LoginPage() {
                 autoComplete="email"
                 aria-invalid={errors.email !== undefined}
                 aria-describedby={errors.email !== undefined ? 'email-err' : undefined}
-                {...register('email')}
+                {...register('email', { onChange: () => setLoginError(null) })}
               />
               {errors.email !== undefined && (
                 <p id="email-err" role="alert" className="text-xs text-destructive">
@@ -136,7 +163,7 @@ export default function LoginPage() {
                   className="pr-10"
                   aria-invalid={errors.password !== undefined}
                   aria-describedby={errors.password !== undefined ? 'password-err' : undefined}
-                  {...register('password')}
+                  {...register('password', { onChange: () => setLoginError(null) })}
                 />
                 <button
                   type="button"

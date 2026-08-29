@@ -10,10 +10,17 @@ use App\Pagination\KeysetPaginator;
 use App\Services\Audit\AuditOutboxService;
 use App\Services\Crypto\EncryptionService;
 use App\Services\Notify\NotificationOutboxService;
+use App\Services\CurrentTenant;
 use DateTimeImmutable;
 use DateTimeZone;
 use Modules\Referrals\DTOs\ReferralDto;
 use Modules\Referrals\Policies\ReferralPolicy;
+use Modules\Clinic\Policies\ClinicPolicy;
+use Modules\Clinic\Services\AppointmentService;
+use Modules\Clinic\Services\ClinicService;
+use Modules\Clinic\Services\QueueService as ClinicQueueService;
+use Modules\Counselling\Policies\CounsellingPolicy;
+use Modules\Counselling\Services\QueueService as CounsellingQueueService;
 
 final class ReferralService extends BaseService
 {
@@ -47,7 +54,7 @@ final class ReferralService extends BaseService
         $this->policy->check('list');
 
         $builder = $this->db->table('referral_referrals AS r')
-            ->select('r.id, r.patient_school_id, r.source_module, r.target_module, r.artifact_type, r.status, r.reason_code, r.provider_user_id, r.created_at, r.updated_at, r.qr_expires_at, r.qr_revoked_at, u.username AS provider_name')
+            ->select('r.id, r.patient_school_id, r.source_encounter_id, r.source_session_id, r.source_module, r.target_module, r.artifact_type, r.status, r.reason_code, r.provider_user_id, r.queue_handoff_destination, r.queue_handoff_entry_id, r.queue_handoff_at, r.created_at, r.updated_at, r.qr_expires_at, r.qr_revoked_at, u.username AS provider_name')
             ->join('users AS u', 'u.id = r.provider_user_id', 'left')
             ->where('r.archived_at', null);
 
@@ -95,6 +102,9 @@ final class ReferralService extends BaseService
         ?string $reasonCode,
         ?string $notesPlaintext,
         ?int $providerUserId = null,
+        ?int $sourceEncounterId = null,
+        ?int $sourceSessionId = null,
+        bool $clinicalStaffContext = false,
     ): ReferralDto {
         $this->policy->check('create');
         $userId = \App\Auth\CurrentUser::assert();
@@ -123,18 +133,62 @@ final class ReferralService extends BaseService
         // `patients_employees.user_id` UNIQUE link (Phase 11). If the
         // link is NULL, the issuer has no employee record and the gate
         // is a no-op.
-        if ($sourceModule === 'clinic' && ! $this->issuerIsTeachingEmployee($userId)) {
+        if (! $clinicalStaffContext && $sourceModule === 'clinic' && ! $this->issuerIsTeachingEmployee($userId)) {
             throw new ApiException('rbac.referrals.forbidden', 403, [
                 ['code' => 'referral.teaching_required', 'message' => 'Only teaching employees (faculty) can refer students to counselling.'],
             ]);
         }
 
-        return $this->txn(function () use ($patientSchoolId, $sourceModule, $targetModule, $artifactType, $reasonCode, $notesPlaintext, $providerUserId, $userId): ReferralDto {
+        return $this->txn(function () use ($patientSchoolId, $sourceModule, $targetModule, $artifactType, $reasonCode, $notesPlaintext, $providerUserId, $sourceEncounterId, $sourceSessionId, $clinicalStaffContext, $userId): ReferralDto {
             $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
+            $contextPatient = $this->lockAndAuthorizeSourceContext(
+                $sourceModule,
+                $sourceEncounterId,
+                $sourceSessionId,
+                $clinicalStaffContext,
+            );
+            if ($contextPatient !== null && $contextPatient !== $patientSchoolId) {
+                throw new ApiException('referral.patient_context_mismatch', 409, [[
+                    'code' => 'referral.patient_context_mismatch',
+                    'message' => 'The referral patient does not match the active clinical session.',
+                ]]);
+            }
+            $patientUserId = $this->resolvePatientUserId($patientSchoolId);
+            if ($patientUserId === null) {
+                throw new ApiException('referral.patient_not_found', 422, [[
+                    'code' => 'referral.patient_not_found',
+                    'message' => 'The selected patient is no longer available. Search and select the patient again.',
+                    'field' => 'patient_school_id',
+                ]]);
+            }
+
+            // Lock the stable patient row before checking so two concurrent
+            // requests for the same direction cannot both pass the lookup.
+            $this->db->query('SELECT `id` FROM `users` WHERE `id` = ? FOR UPDATE', [$patientUserId]);
+            $existing = $this->db->table('referral_referrals')
+                ->where('tenant_id', CurrentTenant::id())
+                ->where('patient_user_id', $patientUserId)
+                ->where('source_module', $sourceModule)
+                ->where('target_module', $targetModule)
+                ->where('status !=', REFERRAL_STATUS_CLOSED)
+                ->where('archived_at', null)
+                ->orderBy('id', 'DESC')
+                ->get()->getRowArray();
+            if ($existing !== null) {
+                $referral = ReferralDto::fromRow($existing)->toArray();
+                throw new ApiException('referral.active_duplicate', 409, [[
+                    'code' => 'referral.active_duplicate',
+                    'message' => sprintf('Referral #%d is already %s for this patient.', $referral['id'], str_replace('_', ' ', $referral['status'])),
+                    'details' => ['referral' => $referral],
+                ]]);
+            }
 
             $row = [
-                'patient_user_id'   => $this->resolvePatientUserId($patientSchoolId),
+                'tenant_id'         => CurrentTenant::id(),
+                'patient_user_id'   => $patientUserId,
                 'patient_school_id' => $patientSchoolId,
+                'source_encounter_id' => $sourceEncounterId,
+                'source_session_id' => $sourceSessionId,
                 'source_module'     => $sourceModule,
                 'target_module'     => $targetModule,
                 'artifact_type'     => $artifactType,
@@ -253,6 +307,155 @@ final class ReferralService extends BaseService
         $this->policy->check('close');
         $userId = \App\Auth\CurrentUser::assert();
         return $this->transition($id, REFERRAL_STATUS_CLOSED, $userId);
+    }
+
+    /**
+     * Explicit receiving-side handoff into the target module's independent
+     * queue. Referral state is not changed and repeated calls return the same
+     * logical queue association.
+     *
+     * @return array{referral:array<string,mixed>,queue:array<string,mixed>}
+     */
+    public function handoffToReceivingQueue(int $id): array
+    {
+        $this->policy->check('handoff');
+        $userId = \App\Auth\CurrentUser::assert();
+
+        return $this->txn(function () use ($id, $userId): array {
+            $referral = $this->selectForUpdate('referral_referrals', ['id' => $id, 'archived_at' => null]);
+            if ($referral === null) {
+                throw new ApiException('resource.not_found', 404, [
+                    ['code' => 'resource.not_found', 'message' => "Referral #{$id} not found."],
+                ]);
+            }
+            $target = (string) $referral['target_module'];
+            $this->policy->checkReceivingSide($target);
+            if ((string) $referral['status'] === REFERRAL_STATUS_CLOSED) {
+                throw new ApiException('statemachine.referral.closed', 409, [
+                    ['code' => 'statemachine.referral.closed', 'message' => 'A closed referral cannot be sent to a queue.'],
+                ]);
+            }
+            if (! in_array((string) $referral['status'], [REFERRAL_STATUS_ACKNOWLEDGED, REFERRAL_STATUS_UNDER_REVIEW], true)) {
+                throw new ApiException('statemachine.referral.not_accepted', 409, [
+                    ['code' => 'statemachine.referral.not_accepted', 'message' => 'A referral must be acknowledged before queue handoff.'],
+                ]);
+            }
+
+            $patientSchoolId = (string) $referral['patient_school_id'];
+            $patientUserId = isset($referral['patient_user_id']) && $referral['patient_user_id'] !== null
+                ? (int) $referral['patient_user_id']
+                : ($this->resolvePatientUserId($patientSchoolId) ?? 0);
+            if ($patientUserId <= 0) {
+                throw ApiException::validationFailure([
+                    ['code' => 'validation.field', 'message' => 'Queue handoff requires a registered patient.', 'field' => 'patient_school_id'],
+                ]);
+            }
+
+            if ($target === 'counselling') {
+                $queueService = new CounsellingQueueService(
+                    new CounsellingPolicy(),
+                    $this->audit,
+                    $this->notify,
+                );
+                $queue = ($referral['queue_handoff_entry_id'] ?? null) !== null
+                    ? $queueService->getForHandoff((int) $referral['queue_handoff_entry_id'])
+                    : $queueService->enqueueFromReferral($patientUserId, $patientSchoolId, $id);
+            } else {
+                $clinicPolicy = new ClinicPolicy();
+                $queueService = new ClinicQueueService(
+                    $clinicPolicy,
+                    $this->audit,
+                    new AppointmentService($clinicPolicy, $this->audit, $this->notify),
+                    new ClinicService($clinicPolicy, $this->audit, $this->notify),
+                    $this->notify,
+                );
+                $queue = ($referral['queue_handoff_entry_id'] ?? null) !== null
+                    ? $queueService->getForHandoff((int) $referral['queue_handoff_entry_id'])
+                    : $queueService->enqueueFromReferral($patientUserId, $patientSchoolId, $id);
+            }
+
+            $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
+            if (($referral['queue_handoff_entry_id'] ?? null) === null) {
+                $this->db->table('referral_referrals')->where('id', $id)->update([
+                    'queue_handoff_destination' => $target,
+                    'queue_handoff_entry_id' => (int) $queue['id'],
+                    'queue_handoff_at' => $now,
+                    'updated_at' => $now,
+                ]);
+                $this->audit->enqueue('referral.queue_handoff', 'referral_referrals', $id, $userId, [
+                    'destination' => $target,
+                    'queue_entry_id' => (int) $queue['id'],
+                    // Source queue ownership remains unchanged. Receiving
+                    // staff never gain permission to complete the source row.
+                    'source_queue_disposition' => 'unchanged',
+                ]);
+                $this->notify->enqueueToPermissions(
+                    $target === 'counselling' ? ['counselling.queue.read'] : ['clinic.queue.read'],
+                    'referral.queue_handoff',
+                    ['resource_code' => 'referral#' . $id, 'destination' => $target],
+                );
+            }
+
+            $fresh = $this->db->table('referral_referrals')->where('id', $id)->get()->getRowArray();
+            return ['referral' => ReferralDto::fromRow($fresh)->toArray(), 'queue' => $queue];
+        });
+    }
+
+    public function createFromEncounter(int $encounterId, ?string $reasonCode, ?string $notesPlaintext): ReferralDto
+    {
+        $row = $this->db->table('clinic_encounters')->select('patient_school_id')
+            ->where('id', $encounterId)->where('archived_at', null)->get()->getRowArray();
+        if ($row === null) {
+            throw new ApiException('resource.not_found', 404, [[
+                'code' => 'resource.not_found', 'message' => "Encounter #{$encounterId} not found.",
+            ]]);
+        }
+        return $this->create((string) $row['patient_school_id'], 'clinic', 'counselling', 'intake_pass', $reasonCode, $notesPlaintext, null, $encounterId, null, true);
+    }
+
+    public function createFromSession(int $sessionId, ?string $reasonCode, ?string $notesPlaintext): ReferralDto
+    {
+        $row = $this->db->table('counselling_sessions')->select('patient_school_id')
+            ->where('id', $sessionId)->where('archived_at', null)->get()->getRowArray();
+        if ($row === null) {
+            throw new ApiException('resource.not_found', 404, [[
+                'code' => 'resource.not_found', 'message' => "Session #{$sessionId} not found.",
+            ]]);
+        }
+        return $this->create((string) $row['patient_school_id'], 'counselling', 'clinic', 'referral_letter', $reasonCode, $notesPlaintext, null, null, $sessionId, true);
+    }
+
+    private function lockAndAuthorizeSourceContext(
+        string $sourceModule,
+        ?int $sourceEncounterId,
+        ?int $sourceSessionId,
+        bool $clinicalStaffContext,
+    ): ?string {
+        if (! $clinicalStaffContext) {
+            if ($sourceEncounterId !== null || $sourceSessionId !== null) {
+                throw new ApiException('referral.context_forbidden', 403, [[
+                    'code' => 'referral.context_forbidden', 'message' => 'Clinical source context may only be assigned by its workflow endpoint.',
+                ]]);
+            }
+            return null;
+        }
+        if ($sourceModule === 'clinic' && $sourceEncounterId !== null && $sourceSessionId === null) {
+            $record = $this->selectForUpdate('clinic_encounters', ['id' => $sourceEncounterId, 'archived_at' => null]);
+            if ($record === null) throw new ApiException('resource.not_found', 404, [['code' => 'resource.not_found', 'message' => "Encounter #{$sourceEncounterId} not found."]]);
+            (new ClinicPolicy())->check('refer', $record);
+            if ((string) $record['status'] !== 'open') throw new ApiException('statemachine.clinic.encounter_closed', 409, [['code' => 'statemachine.clinic.encounter_closed', 'message' => 'Only an open Clinic encounter can create a referral.']]);
+            return (string) $record['patient_school_id'];
+        }
+        if ($sourceModule === 'counselling' && $sourceSessionId !== null && $sourceEncounterId === null) {
+            $record = $this->selectForUpdate('counselling_sessions', ['id' => $sourceSessionId, 'archived_at' => null]);
+            if ($record === null) throw new ApiException('resource.not_found', 404, [['code' => 'resource.not_found', 'message' => "Session #{$sourceSessionId} not found."]]);
+            (new CounsellingPolicy())->check('refer', $record);
+            if ($record['ended_at'] !== null) throw new ApiException('statemachine.counselling.session_closed', 409, [['code' => 'statemachine.counselling.session_closed', 'message' => 'Only an active Guidance session can create a referral.']]);
+            return (string) $record['patient_school_id'];
+        }
+        throw new ApiException('validation.invalid', 422, [[
+            'code' => 'validation.invalid', 'message' => 'Referral source context does not match its module.',
+        ]]);
     }
 
     private function transition(int $id, string $nextStatus, int $userId, ?int $providerUserId = null): ReferralDto

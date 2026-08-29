@@ -181,7 +181,7 @@ const router = createBrowserRouter([
     errorElement: <RouteError />,
     element: (
       <ProtectedShell>
-        <ProtectedRoute anyOf={['clinic.checkin.record']}>
+        <ProtectedRoute anyOf={['kiosk.checkin.submit', 'clinic.checkin.record']}>
           <KioskStationPage />
         </ProtectedRoute>
       </ProtectedShell>
@@ -328,7 +328,7 @@ const router = createBrowserRouter([
       {
         path: '/admin/kiosk-settings',
         element: (
-          <ProtectedRoute anyOf={['rbac.manage']}>
+          <ProtectedRoute anyOf={['kiosk.content.manage']}>
             <AdminKioskSettingsPage />
           </ProtectedRoute>
         ),

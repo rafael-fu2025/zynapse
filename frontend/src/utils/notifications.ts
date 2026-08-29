@@ -14,6 +14,10 @@ export interface NotificationContext {
   target_module?: unknown;
   urgency?: unknown;
   position?: unknown;
+  destination?: unknown;
+  appointment_at?: unknown;
+  appointment_status?: unknown;
+  queue_number?: unknown;
 }
 
 function resourceCode(context: NotificationContext | null): string {
@@ -29,6 +33,10 @@ export function notificationLabel(
   switch (templateCode) {
     case 'appointment.assigned':
       return `New appointment assigned ${suffix}`.trim();
+    case 'appointment.scheduled': return `Appointment booked ${suffix}`.trim();
+    case 'appointment.rescheduled': return `Appointment rescheduled ${suffix}`.trim();
+    case 'appointment.confirmed': return `Appointment confirmed ${suffix}`.trim();
+    case 'appointment.cancelled': return `Appointment cancelled ${suffix}`.trim();
     case 'appointment.no_show':
       return `Appointment marked no-show ${suffix}`.trim();
     case 'referral.created':
@@ -40,7 +48,10 @@ export function notificationLabel(
     case 'reorder.created':
       return `Low stock — reorder created ${suffix}`.trim();
     case 'queue.called':
-      return `You're up — please proceed to the clinic ${suffix}`.trim();
+    case 'counselling.queue_called': {
+      const destination = context?.destination === 'counselling' ? 'Guidance' : 'Clinic';
+      return `You're up — proceed to ${destination} ${suffix}`.trim();
+    }
     case 'bmg.alert_triggered':
       return `BMG alert on batch ${suffix}`.trim();
     default:
@@ -54,6 +65,13 @@ export function notificationDetail(
   context: NotificationContext | null,
 ): string | null {
   if (context === null) return null;
+  if (templateCode.startsWith('appointment.') && typeof context.appointment_at === 'string') {
+    const destination = context.destination === 'counselling' ? 'Guidance' : 'Clinic';
+    return `${destination} · ${new Intl.DateTimeFormat('en-PH', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Asia/Manila' }).format(new Date(context.appointment_at))}`;
+  }
+  if ((templateCode === 'queue.called' || templateCode === 'counselling.queue_called') && typeof context.queue_number === 'string') {
+    return context.queue_number;
+  }
   if (
     (templateCode === 'referral.created' || templateCode === 'referral.acknowledged') &&
     typeof context.source_module === 'string' &&

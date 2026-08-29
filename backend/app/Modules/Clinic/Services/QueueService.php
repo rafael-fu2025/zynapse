@@ -28,6 +28,7 @@ use Throwable;
  */
 final class QueueService extends BaseService
 {
+    private readonly EncounterCompletionService $completion;
     /** @var array<string, array<int, string>> action => allowed current statuses */
     private const TRANSITIONS = [
         'start'    => ['called'],
@@ -48,8 +49,10 @@ final class QueueService extends BaseService
         private readonly AppointmentService $appointments,
         private readonly ClinicService $clinic,
         private readonly NotificationOutboxService $notify,
+        ?EncounterCompletionService $completion = null,
     ) {
         parent::__construct();
+        $this->completion = $completion ?? new EncounterCompletionService($this->audit);
     }
 
     /**
@@ -78,6 +81,83 @@ final class QueueService extends BaseService
             fn (array $r): array => $this->row($r, false),
             $this->todayRows(),
         );
+    }
+
+    /**
+     * Explicit Counselling → Clinic referral handoff. Idempotent by logical
+     * referral id and by an already-active Clinic visit for the patient.
+     *
+     * @return array<string, mixed>
+     */
+    public function enqueueFromReferral(int $patientUserId, string $patientSchoolId, int $referralId): array
+    {
+        $this->policy->check('queueManage');
+        $userId = \App\Auth\CurrentUser::assert();
+
+        return $this->txn(function () use ($patientUserId, $patientSchoolId, $referralId, $userId): array {
+            $existingReferral = $this->db->table('clinic_queue_entries')
+                ->select('id')
+                ->where('referral_id', $referralId)
+                ->get()->getRowArray();
+            if ($existingReferral !== null) {
+                return $this->getRow((int) $existingReferral['id']);
+            }
+
+            $active = $this->db->query(
+                'SELECT q.`id` FROM `clinic_queue_entries` q'
+                . ' INNER JOIN `clinic_encounters` e ON e.`id` = q.`encounter_id`'
+                . ' WHERE e.`patient_school_id` = ? AND q.`status` IN (?, ?, ?)'
+                . ' ORDER BY q.`id` ASC LIMIT 1 FOR UPDATE',
+                [$patientSchoolId, 'waiting', 'called', 'in_session'],
+            )->getRowArray();
+            if ($active !== null) {
+                $this->db->table('clinic_queue_entries')->where('id', (int) $active['id'])->update([
+                    'referral_id' => $referralId,
+                    'updated_at' => $this->utcNow(),
+                ]);
+                return $this->getRow((int) $active['id']);
+            }
+
+            $now = $this->utcNow();
+            $this->db->table('clinic_encounters')->insert([
+                'patient_user_id' => $patientUserId,
+                'patient_school_id' => $patientSchoolId,
+                'chief_complaint' => 'Referral handoff to Clinic (pending triage)',
+                'status' => 'open',
+                'attending_user_id' => $userId,
+                'started_at' => $now,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ]);
+            $encounterId = (int) $this->db->insertID();
+            $last = $this->db->query(
+                'SELECT `position` FROM `clinic_queue_entries` WHERE `queue_date` = ?'
+                . ' ORDER BY `position` DESC LIMIT 1 FOR UPDATE',
+                [$this->utcToday()],
+            )->getRowArray();
+            $position = ($last !== null ? (int) $last['position'] : 0) + 1;
+            $this->db->table('clinic_queue_entries')->insert([
+                'encounter_id' => $encounterId,
+                'referral_id' => $referralId,
+                'queue_date' => $this->utcToday(),
+                'position' => $position,
+                'status' => 'waiting',
+                'created_at' => $now,
+                'updated_at' => $now,
+            ]);
+            $queueId = (int) $this->db->insertID();
+            $this->audit->enqueue('clinic.queue_referral_received', 'clinic_queue_entries', $queueId, $userId, [
+                'resource_code' => 'referral#' . $referralId,
+            ]);
+            return $this->getRow($queueId);
+        });
+    }
+
+    /** Fetch an already-associated handoff without creating or mutating a queue row. */
+    public function getForHandoff(int $id): array
+    {
+        $this->policy->check('queueManage');
+        return $this->getRow($id);
     }
 
     /**
@@ -117,7 +197,14 @@ final class QueueService extends BaseService
         return $closed;
     }
 
-    /** Call the next waiting patient (single "now serving" slot). */
+    /**
+     * Call the next waiting patient (single "now serving" slot).
+     *
+     * Queue policy: strict FIFO by immutable daily `position`. Clinic and
+     * referred patients use the same ordering rule; there is deliberately no
+     * priority insertion or staff-controlled bypass. Emergency escalation is a
+     * clinical workflow and must not silently reorder this operational queue.
+     */
     public function callNext(): array
     {
         $this->policy->check('queueManage');
@@ -126,18 +213,18 @@ final class QueueService extends BaseService
         return $this->txn(function () use ($userId): array {
             $today = $this->utcToday();
 
-            // Lock today's open entries (called + waiting) in one pass.
+            // Lock today's active entries and waiting FIFO in one pass.
             $rows = $this->db->query(
                 'SELECT `id`, `status` FROM `clinic_queue_entries`'
-                . ' WHERE `queue_date` = ? AND `status` IN (?, ?)'
+                . ' WHERE `queue_date` = ? AND `status` IN (?, ?, ?)'
                 . ' ORDER BY `position` ASC FOR UPDATE',
-                [$today, 'called', 'waiting'],
+                [$today, 'called', 'in_session', 'waiting'],
             )->getResultArray();
 
             foreach ($rows as $r) {
-                if ((string) $r['status'] === 'called') {
-                    throw new ApiException('statemachine.queue.already_called', 409, [
-                        ['code' => 'statemachine.queue.already_called', 'message' => 'A patient is already called — start or skip them first.'],
+                if (in_array((string) $r['status'], ['called', 'in_session'], true)) {
+                    throw new ApiException('statemachine.queue.already_active', 409, [
+                        ['code' => 'statemachine.queue.already_active', 'message' => 'Clinic already has a patient called or in session.'],
                     ]);
                 }
             }
@@ -264,66 +351,11 @@ final class QueueService extends BaseService
             // (encounter closed → appointment completed) — the queue
             // "Complete" button is the operator's end-of-session action.
             if ($action === 'complete') {
-                $this->closeLinkedEncounter((int) $row['encounter_id'], $userId, $now);
+                $this->completion->complete((int) $row['encounter_id'], $userId, $now, 'queue_complete');
             }
 
             return $this->getRow($id);
         });
-    }
-
-    /**
-     * Cascade a queue "complete" onto the linked clinical record:
-     * close the linked encounter (if still open) and complete the
-     * linked appointment (if checked_in). Runs inside the caller's
-     * transaction, so it must not call methods that open their own
-     * nested transactions (the CI4 depth counter is finicky).
-     */
-    private function closeLinkedEncounter(int $encounterId, int $userId, string $now): void
-    {
-        $enc = $this->selectForUpdate('clinic_encounters', ['id' => $encounterId, 'archived_at' => null]);
-        if ($enc === null || (string) $enc['status'] !== 'open') {
-            // Already closed by a parallel close / no-show / auto-close
-            // — nothing left to cascade.
-            return;
-        }
-
-        $this->db->table('clinic_encounters')
-            ->where('id', $encounterId)
-            ->update([
-                'status'     => 'closed',
-                'closed_at'  => $now,
-                'updated_at' => $now,
-            ]);
-
-        // Complete the linked appointment when it was checked in —
-        // scheduling layer follows the encounter (same as
-        // ClinicService::closeEncounter / autoCloseStaleEncounter).
-        if (isset($enc['appointment_id']) && $enc['appointment_id'] !== null) {
-            $appt = $this->selectForUpdate('clinic_appointments', [
-                'id'          => (int) $enc['appointment_id'],
-                'archived_at' => null,
-            ]);
-            if ($appt !== null && (string) $appt['status'] === 'checked_in') {
-                $this->db->table('clinic_appointments')
-                    ->where('id', (int) $appt['id'])
-                    ->update(['status' => 'completed', 'updated_at' => $now]);
-                $this->audit->enqueue(
-                    'clinic.appointment_completed',
-                    'clinic_appointments',
-                    (int) $appt['id'],
-                    $userId,
-                    ['previous_status' => 'checked_in', 'next_status' => 'completed', 'reason_code' => 'queue_complete'],
-                );
-            }
-        }
-
-        $this->audit->enqueue(
-            'clinic.encounter_closed',
-            'clinic_encounters',
-            $encounterId,
-            $userId,
-            ['previous_status' => 'open', 'next_status' => 'closed', 'reason_code' => 'queue_complete'],
-        );
     }
 
     /**
@@ -350,6 +382,7 @@ final class QueueService extends BaseService
             $status = (string) $r['status'];
             $item   = [
                 'position'           => (int) $r['position'],
+                'queue_number'       => sprintf('C-%03d', (int) $r['position']),
                 'display_name'       => $this->displayName($r, true),
                 'patient_school_id'  => (string) $r['patient_school_id'],
             ];
@@ -456,6 +489,8 @@ final class QueueService extends BaseService
     {
         $out = [
             'id'              => (int) $r['id'],
+            'destination'     => 'clinic',
+            'queue_number'    => sprintf('C-%03d', (int) $r['position']),
             'encounter_id'    => (int) $r['encounter_id'],
             'position'        => (int) $r['position'],
             'status'          => (string) $r['status'],
@@ -563,7 +598,7 @@ final class QueueService extends BaseService
 
     private function utcToday(): string
     {
-        return (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d');
+        return (new DateTimeImmutable('now', new DateTimeZone('Asia/Manila')))->format('Y-m-d');
     }
 
     private function utcNow(): string

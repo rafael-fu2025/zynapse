@@ -22,6 +22,7 @@ class AuthGroups extends ShieldAuthGroups
         'admin'            => 'Administrator',
         'clinic_staff'     => 'Clinic Staff',
         'counsellor'       => 'Counsellor',
+        'kiosk'            => 'Kiosk Station',
         'facilities_op'    => 'Facilities Operator',
         'audit_reader'     => 'Audit Reader',
         // Phase 19 (ACTOR_ACCESS_ANALYSIS): read-only analytics role.
@@ -96,6 +97,7 @@ class AuthGroups extends ShieldAuthGroups
             'referrals.issue_qr',
             'notifications.read',
             'employee.portal.read',
+            'kiosk.content.manage',
         ],
         'counsellor' => [
             'counselling.records.create',
@@ -103,6 +105,8 @@ class AuthGroups extends ShieldAuthGroups
             'counselling.records.write',
             'counselling.schedule.read',
             'counselling.schedule.manage',
+            'counselling.queue.read',
+            'counselling.queue.manage',
             'reports.read',
             'clinic.patients.read',
             'referrals.create',
@@ -116,6 +120,11 @@ class AuthGroups extends ShieldAuthGroups
             'referrals.issue_qr',
             'notifications.read',
             'employee.portal.read',
+        ],
+        'kiosk' => [
+            // Can submit either destination through the destination-aware
+            // kiosk orchestrator. No record-read or queue-management grants.
+            'kiosk.checkin.submit',
         ],
         'facilities_op' => [
             'facilities.units.read',
@@ -159,6 +168,7 @@ class AuthGroups extends ShieldAuthGroups
             'counselling.records.write',
             'counselling.records.create',
             'counselling.schedule.read',
+            'counselling.schedule.team_manage',
             'notifications.read',
             'employee.portal.read',
         ],
@@ -173,6 +183,9 @@ class AuthGroups extends ShieldAuthGroups
             // mutation on the student's behalf.
             'notifications.read',
             'student.portal.read',
+            'portal.appointments.read',
+            'portal.appointments.manage',
+            'portal.queue.read',
         ],
         'employee' => [
             // Identity-consolidation: default role for auto-created
@@ -184,6 +197,9 @@ class AuthGroups extends ShieldAuthGroups
             // create one (friendly hint in the UI).
             'notifications.read',
             'employee.portal.read',
+            'portal.appointments.read',
+            'portal.appointments.manage',
+            'portal.queue.read',
             'referrals.create',
             'referrals.read',
         ],

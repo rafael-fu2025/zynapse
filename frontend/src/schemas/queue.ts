@@ -13,6 +13,8 @@ export type QueueOutcome = (typeof QUEUE_OUTCOMES)[number];
 
 export const queueEntrySchema = z.object({
   id: z.number().int().positive(),
+  destination: z.literal('clinic').optional(),
+  queue_number: z.string().optional(),
   encounter_id: z.number().int().positive(),
   position: z.number().int().min(1),
   status: z.enum(['waiting', 'called', 'in_session', 'done', 'skipped']),
@@ -42,10 +44,35 @@ export const queueEntrySchema = z.object({
 });
 export type QueueEntry = z.infer<typeof queueEntrySchema>;
 
-export const publicQueueStateSchema = z.object({
+export const guidanceQueueEntrySchema = z.object({
+  id: z.number().int().positive(),
+  position: z.number().int().min(1),
+  queue_number: z.string().optional(),
+  status: z.enum(['waiting', 'called', 'in_session', 'done', 'skipped']),
+  display_name: z.string(),
+  patient_school_id: z.string(),
+  purpose: z.string(),
+  counselling_session_id: z.number().int().positive().nullable().optional(),
+  assigned_counsellor_user_id: z.number().int().positive().nullable().optional(),
+  counselling_appointment_id: z.number().int().positive().nullable().optional(),
+  referral_id: z.number().int().positive().nullable().optional(),
+  called_at: z.string().nullable(),
+  started_at: z.string().nullable(),
+  finished_at: z.string().nullable(),
+});
+export type GuidanceQueueEntry = z.infer<typeof guidanceQueueEntrySchema>;
+
+const publicQueueColumnSchema = z.object({
+  active: z.array(z.object({
+    position: z.number().int(),
+    queue_number: z.string(),
+    display_name: z.string(),
+    patient_school_id: z.string(),
+  })).optional(),
   now_serving: z
     .object({
       position: z.number().int(),
+      queue_number: z.string(),
       display_name: z.string(),
       patient_school_id: z.string(),
     })
@@ -53,11 +80,17 @@ export const publicQueueStateSchema = z.object({
   waiting: z.array(
     z.object({
       position: z.number().int(),
+      queue_number: z.string(),
       display_name: z.string(),
       patient_school_id: z.string(),
       est_wait_minutes: z.number().int().min(0).optional(),
     }),
   ),
+});
+
+export const publicQueueStateSchema = z.object({
+  guidance: publicQueueColumnSchema,
+  clinic: publicQueueColumnSchema,
   updated_at: z.string(),
 });
 export type PublicQueueState = z.infer<typeof publicQueueStateSchema>;

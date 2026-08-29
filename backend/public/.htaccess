@@ -23,4 +23,10 @@ RewriteRule ^(.*)$ index.php [QSA,L]
     Header set Referrer-Policy "no-referrer"
     Header set Permissions-Policy "geolocation=(), microphone=(), camera=()"
     Header always set Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
+
+    # Poster filenames are content-stable UUIDs. Cache them so revisiting the
+    # gallery does not make another network request.
+    <FilesMatch "^[a-f0-9]{32}\.jpg$">
+        Header set Cache-Control "public, max-age=31536000, immutable"
+    </FilesMatch>
 </IfModule>

@@ -7,21 +7,28 @@ import { z } from 'zod';
 export const SCAN_METHODS = ['manual', 'qr', 'rfid'] as const;
 export type ScanMethod = (typeof SCAN_METHODS)[number];
 
+export const CHECKIN_DESTINATIONS = ['clinic', 'counselling'] as const;
+export type CheckinDestination = (typeof CHECKIN_DESTINATIONS)[number];
+
 export const CHECKIN_OUTCOMES = [
   'counselling_confirmed',
   'counselling_already',
+  'counselling_queued',
   'clinic_appointment_confirmed',
+  'clinic_appointment_already',
   'clinic_queued',
   'duplicate',
 ] as const;
 export type CheckinOutcome = (typeof CHECKIN_OUTCOMES)[number];
 
 export const scanInputSchema = z.object({
+  destination: z.enum(CHECKIN_DESTINATIONS),
   identifier: z.string().max(255).optional().or(z.literal('')),
   guest_name: z.string().max(120).optional().or(z.literal('')),
   method: z.enum(SCAN_METHODS),
   station_id: z.string().max(64).optional().or(z.literal('')),
   purpose: z.string().max(120).optional().or(z.literal('')),
+  custom_purpose: z.boolean().optional().default(false),
   scanned_at: z.string().optional(),
 }).refine((v) => (v.identifier?.trim() ?? '') !== '' || (v.guest_name?.trim() ?? '') !== '', {
   message: 'Enter an ID or a name.',
@@ -31,6 +38,7 @@ export type ScanInput = z.infer<typeof scanInputSchema>;
 
 export const scanResultSchema = z.object({
   id: z.number().int().positive(),
+  destination: z.enum(CHECKIN_DESTINATIONS),
   outcome: z.enum(CHECKIN_OUTCOMES),
   message: z.string(),
   student: z.object({
@@ -44,7 +52,9 @@ export const scanResultSchema = z.object({
   counselling_appointment_id: z.number().int().nullable(),
   queue: z
     .object({
-      encounter_id: z.number().int(),
+      encounter_id: z.number().int().positive().nullable().optional(),
+      queue_number: z.string().optional(),
+      counselling_session_id: z.number().int().positive().nullable().optional(),
       position: z.number().int(),
       estimated_wait_minutes: z.number().int().min(0).optional(),
     })
@@ -58,6 +68,7 @@ export const checkinRowSchema = z.object({
   guest_name: z.string().nullable(),
   method: z.enum(SCAN_METHODS),
   station_id: z.string().nullable(),
+  destination: z.enum(CHECKIN_DESTINATIONS),
   outcome: z.enum(CHECKIN_OUTCOMES),
   purpose: z.string().nullable(),
   counselling_appointment_id: z.number().int().nullable(),
@@ -68,10 +79,12 @@ export type CheckinRow = z.infer<typeof checkinRowSchema>;
 
 /** Offline scan buffered client-side (legacy offline_checkin_buffer, moved to the SPA). */
 export interface BufferedScan {
+  destination: CheckinDestination;
   identifier?: string;
   guest_name?: string;
   method: ScanMethod;
   station_id: string;
   purpose?: string;
+  custom_purpose?: boolean;
   scanned_at: string;
 }

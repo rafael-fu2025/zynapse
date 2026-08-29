@@ -88,7 +88,7 @@ const MODULES: ReadonlyArray<Module> = [
     label: 'Inventory',
     href: '/inventory',
     icon: Boxes,
-    summary: () => 'Clinic supplies · movement ledger',
+    summary: () => 'Clinic supplies · stock transactions',
   },
   {
     code: 'clinic.appointments.read',

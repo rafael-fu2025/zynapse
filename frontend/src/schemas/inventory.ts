@@ -18,7 +18,9 @@ export const inventoryItemSchema = z.object({
   unit: z.string(),
   quantity_on_hand: z.number().int().min(0),
   reorder_level: z.number().int().min(0),
+  target_stock: z.number().int().positive().nullable(),
   low_stock: z.boolean(),
+  stock_status: z.enum(['in_stock', 'needs_to_reorder', 'out_of_stock']),
   archived: z.boolean().optional().default(false),
   created_at: z.string(),
   // Row-level "last move" hint — null when the item has no movements yet.
@@ -31,7 +33,11 @@ export const createItemSchema = z.object({
   name: z.string().min(1).max(128),
   unit: z.string().min(1).max(32).default('pc'),
   reorder_level: z.number().int().min(0).default(0),
-});
+  target_stock: z.number().int().positive().optional(),
+}).refine(
+  (v) => v.target_stock === undefined || v.target_stock > v.reorder_level,
+  { message: 'Must be greater than reorder level', path: ['target_stock'] },
+);
 export type CreateItemInput = z.infer<typeof createItemSchema>;
 
 /**
@@ -43,7 +49,11 @@ export const updateItemSchema = z.object({
   name: z.string().min(1, 'Required').max(128),
   unit: z.string().min(1).max(32).optional(),
   reorder_level: z.number().int().min(0).optional(),
-});
+  target_stock: z.number().int().positive().optional(),
+}).refine(
+  (v) => v.target_stock === undefined || v.reorder_level === undefined || v.target_stock > v.reorder_level,
+  { message: 'Must be greater than reorder level', path: ['target_stock'] },
+);
 export type UpdateItemInput = z.infer<typeof updateItemSchema>;
 
 /**

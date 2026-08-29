@@ -32,6 +32,10 @@ export function useAvailability() {
   });
 }
 
+export function useCounsellors() {
+  return useQuery({ queryKey: ['schedule','counsellors'], queryFn: async () => z.array(z.object({ id:z.number(),name:z.string() })).parse((await apiClient.get('/counselling/counsellors')).data) });
+}
+
 export function useAddSlot() {
   const qc = useQueryClient();
   return useMutation<{ id: number }, ApiEnvelopeError, AddSlotInput>({
