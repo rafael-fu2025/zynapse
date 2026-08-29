@@ -64,11 +64,12 @@ jobs:
       - name: Feature suite (boots kernel against MariaDB)
         working-directory: backend
         env:
-          # Config\Database hydrates `database.tests.*` from the
-          # environment; the schema itself is created by the bootstrap.
-          database.tests.username: root
-          database.tests.password: ci-root-password
-          database.tests.hostname: 127.0.0.1
+          # Plain uppercase names — GitHub Actions does not export `env:`
+          # keys containing dots, so dotted names never reach getenv() on
+          # the runner. The bootstrap mirrors these into Config\Database.
+          SYNAPSE_TEST_DB_HOST: 127.0.0.1
+          SYNAPSE_TEST_DB_USER: root
+          SYNAPSE_TEST_DB_PASS: ci-root-password
         run: composer test:feature
 
   frontend:

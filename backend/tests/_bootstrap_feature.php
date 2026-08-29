@@ -74,6 +74,44 @@ if ($dbConfig->defaultGroup !== 'tests') {
     exit(1);
 }
 
+/*
+ * CI-provided credentials — MUST run before the dev-schema guard below so
+ * an env override participates in that decision.
+ *
+ * GitHub Actions cannot export `env:` names that contain dots (getenv() on
+ * the runner sees nothing — the first CI run died with "using password: NO"
+ * despite the workflow setting `database.tests.password`), so the workflow
+ * provides plain uppercase names. The dotted `database.tests.*` names
+ * remain supported for local overrides.
+ *
+ * CI4's BaseConfig hydrates dotted env vars into config arrays ONLY from
+ * $_ENV/$_SERVER, and PHP's default `variables_order` ('GPCS') leaves
+ * $_ENV empty — so whatever their source, the values are mirrored into
+ * $_ENV/$_SERVER (putenv for good measure) so that BOTH this bootstrap's
+ * mysqli_connect() below AND the framework's own connection (a fresh
+ * Config\Database hydrating from the superglobals) get the creds.
+ */
+$dbEnvMap = [
+    'SYNAPSE_TEST_DB_HOST' => 'hostname',
+    'SYNAPSE_TEST_DB_USER' => 'username',
+    'SYNAPSE_TEST_DB_PASS' => 'password',
+    'SYNAPSE_TEST_DB_NAME' => 'database',
+    'SYNAPSE_TEST_DB_PORT' => 'port',
+];
+foreach ($dbEnvMap as $envName => $configKey) {
+    $envValue = getenv($envName);
+    if ($envValue === false || $envValue === '') {
+        $envValue = getenv("database.tests.{$configKey}");
+    }
+    if ($envValue === false || $envValue === '') {
+        continue;
+    }
+    $dbConfig->tests[$configKey] = $configKey === 'port' ? (int) $envValue : $envValue;
+    $_ENV["database.tests.{$configKey}"]    = $envValue;
+    $_SERVER["database.tests.{$configKey}"] = $envValue;
+    putenv("database.tests.{$configKey}={$envValue}");
+}
+
 $testDatabase = (string) ($dbConfig->tests['database'] ?? '');
 $devDatabase  = (string) ($dbConfig->default['database'] ?? '');
 
@@ -86,29 +124,6 @@ if ($testDatabase === '' || $testDatabase === $devDatabase) {
         $devDatabase,
     ));
     exit(1);
-}
-
-/*
- * Mirror `database.tests.*` process-env overrides into the config and the
- * superglobals. CI4's BaseConfig hydrates dotted env vars into array
- * properties ONLY from $_ENV/$_SERVER, and PHP's default `variables_order`
- * ('GPCS') leaves $_ENV empty on CI runners — so GitHub Actions step env
- * (`database.tests.username: …`) is visible to getenv() but never reaches
- * the config, and the suite dies with "Access denied (using password: NO)".
- * getenv() always sees the real process environment, so read from there and
- * publish into $_ENV/$_SERVER (putenv for good measure) so that BOTH this
- * bootstrap's mysqli_connect() below AND the framework's own connection
- * (a fresh Config\Database hydrating from the superglobals) get the creds.
- */
-foreach (['hostname', 'username', 'password', 'port', 'database'] as $envKey) {
-    $envValue = getenv("database.tests.{$envKey}");
-    if ($envValue === false || $envValue === '') {
-        continue;
-    }
-    $dbConfig->tests[$envKey] = $envKey === 'port' ? (int) $envValue : $envValue;
-    $_ENV["database.tests.{$envKey}"]    = $envValue;
-    $_SERVER["database.tests.{$envKey}"] = $envValue;
-    putenv("database.tests.{$envKey}={$envValue}");
 }
 
 /*
