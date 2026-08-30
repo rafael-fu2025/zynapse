@@ -171,7 +171,6 @@ function HomeDispatcher() {
 
 const router = createBrowserRouter([
   { path: '/login', element: <LoginPage /> },
-  { path: '/403', element: <ForbiddenPage /> },
   // PUBLIC lobby-TV board — intentionally outside the protected shell.
   { path: '/queue-display', element: <QueueDisplayPage /> },
   // Fullscreen kiosk station — authenticated but OUTSIDE the shell
@@ -197,6 +196,9 @@ const router = createBrowserRouter([
     children: [
       { path: '/', element: <HomeDispatcher /> },
       { path: '/change-password', element: <ChangePasswordPage /> },
+      // 403 keeps the shell so the user can navigate somewhere they
+      // ARE allowed to be, instead of dead-ending chromeless.
+      { path: '/403', element: <ForbiddenPage /> },
       {
         path: '/me',
         // Phase 13: dispatch the `/me` route to either the

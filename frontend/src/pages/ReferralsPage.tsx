@@ -64,6 +64,7 @@ import { useAvailability, useBookAppointment } from '@/hooks/useSchedule';
 import { useMe } from '@/hooks/useAuth';
 import type { KioskLookupResult } from '@/hooks/usePatientLookup';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
+import { useUrlFilter } from '@/hooks/useUrlFilter';
 import { bookAppointmentSchema, type BookAppointmentInput } from '@/schemas/schedule';
 import {
   createReferralSchema,
@@ -661,7 +662,8 @@ export default function ReferralsPage() {
   const isReferrerScoped = me.data?.person_kind === 'employee';
   const [cursor, setCursor] = useState<string | null>(null);
   const [history, setHistory] = useState<Array<string | null>>([null]);
-  const [statusFilter, setStatusFilter] = useState<string>('all');
+  // ?status= survives a refresh and can be shared (PRODUCT principle 5).
+  const [statusFilter, setStatusFilter] = useUrlFilter('status', { default: 'all' });
   const [openCreate, setOpenCreate] = useState(false);
   const [openQr, setOpenQr] = useState<Referral | null>(null);
   const [openScan, setOpenScan] = useState(false);
@@ -702,7 +704,7 @@ export default function ReferralsPage() {
         <div>
           <h1 className="text-xl font-semibold text-foreground">Referrals</h1>
           <p className="text-sm text-muted-foreground">
-            Bridge contract between clinic and counselling modules. No SQL joins across them.
+            Referrals hand off care between Clinic and Counselling — each side keeps its own records.
           </p>
         </div>
         <div className="flex items-center gap-2">

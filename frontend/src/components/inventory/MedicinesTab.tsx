@@ -40,8 +40,8 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from '@/components/ui/tooltip';
-import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { useKeysetPagination } from '@/hooks/useKeysetPagination';
+import { useUrlFilter } from '@/hooks/useUrlFilter';
 import { useTableRowKeyboardNav } from '@/hooks/useTableRowKeyboardNav';
 import {
   useArchiveMedicine,
@@ -68,11 +68,13 @@ export function MedicinesTab() {
   const [editFor, setEditFor] = useState<Medicine | null>(null);
   const [archiveFor, setArchiveFor] = useState<Medicine | null>(null);
   const [forecastFor, setForecastFor] = useState<Medicine | null>(null);
-  const [showArchived, setShowArchived] = useState(false);
-  const [q, setQ] = useState('');
-  const debouncedQ = useDebouncedValue(q, 300);
-  const { cursor, history, nextPage, prevPage, reset } = useKeysetPagination(debouncedQ);
-  const list = useMedicines(cursor, 25, debouncedQ === '' ? null : debouncedQ, showArchived);
+  // ?q= / ?archived=1 live in the URL (PRODUCT principle 5) so a
+  // filtered medicines list survives a refresh and can be shared.
+  const [q, setQ, qDraft] = useUrlFilter('q', { debounceMs: 300 });
+  const [showArchivedRaw, setShowArchived] = useUrlFilter('archived', { default: '' });
+  const showArchived = showArchivedRaw === '1';
+  const { cursor, history, nextPage, prevPage, reset } = useKeysetPagination(q);
+  const list = useMedicines(cursor, 25, q === '' ? null : q, showArchived);
   const archive = useArchiveMedicine();
   const unarchive = useUnarchiveMedicine();
 
@@ -172,7 +174,7 @@ export function MedicinesTab() {
     <div className="space-y-4">
       <section className="flex flex-wrap items-center justify-between gap-3 rounded-xl border bg-card p-3">
         <SearchBox
-          value={q}
+          value={qDraft}
           onValueChange={setQ}
           placeholder="Search by name, brand, or category…"
           inputId="medicines-search"
@@ -184,7 +186,7 @@ export function MedicinesTab() {
           <Button
             variant={showArchived ? 'secondary' : 'outline'}
             aria-pressed={showArchived}
-            onClick={() => { setShowArchived((v) => !v); reset(); }}
+            onClick={() => { setShowArchived(showArchived ? '' : '1'); reset(); }}
           >
             <Archive /> {showArchived ? 'Hide archived' : 'Show archived'}
           </Button>
@@ -220,7 +222,7 @@ export function MedicinesTab() {
             {!list.isLoading && rows.length === 0 && (
               <TableRow>
                 <TableCell colSpan={6} className="px-3 py-6 text-center text-muted-foreground">
-                  {debouncedQ !== '' ? `No medicines match "${debouncedQ}".` : 'No medicines in the catalog.'}
+                  {q !== '' ? `No medicines match "${q}".` : 'No medicines in the catalog.'}
                 </TableCell>
               </TableRow>
             )}
@@ -239,12 +241,12 @@ export function MedicinesTab() {
                       className="font-medium"
                       title={m.description !== null && m.description !== '' ? m.description : undefined}
                     >
-                      {highlightMatch(m.generic_name, debouncedQ)}
+                      {highlightMatch(m.generic_name, q)}
                     </span>
                     <span className="ml-1 text-xs text-muted-foreground">
                       {m.brand_name !== null && m.brand_name !== '' ? (
                         <>
-                          {highlightMatch(m.brand_name, debouncedQ)}
+                          {highlightMatch(m.brand_name, q)}
                           {m.dosage_strength !== null && m.dosage_strength !== '' && ` · ${m.dosage_strength}`}
                         </>
                       ) : (
@@ -256,7 +258,7 @@ export function MedicinesTab() {
                     <LastMovementHint movement={m.last_movement} unit={m.unit} />
                   </TableCell>
                   <TableCell className="px-3 text-xs">
-                    {m.category === null ? '—' : highlightMatch(m.category, debouncedQ)}
+                    {m.category === null ? '—' : highlightMatch(m.category, q)}
                   </TableCell>
                   <TableCell className="px-3 font-mono text-xs">
                     {m.quantity_on_hand} {m.unit}
@@ -300,7 +302,7 @@ export function MedicinesTab() {
       )}
       {!list.isLoading && !list.isError && rows.length === 0 && (
         <p className="rounded-xl border border-dashed p-6 text-center text-sm text-muted-foreground md:hidden">
-          {debouncedQ !== '' ? `No medicines match "${debouncedQ}".` : 'No medicines in the catalog.'}
+          {q !== '' ? `No medicines match "${q}".` : 'No medicines in the catalog.'}
         </p>
       )}
       <MobileCardList>
@@ -313,7 +315,7 @@ export function MedicinesTab() {
                   className="text-sm font-medium text-foreground"
                   title={m.description !== null && m.description !== '' ? m.description : undefined}
                 >
-                  {highlightMatch(m.generic_name, debouncedQ)}
+                  {highlightMatch(m.generic_name, q)}
                 </span>
                 <StockBadge
                   onHand={m.quantity_on_hand}
@@ -325,7 +327,7 @@ export function MedicinesTab() {
               </div>
               {m.brand_name !== null && m.brand_name !== '' ? (
                 <p className="text-xs text-muted-foreground">
-                  {highlightMatch(m.brand_name, debouncedQ)}
+                  {highlightMatch(m.brand_name, q)}
                   {m.dosage_strength !== null && m.dosage_strength !== '' && ` · ${m.dosage_strength}`}
                 </p>
               ) : (
@@ -334,7 +336,7 @@ export function MedicinesTab() {
                 )
               )}
               <MobileCardField label="Category">
-                {m.category === null ? '—' : highlightMatch(m.category, debouncedQ)}
+                {m.category === null ? '—' : highlightMatch(m.category, q)}
               </MobileCardField>
               <MobileCardField label="On hand"><span className="font-mono text-xs">{m.quantity_on_hand} {m.unit}</span></MobileCardField>
               <MobileCardField label="Reorder threshold"><span className="font-mono text-xs">{m.reorder_threshold}</span></MobileCardField>

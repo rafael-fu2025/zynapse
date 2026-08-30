@@ -40,8 +40,8 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from '@/components/ui/tooltip';
-import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { useKeysetPagination } from '@/hooks/useKeysetPagination';
+import { useUrlFilter } from '@/hooks/useUrlFilter';
 import { useTableRowKeyboardNav } from '@/hooks/useTableRowKeyboardNav';
 import {
   useArchiveItem,
@@ -65,12 +65,15 @@ export function SuppliesTab() {
   const [dispenseItem, setDispenseItem] = useState<InventoryItem | null>(null);
   const [editItem, setEditItem] = useState<InventoryItem | null>(null);
   const [archiveItem, setArchiveItem] = useState<InventoryItem | null>(null);
-  const [showArchived, setShowArchived] = useState(false);
-  const [lowStockOnly, setLowStockOnly] = useState(false);
-  const [q, setQ] = useState('');
-  const debouncedQ = useDebouncedValue(q, 300);
-  const { cursor, history, nextPage, prevPage, reset } = useKeysetPagination(debouncedQ);
-  const list = useInventoryItems(cursor, 25, debouncedQ === '' ? null : debouncedQ, showArchived, lowStockOnly);
+  // ?q= / ?archived=1 / ?low=1 live in the URL (PRODUCT principle 5)
+  // so a filtered supplies list survives a refresh and can be shared.
+  const [q, setQ, qDraft] = useUrlFilter('q', { debounceMs: 300 });
+  const [showArchivedRaw, setShowArchived] = useUrlFilter('archived', { default: '' });
+  const showArchived = showArchivedRaw === '1';
+  const [lowStockOnlyRaw, setLowStockOnly] = useUrlFilter('low', { default: '' });
+  const lowStockOnly = lowStockOnlyRaw === '1';
+  const { cursor, history, nextPage, prevPage, reset } = useKeysetPagination(q);
+  const list = useInventoryItems(cursor, 25, q === '' ? null : q, showArchived, lowStockOnly);
   const archive = useArchiveItem();
   const unarchive = useUnarchiveItem();
 
@@ -150,7 +153,7 @@ export function SuppliesTab() {
     <div className="space-y-4">
       <section className="flex flex-wrap items-center justify-between gap-3 rounded-xl border bg-card p-3">
         <SearchBox
-          value={q}
+          value={qDraft}
           onValueChange={setQ}
           placeholder="Search by SKU or name…"
           inputId="supplies-search"
@@ -165,14 +168,14 @@ export function SuppliesTab() {
           <Button
             variant={lowStockOnly ? 'secondary' : 'outline'}
             aria-pressed={lowStockOnly}
-            onClick={() => setLowStockOnly((v) => !v)}
+            onClick={() => setLowStockOnly(lowStockOnly ? '' : '1')}
           >
             <TrendingDown /> {lowStockOnly ? 'Showing reorder needs' : 'Needs reorder only'}
           </Button>
           <Button
             variant={showArchived ? 'secondary' : 'outline'}
             aria-pressed={showArchived}
-            onClick={() => { setShowArchived((v) => !v); reset(); }}
+            onClick={() => { setShowArchived(showArchived ? '' : '1'); reset(); }}
           >
             <Archive /> {showArchived ? 'Hide archived' : 'Show archived'}
           </Button>
@@ -209,7 +212,7 @@ export function SuppliesTab() {
             {!list.isLoading && rows.length === 0 && (
               <TableRow>
                 <TableCell colSpan={7} className="px-3 py-6 text-center text-muted-foreground">
-                  {debouncedQ !== '' ? `No items match "${debouncedQ}".` : 'No items.'}
+                  {q !== '' ? `No items match "${q}".` : 'No items.'}
                 </TableCell>
               </TableRow>
             )}
@@ -218,9 +221,9 @@ export function SuppliesTab() {
             )}
             {rows.map((it, idx) => (
               <TableRow key={it.id} {...supplyRowNav.getRowProps(idx)}>
-                <TableCell className="px-3 font-mono text-xs">{highlightMatch(it.sku, debouncedQ)}</TableCell>
+                <TableCell className="px-3 font-mono text-xs">{highlightMatch(it.sku, q)}</TableCell>
                 <TableCell className="px-3">
-                  {highlightMatch(it.name, debouncedQ)}
+                  {highlightMatch(it.name, q)}
                   <SupplyLastMovementHint movement={it.last_movement ?? null} unit={it.unit} />
                 </TableCell>
                 <TableCell className="px-3 font-mono text-xs">{it.quantity_on_hand} {it.unit}</TableCell>
@@ -260,14 +263,14 @@ export function SuppliesTab() {
       )}
       {!list.isLoading && !list.isError && rows.length === 0 && (
         <p className="rounded-xl border border-dashed p-6 text-center text-sm text-muted-foreground md:hidden">
-          {debouncedQ !== '' ? `No items match "${debouncedQ}".` : 'No items.'}
+          {q !== '' ? `No items match "${q}".` : 'No items.'}
         </p>
       )}
       <MobileCardList>
         {rows.map((it) => (
           <MobileCard key={it.id} aria-label={`Supply ${it.name}`}>
             <div className="mb-1 flex items-center justify-between gap-2">
-              <span className="text-sm font-medium text-foreground">{highlightMatch(it.name, debouncedQ)}</span>
+              <span className="text-sm font-medium text-foreground">{highlightMatch(it.name, q)}</span>
               <StockBadge
                 onHand={it.quantity_on_hand}
                 threshold={it.reorder_level}
@@ -277,7 +280,7 @@ export function SuppliesTab() {
               />
             </div>
             <SupplyLastMovementHint movement={it.last_movement ?? null} unit={it.unit} />
-            <MobileCardField label="SKU"><span className="font-mono text-xs">{highlightMatch(it.sku, debouncedQ)}</span></MobileCardField>
+            <MobileCardField label="SKU"><span className="font-mono text-xs">{highlightMatch(it.sku, q)}</span></MobileCardField>
             <MobileCardField label="On hand"><span className="font-mono text-xs">{it.quantity_on_hand} {it.unit}</span></MobileCardField>
             <MobileCardField label="Reorder level"><span className="font-mono text-xs text-muted-foreground">{it.reorder_level}</span></MobileCardField>
             <MobileCardField label="Target stock"><span className="font-mono text-xs text-muted-foreground">{it.target_stock ?? 'Not configured'}</span></MobileCardField>

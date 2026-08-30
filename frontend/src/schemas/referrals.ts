@@ -31,14 +31,14 @@ export const referralSchema = z.object({
 export type Referral = z.infer<typeof referralSchema>;
 
 export const createReferralSchema = z.object({
-  patient_school_id: z.string().min(1).max(32),
-  source_module: z.enum(['clinic', 'counselling']),
-  target_module: z.enum(['clinic', 'counselling']),
-  artifact_type: z.string().min(1).max(64),
+  patient_school_id: z.string().min(1, 'Pick a patient.').max(32),
+  source_module: z.enum(['clinic', 'counselling'], { message: 'Pick the source module.' }),
+  target_module: z.enum(['clinic', 'counselling'], { message: 'Pick the target module.' }),
+  artifact_type: z.string().min(1, 'Pick an artifact type.').max(64),
   reason_code: z.string().max(64).optional(),
   notes_plaintext: z.string().max(8192).optional(),
 }).refine((v) => v.source_module !== v.target_module, {
-  message: 'source_module must differ from target_module.',
+  message: 'Source and target module must differ.',
   path: ['target_module'],
 });
 export type CreateReferralInput = z.infer<typeof createReferralSchema>;

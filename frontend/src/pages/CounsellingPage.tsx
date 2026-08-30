@@ -217,7 +217,7 @@ function WriteNotesDialog({ session, onClose }: { session: Session; onClose: () 
       <form noValidate onSubmit={(e) => void onSubmit(e)} className="space-y-3">
         <div className="space-y-1.5">
           <Label htmlFor="plaintext">
-            Notes (will be encrypted with AES-256-GCM server-side)
+            Notes (encrypted before they reach the server)
           </Label>
           <Textarea
             id="plaintext"
@@ -1385,10 +1385,10 @@ export default function CounsellingPage() {
   return (
     <main className="mx-auto max-w-7xl space-y-4 p-6">
       <header>
-        <h1 className="text-xl font-semibold text-foreground">Guidance</h1>
+        <h1 className="text-xl font-semibold text-foreground">Counselling</h1>
         <p className="text-sm text-muted-foreground">
-          Notes are encrypted with AES-256-GCM. Bookings must fit an active availability window;
-          no-shows drive the three-strike counter.
+          Session notes are encrypted end to end. Bookings must fall inside an availability
+          window; repeated no-shows follow the three-strike policy.
         </p>
       </header>
 
