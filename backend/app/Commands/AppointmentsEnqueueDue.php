@@ -18,13 +18,15 @@ final class AppointmentsEnqueueDue extends BaseCommand
 
     public function run(array $params): int
     {
-        $clinic = \Config\Services::appointmentService()->autoCheckInTodaysPending();
+        $svc = \Config\Services::appointmentService();
+        $clinic = $svc->autoCheckInTodaysPending();
+        $aged = $svc->agePastDueNoShows();
         $guidance = (new GuidanceQueueService(
             new CounsellingPolicy(),
             \Config\Services::auditOutbox(),
             \Config\Services::notificationOutbox(),
         ))->enqueueDueAppointments();
-        CLI::write("Due appointment enqueue complete. Clinic: {$clinic}; Guidance: {$guidance}.", 'green');
+        CLI::write("Due appointment enqueue complete. Clinic: {$clinic}; aged no-shows: {$aged}; Guidance: {$guidance}.", 'green');
         return 0;
     }
 }

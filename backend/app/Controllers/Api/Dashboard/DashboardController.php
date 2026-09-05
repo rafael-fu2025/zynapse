@@ -66,25 +66,9 @@ final class DashboardController extends ApiController
         if ($this->permissions->userHas(\App\Auth\CurrentUser::assert(), 'audit.read')) {
             $out['audit'] = [
                 'events_last_24h' => (int) $db->table('audit_events')
+                    ->where('tenant_id', CurrentTenant::id())
                     ->where('commited_at >=', date('Y-m-d H:i:s', time() - 86_400))
                     ->countAllResults(),
-            ];
-        }
-
-        // Identity-consolidated coverage — how many active users carry a
-        // patient identity (`kind` IS NOT NULL). Gated by rbac.read so
-        // any admin can see the rollout status.
-        if ($this->permissions->userHas(\App\Auth\CurrentUser::assert(), 'rbac.read')) {
-            $totalUsers = (int) $db->table('users')->where('tenant_id', CurrentTenant::id())->where('deleted_at', null)->countAllResults();
-            $linkedUsers = (int) $db->table('users')
-                ->where('tenant_id', CurrentTenant::id())
-                ->where('deleted_at', null)
-                ->where('kind IS NOT NULL', null, false)
-                ->countAllResults();
-            $out['identity_coverage'] = [
-                'linked_users' => $linkedUsers,
-                'total_users'  => $totalUsers,
-                'percent'      => $totalUsers > 0 ? (int) round(($linkedUsers / $totalUsers) * 100) : 0,
             ];
         }
 

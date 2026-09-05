@@ -6,6 +6,7 @@ namespace Modules\Clinic\Services;
 
 use App\Exceptions\ApiException;
 use App\Modules\Shared\BaseService;
+use App\Modules\Shared\ManilaDay;
 use App\Pagination\KeysetPaginator;
 use App\Services\Analytics\TriageAssistant;
 use App\Services\Audit\AuditOutboxService;
@@ -129,7 +130,10 @@ final class ClinicService extends BaseService
      * auto-queued into the same transaction at the row-locked
      * `MAX(position) + 1` slot, mirroring how `transition()` /
      * `createEncounter()` keep the encounter + queue entries
-     * side-by-side. The queue date is the import's UTC day so the
+     * side-by-side. The queue date is the current Manila business day
+     * (2026-09 audit: it was the import's UTC day, so imports landing
+     * between Manila midnight and 08:00 were filed under the previous
+     * business day and vanished from the staff queue) so the
      * bulk-imported rows surface immediately on the staff queue page.
      *
      * @param list<array{patient_school_id:string, chief_complaint:string}> $rows
@@ -142,7 +146,7 @@ final class ClinicService extends BaseService
 
         return $this->txn(function () use ($rows, $userId): array {
             $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
-            $queueDate = substr($now, 0, 10);
+            $queueDate = ManilaDay::today();
 
             $firstId = 0;
             $lastId  = 0;
@@ -210,6 +214,15 @@ final class ClinicService extends BaseService
             }
 
             $this->policy->check('recordVitals', $enc);
+
+            // Only open encounters accept vitals (DTO contract: vitals,
+            // treatments, assessment live on the open record).
+            if ((string) $enc['status'] !== 'open') {
+                throw new ApiException('statemachine.clinic.encounter_not_open', 409, [
+                    ['code' => 'statemachine.clinic.encounter_not_open',
+                     'message' => "Encounter #{$encounterId} is already {$enc['status']}; vitals can no longer be recorded."],
+                ]);
+            }
 
             $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
 
@@ -638,6 +651,15 @@ final class ClinicService extends BaseService
             }
             $this->policy->check('setAssessment', $enc);
 
+            // Terminal encounters are immutable (same contract as vitals
+            // and treatments); a 409 beats a silently amended record.
+            if ((string) $enc['status'] !== 'open') {
+                throw new ApiException('statemachine.clinic.encounter_not_open', 409, [
+                    ['code' => 'statemachine.clinic.encounter_not_open',
+                     'message' => "Encounter #{$encounterId} is already {$enc['status']}; the assessment can no longer be changed."],
+                ]);
+            }
+
             $update = ['updated_at' => $this->utcNow()];
             if (array_key_exists('triage_priority', $input) && $input['triage_priority'] !== null && $input['triage_priority'] !== '') {
                 $update['triage_priority'] = (string) $input['triage_priority'];
@@ -937,7 +959,6 @@ final class ClinicService extends BaseService
      */
     public function decideTriage(int $predictionId, string $decision, ?string $staffPriority): array
     {
-        $this->policy->check('triageUse');
         $userId = \App\Auth\CurrentUser::assert();
 
         return $this->txn(function () use ($predictionId, $decision, $staffPriority, $userId): array {
@@ -945,6 +966,29 @@ final class ClinicService extends BaseService
             if ($pred === null) {
                 throw new ApiException('resource.not_found', 404, [
                     ['code' => 'resource.not_found', 'message' => "Prediction #{$predictionId} not found."],
+                ]);
+            }
+
+            // The decision writes to the encounter, so the record-level
+            // policy must apply (2026-09 audit: the bare module check
+            // let any `clinic.triage.use` holder bypass the
+            // attending-user gate that guards `setAssessment` on the
+            // same field).
+            $enc = $this->selectForUpdate('clinic_encounters', [
+                'tenant_id'   => CurrentTenant::id(),
+                'id'          => (int) $pred['encounter_id'],
+                'archived_at' => null,
+            ]);
+            if ($enc === null) {
+                throw new ApiException('resource.not_found', 404, [
+                    ['code' => 'resource.not_found', 'message' => "Encounter #{$pred['encounter_id']} not found."],
+                ]);
+            }
+            $this->policy->check('triageUse', $enc);
+            if ((string) $enc['status'] !== 'open') {
+                throw new ApiException('statemachine.clinic.encounter_not_open', 409, [
+                    ['code' => 'statemachine.clinic.encounter_not_open',
+                     'message' => "Encounter #{$pred['encounter_id']} is already {$enc['status']}; triage can no longer be decided."],
                 ]);
             }
 

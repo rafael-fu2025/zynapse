@@ -54,6 +54,38 @@ export function notificationLabel(
     }
     case 'bmg.alert_triggered':
       return `BMG alert on batch ${suffix}`.trim();
+    case 'referral.queue_handoff':
+      return `Referral moved to queue ${suffix}`.trim();
+    case 'referral.qr_issued':
+      return `Referral QR issued ${suffix}`.trim();
+    case 'referral.qr_revoked':
+      return `Referral QR revoked ${suffix}`.trim();
+    case 'counselling.session_opened':
+      return `Guidance session opened ${suffix}`.trim();
+    case 'counselling.session_closed':
+      return `Guidance session closed ${suffix}`.trim();
+    case 'counselling.session_reassigned':
+      return `Guidance session reassigned to you ${suffix}`.trim();
+    case 'counselling.appointment_booked':
+      return `Guidance appointment booked ${suffix}`.trim();
+    case 'kiosk.media_uploaded':
+      return `Kiosk media uploaded ${suffix}`.trim();
+    case 'kiosk.media_archived':
+      return `Kiosk media archived ${suffix}`.trim();
+    case 'kiosk.media_restored':
+      return `Kiosk media restored ${suffix}`.trim();
+    case 'kiosk.settings_updated':
+      return `Kiosk settings updated ${suffix}`.trim();
+    case 'admin.user_created':
+      return 'New user account created';
+    case 'admin.user_groups_changed':
+      return 'User roles changed';
+    case 'admin.user_password_reset':
+      return 'User password reset';
+    case 'admin.user_status_changed':
+      return 'User account status changed';
+    case 'admin.portal_account_minted':
+      return 'Portal account minted for patient';
     default:
       return templateCode;
   }

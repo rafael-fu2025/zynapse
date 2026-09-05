@@ -48,4 +48,24 @@ final class ManilaDay
             ->setTimezone(new DateTimeZone('UTC'))
             ->format('Y-m-d H:i:s');
     }
+
+    /**
+     * A Manila calendar day converted to UTC `[start, end)` bounds for
+     * range filters against UTC timestamp columns (e.g. `scheduled_at`).
+     * `end` is EXCLUSIVE — compare with `>= start AND < end`, never
+     * against a `23:59:59` literal on the UTC column.
+     *
+     * @return array{start: string, end: string}
+     */
+    public static function dayBoundsUtcSql(string $manilaDate): array
+    {
+        $tzManila = new DateTimeZone(self::TZ);
+        $start = new DateTimeImmutable($manilaDate . ' 00:00:00', $tzManila);
+        $end   = $start->modify('+1 day');
+
+        return [
+            'start' => $start->setTimezone(new DateTimeZone('UTC'))->format('Y-m-d H:i:s'),
+            'end'   => $end->setTimezone(new DateTimeZone('UTC'))->format('Y-m-d H:i:s'),
+        ];
+    }
 }

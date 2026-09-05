@@ -13,8 +13,10 @@ const DEFAULT_TZ = 'Asia/Manila';
  * API timestamps are MySQL `YYYY-MM-DD HH:mm:ss` in UTC with NO zone
  * designator — `parseISO` would read them as LOCAL time and skew every
  * rendered date. Normalize to an explicit UTC instant first.
+ * Exported for callers that need the INSTANT (e.g. day-bucketing
+ * comparisons), not just a formatted string.
  */
-function parseUtc(isoUtc: string): Date {
+export function parseUtc(isoUtc: string): Date {
   const hasZone = /[zZ]$|[+-]\d{2}:?\d{2}$/.test(isoUtc);
   return parseISO(hasZone ? isoUtc : isoUtc.replace(' ', 'T') + 'Z');
 }

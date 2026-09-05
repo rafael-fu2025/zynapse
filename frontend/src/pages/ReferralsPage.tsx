@@ -652,6 +652,22 @@ function ReferralBookingDialog({ referral, onClose }: { referral: Referral; onCl
 
 export default function ReferralsPage() {
   const me = useMe();
+  // Client-side mirror of ReferralPolicy: acknowledge/review/close/
+  // issue-QR require the specific permission AND the receiving side
+  // (R6) — a faculty referrer must not see handler buttons on their
+  // own submissions only to eat 403s (2026-09 audit).
+  const perms = me.data?.permissions ?? [];
+  const hasPerm = (code: string): boolean => perms.includes(code) || perms.includes('*');
+  const servesSide = (targetModule: string): boolean =>
+    targetModule === 'clinic'
+      ? hasPerm('clinic.encounters.read')
+      : hasPerm('counselling.records.read') || hasPerm('counselling.schedule.read');
+  const canHandler = (referral: Referral): boolean =>
+    servesSide(referral.target_module);
+  const canAcknowledge = (r: Referral): boolean => hasPerm('referrals.acknowledge') && canHandler(r);
+  const canReview = (r: Referral): boolean => hasPerm('referrals.review') && canHandler(r);
+  const canClose = (r: Referral): boolean => hasPerm('referrals.close') && canHandler(r);
+  const canIssueQr = (r: Referral): boolean => hasPerm('referrals.issue_qr') && canHandler(r);
   // Non-teaching staff can open the page but cannot create a clinic→
   // counselling referral (server enforces `is_teaching = 1`); show a
   // friendly hint instead of a confusing 403 on submit.
@@ -804,10 +820,10 @@ export default function ReferralsPage() {
                         {r.queue_handoff_entry_id != null ? `In ${r.target_module === 'clinic' ? 'Clinic' : 'Guidance'} Queue` : `Send to ${r.target_module === 'clinic' ? 'Clinic' : 'Guidance'} Queue`}
                       </Button>
                     )}
-                    {r.status === 'submitted' && (
+                    {r.status === 'submitted' && canAcknowledge(r) && (
                       <Button className="min-h-11" size="sm" variant="secondary" disabled={ack.isPending} onClick={() => ack.mutate(r.id)}>Acknowledge</Button>
                     )}
-                    {r.status === 'acknowledged' && (
+                    {r.status === 'acknowledged' && canReview(r) && (
                       <Button className="min-h-11" size="sm" variant="secondary" disabled={rev.isPending} onClick={() => rev.mutate(r.id)}>Review</Button>
                     )}
                     {r.target_module === 'counselling' && (r.status === 'acknowledged' || r.status === 'under_review') && (
@@ -823,12 +839,12 @@ export default function ReferralsPage() {
                           </Button>
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end" className="w-48">
-                          {(r.status === 'under_review' || r.status === 'acknowledged') && (
+                          {(r.status === 'under_review' || r.status === 'acknowledged') && canIssueQr(r) && (
                             <DropdownMenuItem className="min-h-11" onSelect={() => setOpenQr(r)}>
                               <QrCode /> Issue QR code
                             </DropdownMenuItem>
                           )}
-                          {r.qr_expires_at !== null && (r.qr_revoked_at ?? null) === null && (
+                          {r.qr_expires_at !== null && (r.qr_revoked_at ?? null) === null && canIssueQr(r) && (
                             <DropdownMenuItem
                               className="min-h-11 text-destructive focus:text-destructive"
                               disabled={revokeQr.isPending}
@@ -837,14 +853,19 @@ export default function ReferralsPage() {
                               <X /> Revoke QR code
                             </DropdownMenuItem>
                           )}
-                          {(r.status === 'under_review' || r.status === 'acknowledged') && <DropdownMenuSeparator />}
-                          <DropdownMenuItem
-                            className="min-h-11 text-destructive focus:text-destructive"
-                            disabled={close.isPending}
-                            onSelect={() => setClosing(r)}
-                          >
-                            <X /> Close referral
-                          </DropdownMenuItem>
+                          {/* Close is only legal from acknowledged|under_review —
+                              offering it from `submitted` was a guaranteed 409
+                              (2026-09 audit). */}
+                          {(r.status === 'under_review' || r.status === 'acknowledged') && canClose(r) && <DropdownMenuSeparator />}
+                          {(r.status === 'under_review' || r.status === 'acknowledged') && canClose(r) && (
+                            <DropdownMenuItem
+                              className="min-h-11 text-destructive focus:text-destructive"
+                              disabled={close.isPending}
+                              onSelect={() => setClosing(r)}
+                            >
+                              <X /> Close referral
+                            </DropdownMenuItem>
+                          )}
                         </DropdownMenuContent>
                       </DropdownMenu>
                     )}

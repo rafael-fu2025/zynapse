@@ -62,6 +62,7 @@ final class Routes implements BaseRoutes
             $r->get('encounters/(:num)/previous-height-weight', 'ClinicController::previousHeightWeight/$1');
             $r->post('encounters/(:num)/close',              'ClinicController::closeEncounter/$1');
             $r->post('encounters/(:num)/assessment',         'ClinicController::setAssessment/$1');
+            $r->post('encounters/(:num)/no-show',            'ClinicController::markNoShow/$1');
             $r->get('encounters/(:num)/treatments',          'ClinicController::listTreatments/$1');
             $r->post('encounters/(:num)/treatments',         'ClinicController::addTreatment/$1');
 

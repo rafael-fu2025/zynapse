@@ -37,7 +37,9 @@ export default function NotificationsPage() {
   function openNotification(template: string, context: NotificationContext | null, id: number, unread: boolean) {
     if (unread) markRead.mutate(id);
     // Deep-link to the surface the notification is about (never just
-    // mark-and-stay); permission-gated like the sidebar.
+    // mark-and-stay); permission-gated like the sidebar. Every template
+    // family the backend enqueues has a destination now — unmatched
+    // codes simply mark read and stay (2026-09 audit).
     if (template.startsWith('appointment.')) {
       if (hasPermission(auth, 'portal.appointments.read')) navigate('/me');
       else if (context?.destination === 'counselling' && hasPermission(auth, 'counselling.schedule.read')) navigate('/counselling?tab=scheduling');
@@ -50,6 +52,27 @@ export default function NotificationsPage() {
     }
     if (template.startsWith('reorder.') && hasPermission(auth, 'clinic.inventory.read')) {
       navigate('/inventory?tab=reorders');
+      return;
+    }
+    if (template.startsWith('bmg.') && hasPermission(auth, 'facilities.units.read')) {
+      navigate('/facilities');
+      return;
+    }
+    if ((template.startsWith('queue.') || template.startsWith('counselling.queue')) && hasPermission(auth, 'portal.queue.read')) {
+      navigate('/me');
+      return;
+    }
+    if (template.startsWith('counselling.') && hasPermission(auth, 'counselling.records.read')) {
+      navigate('/counselling');
+      return;
+    }
+    if (template.startsWith('admin.') && hasPermission(auth, 'rbac.manage')) {
+      navigate('/admin/users');
+      return;
+    }
+    if (template.startsWith('kiosk.') && hasPermission(auth, 'kiosk.content.manage')) {
+      navigate('/admin/kiosk-settings');
+      return;
     }
   }
 

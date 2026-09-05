@@ -228,14 +228,15 @@ final class BmgSupport extends BaseService
             . ' SELECT c.category_id AS cat_id, DATEDIFF(b.finished_at, b.started_at) AS days'
             . ' FROM facilities_bmg_composition c'
             . ' JOIN facilities_bmg_batches b ON b.id = c.batch_id'
-            . " WHERE b.finished_at IS NOT NULL AND b.archived_at IS NULL AND c.category_id IN ({$in})"
+            . ' WHERE b.tenant_id = ? AND b.finished_at IS NOT NULL AND b.archived_at IS NULL AND c.category_id IN (' . $in . ')'
             . ' UNION ALL'
             . ' SELECT b.category_id, DATEDIFF(b.finished_at, b.started_at)'
             . ' FROM facilities_bmg_batches b'
             . ' LEFT JOIN facilities_bmg_composition c2 ON c2.batch_id = b.id'
-            . ' WHERE c2.id IS NULL AND b.category_id IS NOT NULL AND b.finished_at IS NOT NULL'
-            . " AND b.archived_at IS NULL AND b.category_id IN ({$in})"
+            . ' WHERE c2.id IS NULL AND b.tenant_id = ? AND b.category_id IS NOT NULL AND b.finished_at IS NOT NULL'
+            . ' AND b.archived_at IS NULL AND b.category_id IN (' . $in . ')'
             . ') t GROUP BY t.cat_id',
+            [CurrentTenant::id(), CurrentTenant::id()],
         )->getResultArray();
 
         $out = [];
@@ -293,13 +294,14 @@ final class BmgSupport extends BaseService
             'SELECT COUNT(*) AS n FROM ('
             . ' SELECT c.category_id AS cat_id FROM facilities_bmg_composition c'
             . ' JOIN facilities_bmg_batches b ON b.id = c.batch_id'
-            . ' WHERE b.finished_at IS NOT NULL AND b.archived_at IS NULL AND c.category_id = ' . (int) $categoryId
+            . ' WHERE b.tenant_id = ? AND b.finished_at IS NOT NULL AND b.archived_at IS NULL AND c.category_id = ' . (int) $categoryId
             . ' UNION ALL'
             . ' SELECT b.category_id FROM facilities_bmg_batches b'
             . ' LEFT JOIN facilities_bmg_composition c2 ON c2.batch_id = b.id'
-            . ' WHERE c2.id IS NULL AND b.category_id IS NOT NULL AND b.finished_at IS NOT NULL'
+            . ' WHERE c2.id IS NULL AND b.tenant_id = ? AND b.category_id IS NOT NULL AND b.finished_at IS NOT NULL'
             . ' AND b.archived_at IS NULL AND b.category_id = ' . (int) $categoryId
             . ') t',
+            [CurrentTenant::id(), CurrentTenant::id()],
         )->getRowArray();
         return $row !== null ? (int) $row['n'] : 0;
     }

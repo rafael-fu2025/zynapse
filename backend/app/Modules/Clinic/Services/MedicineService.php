@@ -6,6 +6,7 @@ namespace Modules\Clinic\Services;
 
 use App\Exceptions\ApiException;
 use App\Modules\Shared\BaseService;
+use App\Modules\Shared\ManilaDay;
 use App\Pagination\KeysetPaginator;
 use App\Services\Audit\AuditOutboxService;
 use App\Services\CurrentTenant;
@@ -477,8 +478,13 @@ final class MedicineService extends BaseService
     {
         $this->policy->check('inventoryRead');
 
-        $today = new DateTimeImmutable('now', new DateTimeZone('UTC'));
-        $until = $today->modify('+' . max(1, min($days, 365)) . ' days')->format('Y-m-d');
+        // Manila calendar bounds on the DATE column: "expiring within N
+        // days" means [today, today+N] — without the lower bound, lots
+        // that expired months ago and were never written off counted as
+        // "expiring soon" on the alert banner (2026-09 audit).
+        $today = ManilaDay::today();
+        $until = (new DateTimeImmutable($today, new DateTimeZone('Asia/Manila')))
+            ->modify('+' . max(1, min($days, 365)) . ' days')->format('Y-m-d');
 
         $rows = $this->db->table('clinic_medicine_batches b')
             ->where('b.tenant_id', CurrentTenant::id())
@@ -486,6 +492,7 @@ final class MedicineService extends BaseService
             ->join('clinic_medicines m', 'm.id = b.medicine_id')
             ->where('b.status', 'active')
             ->where('b.quantity_remaining >', 0)
+            ->where('b.expiration_date >=', $today)
             ->where('b.expiration_date <=', $until)
             ->orderBy('b.expiration_date', 'ASC')
             ->get()->getResultArray();

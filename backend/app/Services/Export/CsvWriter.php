@@ -63,12 +63,36 @@ final class CsvWriter
     /**
      * Write a single CSV row.
      *
+     * Cell values are neutralized against spreadsheet formula injection
+     * (OWASP CSV sheet): a leading `=`, `+`, `-`, `@`, tab or CR would
+     * otherwise be evaluated as a formula when the export is opened in
+     * Excel/Sheets. Fields here carry user-controlled strings (names,
+     * notes, JSON payloads), so the guard is applied to every cell.
+     *
      * @param array<int, mixed> $values
      */
     public function writeRow(array $values): void
     {
         $this->ensureOpen();
-        fputcsv($this->handle, $values);
+        fputcsv($this->handle, array_map(static fn ($v) => self::escapeFormulaCell($v), $values));
+    }
+
+    /**
+     * Prefix a formula-leading string cell with a single quote so the
+     * spreadsheet renders it as text. Non-string cells and strings that
+     * cannot start a formula pass through untouched.
+     */
+    private static function escapeFormulaCell(mixed $value): mixed
+    {
+        if (! is_string($value) || $value === '') {
+            return $value;
+        }
+        $first = $value[0];
+        if ($first === '=' || $first === '+' || $first === '-' || $first === '@'
+            || $first === "\t" || $first === "\r") {
+            return "'" . $value;
+        }
+        return $value;
     }
 
     /**

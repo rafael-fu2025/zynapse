@@ -532,6 +532,7 @@ export default function AdminUsersPage() {
             value={searchDraft}
             onValueChange={setSearchDraft}
             placeholder="Search email or username"
+            ariaLabel="Search users"
             inputId="users-search"
             isFetching={list.isFetching && list.data !== undefined}
             className="sm:flex-[2_1_240px]"
@@ -623,7 +624,7 @@ export default function AdminUsersPage() {
               ))}
             </div>
 
-            <div className="hidden min-w-0 lg:block">
+            <div className="hidden min-w-0 overflow-x-auto lg:block">
               <Table>
                 <TableCaption className="sr-only">User accounts, their roles, security state, and available actions.</TableCaption>
                 <TableHeader className="bg-muted/50">

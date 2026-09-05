@@ -233,13 +233,18 @@ final class CheckinService extends BaseService
             //                     closed; report and fall through to
             //                     the walk-in path so the patient
             //                     isn't silently dropped
+            //    `scheduled_at` is a UTC column; the Manila scan day must
+            //    be converted to UTC bounds (2026-09 audit: naive Manila
+            //    strings here matched tomorrow-morning appointments on
+            //    evening scans and missed pre-08:00 ones entirely).
+            $scanBounds = ManilaDay::dayBoundsUtcSql($scanDate);
             $clinicAppt = $this->db->query(
                 'SELECT `id`, `status` FROM `clinic_appointments`'
                 . ' WHERE `patient_school_id` = ?'
                 . ' AND `scheduled_at` >= ? AND `scheduled_at` < ?'
                 . ' AND `archived_at` IS NULL'
                 . ' ORDER BY `scheduled_at` ASC LIMIT 1 FOR UPDATE',
-                [$schoolId, $scanDate . ' 00:00:00', $scanDate . ' 23:59:59'],
+                [$schoolId, $scanBounds['start'], $scanBounds['end']],
             )->getRowArray();
 
             if ($clinicAppt !== null) {

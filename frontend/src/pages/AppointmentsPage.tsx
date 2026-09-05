@@ -86,6 +86,7 @@ import {
 } from '@/components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useTabParam } from '@/hooks/useTabParam';
+import { useCan } from '@/hooks/useCan';
 import { useUrlFilter } from '@/hooks/useUrlFilter';
 import {
   useAppointment,
@@ -103,7 +104,7 @@ import {
   type AppointmentTransition,
   type ScheduleAppointmentInput,
 } from '@/schemas/appointments';
-import { appDateTimeToUtcSql, fmtUtcToApp, utcSqlToAppParts } from '@/utils/date';
+import { appDateTimeToUtcSql, fmtUtcToApp, parseUtc, utcSqlToAppParts } from '@/utils/date';
 import { statusLabel } from '@/utils/status';
 import { titleCase } from '@/lib/utils';
 
@@ -629,6 +630,10 @@ export default function AppointmentsPage() {
   // the debounced ?q= survive a refresh and can be shared as links.
   const [tab, setTab] = useTabParam('all');
   const [statusFilter, setStatusFilter] = useUrlFilter('status', { default: 'all' });
+  // Scheduling and editing need `clinic.appointments.write` — read-only
+  // holders previously saw (and 403'd on) every write affordance
+  // (2026-09 audit).
+  const canWrite = useCan('clinic.appointments.write');
   const [openSchedule, setOpenSchedule] = useState(false);
   const [editing, setEditing] = useState<Appointment | null>(null);
   const [viewing, setViewing] = useState<Appointment | null>(null);
@@ -668,6 +673,8 @@ export default function AppointmentsPage() {
   }
 
   // Derive tab buckets client-side. Tabs do NOT refetch.
+  // `now` is captured per render; the memo deps include it so the
+  // buckets refresh when the rows refresh (poll cadence dominates).
   const now = Date.now();
   const rows = useMemo<Appointment[]>(
     () => (searching ? (searchQuery.data ?? []) : (list.data?.data ?? [])),
@@ -678,23 +685,26 @@ export default function AppointmentsPage() {
   const loading = searching ? searchQuery.isLoading : list.isLoading;
   const errored = searching ? searchQuery.isError : list.isError;
   const retry = () => void (searching ? searchQuery.refetch() : list.refetch());
+  // `scheduled_at` is a zone-less UTC MySQL string; `Date.parse` would
+  // read it as LOCAL time and skew every bucket by the tz offset
+  // (8h in Manila, NaN on Safari). Parse to the real instant first.
+  const openAndUpcoming = (a: Appointment): boolean =>
+    (a.status === 'scheduled' || a.status === 'checked_in') && parseUtc(a.scheduled_at).getTime() >= now;
   const counts = useMemo(() => {
     let upcoming = 0;
     let past = 0;
     for (const a of rows) {
-      const t = Date.parse(a.scheduled_at);
-      const isOpen = a.status === 'scheduled' || a.status === 'checked_in';
-      if (isOpen && t >= now) upcoming += 1;
+      if (openAndUpcoming(a)) upcoming += 1;
       else past += 1;
     }
     return { all: rows.length, upcoming, past };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- openAndUpcoming closes over `now`
   }, [rows, now]);
   const visibleRows = useMemo(() => {
     if (tab === 'all') return rows;
-    if (tab === 'upcoming') {
-      return rows.filter((a) => (a.status === 'scheduled' || a.status === 'checked_in') && Date.parse(a.scheduled_at) >= now);
-    }
-    return rows.filter((a) => !((a.status === 'scheduled' || a.status === 'checked_in') && Date.parse(a.scheduled_at) >= now));
+    if (tab === 'upcoming') return rows.filter(openAndUpcoming);
+    return rows.filter((a) => !openAndUpcoming(a));
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- openAndUpcoming closes over `now`
   }, [rows, tab, now]);
 
   return (
@@ -747,10 +757,12 @@ export default function AppointmentsPage() {
             </Select>
           </div>
           <Dialog open={openSchedule} onOpenChange={setOpenSchedule}>
-            <Button onClick={() => setOpenSchedule(true)}>
-              <CalendarPlus /> Schedule
-            </Button>
-            {openSchedule && (
+            {canWrite && (
+              <Button onClick={() => setOpenSchedule(true)}>
+                <CalendarPlus /> Schedule
+              </Button>
+            )}
+            {openSchedule && canWrite && (
               <ScheduleDialog
                 mode="create"
                 onClose={() => setOpenSchedule(false)}
@@ -811,7 +823,7 @@ export default function AppointmentsPage() {
                     transition={(vars) => transition.mutate(vars)}
                     onConfirm={setConfirm}
                     transitionPending={transition.isPending}
-                    canEdit={a.status === 'scheduled'}
+                    canEdit={canWrite && a.status === 'scheduled'}
                   />
                 ))}
               </TableBody>
@@ -845,7 +857,7 @@ export default function AppointmentsPage() {
                 transition={(vars) => transition.mutate(vars)}
                 onConfirm={setConfirm}
                 transitionPending={transition.isPending}
-                canEdit={a.status === 'scheduled'}
+                canEdit={canWrite && a.status === 'scheduled'}
               />
             ))}
           </MobileCardList>
@@ -896,7 +908,7 @@ export default function AppointmentsPage() {
             scheduledAt={qrAppt.scheduled_at}
             status={qrAppt.status}
             initialToken={qrAppt.qr_token ?? null}
-            canIssue
+            canIssue={canWrite}
             onClose={() => setQrAppt(null)}
           />
         </Dialog>

@@ -321,8 +321,12 @@ final class ReportConfigService extends BaseService
     private function claimNext(): ?array
     {
         return $this->txn(function (): ?array {
+            // Tenant-scoped claim (2026-09 audit): the worker must never
+            // claim another tenant's job — the tenant-filtered UPDATE
+            // below would no-op and leave the row stuck in `queued`.
             $row = $this->db->query(
-                "SELECT * FROM generated_reports WHERE status = 'queued' ORDER BY id ASC LIMIT 1 FOR UPDATE",
+                "SELECT * FROM generated_reports WHERE tenant_id = ? AND status = 'queued' ORDER BY id ASC LIMIT 1 FOR UPDATE",
+                [CurrentTenant::id()],
             )->getRowArray();
             if ($row === null) {
                 return null;
