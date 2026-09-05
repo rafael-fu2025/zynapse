@@ -373,9 +373,9 @@ final class MedicineService extends BaseService
             // for row locking (see BaseService::selectForUpdate).
             $batches = $this->db->query(
                 'SELECT ' . self::BATCH_COLS . ' FROM `clinic_medicine_batches`'
-                . ' WHERE `medicine_id` = ? AND `status` = ? AND `quantity_remaining` > 0 AND `expiration_date` >= ?'
+                . ' WHERE `tenant_id` = ? AND `medicine_id` = ? AND `status` = ? AND `quantity_remaining` > 0 AND `expiration_date` >= ?'
                 . ' ORDER BY `expiration_date` ASC, `id` ASC FOR UPDATE',
-                [$medicineId, 'active', $today],
+                [CurrentTenant::id(), $medicineId, 'active', $today],
             )->getResultArray();
 
             $available = array_sum(array_map(static fn (array $b): int => (int) $b['quantity_remaining'], $batches));
@@ -666,8 +666,8 @@ final class MedicineService extends BaseService
     {
         $row = $this->db->query(
             'SELECT `balance_after` FROM `clinic_medicine_transactions`'
-            . ' WHERE `medicine_id` = ? ORDER BY `id` DESC LIMIT 1 FOR UPDATE',
-            [$medicineId],
+            . ' WHERE `tenant_id` = ? AND `medicine_id` = ? ORDER BY `id` DESC LIMIT 1 FOR UPDATE',
+            [CurrentTenant::id(), $medicineId],
         )->getRowArray();
 
         return $row !== null && $row['balance_after'] !== null ? (int) $row['balance_after'] : 0;
@@ -919,12 +919,13 @@ final class MedicineService extends BaseService
             . " INNER JOIN ("
             . "   SELECT medicine_id, MAX(id) AS max_id"
             . "   FROM `clinic_medicine_transactions`"
-            . "   WHERE medicine_id IN ($idList)"
+            . "   WHERE tenant_id = ? AND medicine_id IN ($idList)"
             . "   GROUP BY medicine_id"
             . " ) latest ON latest.max_id = t.id"
             . ' LEFT JOIN `users` u ON u.id = t.performed_by_user_id'
             . " LEFT JOIN `auth_identities` ai"
-            . "   ON ai.user_id = u.id AND ai.type = 'email_password'"
+            . "   ON ai.user_id = u.id AND ai.type = 'email_password'",
+            [CurrentTenant::id()],
         )->getResultArray();
 
         $out = [];

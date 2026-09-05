@@ -172,8 +172,8 @@ final class ClinicService extends BaseService
                 // walk-in that's been queueing concurrently.
                 $lastPos = $this->db->query(
                     'SELECT `position` FROM `clinic_queue_entries`'
-                    . ' WHERE `queue_date` = ? ORDER BY `position` DESC LIMIT 1 FOR UPDATE',
-                    [$queueDate],
+                    . ' WHERE `tenant_id` = ? AND `queue_date` = ? ORDER BY `position` DESC LIMIT 1 FOR UPDATE',
+                    [CurrentTenant::id(), $queueDate],
                 )->getRowArray();
                 $position = ($lastPos !== null ? (int) $lastPos['position'] : 0) + 1;
 
@@ -449,8 +449,8 @@ final class ClinicService extends BaseService
             $queue = null;
             $queueRow = $this->db->query(
                 'SELECT `id`, `status` FROM `clinic_queue_entries`'
-                . ' WHERE `encounter_id` = ? ORDER BY `id` DESC LIMIT 1 FOR UPDATE',
-                [$encounterId],
+                . ' WHERE `tenant_id` = ? AND `encounter_id` = ? ORDER BY `id` DESC LIMIT 1 FOR UPDATE',
+                [CurrentTenant::id(), $encounterId],
             )->getRowArray();
             if ($queueRow !== null) {
                 $queue = (string) $queueRow['status'];
@@ -594,8 +594,8 @@ final class ClinicService extends BaseService
 
                 $queueRow = $this->db->query(
                     'SELECT `id`, `status` FROM `clinic_queue_entries`'
-                    . ' WHERE `encounter_id` = ? ORDER BY `id` DESC LIMIT 1 FOR UPDATE',
-                    [$encounterId],
+                    . ' WHERE `tenant_id` = ? AND `encounter_id` = ? ORDER BY `id` DESC LIMIT 1 FOR UPDATE',
+                    [CurrentTenant::id(), $encounterId],
                 )->getRowArray();
                 if ($queueRow !== null
                     && in_array((string) $queueRow['status'], ['waiting', 'called', 'in_session'], true)) {
@@ -802,9 +802,9 @@ final class ClinicService extends BaseService
         $today   = substr($now, 0, 10);
         $batches = $this->db->query(
             'SELECT `id`, `quantity_remaining` FROM `clinic_medicine_batches`'
-            . ' WHERE `medicine_id` = ? AND `status` = ? AND `quantity_remaining` > 0 AND `expiration_date` >= ?'
+            . ' WHERE `tenant_id` = ? AND `medicine_id` = ? AND `status` = ? AND `quantity_remaining` > 0 AND `expiration_date` >= ?'
             . ' ORDER BY `expiration_date` ASC, `id` ASC FOR UPDATE',
-            [$medicineId, 'active', $today],
+            [CurrentTenant::id(), $medicineId, 'active', $today],
         )->getResultArray();
 
         $available = array_sum(array_map(static fn (array $b): int => (int) $b['quantity_remaining'], $batches));
@@ -861,8 +861,8 @@ final class ClinicService extends BaseService
     {
         $row = $this->db->query(
             'SELECT `balance_after` FROM `clinic_medicine_transactions`'
-            . ' WHERE `medicine_id` = ? ORDER BY `id` DESC LIMIT 1 FOR UPDATE',
-            [$medicineId],
+            . ' WHERE `tenant_id` = ? AND `medicine_id` = ? ORDER BY `id` DESC LIMIT 1 FOR UPDATE',
+            [CurrentTenant::id(), $medicineId],
         )->getRowArray();
 
         return $row !== null && $row['balance_after'] !== null ? (int) $row['balance_after'] : 0;

@@ -562,12 +562,13 @@ final class InventoryService extends BaseService
             . " INNER JOIN ("
             . "   SELECT item_id, MAX(id) AS max_id"
             . "   FROM `clinic_inventory_movements`"
-            . "   WHERE item_id IN ($idList)"
+            . "   WHERE tenant_id = ? AND item_id IN ($idList)"
             . "   GROUP BY item_id"
             . " ) latest ON latest.max_id = m.id"
             . ' LEFT JOIN `users` u ON u.id = m.moved_by_user_id'
             . " LEFT JOIN `auth_identities` ai"
-            . "   ON ai.user_id = u.id AND ai.type = 'email_password'"
+            . "   ON ai.user_id = u.id AND ai.type = 'email_password'",
+            [CurrentTenant::id()],
         )->getResultArray();
 
         $out = [];

@@ -25,7 +25,7 @@ final class DestinationQueueContractTest extends TestCase
         $this->assertNotFalse($guidanceBranch);
         $this->assertNotFalse($clinicLookup);
         $this->assertLessThan($clinicLookup, $guidanceBranch);
-        $this->assertStringContainsString('WHERE `destination` = ? AND `patient_school_id` = ?', $source);
+        $this->assertStringContainsString('WHERE `tenant_id` = ? AND `destination` = ? AND `patient_school_id` = ?', $source);
     }
 
     public function testQueueNumbersAndPublicGroupingAreExplicit(): void

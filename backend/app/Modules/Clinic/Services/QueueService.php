@@ -109,9 +109,9 @@ final class QueueService extends BaseService
             $active = $this->db->query(
                 'SELECT q.`id` FROM `clinic_queue_entries` q'
                 . ' INNER JOIN `clinic_encounters` e ON e.`id` = q.`encounter_id`'
-                . ' WHERE e.`patient_school_id` = ? AND q.`status` IN (?, ?, ?)'
+                . ' WHERE q.`tenant_id` = ? AND e.`patient_school_id` = ? AND q.`status` IN (?, ?, ?)'
                 . ' ORDER BY q.`id` ASC LIMIT 1 FOR UPDATE',
-                [$patientSchoolId, 'waiting', 'called', 'in_session'],
+                [CurrentTenant::id(), $patientSchoolId, 'waiting', 'called', 'in_session'],
             )->getRowArray();
             if ($active !== null) {
                 $this->db->table('clinic_queue_entries')->where('clinic_queue_entries.tenant_id', CurrentTenant::id())->where('id', (int) $active['id'])->update([
@@ -135,9 +135,9 @@ final class QueueService extends BaseService
             ]);
             $encounterId = (int) $this->db->insertID();
             $last = $this->db->query(
-                'SELECT `position` FROM `clinic_queue_entries` WHERE `queue_date` = ?'
+                'SELECT `position` FROM `clinic_queue_entries` WHERE `tenant_id` = ? AND `queue_date` = ?'
                 . ' ORDER BY `position` DESC LIMIT 1 FOR UPDATE',
-                [$this->manilaToday()],
+                [CurrentTenant::id(), $this->manilaToday()],
             )->getRowArray();
             $position = ($last !== null ? (int) $last['position'] : 0) + 1;
             $this->db->table('clinic_queue_entries')->insert([
@@ -222,9 +222,9 @@ final class QueueService extends BaseService
             // Lock today's active entries and waiting FIFO in one pass.
             $rows = $this->db->query(
                 'SELECT `id`, `status` FROM `clinic_queue_entries`'
-                . ' WHERE `queue_date` = ? AND `status` IN (?, ?, ?)'
+                . ' WHERE `tenant_id` = ? AND `queue_date` = ? AND `status` IN (?, ?, ?)'
                 . ' ORDER BY `position` ASC FOR UPDATE',
-                [$today, 'called', 'in_session', 'waiting'],
+                [CurrentTenant::id(), $today, 'called', 'in_session', 'waiting'],
             )->getResultArray();
 
             foreach ($rows as $r) {
@@ -600,8 +600,8 @@ final class QueueService extends BaseService
         $row = $this->db->query(
             'SELECT AVG(TIMESTAMPDIFF(MINUTE, `started_at`, `finished_at`)) AS avg_min'
             . ' FROM `clinic_queue_entries`'
-            . ' WHERE `queue_date` = ? AND `started_at` IS NOT NULL AND `finished_at` IS NOT NULL',
-            [$this->manilaToday()],
+            . ' WHERE `tenant_id` = ? AND `queue_date` = ? AND `started_at` IS NOT NULL AND `finished_at` IS NOT NULL',
+            [CurrentTenant::id(), $this->manilaToday()],
         )->getRowArray();
 
         return $row !== null && $row['avg_min'] !== null ? max(1.0, (float) $row['avg_min']) : 10.0;

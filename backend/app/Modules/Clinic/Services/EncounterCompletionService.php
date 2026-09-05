@@ -42,8 +42,8 @@ final class EncounterCompletionService extends BaseService
         }
 
         $queue = $this->db->query(
-            'SELECT `id`, `status` FROM `clinic_queue_entries` WHERE `encounter_id` = ? ORDER BY `id` DESC LIMIT 1 FOR UPDATE',
-            [$encounterId],
+            'SELECT `id`, `status` FROM `clinic_queue_entries` WHERE `tenant_id` = ? AND `encounter_id` = ? ORDER BY `id` DESC LIMIT 1 FOR UPDATE',
+            [CurrentTenant::id(), $encounterId],
         )->getRowArray();
         if ($queue !== null && in_array((string) $queue['status'], ['waiting', 'called', 'in_session'], true)) {
             $this->db->table('clinic_queue_entries')->where('clinic_queue_entries.tenant_id', CurrentTenant::id())->where('id', (int) $queue['id'])->update([

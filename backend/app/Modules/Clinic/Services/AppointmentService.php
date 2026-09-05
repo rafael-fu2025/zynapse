@@ -753,8 +753,8 @@ final class AppointmentService extends BaseService
         // filed the row under a past queue_date, invisible to staff).
         $queueDate = ManilaDay::today();
         $last = $this->db->query(
-            'SELECT `position` FROM `clinic_queue_entries` WHERE `queue_date` = ? ORDER BY `position` DESC LIMIT 1 FOR UPDATE',
-            [$queueDate],
+            'SELECT `position` FROM `clinic_queue_entries` WHERE `tenant_id` = ? AND `queue_date` = ? ORDER BY `position` DESC LIMIT 1 FOR UPDATE',
+            [CurrentTenant::id(), $queueDate],
         )->getRowArray();
         $position = ($last !== null ? (int) $last['position'] : 0) + 1;
         $this->db->table('clinic_queue_entries')->insert([
