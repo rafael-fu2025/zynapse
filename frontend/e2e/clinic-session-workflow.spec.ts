@@ -71,7 +71,7 @@ test('Clinic deep link keeps one tracked workspace and fixes the referral contex
   await signIn(page);
   await mockClinicApis(page);
   await page.goto('/clinic?encounter=91');
-  await expect(page.getByRole('region', { name: 'Encounter #91 workspace' })).toBeVisible();
+  await expect(page.getByRole('dialog', { name: 'Maria Reyes' })).toBeVisible();
   await expect(page.getByRole('button', { name: /^Vitals/ })).toBeVisible();
   await expect(page.getByRole('button', { name: /^Assessment/ })).toBeVisible();
   await expect(page.getByRole('button', { name: /^Care \/ Treatment/ })).toBeVisible();
@@ -84,7 +84,7 @@ test('Clinic deep link keeps one tracked workspace and fixes the referral contex
   await page.getByRole('button', { name: 'Cancel' }).click();
   await page.reload();
   await expect(page).toHaveURL(/\/clinic\?encounter=91/);
-  await expect(page.getByRole('region', { name: 'Encounter #91 workspace' })).toBeVisible();
+  await expect(page.getByRole('dialog', { name: 'Maria Reyes' })).toBeVisible();
 });
 
 test('starting a called Clinic queue entry opens its exact encounter workspace', async ({ page }) => {
@@ -94,7 +94,7 @@ test('starting a called Clinic queue entry opens its exact encounter workspace',
   await page.goto('/clinic');
   await page.getByRole('button', { name: 'Start Session' }).first().click();
   await expect(page).toHaveURL(/\/clinic\?encounter=91/);
-  await expect(page.getByRole('region', { name: 'Encounter #91 workspace' })).toBeVisible();
+  await expect(page.getByRole('dialog', { name: 'Maria Reyes' })).toBeVisible();
 });
 
 test('Clinic completion warns but does not block missing optional or recommended steps', async ({ page }) => {

@@ -11,9 +11,12 @@ test.skip(!RUN, 'SYNAPSE_E2E=1 not set — skipping live smoke.');
 
 test('login page renders and the form is reachable', async ({ page }) => {
   await page.goto('/login');
-  await expect(page.getByRole('heading', { name: /sign in to synapse/i })).toBeVisible();
+  // The login title is a styled CardTitle (not a heading element), so
+  // assert on text, not the heading role.
+  await expect(page.getByText(/sign in to synapse/i)).toBeVisible();
   await expect(page.getByLabel(/email/i)).toBeVisible();
-  await expect(page.getByLabel(/password/i)).toBeVisible();
+  // "Show password" toggle also matches /password/i — target the textbox.
+  await expect(page.getByRole('textbox', { name: 'Password' })).toBeVisible();
 });
 
 test('root path is gated when unauthenticated', async ({ page }) => {

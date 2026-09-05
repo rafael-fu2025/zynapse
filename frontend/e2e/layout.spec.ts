@@ -22,9 +22,12 @@ test('authenticated shell shows the sidebar navigation and topbar', async ({ pag
   await expect(sidebar.getByRole('link', { name: /appointments/i })).toBeVisible();
   await expect(sidebar.getByRole('link', { name: /audit/i })).toBeVisible();
 
-  // Topbar controls.
+  // Topbar controls. Sign-out lives INSIDE the user menu popover, so
+  // open the menu before asserting it.
   await expect(page.getByRole('button', { name: /notifications/i })).toBeVisible();
+  await page.getByRole('button', { name: 'Open user menu' }).click();
   await expect(page.getByRole('button', { name: /sign out/i })).toBeVisible();
+  await page.keyboard.press('Escape');
 
   // Dashboard CONTENT loads (not just the shell) — proves the cold-load
   // path works after the code-split + /auth/me dedupe.

@@ -71,9 +71,10 @@ test('admin reset forces nurse into change-password, rotation unlocks', async ({
   await page.getByLabel(/confirm new password/i).fill('RotatedNursePass1!');
   await page.getByRole('button', { name: /change password/i }).click();
 
-  // Unlocked — back on the dashboard.
+  // Unlocked — back on the dashboard. The nurse is a clinic-role user,
+  // so the dashboard renders the analytics view, not the Modules grid.
   await page.waitForURL(/\/$/, { timeout: 15_000 });
-  await expect(page.getByRole('region', { name: /modules/i })).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByRole('heading', { name: /dashboard/i })).toBeVisible({ timeout: 15_000 });
 });
 
 /**
