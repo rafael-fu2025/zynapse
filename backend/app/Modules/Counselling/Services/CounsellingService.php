@@ -184,7 +184,12 @@ final class CounsellingService extends BaseService
         });
     }
 
-    public function writeNotes(int $sessionId, string $plaintext): NoteDto
+    /**
+     * Append a note. Notes are INSERT-ONLY (F15): corrections arrive as
+     * a new note carrying `supersedesNoteId`, never as an edit — the
+     * superseded row stays intact so the error itself remains evidence.
+     */
+    public function writeNotes(int $sessionId, string $plaintext, ?int $supersedesNoteId = null): NoteDto
     {
         $userId = \App\Auth\CurrentUser::assert();
 
@@ -195,7 +200,7 @@ final class CounsellingService extends BaseService
             ]);
         }
 
-        return $this->txn(function () use ($sessionId, $plaintext, $userId): NoteDto {
+        return $this->txn(function () use ($sessionId, $plaintext, $supersedesNoteId, $userId): NoteDto {
             $session = $this->selectForUpdate('counselling_sessions', ['tenant_id' => CurrentTenant::id(), 'id' => $sessionId, 'archived_at' => null]);
 
             if ($session === null) {
@@ -206,19 +211,36 @@ final class CounsellingService extends BaseService
 
             $this->policy->check('writeNotes', $session);
 
+            // An amendment must point at a real note of the SAME
+            // session — otherwise it silently corrects nothing.
+            if ($supersedesNoteId !== null) {
+                $target = $this->db->table('counselling_notes')
+                    ->where('counselling_notes.tenant_id', CurrentTenant::id())
+                    ->select('id')
+                    ->where('id', $supersedesNoteId)
+                    ->where('session_id', $sessionId)
+                    ->get()->getRowArray();
+                if ($target === null) {
+                    throw new ApiException('validation.invalid', 422, [
+                        ['code' => 'validation.invalid', 'message' => "Note #{$supersedesNoteId} is not part of session #{$sessionId}.", 'field' => 'supersedes_note_id'],
+                    ]);
+                }
+            }
+
             $env = $this->crypto->encryptField($plaintext);
 
             $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
 
             $this->db->table('counselling_notes')->insert([
-                'tenant_id'         => CurrentTenant::id(),
-                'session_id'        => $sessionId,
-                'notes_cipher'      => $env['ciphertext'],
-                'notes_nonce'       => $env['nonce'],
-                'notes_key_version' => $env['key_version'],
-                'created_by_user_id'=> $userId,
-                'created_at'        => $now,
-                'updated_at'        => $now,
+                'tenant_id'           => CurrentTenant::id(),
+                'session_id'          => $sessionId,
+                'supersedes_note_id'  => $supersedesNoteId,
+                'notes_cipher'        => $env['ciphertext'],
+                'notes_nonce'         => $env['nonce'],
+                'notes_key_version'   => $env['key_version'],
+                'created_by_user_id'  => $userId,
+                'created_at'          => $now,
+                'updated_at'          => $now,
             ]);
 
             $noteId = (int) $this->db->insertID();
@@ -233,7 +255,7 @@ final class CounsellingService extends BaseService
 
             // DTO reveals plaintext only to the consuming channel
             // (controller); never persisted in plaintext.
-            return new NoteDto($sessionId, $plaintext, $env['key_version'], $now);
+            return new NoteDto($sessionId, $plaintext, $env['key_version'], $now, $noteId, $supersedesNoteId);
         });
     }
 
@@ -256,7 +278,7 @@ final class CounsellingService extends BaseService
 
         $rows = $this->db->table('counselling_notes')
             ->where('counselling_notes.tenant_id', CurrentTenant::id())
-            ->select('id, notes_cipher, notes_nonce, notes_key_version, created_at')
+            ->select('id, notes_cipher, notes_nonce, notes_key_version, created_at, supersedes_note_id')
             ->where('session_id', $sessionId)
             ->orderBy('id', 'DESC')
             ->get()->getResultArray();
@@ -273,6 +295,8 @@ final class CounsellingService extends BaseService
                 $plaintext,
                 (int) $r['notes_key_version'],
                 (string) $r['created_at'],
+                (int) $r['id'],
+                $r['supersedes_note_id'] !== null ? (int) $r['supersedes_note_id'] : null,
             ))->toArray();
         }
 
@@ -280,13 +304,18 @@ final class CounsellingService extends BaseService
         // counselling notes is the most privacy-critical read in the
         // system, so every authorized read is recorded in the append-only
         // audit chain. No plaintext or patient identifier is logged.
-        $this->audit->enqueue(
-            'counselling.notes_read',
-            'counselling_notes',
-            $sessionId,
-            $userId,
-            ['resource_code' => 'session#' . $sessionId],
-        );
+        // Logged only when notes actually exist — a zero-note session
+        // decrypts nothing, so logging it would record a read that never
+        // happened (audit 2026-09-03, F3).
+        if ($out !== []) {
+            $this->audit->enqueue(
+                'counselling.notes_read',
+                'counselling_notes',
+                $sessionId,
+                $userId,
+                ['resource_code' => 'session#' . $sessionId],
+            );
+        }
 
         return $out;
     }
@@ -322,6 +351,133 @@ final class CounsellingService extends BaseService
 
             $this->audit->enqueue(
                 'counselling.session_closed',
+                'counselling_sessions',
+                $sessionId,
+                $userId,
+                ['resource_code' => 'session#' . $sessionId],
+            );
+
+            $row = $this->db->table('counselling_sessions')->where('counselling_sessions.tenant_id', CurrentTenant::id())->where('id', $sessionId)->get()->getRowArray();
+            return SessionDto::fromRow($row);
+        });
+    }
+
+    /**
+     * Transfer a session to another counsellor — the recorded
+     * operational act that replaces the old standing "any counsellor
+     * may act on any session" bypass (audit 2026-09-05, F2). Only
+     * `counselling.records.read_any` holders (clinical_supervisor,
+     * admin) pass the policy gate; the transfer itself is audited.
+     */
+    public function reassignSession(int $sessionId, int $newCounsellorUserId): SessionDto
+    {
+        $userId = \App\Auth\CurrentUser::assert();
+
+        return $this->txn(function () use ($sessionId, $newCounsellorUserId, $userId): SessionDto {
+            $session = $this->selectForUpdate('counselling_sessions', ['tenant_id' => CurrentTenant::id(), 'id' => $sessionId, 'archived_at' => null]);
+
+            if ($session === null) {
+                throw new ApiException('resource.not_found', 404, [
+                    ['code' => 'resource.not_found', 'message' => "Session #{$sessionId} not found."],
+                ]);
+            }
+
+            $this->policy->check('reassign', $session);
+
+            // The target must be an active, non-archived user —
+            // reassigning to a departed counsellor would strand the
+            // session again, which is exactly what this route exists
+            // to prevent.
+            $target = $this->db->table('users')
+                ->where('users.tenant_id', CurrentTenant::id())
+                ->select('id, archived_at, status')
+                ->where('id', $newCounsellorUserId)
+                ->get()->getRowArray();
+            if ($target === null || $target['archived_at'] !== null || (string) $target['status'] !== 'active') {
+                throw new ApiException('validation.invalid', 422, [
+                    ['code' => 'validation.invalid', 'message' => 'Target counsellor must be an active user.', 'field' => 'counsellor_user_id'],
+                ]);
+            }
+            if ((int) $session['counsellor_user_id'] === $newCounsellorUserId) {
+                throw new ApiException('statemachine.invalid_transition', 409, [
+                    ['code' => 'statemachine.invalid_transition', 'message' => 'Session is already assigned to that counsellor.'],
+                ]);
+            }
+
+            $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
+            $this->db->table('counselling_sessions')
+                ->where('counselling_sessions.tenant_id', CurrentTenant::id())
+                ->where('id', $sessionId)
+                ->update([
+                    'counsellor_user_id' => $newCounsellorUserId,
+                    'updated_at'         => $now,
+                ]);
+
+            $this->audit->enqueue(
+                'counselling.session_reassigned',
+                'counselling_sessions',
+                $sessionId,
+                $userId,
+                // from/to counsellor ids ride the whitelisted
+                // resource_code key — AuditOutboxService drops any key
+                // outside its CONTEXT_KEYS allow-list.
+                ['resource_code' => sprintf('session#%d:%d->%d', $sessionId, (int) $session['counsellor_user_id'], $newCounsellorUserId)],
+            );
+
+            $row = $this->db->table('counselling_sessions')->where('counselling_sessions.tenant_id', CurrentTenant::id())->where('id', $sessionId)->get()->getRowArray();
+            return SessionDto::fromRow($row);
+        });
+    }
+
+    /**
+     * Soft-delete a session (audit 2026-09-05, F15) — corrects a note-
+     * on-the-wrong-patient mistake without mutating the notes themselves.
+     * All read paths already filter on `archived_at = null`. Gated on
+     * `counselling.records.soft_delete` (supervisor + admin only).
+     */
+    public function archiveSession(int $sessionId): SessionDto
+    {
+        return $this->setSessionArchived($sessionId, true);
+    }
+
+    public function unarchiveSession(int $sessionId): SessionDto
+    {
+        return $this->setSessionArchived($sessionId, false);
+    }
+
+    private function setSessionArchived(int $sessionId, bool $archived): SessionDto
+    {
+        $userId = \App\Auth\CurrentUser::assert();
+
+        return $this->txn(function () use ($sessionId, $archived, $userId): SessionDto {
+            // Unarchive needs to find already-archived rows; archive finds
+            // only live ones.
+            $predicates = ['tenant_id' => CurrentTenant::id(), 'id' => $sessionId];
+            if ($archived) {
+                $predicates['archived_at'] = null;
+            }
+            $session = $this->selectForUpdate('counselling_sessions', $predicates);
+
+            if ($session === null) {
+                throw new ApiException('resource.not_found', 404, [
+                    ['code' => 'resource.not_found', 'message' => "Session #{$sessionId} not found."],
+                ]);
+            }
+
+            $action = $archived ? 'archive' : 'unarchive';
+            $this->policy->check($action, $session);
+
+            $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
+            $this->db->table('counselling_sessions')
+                ->where('counselling_sessions.tenant_id', CurrentTenant::id())
+                ->where('id', $sessionId)
+                ->update([
+                    'archived_at' => $archived ? $now : null,
+                    'updated_at'  => $now,
+                ]);
+
+            $this->audit->enqueue(
+                'counselling.session_' . ($archived ? 'archived' : 'unarchived'),
                 'counselling_sessions',
                 $sessionId,
                 $userId,

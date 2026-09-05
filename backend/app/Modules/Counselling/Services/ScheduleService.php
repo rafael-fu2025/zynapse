@@ -6,6 +6,7 @@ namespace Modules\Counselling\Services;
 
 use App\Exceptions\ApiException;
 use App\Modules\Shared\BaseService;
+use App\Modules\Shared\ManilaDay;
 use App\Modules\Shared\StateMachineException;
 use App\Pagination\KeysetPaginator;
 use App\Services\Analytics\SchedulingAnalytics;
@@ -27,8 +28,11 @@ use Modules\Counselling\Policies\CounsellingPolicy;
  *     the window may not exceed `max_slots` (ConflictDetector predicate,
  *     rebuilt with BOUND parameters — the legacy version interpolated).
  *   - Three-strike no-show: `no_show` increments the patient registry
- *     counter; `completed` resets it. Registry is touched via a
- *     separate UPDATE by student_number (never a cross-module JOIN).
+ *     counter; `completed` resets it. At 3 consecutive strikes `book()`
+ *     refuses the booking unless the caller holds
+ *     `counselling.schedule.team_manage` (supervisor override).
+ *     Registry is touched via a separate UPDATE by student_number
+ *     (never a cross-module JOIN).
  */
 final class ScheduleService extends BaseService
 {
@@ -47,6 +51,16 @@ final class ScheduleService extends BaseService
         'cancel'   => 'cancelled',
         'no_show'  => 'no_show',
     ];
+
+    /**
+     * Three-strike threshold: booking is refused once the patient's
+     * consecutive_no_shows reaches this value. `complete` resets the
+     * counter, so a patient who attends is immediately bookable again.
+     * Override: `counselling.schedule.team_manage` (supervisor) may
+     * still book — the refusal is then the supervisor's documented
+     * decision, and it lands in the audit chain like every booking.
+     */
+    private const NO_SHOW_STRIKE_LIMIT = 3;
 
     public function __construct(
         private readonly CounsellingPolicy $policy,
@@ -162,7 +176,7 @@ final class ScheduleService extends BaseService
     /**
      * @return array{data: array<int, array<string, mixed>>, next: ?string, count: int}
      */
-    public function listAppointments(?string $cursor, int $limit, ?string $status): array
+    public function listAppointments(?string $cursor, int $limit, ?string $status, ?string $date = null): array
     {
         $this->policy->check('scheduleRead');
 
@@ -170,13 +184,17 @@ final class ScheduleService extends BaseService
         $builder = $this->db->table('counselling_appointments')
             ->where('counselling_appointments.tenant_id', CurrentTenant::id())
             ->select('*')
-            ->orderBy('created_at', 'DESC')
-            ->orderBy('id', 'DESC');
+            ->orderBy('appointment_date', 'ASC')
+            ->orderBy('start_time', 'ASC')
+            ->orderBy('id', 'ASC');
         if ($scope !== null) {
             $builder->where('counsellor_user_id', $scope);
         }
         if ($status !== null && $status !== '') {
             $builder->where('status', $status);
+        }
+        if ($date !== null && $date !== '') {
+            $builder->where('appointment_date', $date);
         }
 
         KeysetPaginator::apply($builder, $cursor, $limit);
@@ -213,15 +231,30 @@ final class ScheduleService extends BaseService
                 ]);
             }
 
+            // Past-date booking refusal (audit 2026-09-03, F10).
+            if ($date < ManilaDay::today()) {
+                throw ApiException::validationFailure([
+                    ['code' => 'validation.field', 'message' => 'appointment_date cannot be in the past.', 'field' => 'appointment_date'],
+                ]);
+            }
+
+            // Unregistered patient booking refusal (audit 2026-09-03, F10).
+            [, $patient] = (new \Modules\Clinic\Services\PatientLookupService())->findByIdentifier((string) $input['patient_school_id']);
+            if ($patient === null) {
+                throw ApiException::validationFailure([
+                    ['code' => 'patient.not_found', 'message' => 'Patient school ID was not found in the student or employee registry.', 'field' => 'patient_school_id'],
+                ]);
+            }
+
             $dow = (int) (new DateTimeImmutable($date))->format('w');
 
             // 1. Must fit an active availability window (locked so a
             //    concurrent removeSlot cannot race the booking).
             $window = $this->db->query(
                 'SELECT `id`, `max_slots` FROM `counselling_availability`'
-                . ' WHERE `counsellor_user_id` = ? AND `day_of_week` = ? AND `is_active` = 1'
+                . ' WHERE `tenant_id` = ? AND `counsellor_user_id` = ? AND `day_of_week` = ? AND `is_active` = 1'
                 . ' AND `start_time` <= ? AND `end_time` >= ? LIMIT 1 FOR UPDATE',
-                [$counsellorId, $dow, $start, $end],
+                [CurrentTenant::id(), $counsellorId, $dow, $start, $end],
             )->getRowArray();
             if ($window === null) {
                 throw new ApiException('statemachine.schedule.outside_availability', 409, [
@@ -232,10 +265,10 @@ final class ScheduleService extends BaseService
             // 2. Overlap capacity (ConflictDetector predicate, bound).
             $overlaps = $this->db->query(
                 'SELECT COUNT(*) AS n FROM `counselling_appointments`'
-                . ' WHERE `counsellor_user_id` = ? AND `appointment_date` = ?'
+                . ' WHERE `tenant_id` = ? AND `counsellor_user_id` = ? AND `appointment_date` = ?'
                 . ' AND `status` IN (?, ?)'
                 . ' AND NOT (? <= `start_time` OR ? >= `end_time`) FOR UPDATE',
-                [$counsellorId, $date, 'scheduled', 'confirmed', $end, $start],
+                [CurrentTenant::id(), $counsellorId, $date, 'scheduled', 'confirmed', $end, $start],
             )->getRowArray();
             if ((int) ($overlaps['n'] ?? 0) >= (int) $window['max_slots']) {
                 throw new ApiException('statemachine.schedule.slot_full', 409, [
@@ -244,10 +277,24 @@ final class ScheduleService extends BaseService
             }
 
             $now = $this->utcNow();
-            [, $patient] = (new \Modules\Clinic\Services\PatientLookupService())->findByIdentifier((string) $input['patient_school_id']);
+
+            // Three-strike gate: a patient at the limit is refused unless
+            // the caller holds the supervisor override.
+            if (! $this->canTeamManage()) {
+                $strikes = (int) $this->db->query(
+                    'SELECT `consecutive_no_shows` FROM `users` WHERE `tenant_id` = ? AND `id` = ?',
+                    [CurrentTenant::id(), (int) $patient['id']],
+                )->getRowArray()['consecutive_no_shows'] ?? 0;
+                if ($strikes >= self::NO_SHOW_STRIKE_LIMIT) {
+                    throw new ApiException('counselling.schedule.no_show_limit', 409, [
+                        ['code' => 'counselling.schedule.no_show_limit', 'message' => 'Patient has reached the three-strike no-show limit and cannot book without supervisor override.'],
+                    ]);
+                }
+            }
+
             $this->db->table('counselling_appointments')->insert([
                 'tenant_id'          => CurrentTenant::id(),
-                'patient_user_id'    => $patient !== null ? (int) $patient['id'] : null,
+                'patient_user_id'    => (int) $patient['id'],
                 'patient_school_id'  => (string) $input['patient_school_id'],
                 'counsellor_user_id' => $counsellorId,
                 'appointment_date'   => $date,
@@ -322,14 +369,14 @@ final class ScheduleService extends BaseService
                 : null;
             if ($action === 'no_show' && $patientUserId !== null) {
                 $this->db->query(
-                    'UPDATE `users` SET `consecutive_no_shows` = `consecutive_no_shows` + 1 WHERE `id` = ?',
-                    [$patientUserId],
+                    'UPDATE `users` SET `consecutive_no_shows` = `consecutive_no_shows` + 1 WHERE `tenant_id` = ? AND `id` = ?',
+                    [CurrentTenant::id(), $patientUserId],
                 );
             }
             if ($action === 'complete' && $patientUserId !== null) {
                 $this->db->query(
-                    'UPDATE `users` SET `consecutive_no_shows` = 0 WHERE `id` = ?',
-                    [$patientUserId],
+                    'UPDATE `users` SET `consecutive_no_shows` = 0 WHERE `tenant_id` = ? AND `id` = ?',
+                    [CurrentTenant::id(), $patientUserId],
                 );
             }
 
@@ -374,10 +421,11 @@ final class ScheduleService extends BaseService
             $sql = 'SELECT `counsellor_user_id`, (DAYOFWEEK(`appointment_date`) - 1) AS dow,'
                  . ' `start_time` AS time_slot, COUNT(*) AS total,'
                  . ' SUM(CASE WHEN `status` = ? THEN 1 ELSE 0 END) AS no_shows'
-                 . ' FROM `counselling_appointments`';
-            $params = ['no_show'];
+                 . ' FROM `counselling_appointments`'
+                 . ' WHERE `tenant_id` = ?';
+            $params = ['no_show', CurrentTenant::id()];
             if ($counsellorUserId !== null) {
-                $sql     .= ' WHERE `counsellor_user_id` = ?';
+                $sql     .= ' AND `counsellor_user_id` = ?';
                 $params[] = $counsellorUserId;
             }
             $sql .= ' GROUP BY `counsellor_user_id`, dow, `start_time`';
@@ -396,6 +444,7 @@ final class ScheduleService extends BaseService
                 $rate    = $calc->noShowRate($total, $noShows);
 
                 $data = [
+                    'tenant_id'               => CurrentTenant::id(),
                     'counsellor_user_id'      => $cid,
                     'day_of_week'             => $dow,
                     'time_slot'               => $slot,
@@ -409,6 +458,7 @@ final class ScheduleService extends BaseService
                 ];
 
                 $existing = $this->db->table('counselling_scheduling_analytics')
+                    ->where('counselling_scheduling_analytics.tenant_id', CurrentTenant::id())
                     ->where('counsellor_user_id', $cid)
                     ->where('day_of_week', $dow)
                     ->where('time_slot', $slot)
@@ -416,10 +466,13 @@ final class ScheduleService extends BaseService
 
                 if ($existing !== null) {
                     $this->db->table('counselling_scheduling_analytics')
+                        ->where('counselling_scheduling_analytics.tenant_id', CurrentTenant::id())
                         ->where('id', (int) $existing['id'])->update($data);
                 } else {
                     $data['created_at'] = $now;
-                    $this->db->table('counselling_scheduling_analytics')->insert($data);
+                    $this->db->table('counselling_scheduling_analytics')->insert(
+                        ['tenant_id' => CurrentTenant::id(), ...$data]
+                    );
                 }
                 $upserted++;
             }
@@ -442,6 +495,7 @@ final class ScheduleService extends BaseService
 
         $builder = $this->db->table('counselling_scheduling_analytics')
             ->select('id, counsellor_user_id, day_of_week, time_slot, total_appointments, total_no_shows, no_show_rate, avg_utilization, recommended_overbooking, last_calculated_at')
+            ->where('counselling_scheduling_analytics.tenant_id', CurrentTenant::id())
             ->orderBy('counsellor_user_id', 'ASC')
             ->orderBy('day_of_week', 'ASC')
             ->orderBy('time_slot', 'ASC');

@@ -30,13 +30,20 @@ export const PAGE_META: Readonly<Record<string, PageMeta>> = {
   '/kiosk': { title: 'Check-in Kiosk' },
   '/counselling': { title: 'Counselling' },
   '/facilities': { title: 'Facilities — BMG' },
-  '/referrals': { title: 'Referrals' },
-  '/reports': { title: 'Reports & Analytics' },
-  '/audit': { title: 'Audit' },
+  '/facilities/drums': { title: 'Drums' },
+  '/facilities/waste-categories': { title: 'Waste Categories' },
+  '/admin': { title: 'Administration' },
+  '/admin/kiosk-settings': { title: 'Kiosk Settings' },
   '/admin/users': {
     title: 'Users',
     description: 'Deactivation is soft — accounts are never deleted.',
   },
+  '/kiosk-station': { title: 'Kiosk Station' },
+  '/queue-display': { title: 'Queue Display' },
+  '/notifications': { title: 'Notifications' },
+  '/referrals': { title: 'Referrals' },
+  '/reports': { title: 'Reports & Analytics' },
+  '/audit': { title: 'Audit' },
   '/change-password': { title: 'Change password' },
 };
 

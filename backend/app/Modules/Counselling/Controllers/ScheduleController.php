@@ -64,6 +64,7 @@ final class ScheduleController extends ApiController
         $cursor = (string) ($this->request->getGet('cursor') ?? '');
         $limit  = (int)    ($this->request->getGet('limit')  ?? 25);
         $status = (string) ($this->request->getGet('status') ?? '');
+        $date   = (string) ($this->request->getGet('date') ?? '');
 
         if ($status !== '' && ! in_array($status, ['scheduled', 'confirmed', 'completed', 'cancelled', 'no_show'], true)) {
             throw ApiException::validationFailure([
@@ -71,7 +72,12 @@ final class ScheduleController extends ApiController
             ]);
         }
 
-        $page = $this->service->listAppointments($cursor !== '' ? $cursor : null, $limit, $status !== '' ? $status : null);
+        $page = $this->service->listAppointments(
+            $cursor !== '' ? $cursor : null,
+            $limit,
+            $status !== '' ? $status : null,
+            $date !== '' ? $date : null,
+        );
 
         return $this->ok(
             $page['data'],

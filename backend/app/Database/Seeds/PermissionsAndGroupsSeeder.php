@@ -60,6 +60,12 @@ final class PermissionsAndGroupsSeeder extends Seeder
         'counselling.records.create'                 => 'counselling',
         'counselling.records.read'                   => 'counselling',
         'counselling.records.write'                  => 'counselling',
+        // Oversight break-glass: satisfies the policy's record gate for
+        // sessions the holder does not own. Granted ONLY to
+        // clinical_supervisor + admin — every counsellor holding
+        // records.write had made the per-record check a no-op (audit
+        // 2026-09-05, F2).
+        'counselling.records.read_any'               => 'counselling',
         'counselling.records.soft_delete'            => 'counselling',
         'counselling.schedule.read'                  => 'counselling',
         'counselling.schedule.manage'                => 'counselling',

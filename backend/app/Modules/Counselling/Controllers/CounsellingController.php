@@ -100,12 +100,19 @@ final class CounsellingController extends ApiController
     {
         $payload = $this->request->getJSON(true) ?? [];
 
-        $rules = ['plaintext' => 'required|string|max_length[16384]'];
+        $rules = [
+            'plaintext'          => 'required|string|max_length[16384]',
+            'supersedes_note_id' => 'permit_empty|is_natural_no_zero',
+        ];
         if (! $this->makeValidation($rules)->run($payload)) {
             throw ApiException::validationFailure($this->collectErrors());
         }
 
-        $dto = $this->service->writeNotes($sessionId, (string) $payload['plaintext']);
+        $supersedes = isset($payload['supersedes_note_id']) && $payload['supersedes_note_id'] !== ''
+            ? (int) $payload['supersedes_note_id']
+            : null;
+
+        $dto = $this->service->writeNotes($sessionId, (string) $payload['plaintext'], $supersedes);
         return $this->ok($dto->toArray(), null, 201);
     }
 
@@ -122,6 +129,35 @@ final class CounsellingController extends ApiController
             return $this->ok($linked->toArray());
         }
         $dto = $this->service->closeSession($sessionId);
+        return $this->ok($dto->toArray());
+    }
+
+    /**
+     * Oversight-only ownership transfer (audit 2026-09-05, F2) — the
+     * recorded act that replaces the old standing any-counsellor access.
+     */
+    public function reassignSession(int $sessionId): ResponseInterface
+    {
+        $payload = $this->request->getJSON(true) ?? [];
+
+        $rules = ['counsellor_user_id' => 'required|is_natural_no_zero'];
+        if (! $this->makeValidation($rules)->run($payload)) {
+            throw ApiException::validationFailure($this->collectErrors());
+        }
+
+        $dto = $this->service->reassignSession($sessionId, (int) $payload['counsellor_user_id']);
+        return $this->ok($dto->toArray());
+    }
+
+    public function archiveSession(int $sessionId): ResponseInterface
+    {
+        $dto = $this->service->archiveSession($sessionId);
+        return $this->ok($dto->toArray());
+    }
+
+    public function unarchiveSession(int $sessionId): ResponseInterface
+    {
+        $dto = $this->service->unarchiveSession($sessionId);
         return $this->ok($dto->toArray());
     }
 

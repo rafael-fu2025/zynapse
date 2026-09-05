@@ -18,6 +18,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { useTabParam } from '@/hooks/useTabParam';
 import { InsightsTab } from '@/components/inventory/InsightsTab';
+import { InventoryStockAlertBanner } from '@/components/inventory/InventoryStockAlertBanner';
 import { MedicinesTab } from '@/components/inventory/MedicinesTab';
 import { ReordersTab } from '@/components/inventory/ReordersTab';
 import { SuppliesTab } from '@/components/inventory/SuppliesTab';
@@ -38,6 +39,8 @@ export default function InventoryPage() {
           Medicines are tracked by batch with expiry — earliest expiring dispensed first; supplies use signed stock movements.
         </p>
       </header>
+
+      <InventoryStockAlertBanner onJumpToTab={setTab} />
 
       <Tabs value={tab} onValueChange={setTab}>
         <TabsList>

@@ -61,6 +61,7 @@ final class TenantScopeFitnessTest extends TestCase
         'counselling_availability',
         'counselling_notes',
         'counselling_queue_entries',
+        'counselling_scheduling_analytics',
         'counselling_sessions',
         'facilities_bmg_alerts',
         'facilities_bmg_batch_updates',

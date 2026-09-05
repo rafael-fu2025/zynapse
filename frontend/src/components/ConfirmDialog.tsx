@@ -55,7 +55,7 @@ export function ConfirmDialog({
 
   return (
     <Dialog open={open} onOpenChange={(o) => !o && !pending && onCancel()}>
-      <DialogContent>
+      <DialogContent size="sm">
         <DialogHeader>
           <DialogTitle>{shownTitle}</DialogTitle>
           {shownDescription !== undefined && <DialogDescription>{shownDescription}</DialogDescription>}

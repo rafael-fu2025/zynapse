@@ -323,3 +323,44 @@
       synapse-palette-fade-out 700ms ease-in forwards;
   }
 }
+
+/*
+ * Bootstrap-style modal slide-down / slide-up:
+ * Centered on viewport via translate(-50%, -50%).
+ * - Enter: starts 50px higher (calc(-50% - 50px)) and slides down to -50%
+ * - Exit: slides up to calc(-50% - 50px)
+ */
+@keyframes bootstrap-modal-down {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, calc(-50% - 60px)) !important;
+  }
+  100% {
+    opacity: 1;
+    transform: translate(-50%, -50%) !important;
+  }
+}
+@keyframes bootstrap-modal-up {
+  0% {
+    opacity: 1;
+    transform: translate(-50%, -50%) !important;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, calc(-50% - 60px)) !important;
+  }
+}
+
+@media (min-width: 640px) {
+  .bootstrap-modal-anim {
+    transform: translate(-50%, -50%);
+  }
+  .bootstrap-modal-anim[data-state='open'] {
+    animation: bootstrap-modal-down 250ms cubic-bezier(0.16, 1, 0.3, 1) forwards !important;
+  }
+  .bootstrap-modal-anim[data-state='closed'] {
+    animation: bootstrap-modal-up 200ms cubic-bezier(0.7, 0, 0.84, 0) forwards !important;
+  }
+}
+
+

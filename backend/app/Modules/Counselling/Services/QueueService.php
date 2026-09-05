@@ -6,6 +6,7 @@ namespace Modules\Counselling\Services;
 
 use App\Exceptions\ApiException;
 use App\Modules\Shared\BaseService;
+use App\Modules\Shared\ManilaDay;
 use App\Modules\Shared\StateMachineException;
 use App\Services\Audit\AuditOutboxService;
 use App\Services\CurrentTenant;
@@ -20,7 +21,7 @@ final class QueueService extends BaseService
 {
     private const TRANSITIONS = [
         'start' => ['called'],
-        'skip' => ['called'],
+        'skip' => ['waiting', 'called'],
         'complete' => ['in_session'],
     ];
 
@@ -38,11 +39,17 @@ final class QueueService extends BaseService
         parent::__construct();
     }
 
-    /** @return list<array<string, mixed>> */
+    /**
+     * Return today's guidance queue entries.
+     * Pure read (audit 2026-09-03, F7): enqueue due appointments runs
+     * via the async spark command `synapse:appointments-enqueue-due`,
+     * never inside request threads or GET polls.
+     *
+     * @return list<array<string, mixed>>
+     */
     public function today(): array
     {
         $this->policy->check('queueRead');
-        $this->enqueueDueAppointments();
         return array_map(fn (array $row): array => $this->serialize($row), $this->todayRows());
     }
 
@@ -89,16 +96,17 @@ final class QueueService extends BaseService
     /** @return array<string,mixed>|null */
     public function myStatus(int $patientUserId): ?array
     {
+        $today = ManilaDay::today();
         $row = $this->db->table('counselling_queue_entries')
             ->where('counselling_queue_entries.tenant_id', CurrentTenant::id())
-            ->where('queue_date', $this->businessToday())
+            ->where('queue_date', $today)
             ->where('patient_user_id', $patientUserId)
             ->whereIn('status', ['waiting', 'called', 'in_session'])
             ->orderBy('position', 'ASC')->get()->getRowArray();
         if ($row === null) return null;
         $ahead = (string) $row['status'] === 'waiting' ? $this->db->table('counselling_queue_entries')
             ->where('counselling_queue_entries.tenant_id', CurrentTenant::id())
-            ->where('queue_date', $this->businessToday())->whereIn('status', ['waiting', 'called', 'in_session'])
+            ->where('queue_date', $today)->whereIn('status', ['waiting', 'called', 'in_session'])
             ->where('position <', (int) $row['position'])->countAllResults() : 0;
         return [
             'destination' => 'counselling', 'queue_entry_id' => (int) $row['id'],
@@ -159,10 +167,10 @@ final class QueueService extends BaseService
         return $this->txn(function () use ($userId): array {
             $rows = $this->db->query(
                 'SELECT `id`, `status`, `assigned_counsellor_user_id` FROM `counselling_queue_entries`'
-                . ' WHERE `queue_date` = ? AND ((`status` IN (?, ?) AND `assigned_counsellor_user_id` = ?)'
+                . ' WHERE `tenant_id` = ? AND `queue_date` = ? AND ((`status` IN (?, ?) AND `assigned_counsellor_user_id` = ?)'
                 . ' OR (`status` = ? AND (`assigned_counsellor_user_id` = ? OR `assigned_counsellor_user_id` IS NULL)))'
                 . ' ORDER BY `position` ASC FOR UPDATE',
-                [$this->businessToday(), 'called', 'in_session', $userId, 'waiting', $userId],
+                [CurrentTenant::id(), ManilaDay::today(), 'called', 'in_session', $userId, 'waiting', $userId],
             )->getResultArray();
 
             foreach ($rows as $row) {
@@ -212,7 +220,9 @@ final class QueueService extends BaseService
                 ]);
             }
             $current = (string) $row['status'];
-            if ($row['assigned_counsellor_user_id'] !== null && (int) $row['assigned_counsellor_user_id'] !== $userId) {
+            $canTeamManage = \Config\Services::permissionService()->userHas($userId, 'counselling.schedule.team_manage')
+                || \Config\Services::permissionService()->userHas($userId, 'counselling.records.read_any');
+            if ($row['assigned_counsellor_user_id'] !== null && (int) $row['assigned_counsellor_user_id'] !== $userId && ! $canTeamManage) {
                 throw ApiException::forbidden('rbac.record.forbidden');
             }
             if (! in_array($current, self::TRANSITIONS[$action], true)) {
@@ -247,6 +257,61 @@ final class QueueService extends BaseService
     }
 
     /**
+     * Reassign an assigned-lane queue entry to another counsellor or return to
+     * pool (audit 2026-09-03, F8). Resolves stranded queue entries when the
+     * assigned counsellor is absent.
+     *
+     * @return array<string, mixed>
+     */
+    public function reassign(int $id, ?int $newCounsellorUserId): array
+    {
+        $this->policy->check('queueManage');
+        $userId = \App\Auth\CurrentUser::assert();
+
+        return $this->txn(function () use ($id, $newCounsellorUserId, $userId): array {
+            $row = $this->selectForUpdate('counselling_queue_entries', ['tenant_id' => CurrentTenant::id(), 'id' => $id]);
+            if ($row === null) {
+                throw new ApiException('resource.not_found', 404, [
+                    ['code' => 'resource.not_found', 'message' => "Guidance queue entry #{$id} not found."],
+                ]);
+            }
+            if (! in_array((string) $row['status'], ['waiting', 'called'], true)) {
+                throw new ApiException('statemachine.invalid_transition', 409, [
+                    ['code' => 'statemachine.invalid_transition', 'message' => 'Only waiting or called entries can be reassigned.'],
+                ]);
+            }
+
+            if ($newCounsellorUserId !== null) {
+                $target = $this->db->table('users')
+                    ->where('users.tenant_id', CurrentTenant::id())
+                    ->select('id, archived_at, status')
+                    ->where('id', $newCounsellorUserId)
+                    ->get()->getRowArray();
+                if ($target === null || $target['archived_at'] !== null || (string) $target['status'] !== 'active') {
+                    throw new ApiException('validation.invalid', 422, [
+                        ['code' => 'validation.invalid', 'message' => 'Target counsellor must be an active user.', 'field' => 'assigned_counsellor_user_id'],
+                    ]);
+                }
+            }
+
+            $now = $this->utcNow();
+            $this->db->table('counselling_queue_entries')
+                ->where('counselling_queue_entries.tenant_id', CurrentTenant::id())
+                ->where('id', $id)
+                ->update([
+                    'assigned_counsellor_user_id' => $newCounsellorUserId,
+                    'updated_at' => $now,
+                ]);
+
+            $this->audit->enqueue('counselling.queue_reassigned', 'counselling_queue_entries', $id, $userId, [
+                'resource_code' => sprintf('queue#%d->%s', $id, $newCounsellorUserId !== null ? (string) $newCounsellorUserId : 'pool'),
+            ]);
+
+            return $this->getRow($id);
+        });
+    }
+
+    /**
      * Complete a queue-linked session from the Sessions workspace. Returning
      * null means this is a manually opened session and should use the normal
      * direct-close path. Linked completion is transactional and idempotent.
@@ -265,8 +330,8 @@ final class QueueService extends BaseService
             $this->policy->check('close', $session);
 
             $queue = $this->db->query(
-                'SELECT * FROM `counselling_queue_entries` WHERE `counselling_session_id` = ? LIMIT 1 FOR UPDATE',
-                [$sessionId],
+                'SELECT * FROM `counselling_queue_entries` WHERE `tenant_id` = ? AND `counselling_session_id` = ? LIMIT 1 FOR UPDATE',
+                [CurrentTenant::id(), $sessionId],
             )->getRowArray();
             if ($queue === null) {
                 return null;
@@ -371,11 +436,11 @@ final class QueueService extends BaseService
         string $purpose,
         ?int $assignedCounsellorUserId,
     ): array {
-        $date = $this->businessToday();
+        $date = ManilaDay::today();
         $active = $this->db->query(
             'SELECT `id` FROM `counselling_queue_entries`'
-            . ' WHERE `queue_date` = ? AND `patient_school_id` = ? AND `status` IN (?, ?, ?) LIMIT 1 FOR UPDATE',
-            [$date, $patientSchoolId, 'waiting', 'called', 'in_session'],
+            . ' WHERE `tenant_id` = ? AND `queue_date` = ? AND `patient_school_id` = ? AND `status` IN (?, ?, ?) LIMIT 1 FOR UPDATE',
+            [CurrentTenant::id(), $date, $patientSchoolId, 'waiting', 'called', 'in_session'],
         )->getRowArray();
         if ($active !== null) {
             return $this->getRow((int) $active['id']);
@@ -383,11 +448,11 @@ final class QueueService extends BaseService
 
         // Lock a stable row even when today's queue is empty so two first
         // arrivals cannot both calculate position 1.
-        $this->db->query('SELECT `id` FROM `tenants` WHERE `id` = ? FOR UPDATE', [1]);
+        $this->db->query('SELECT `id` FROM `tenants` WHERE `id` = ? FOR UPDATE', [CurrentTenant::id()]);
         $last = $this->db->query(
             'SELECT `position` FROM `counselling_queue_entries`'
-            . ' WHERE `queue_date` = ? ORDER BY `position` DESC LIMIT 1 FOR UPDATE',
-            [$date],
+            . ' WHERE `tenant_id` = ? AND `queue_date` = ? ORDER BY `position` DESC LIMIT 1 FOR UPDATE',
+            [CurrentTenant::id(), $date],
         )->getRowArray();
         $position = ($last !== null ? (int) $last['position'] : 0) + 1;
         $now = $this->utcNow();
@@ -474,7 +539,7 @@ final class QueueService extends BaseService
             ->where('q.tenant_id', CurrentTenant::id())
             ->select('q.*, u.first_name, u.last_name')
             ->join('users u', 'u.id = q.patient_user_id', 'left')
-            ->where('q.queue_date', $this->businessToday())
+            ->where('q.queue_date', ManilaDay::today())
             ->orderBy('q.position', 'ASC')
             ->get()->getResultArray();
     }
@@ -518,14 +583,19 @@ final class QueueService extends BaseService
         ];
     }
 
-    /** @return array<string, mixed> */
+    /**
+     * Public lobby feed row. Deliberately minimal: the queue-number
+     * abstraction is the ONLY identity the unauthenticated lobby TV
+     * gets — guidance attendance is materially more sensitive than a
+     * clinic visit, so no names or school IDs (audit 2026-09-05, F16).
+     *
+     * @return array<string, mixed>
+     */
     private function publicRow(array $row): array
     {
         return [
             'position' => (int) $row['position'],
             'queue_number' => sprintf('G-%03d', (int) $row['position']),
-            'display_name' => $this->displayName($row, true),
-            'patient_school_id' => (string) $row['patient_school_id'],
         ];
     }
 
@@ -543,16 +613,11 @@ final class QueueService extends BaseService
     {
         $row = $this->db->query(
             'SELECT AVG(TIMESTAMPDIFF(MINUTE, `started_at`, `finished_at`)) AS avg_min'
-            . ' FROM `counselling_queue_entries` WHERE `queue_date` = ?'
+            . ' FROM `counselling_queue_entries` WHERE `tenant_id` = ? AND `queue_date` = ?'
             . ' AND `started_at` IS NOT NULL AND `finished_at` IS NOT NULL',
-            [$this->businessToday()],
+            [CurrentTenant::id(), ManilaDay::today()],
         )->getRowArray();
         return $row !== null && $row['avg_min'] !== null ? max(1.0, (float) $row['avg_min']) : 10.0;
-    }
-
-    private function businessToday(): string
-    {
-        return (new DateTimeImmutable('now', new DateTimeZone('Asia/Manila')))->format('Y-m-d');
     }
 
     private function utcNow(): string

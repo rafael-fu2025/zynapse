@@ -48,6 +48,18 @@ final class QueueController extends ApiController
         return $this->ok($this->service->repairSession($id));
     }
 
+    public function reassign(int $id): ResponseInterface
+    {
+        $payload = $this->request->getJSON(true) ?? [];
+        if (! $this->makeValidation(['assigned_counsellor_user_id' => 'permit_empty|is_natural_no_zero'])->run($payload)) {
+            throw ApiException::validationFailure($this->collectErrors());
+        }
+        $target = isset($payload['assigned_counsellor_user_id']) && $payload['assigned_counsellor_user_id'] !== ''
+            ? (int) $payload['assigned_counsellor_user_id']
+            : null;
+        return $this->ok($this->service->reassign($id, $target));
+    }
+
     private function collectErrors(): array
     {
         $errors = [];

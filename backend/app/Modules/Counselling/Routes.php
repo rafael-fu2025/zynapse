@@ -20,6 +20,11 @@ final class Routes implements BaseRoutes
             $r->post('sessions/(:num)/notes',         'CounsellingController::writeNotes/$1');
             $r->get('sessions/(:num)/notes',          'CounsellingController::readNotes/$1');
             $r->post('sessions/(:num)/close',         'CounsellingController::closeSession/$1');
+            // Oversight-only ownership transfer (audit 2026-09-05, F2).
+            $r->post('sessions/(:num)/reassign',      'CounsellingController::reassignSession/$1');
+            // Oversight-only soft-delete / restore (audit 2026-09-05, F15).
+            $r->post('sessions/(:num)/archive',       'CounsellingController::archiveSession/$1');
+            $r->post('sessions/(:num)/unarchive',     'CounsellingController::unarchiveSession/$1');
 
             // Guidance queue (user-facing label); counselling remains the
             // internal module and route namespace.
@@ -27,6 +32,7 @@ final class Routes implements BaseRoutes
             $r->post('queue/call-next',               'QueueController::callNext');
             $r->post('queue/(:num)/transition',       'QueueController::transition/$1');
             $r->post('queue/(:num)/repair-session',   'QueueController::repairSession/$1');
+            $r->post('queue/(:num)/reassign',         'QueueController::reassign/$1');
 
             // Scheduling (Phase 15 — recycled from synapse_ag).
             $r->get('availability',                   'ScheduleController::listAvailability');

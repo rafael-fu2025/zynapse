@@ -13,15 +13,19 @@ final class NoteDto extends BaseDTO
         private readonly string $plaintext,
         private readonly int $keyVersion,
         private readonly string $createdAt,
+        private readonly ?int $id = null,
+        private readonly ?int $supersedesNoteId = null,
     ) {}
 
     public function jsonSerialize(): array
     {
         return [
-            'session_id'   => $this->sessionId,
-            'plaintext'    => $this->plaintext,
-            'key_version'  => $this->keyVersion,
-            'created_at'   => $this->createdAt,
+            'session_id'         => $this->sessionId,
+            'plaintext'          => $this->plaintext,
+            'key_version'        => $this->keyVersion,
+            'created_at'         => $this->createdAt,
+            'id'                 => $this->id,
+            'supersedes_note_id' => $this->supersedesNoteId,
         ];
     }
 }

@@ -164,11 +164,22 @@ class AuthGroups extends ShieldAuthGroups
             // Explicit grants (NOT via the wildcard) so R1's exclusion
             // permits note access; reads are audited by CounsellingService
             // (RBAC_SECURITY_REVIEW R2/R4).
+            // records.read_any is the oversight break-glass for notes on
+            // sessions the supervisor does not own (audit 2026-09-05, F2)
+            // — counsellors are own-session only.
             'counselling.records.read',
             'counselling.records.write',
             'counselling.records.create',
+            'counselling.records.read_any',
+            // Session archive/unarchive (F15): correcting a note-on-the-
+            // wrong-patient mistake must surface to oversight, not be
+            // quietly cleaned up by whoever made the error — so plain
+            // counsellors do NOT hold this.
+            'counselling.records.soft_delete',
             'counselling.schedule.read',
             'counselling.schedule.team_manage',
+            'counselling.queue.read',
+            'counselling.queue.manage',
             'notifications.read',
             'employee.portal.read',
         ],

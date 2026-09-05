@@ -28,6 +28,39 @@ final class PublicRoutesTest extends FeatureTestCase
         $this->assertIsArray($body['data']);
     }
 
+    /**
+     * Minimum-disclosure shape of the lobby feed (audit 2026-09-05,
+     * F16): guidance rows must carry ONLY the queue-number abstraction.
+     * Guidance attendance is materially more sensitive than a clinic
+     * visit, so `display_name` / `patient_school_id` leaking back into
+     * the guidance branch is a disclosure regression. Clinic rows keep
+     * name + school ID by design.
+     */
+    public function testLobbyGuidanceFeedCarriesNoPatientIdentity(): void
+    {
+        $result = $this->call('get', 'api/v1/clinic/queue/state');
+
+        $result->assertStatus(200);
+        $body = $this->envelope($result);
+        $this->assertTrue($body['success']);
+
+        $guidance = $body['data']['guidance'];
+        $this->assertIsArray($guidance);
+        $allowed = ['position', 'queue_number', 'est_wait_minutes'];
+        foreach (['active', 'waiting'] as $section) {
+            foreach ($guidance[$section] ?? [] as $row) {
+                foreach (array_keys($row) as $key) {
+                    $this->assertContains($key, $allowed, "guidance {$section} leaked key '{$key}' to the unauthenticated lobby feed");
+                }
+            }
+        }
+        if ($guidance['now_serving'] !== null) {
+            foreach (array_keys($guidance['now_serving']) as $key) {
+                $this->assertContains($key, $allowed, "guidance now_serving leaked key '{$key}' to the unauthenticated lobby feed");
+            }
+        }
+    }
+
     public function testAppointmentVerifyIsPublicButRejectsGarbage(): void
     {
         $result = $this->withBodyFormat('json')->call(

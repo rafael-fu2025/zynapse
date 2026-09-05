@@ -13,6 +13,7 @@ import { Navigate, Outlet, useLocation } from 'react-router-dom';
 import { Search } from 'lucide-react';
 import { AppSidebar } from '@/components/AppSidebar';
 import { CommandPalette } from '@/components/CommandPalette';
+import { HeaderBreadcrumbs } from '@/components/HeaderBreadcrumbs';
 import { NotificationBell } from '@/components/NotificationBell';
 import { UserMenu } from '@/components/UserMenu';
 import { SidebarInset, SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar';
@@ -93,6 +94,7 @@ export default function Layout() {
             </span>
             <kbd className="ml-auto rounded border bg-muted px-1 font-mono text-[10px]">⌘K</kbd>
           </button>
+          <HeaderBreadcrumbs />
           {/*
             Page title — mirrors the page H1 as a location cue. On web
             (desktop) the in-page H1 already provides this context, so
