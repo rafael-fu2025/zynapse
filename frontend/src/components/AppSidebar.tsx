@@ -26,6 +26,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { NavLink, useLocation } from 'react-router-dom';
+import { Badge } from '@/components/ui/badge';
 import {
   Sidebar,
   SidebarContent,
@@ -40,6 +41,7 @@ import {
   useSidebar,
 } from '@/components/ui/sidebar';
 import { prefetchRoute } from '@/lib/routeChunks';
+import { useDashboardCounters } from '@/hooks/useDashboard';
 import { hasPermission, useAuthStore } from '@/store/auth';
 
 interface NavItem {
@@ -59,6 +61,10 @@ interface NavItem {
    * admin since admin has no student/employee record.
    */
   hideForAdmin?: boolean;
+  /**
+   * Extract count badge from dashboard counters.
+   */
+  badge?: (c: ReturnType<typeof useDashboardCounters>['data']) => { count: number; variant?: 'default' | 'destructive' | 'outline' | 'secondary' | 'warning' | 'info' } | null;
 }
 
 function hasAnyPermission(state: ReturnType<typeof useAuthStore.getState>, perm: string | string[] | null): boolean {
@@ -87,7 +93,16 @@ const NAV_SECTIONS: ReadonlyArray<{ title: string; items: ReadonlyArray<NavItem>
   {
     title: 'Clinic',
     items: [
-      { label: 'Encounters', href: '/clinic', icon: HeartPulse, permission: 'clinic.encounters.read' },
+      {
+        label: 'Encounters',
+        href: '/clinic',
+        icon: HeartPulse,
+        permission: 'clinic.encounters.read',
+        badge: (c) => {
+          const n = c?.clinic?.open_encounters ?? 0;
+          return n > 0 ? { count: n, variant: 'info' } : null;
+        },
+      },
       { label: 'Appointments', href: '/appointments', icon: CalendarClock, permission: 'clinic.appointments.read' },
       { label: 'Patients', href: '/patients', icon: ContactRound, permission: 'clinic.patients.read' },
       { label: 'Inventory', href: '/inventory', icon: Boxes, permission: 'clinic.inventory.read' },
@@ -97,19 +112,46 @@ const NAV_SECTIONS: ReadonlyArray<{ title: string; items: ReadonlyArray<NavItem>
   {
     title: 'Guidance Center',
     items: [
-      { label: 'Counselling', href: '/counselling', icon: MessagesSquare, permission: 'counselling.records.read' },
+      {
+        label: 'Counselling',
+        href: '/counselling',
+        icon: MessagesSquare,
+        permission: 'counselling.records.read',
+        badge: (c) => {
+          const n = c?.counselling?.open_sessions ?? 0;
+          return n > 0 ? { count: n, variant: 'info' } : null;
+        },
+      },
     ],
   },
   {
     title: 'Referrals',
     items: [
-      { label: 'All Referrals', href: '/referrals', icon: Share2, permission: 'referrals.read' },
+      {
+        label: 'All Referrals',
+        href: '/referrals',
+        icon: Share2,
+        permission: 'referrals.read',
+        badge: (c) => {
+          const n = (c?.referrals?.submitted ?? 0) + (c?.referrals?.under_review ?? 0);
+          return n > 0 ? { count: n, variant: 'warning' } : null;
+        },
+      },
     ],
   },
   {
     title: 'Facilities',
     items: [
-      { label: 'Facilities', href: '/facilities', icon: Factory, permission: 'facilities.units.read' },
+      {
+        label: 'Facilities',
+        href: '/facilities',
+        icon: Factory,
+        permission: 'facilities.units.read',
+        badge: (c) => {
+          const risk = c?.facilities?.at_risk ?? 0;
+          return risk > 0 ? { count: risk, variant: 'destructive' } : null;
+        },
+      },
       // Waste categories now live on their own screen (no longer a
       // dialog inside the Facilities page) — the sidebar entry links
       // straight to the dedicated route.
@@ -132,6 +174,7 @@ export function AppSidebar() {
   const isAdmin = hasPermission(state, '*');
   const { pathname } = useLocation();
   const { setOpenMobile } = useSidebar();
+  const counters = useDashboardCounters();
 
   const closeMobile = () => setOpenMobile(false);
   // Longest-prefix match: `/facilities/waste-categories` must light up
@@ -170,7 +213,9 @@ export function AppSidebar() {
         </SidebarMenu>
       </SidebarHeader>
 
-      <SidebarContent>
+      {/* Primary navigation landmark — the skip link and assistive tech
+          target this; the spec suite asserts it by name. */}
+      <SidebarContent role="navigation" aria-label="Primary">
         {NAV_SECTIONS.map((section) => {
           const items = section.items.filter(
             (i) => !(i.hideForAdmin && isAdmin) && hasAnyPermission(state, i.permission),
@@ -208,7 +253,19 @@ export function AppSidebar() {
                           onTouchStart={() => void prefetchRoute(item.href)}
                         >
                           <item.icon aria-hidden />
-                          <span>{item.label}</span>
+                          <span className="flex-1 truncate">{item.label}</span>
+                          {item.badge !== undefined && counters.data !== undefined && (() => {
+                            const b = item.badge(counters.data);
+                            if (!b || b.count <= 0) return null;
+                            return (
+                              <Badge
+                                variant={b.variant ?? 'default'}
+                                className="ml-auto px-1.5 py-0 text-[10px] font-mono h-4 shrink-0 group-data-[collapsible=icon]:hidden"
+                              >
+                                {b.count}
+                              </Badge>
+                            );
+                          })()}
                         </NavLink>
                       </SidebarMenuButton>
                     </SidebarMenuItem>

@@ -145,6 +145,51 @@
 }
 
 /*
+ * Autofill — Chrome/WebKit paints autofilled inputs with an opaque
+ * pale-blue fill that clashes with card surfaces (most visibly on the
+ * login page, where the fill covers the white card behind a translucent
+ * input). Delaying Chrome's background-color transition past any
+ * realistic session keeps that fill invisible while the surface beneath
+ * shows through; `-webkit-text-fill-color` keeps the value legible in
+ * dark mode, where Chrome otherwise forces black text.
+ */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus,
+input:-webkit-autofill:active {
+  -webkit-text-fill-color: var(--foreground);
+  caret-color: var(--foreground);
+  font-family: var(--font-sans) !important;
+  transition: background-color 9999s ease-out;
+}
+
+/*
+ * Font on autofilled values — Blink paints the value through its
+ * `internal-input-suggested` agent stylesheet, which ignores the
+ * page's font family until the field is focused (crbug 41457553 /
+ * 41474672). Re-assert Figtree with `!important`, and on ::first-line,
+ * which is where the rendered value actually comes from. Font-size is
+ * deliberately left alone: `inherit` would resolve against the parent
+ * (16px) and fight the Input's own `text-base md:text-sm`.
+ *
+ * The Blink-only internal pseudo-classes live in a separate rule — an
+ * unrecognised pseudo-class invalidates the whole selector list, and
+ * mixing them in would drop the base rule in Safari/Firefox.
+ */
+input:-webkit-autofill::first-line {
+  -webkit-text-fill-color: var(--foreground);
+  font-family: var(--font-sans) !important;
+}
+
+input:-internal-autofill-previewed,
+input:-internal-autofill-selected {
+  -webkit-text-fill-color: var(--foreground);
+  caret-color: var(--foreground);
+  font-family: var(--font-sans) !important;
+  transition: background-color 9999s ease-out;
+}
+
+/*
  * Login page background — disables text selection and image dragging
  * so the asset can't be lifted out via long-press / right-click / drag.
  * Vendor-prefixed props (`-webkit-user-drag`, `-webkit-touch-callout`)
@@ -323,3 +368,44 @@
       synapse-palette-fade-out 700ms ease-in forwards;
   }
 }
+
+/*
+ * Bootstrap-style modal slide-down / slide-up:
+ * Centered on viewport via translate(-50%, -50%).
+ * - Enter: starts 50px higher (calc(-50% - 50px)) and slides down to -50%
+ * - Exit: slides up to calc(-50% - 50px)
+ */
+@keyframes bootstrap-modal-down {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, calc(-50% - 60px)) !important;
+  }
+  100% {
+    opacity: 1;
+    transform: translate(-50%, -50%) !important;
+  }
+}
+@keyframes bootstrap-modal-up {
+  0% {
+    opacity: 1;
+    transform: translate(-50%, -50%) !important;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, calc(-50% - 60px)) !important;
+  }
+}
+
+@media (min-width: 640px) {
+  .bootstrap-modal-anim {
+    transform: translate(-50%, -50%);
+  }
+  .bootstrap-modal-anim[data-state='open'] {
+    animation: bootstrap-modal-down 250ms cubic-bezier(0.16, 1, 0.3, 1) forwards !important;
+  }
+  .bootstrap-modal-anim[data-state='closed'] {
+    animation: bootstrap-modal-up 200ms cubic-bezier(0.7, 0, 0.84, 0) forwards !important;
+  }
+}
+
+

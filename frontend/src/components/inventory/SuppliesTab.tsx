@@ -43,6 +43,7 @@ import {
 import { useKeysetPagination } from '@/hooks/useKeysetPagination';
 import { useUrlFilter } from '@/hooks/useUrlFilter';
 import { useTableRowKeyboardNav } from '@/hooks/useTableRowKeyboardNav';
+import { useCan } from '@/hooks/useCan';
 import {
   useArchiveItem,
   useInventoryItems,
@@ -76,6 +77,9 @@ export function SuppliesTab() {
   const list = useInventoryItems(cursor, 25, q === '' ? null : q, showArchived, lowStockOnly);
   const archive = useArchiveItem();
   const unarchive = useUnarchiveItem();
+  // Archive/delete is admin-only (`clinic.inventory.delete`) — the
+  // primary clinic_staff role would always 403 (2026-09 audit).
+  const canDelete = useCan('clinic.inventory.delete');
 
   // Same reset on the low-stock toggle — flipping the filter chip
   // shouldn't leave the cursor pointing into the previous page set.
@@ -137,12 +141,14 @@ export function SuppliesTab() {
             <DropdownMenuItem onSelect={() => setEditItem(it)}>
               <Pencil /> Edit
             </DropdownMenuItem>
-            <DropdownMenuItem
-              className="text-muted-foreground"
-              onSelect={() => setArchiveItem(it)}
-            >
-              <Archive /> Archive
-            </DropdownMenuItem>
+            {canDelete && (
+              <DropdownMenuItem
+                className="text-muted-foreground"
+                onSelect={() => setArchiveItem(it)}
+              >
+                <Archive /> Archive
+              </DropdownMenuItem>
+            )}
           </>
         )}
       </DropdownMenuContent>

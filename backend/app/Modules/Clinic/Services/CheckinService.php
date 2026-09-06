@@ -103,10 +103,10 @@ final class CheckinService extends BaseService
                 $to   = $this->shift($scannedAt, +self::DUPLICATE_WINDOW_SECONDS);
                 $dup  = $this->db->query(
                     'SELECT `id` FROM `clinic_checkins`'
-                    . ' WHERE `destination` = ? AND `guest_name` IS NOT NULL AND `outcome` != ?'
+                    . ' WHERE `tenant_id` = ? AND `destination` = ? AND `guest_name` IS NOT NULL AND `outcome` != ?'
                     . ' AND LOWER(REPLACE(`guest_name`, \' \', \'\')) = LOWER(REPLACE(?, \' \', \'\'))'
                     . ' AND `scanned_at` BETWEEN ? AND ? LIMIT 1 FOR UPDATE',
-                    [$destination, 'duplicate', $guestName, $from, $to],
+                    [CurrentTenant::id(), $destination, 'duplicate', $guestName, $from, $to],
                 )->getRowArray();
                 if ($dup !== null) {
                     $checkinId = $this->insertCheckin(null, null, $method, $stationId, 'duplicate', null, null, $userId, $scannedAt, $purpose, $guestName, $destination);
@@ -130,7 +130,7 @@ final class CheckinService extends BaseService
             // Serialize concurrent submissions for the same registered user;
             // the subsequent duplicate/active-queue checks then see the first
             // transaction's committed row instead of racing through a gap.
-            $this->db->query('SELECT `id` FROM `users` WHERE `id` = ? FOR UPDATE', [$patientUserId]);
+            $this->db->query('SELECT `id` FROM `users` WHERE `tenant_id` = ? AND `id` = ? FOR UPDATE', [CurrentTenant::id(), $patientUserId]);
 
             // 2. Legacy ±5-minute duplicate window (locked so two kiosks
             //    replaying the same buffered scan cannot both pass).
@@ -138,9 +138,9 @@ final class CheckinService extends BaseService
             $to   = $this->shift($scannedAt, +self::DUPLICATE_WINDOW_SECONDS);
             $dup  = $this->db->query(
                 'SELECT `id` FROM `clinic_checkins`'
-                . ' WHERE `destination` = ? AND `patient_school_id` = ? AND `outcome` != ?'
+                . ' WHERE `tenant_id` = ? AND `destination` = ? AND `patient_school_id` = ? AND `outcome` != ?'
                 . ' AND `scanned_at` BETWEEN ? AND ? LIMIT 1 FOR UPDATE',
-                [$destination, $schoolId, 'duplicate', $from, $to],
+                [CurrentTenant::id(), $destination, $schoolId, 'duplicate', $from, $to],
             )->getRowArray();
             if ($dup !== null) {
                 $checkinId = $this->insertCheckin($patientUserId, $schoolId, $method, $stationId, 'duplicate', null, null, $userId, $scannedAt, $purpose, null, $destination);
@@ -154,9 +154,9 @@ final class CheckinService extends BaseService
                 // and queue tables are touched; no Clinic encounter exists.
                 $appointment = $this->db->query(
                     'SELECT `id`, `status`, `start_time`, `end_time`, `counsellor_user_id` FROM `counselling_appointments`'
-                    . ' WHERE `patient_school_id` = ? AND `appointment_date` = ?'
+                    . ' WHERE `tenant_id` = ? AND `patient_school_id` = ? AND `appointment_date` = ?'
                     . ' AND `status` IN (?, ?) ORDER BY `start_time` ASC LIMIT 1 FOR UPDATE',
-                    [$schoolId, $scanDate, 'scheduled', 'confirmed'],
+                    [CurrentTenant::id(), $schoolId, $scanDate, 'scheduled', 'confirmed'],
                 )->getRowArray();
                 $appointmentId = $appointment !== null ? (int) $appointment['id'] : null;
                 $outcome = 'counselling_queued';
@@ -233,13 +233,18 @@ final class CheckinService extends BaseService
             //                     closed; report and fall through to
             //                     the walk-in path so the patient
             //                     isn't silently dropped
+            //    `scheduled_at` is a UTC column; the Manila scan day must
+            //    be converted to UTC bounds (2026-09 audit: naive Manila
+            //    strings here matched tomorrow-morning appointments on
+            //    evening scans and missed pre-08:00 ones entirely).
+            $scanBounds = ManilaDay::dayBoundsUtcSql($scanDate);
             $clinicAppt = $this->db->query(
                 'SELECT `id`, `status` FROM `clinic_appointments`'
-                . ' WHERE `patient_school_id` = ?'
+                . ' WHERE `tenant_id` = ? AND `patient_school_id` = ?'
                 . ' AND `scheduled_at` >= ? AND `scheduled_at` < ?'
                 . ' AND `archived_at` IS NULL'
                 . ' ORDER BY `scheduled_at` ASC LIMIT 1 FOR UPDATE',
-                [$schoolId, $scanDate . ' 00:00:00', $scanDate . ' 23:59:59'],
+                [CurrentTenant::id(), $schoolId, $scanBounds['start'], $scanBounds['end']],
             )->getRowArray();
 
             if ($clinicAppt !== null) {
@@ -458,8 +463,8 @@ final class CheckinService extends BaseService
     private function enqueue(int $encounterId, string $date): int
     {
         $last = $this->db->query(
-            'SELECT `position` FROM `clinic_queue_entries` WHERE `queue_date` = ? ORDER BY `position` DESC LIMIT 1 FOR UPDATE',
-            [$date],
+            'SELECT `position` FROM `clinic_queue_entries` WHERE `tenant_id` = ? AND `queue_date` = ? ORDER BY `position` DESC LIMIT 1 FOR UPDATE',
+            [CurrentTenant::id(), $date],
         )->getRowArray();
         $position = ($last !== null ? (int) $last['position'] : 0) + 1;
         $now = $this->utcNow();
@@ -601,8 +606,8 @@ final class CheckinService extends BaseService
         $avg = $this->db->query(
             'SELECT AVG(TIMESTAMPDIFF(MINUTE, `started_at`, `finished_at`)) AS avg_min'
             . ' FROM `clinic_queue_entries`'
-            . ' WHERE `queue_date` = ? AND `started_at` IS NOT NULL AND `finished_at` IS NOT NULL',
-            [$today],
+            . ' WHERE `tenant_id` = ? AND `queue_date` = ? AND `started_at` IS NOT NULL AND `finished_at` IS NOT NULL',
+            [CurrentTenant::id(), $today],
         )->getRowArray();
         $serviceMinutes = $avg !== null && $avg['avg_min'] !== null
             ? max(1.0, (float) $avg['avg_min'])
@@ -610,8 +615,8 @@ final class CheckinService extends BaseService
 
         $ahead = (int) ($this->db->query(
             'SELECT COUNT(*) AS c FROM `clinic_queue_entries`'
-            . ' WHERE `queue_date` = ? AND `position` < ? AND `status` IN (?, ?, ?)',
-            [$today, $position, 'waiting', 'called', 'in_session'],
+            . ' WHERE `tenant_id` = ? AND `queue_date` = ? AND `position` < ? AND `status` IN (?, ?, ?)',
+            [CurrentTenant::id(), $today, $position, 'waiting', 'called', 'in_session'],
         )->getRowArray()['c'] ?? 0);
 
         return (int) round($ahead * $serviceMinutes);

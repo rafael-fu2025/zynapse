@@ -58,10 +58,18 @@ export function useStudents(cursor: string | null, limit = 25, includeArchived =
   });
 }
 
-export function useStudentSearch(q: string) {
+export function useStudentSearch(
+  q: string,
+  opts: { enabled?: boolean } = {},
+) {
   return useQuery<Student[], ApiEnvelopeError>({
     queryKey: ['patients', 'students', 'search', q],
-    enabled: q.trim().length >= 2,
+    // `enabled` must include the CALLER's permission gate, not just the
+    // query length — surfaces like the command palette render the search
+    // only for `clinic.patients.read` holders, and without this gate
+    // every keystroke still fired the request and collected 403s
+    // (2026-09 audit).
+    enabled: (opts.enabled ?? true) && q.trim().length >= 2,
     queryFn: async () => {
       const res = await apiClient.get<unknown[]>(
         `/clinic/students/search?q=${encodeURIComponent(q.trim())}`,

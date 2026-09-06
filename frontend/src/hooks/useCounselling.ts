@@ -151,3 +151,39 @@ export function useCloseSession() {
     },
   });
 }
+
+export function useArchiveSession() {
+  const qc = useQueryClient();
+  return useMutation<Session, ApiEnvelopeError, number>({
+    mutationFn: async (sessionId) => {
+      const res = await apiClient.post<Session>(`/counselling/sessions/${sessionId}/archive`);
+      return sessionSchema.parse(res.data);
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['counselling'] });
+      void qc.invalidateQueries({ queryKey: ['counselling-queue'] });
+      toast.success('Session archived.');
+    },
+    onError: (err) => {
+      toast.error(err.errors[0]?.message ?? 'Failed to archive session.');
+    },
+  });
+}
+
+export function useUnarchiveSession() {
+  const qc = useQueryClient();
+  return useMutation<Session, ApiEnvelopeError, number>({
+    mutationFn: async (sessionId) => {
+      const res = await apiClient.post<Session>(`/counselling/sessions/${sessionId}/unarchive`);
+      return sessionSchema.parse(res.data);
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['counselling'] });
+      void qc.invalidateQueries({ queryKey: ['counselling-queue'] });
+      toast.success('Session restored.');
+    },
+    onError: (err) => {
+      toast.error(err.errors[0]?.message ?? 'Failed to restore session.');
+    },
+  });
+}

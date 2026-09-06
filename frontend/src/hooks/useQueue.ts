@@ -144,6 +144,10 @@ export function usePublicQueueState() {
   return useQuery<PublicQueueState, Error>({
     queryKey: ['queue', 'public-state'],
     refetchInterval: 5_000,
+    // Keep the last known board on screen while a poll fails — a lobby
+    // TV must not blank out over one transient 5-second error
+    // (2026-09 audit); the error banner still shows.
+    placeholderData: (previous) => previous,
     queryFn: async () => {
       const res = await fetch(`${API_BASE_URL}/clinic/queue/state`);
       if (!res.ok) {

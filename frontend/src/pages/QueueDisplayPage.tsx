@@ -2,14 +2,17 @@ import { useEffect, useRef, useState } from 'react';
 import { MediaPlaylistPanel } from '@/components/MediaPlaylistPanel';
 import { useKioskSettings } from '@/hooks/useKioskSettings';
 import { usePublicQueueState } from '@/hooks/useQueue';
-import { playConfiguredChime } from '@/lib/chime';
+import { playConfiguredChime, unlockAudio } from '@/lib/chime';
 import { cn } from '@/lib/utils';
 import type { PublicQueueState } from '@/schemas/queue';
 
 type QueueColumn = PublicQueueState['clinic'];
 
+// Lobby TVs boot unattended and their OS clock/timezone can drift —
+// pin the header clock to the clinic's Manila calendar, never the
+// browser zone (2026-09 audit).
 function formatClock(date: Date): string {
-  return new Intl.DateTimeFormat('en-PH', { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', second: '2-digit' }).format(date);
+  return new Intl.DateTimeFormat('en-PH', { timeZone: 'Asia/Manila', weekday: 'short', year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', second: '2-digit' }).format(date);
 }
 
 function NowServingCard({ title, data, flash }: { title: string; data: QueueColumn; flash: boolean }) {
@@ -17,7 +20,7 @@ function NowServingCard({ title, data, flash }: { title: string; data: QueueColu
   return <article aria-label={`${title} now serving`} className={cn('flex h-40 min-h-40 max-h-40 min-w-0 flex-col overflow-hidden rounded-xl border bg-card p-4 text-center shadow-sm transition-colors duration-500 motion-reduce:transition-none', flash && 'border-primary bg-primary/10')}>
     <h3 className="shrink-0 text-sm font-bold uppercase tracking-[0.18em] text-muted-foreground">{title}</h3>
     <div className="flex min-h-0 flex-1 flex-col items-center justify-center overflow-hidden">
-      {active.length === 0 ? <p className="text-lg text-muted-foreground">No one in service.</p> : <div className="grid w-full min-h-0 gap-1 overflow-y-auto">{active.map((entry) => <div key={entry.queue_number} className="flex items-center justify-center gap-3 rounded-md bg-muted/40 px-2 py-1"><p aria-label={`Now serving ${entry.queue_number}`} className={cn('font-mono font-bold leading-none text-primary tabular-nums', active.length > 1 ? 'text-2xl' : 'text-5xl xl:text-6xl')}>{entry.queue_number}</p><div className="min-w-0 text-left"><p className="truncate text-sm font-semibold">{entry.display_name}</p><p className="truncate font-mono text-xs text-muted-foreground">{entry.patient_school_id}</p></div></div>)}</div>}
+      {active.length === 0 ? <p className="text-lg text-muted-foreground">No one in service.</p> : <div className="grid w-full min-h-0 gap-1 overflow-y-auto">{active.map((entry) => <div key={entry.queue_number} className="flex items-center justify-center gap-3 rounded-md bg-muted/40 px-2 py-1"><p aria-label={`Now serving ${entry.queue_number}`} className={cn('font-mono font-bold leading-none text-primary tabular-nums', active.length > 1 ? 'text-2xl' : 'text-5xl xl:text-6xl')}>{entry.queue_number}</p><div className="min-w-0 text-left">{entry.display_name !== undefined && <p className="truncate text-sm font-semibold">{entry.display_name}</p>}{entry.patient_school_id !== undefined && <p className="truncate font-mono text-xs text-muted-foreground">{entry.patient_school_id}</p>}</div></div>)}</div>}
     </div>
   </article>;
 }
@@ -45,7 +48,7 @@ function WaitingColumn({ title, data, textSize, autoScroll, speed }: { title: st
     <div className="mb-3 flex items-center justify-between gap-2 border-b pb-2"><h3 className="font-semibold">{title}</h3><span aria-label={`${data.waiting.length} waiting`} className="rounded-full bg-primary/10 px-2 py-0.5 font-mono text-sm font-bold text-primary">{data.waiting.length}</span></div>
     {data.waiting.length === 0 ? <p className="text-sm text-muted-foreground">No one waiting.</p> : <ul ref={listRef} className="min-h-0 flex-1 space-y-2 overflow-y-auto overflow-x-hidden pr-1 [scrollbar-color:hsl(var(--muted-foreground))_transparent] [scrollbar-width:thin]">
       {data.waiting.map((entry) => <li key={entry.queue_number} className="min-w-0 rounded-lg bg-muted/60 p-2.5">
-        <p className={cn('font-mono font-bold text-primary tabular-nums', size)}>{entry.queue_number}</p><p className={cn('truncate font-medium', size)}>{entry.display_name}</p><p className="truncate font-mono text-xs text-muted-foreground">{entry.patient_school_id}</p>
+        <p className={cn('font-mono font-bold text-primary tabular-nums', size)}>{entry.queue_number}</p>{entry.display_name !== undefined && <p className={cn('truncate font-medium', size)}>{entry.display_name}</p>}{entry.patient_school_id !== undefined && <p className="truncate font-mono text-xs text-muted-foreground">{entry.patient_school_id}</p>}
       </li>)}
     </ul>}
   </section>;
@@ -59,17 +62,35 @@ export default function QueueDisplayPage() {
   const previous = useRef<{ guidance: string | null; clinic: string | null }>({ guidance: null, clinic: null });
 
   useEffect(() => { const id = window.setInterval(() => setNow(new Date()), 1_000); return () => window.clearInterval(id); }, []);
+  // Browsers start AudioContexts SUSPENDED until a user gesture. The
+  // board has no sound toggle any more, so any first pointer/key
+  // interaction with the board (a technician checking it works)
+  // unlocks the chime for the session (2026-09 audit).
+  useEffect(() => {
+    const unlock = () => unlockAudio();
+    window.addEventListener('pointerdown', unlock, { once: true });
+    window.addEventListener('keydown', unlock, { once: true });
+    return () => {
+      window.removeEventListener('pointerdown', unlock);
+      window.removeEventListener('keydown', unlock);
+    };
+  }, []);
   useEffect(() => {
     const timers: number[] = [];
+    // Watch the full active set per destination — Guidance can serve
+    // several patients at once, and chime-watch on `now_serving` alone
+    // missed every call after the first (2026-09 audit).
     (['guidance', 'clinic'] as const).forEach((destination) => {
-      const number = queue.data?.[destination].now_serving?.queue_number ?? null;
+      const col = queue.data?.[destination];
+      const active = col?.active ?? (col?.now_serving !== null && col?.now_serving !== undefined ? [col.now_serving] : []);
+      const signature = active.map((e) => e.queue_number).sort().join(',');
       const last = previous.current[destination];
-      if (number !== null && last !== null && number !== last) {
-        playConfiguredChime(settings, number);
+      if (signature !== '' && last !== null && signature !== last) {
+        playConfiguredChime(settings, active[active.length - 1]?.queue_number ?? '');
         setFlash((current) => ({ ...current, [destination]: true }));
         timers.push(window.setTimeout(() => setFlash((current) => ({ ...current, [destination]: false })), 2_500));
       }
-      previous.current[destination] = number;
+      previous.current[destination] = signature;
     });
     return () => timers.forEach((timer) => window.clearTimeout(timer));
   }, [queue.data, settings]);

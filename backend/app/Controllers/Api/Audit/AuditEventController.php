@@ -10,7 +10,9 @@ use App\Http\ApiResponse;
 use App\Pagination\KeysetPaginator;
 use App\Services\Audit\AuditChainVerifier;
 use App\Services\Audit\AuditPayload;
+use App\Services\CurrentTenant;
 use App\Services\Export\CsvWriter;
+use App\Modules\Shared\ManilaDay;
 use CodeIgniter\Database\BaseBuilder;
 use CodeIgniter\HTTP\ResponseInterface;
 use DateTimeImmutable;
@@ -57,19 +59,24 @@ final class AuditEventController extends ApiController
 
         $actions = array_column(
             $db->table(SYNAPSE_AUDIT_EVENTS)
-                ->distinct()->select('action_code')->orderBy('action_code', 'ASC')
+                ->distinct()->select('action_code')
+                ->where('tenant_id', CurrentTenant::id())
+                ->orderBy('action_code', 'ASC')
                 ->get()->getResultArray(),
             'action_code',
         );
         $entities = array_column(
             $db->table(SYNAPSE_AUDIT_EVENTS)
-                ->distinct()->select('entity_type')->orderBy('entity_type', 'ASC')
+                ->distinct()->select('entity_type')
+                ->where('tenant_id', CurrentTenant::id())
+                ->orderBy('entity_type', 'ASC')
                 ->get()->getResultArray(),
             'entity_type',
         );
         $actors = $db->table(SYNAPSE_AUDIT_EVENTS . ' ae')
             ->distinct()
             ->select('u.id, u.username AS display_name, ai.secret AS email')
+            ->where('ae.tenant_id', CurrentTenant::id())
             ->join('users u', 'u.id = ae.actor_user_id', 'inner')
             ->join('auth_identities ai', "ai.user_id = u.id AND ai.type = 'email_password'", 'left')
             ->orderBy('ai.secret', 'ASC')
@@ -164,7 +171,9 @@ final class AuditEventController extends ApiController
         $this->authorize('audit.read');
 
         $exists = Services::database()->table(SYNAPSE_AUDIT_EVENTS)
-            ->select('id')->where('id', $id)->get()->getRowArray();
+            ->select('id')
+            ->where('tenant_id', CurrentTenant::id())
+            ->where('id', $id)->get()->getRowArray();
         if ($exists === null) {
             throw ApiException::notFound('audit.event_not_found');
         }
@@ -183,6 +192,10 @@ final class AuditEventController extends ApiController
 
         return Services::database()->table(SYNAPSE_AUDIT_EVENTS . ' ae')
             ->select($columns)
+            // Tenant scoping: `audit_events` carries the column since the
+            // 2026-08-02 migration; the reader must honour it like every
+            // other domain read (2026-09 audit).
+            ->where('ae.tenant_id', CurrentTenant::id())
             ->join('users u', 'u.id = ae.actor_user_id', 'left')
             ->join('auth_identities ai', "ai.user_id = u.id AND ai.type = 'email_password'", 'left');
     }
@@ -243,12 +256,18 @@ final class AuditEventController extends ApiController
         if ($filters['request_id'] !== null) {
             $builder->where('ae.request_id', $filters['request_id']);
         }
+        // `occurred_at` is a UTC column while the console's date filters
+        // mean MANILA calendar days (the timestamps the auditor sees are
+        // rendered in Manila). Convert each day to its UTC [start, end)
+        // bounds — comparing naive date strings against the UTC column
+        // silently dropped events from Manila 00:00–07:59 (2026-09 audit).
         if ($filters['from'] !== null) {
-            $builder->where('ae.occurred_at >=', $filters['from'] . ' 00:00:00');
+            $fromBounds = ManilaDay::dayBoundsUtcSql($filters['from']);
+            $builder->where('ae.occurred_at >=', $fromBounds['start']);
         }
         if ($filters['to'] !== null) {
-            $exclusiveEnd = (new DateTimeImmutable($filters['to']))->modify('+1 day')->format('Y-m-d');
-            $builder->where('ae.occurred_at <', $exclusiveEnd . ' 00:00:00');
+            $toBounds = ManilaDay::dayBoundsUtcSql($filters['to']);
+            $builder->where('ae.occurred_at <', $toBounds['end']);
         }
         if ($filters['q'] !== null) {
             $builder->like('ae.payload_json', $filters['q']);

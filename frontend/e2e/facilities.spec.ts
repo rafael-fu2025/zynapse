@@ -12,7 +12,7 @@
  * Use `playwright.config.ts` to point at the right baseURL.
  */
 import { expect, test } from '@playwright/test';
-import { signInLive } from './helpers/auth';
+import { apiOrigin, apiToken, signInLive } from './helpers/auth';
 
 const RUN = process.env['SYNAPSE_E2E'] === '1';
 
@@ -50,15 +50,17 @@ test('facilities page renders the BMG units table', async ({ page }) => {
 test('Move to curing action is available for awaiting_output units', async ({ page, request }) => {
   await signInLive(page);
 
-  const baseURL = page.url().replace(/\/$/, '');
-  const cookies = await page.context().cookies();
-  const cookieHeader = cookies.map((c) => `${c.name}=${c.value}`).join('; ');
+  // The API is Bearer-authenticated — cookies are never accepted on
+  // api_auth routes (the cookie-only header 401'd here, 2026-09 run).
+  const api = apiOrigin();
+  const bearer = await apiToken();
+  const auth = { authorization: `Bearer ${bearer}` };
 
-  // Discover the first unit in awaiting_output via the public API.
+  // Discover the first unit in awaiting_output via the API.
   // The endpoint is paginated; the seed ships 1–2 units, so a single
   // page is enough. The backend groups everything under /api/v1.
-  const list = await request.get(`${baseURL}/api/v1/facilities/units?limit=50`, {
-    headers: { cookie: cookieHeader },
+  const list = await request.get(`${api}/api/v1/facilities/units?limit=50`, {
+    headers: auth,
   });
   expect(list.ok(), `units list status was ${list.status()}`).toBeTruthy();
   const body = (await list.json()) as { data?: Array<{ id: number; status: string; active_batch_id?: number | null }> };
@@ -82,8 +84,8 @@ test('Move to curing action is available for awaiting_output units', async ({ pa
   // route with a batch id that won't exist. A 404 (resource not
   // found) or 409 (state machine rejection) is enough to prove the
   // route is reachable; a 405 would mean the route is missing.
-  const probe = await request.post(`${baseURL}/api/v1/facilities/batches/-1/curing`, {
-    headers: { cookie: cookieHeader, 'content-type': 'application/json' },
+  const probe = await request.post(`${api}/api/v1/facilities/batches/-1/curing`, {
+    headers: { ...auth, 'content-type': 'application/json' },
     data: {},
   });
   expect([404, 409]).toContain(probe.status());

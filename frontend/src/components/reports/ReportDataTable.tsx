@@ -58,7 +58,7 @@ export function ReportDataTable({
         <p className="px-4 py-8 text-center text-sm text-muted-foreground">{emptyMessage}</p>
       ) : (
         <>
-          <div className="hidden md:block">
+          <div className="hidden overflow-x-auto md:block">
             <Table aria-labelledby={headingId}>
               <caption className="sr-only">{title}</caption>
               <TableHeader className="bg-muted/50">

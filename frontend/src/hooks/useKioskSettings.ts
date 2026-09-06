@@ -16,6 +16,14 @@ export function useKioskSettings(): KioskSettings {
     const sync = () => {
       void fetchKioskSettings().then((snapshot) => {
         if (!active || snapshot.revision === 0) return;
+        // `normalizeKioskSettings` builds fresh arrays every poll, so the
+        // object identity always differs. Pushing it into state (and
+        // localStorage) on every 15 s tick reset every consumer keyed on
+        // identity — the lobby playlist restarted from item 0 mid-loop
+        // (2026-09 audit). Only commit when the CONTENT changed.
+        const next = JSON.stringify(snapshot.settings);
+        const current = JSON.stringify(loadKioskSettings());
+        if (next === current) return;
         saveKioskSettings(snapshot.settings);
         setSettings(snapshot.settings);
       }).catch(() => { /* Keep the last local cache while offline. */ });

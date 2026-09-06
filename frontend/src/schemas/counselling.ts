@@ -31,6 +31,10 @@ export const noteSchema = z.object({
   plaintext: z.string(),
   key_version: z.number().int(),
   created_at: z.string(),
+  // Amendment chain (F15): id + optional pointer to the note this row
+  // supersedes. Notes are insert-only, so corrections happen by amendment.
+  id: z.number().int().positive().optional(),
+  supersedes_note_id: z.number().int().positive().nullable().optional(),
 });
 export type Note = z.infer<typeof noteSchema>;
 
@@ -41,5 +45,6 @@ export type OpenSessionInput = z.infer<typeof openSessionSchema>;
 
 export const writeNotesSchema = z.object({
   plaintext: z.string().min(1).max(16384),
+  supersedes_note_id: z.number().int().positive().optional(),
 });
 export type WriteNotesInput = z.infer<typeof writeNotesSchema>;

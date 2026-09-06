@@ -61,6 +61,7 @@ final class TenantScopeFitnessTest extends TestCase
         'counselling_availability',
         'counselling_notes',
         'counselling_queue_entries',
+        'counselling_scheduling_analytics',
         'counselling_sessions',
         'facilities_bmg_alerts',
         'facilities_bmg_batch_updates',
@@ -199,23 +200,38 @@ final class TenantScopeFitnessTest extends TestCase
     }
 
     /**
-     * Counts `->table('X')` sites on tenant-scoped tables whose
-     * statement shows no tenant scoping.
+     * Counts `->table('X')` AND `->query(...)` sites touching
+     * tenant-scoped tables whose statement shows no tenant scoping.
+     * The raw-SQL half mirrors the 2026-09 scanner extension (audit
+     * finding F4): `$this->db->query()` was invisible to the original
+     * heuristic, which is exactly how 24 raw sites accumulated while
+     * the test stayed green.
      */
     private function countUnscopedSites(string $source): int
     {
         $scopedTables = implode('|', self::TENANT_TABLES);
-        $pattern = "/->table\\(\\s*['\"]({$scopedTables})['\"]/";
-
         $count = 0;
-        if (preg_match_all($pattern, $source, $matches, PREG_OFFSET_CAPTURE) === false) {
-            return 0;
+
+        $tablePattern = "/->table\\(\\s*['\"]({$scopedTables})['\"]/";
+        if (preg_match_all($tablePattern, $source, $matches, PREG_OFFSET_CAPTURE) !== false) {
+            foreach ($matches[1] as [$table, $offset]) {
+                $window = $this->statementWindow($source, $offset);
+                if (! str_contains($window, 'tenant_id') && ! str_contains($window, 'CurrentTenant')) {
+                    $count++;
+                }
+            }
         }
 
-        foreach ($matches[1] as [$table, $offset]) {
-            $window = $this->statementWindow($source, $offset);
-            if (! str_contains($window, 'tenant_id') && ! str_contains($window, 'CurrentTenant')) {
-                $count++;
+        // Raw SQL writes table names with backticks/quotes — match either form.
+        $rawTablePattern = "/[`'\"]?({$scopedTables})[`'\"]?/";
+        $rawPattern = "/->query\\s*\\(/";
+        if (preg_match_all($rawPattern, $source, $rawMatches, PREG_OFFSET_CAPTURE) !== false) {
+            foreach ($rawMatches[0] as [$match, $offset]) {
+                $window = $this->statementWindow($source, $offset);
+                if (preg_match($rawTablePattern, $window) === 1
+                    && ! str_contains($window, 'tenant_id') && ! str_contains($window, 'CurrentTenant')) {
+                    $count++;
+                }
             }
         }
 

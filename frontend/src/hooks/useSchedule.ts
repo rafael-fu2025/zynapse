@@ -4,7 +4,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { z } from 'zod';
 import { toast } from 'sonner';
-import { apiClient } from '@/api/client';
+import { apiClient, getNextCursor } from '@/api/client';
 import type { ApiEnvelopeError } from '@/api/envelope';
 import {
   addSlotSchema,
@@ -70,15 +70,24 @@ export function useRemoveSlot() {
   });
 }
 
-export function useAppointments(status: AppointmentStatus | null) {
-  return useQuery<Appointment[], ApiEnvelopeError>({
-    queryKey: ['schedule', 'appointments', { status }],
+export function useAppointments(
+  status: AppointmentStatus | null,
+  date?: string | null,
+  cursor?: string | null,
+) {
+  return useQuery<{ data: Appointment[]; next: string | null }, ApiEnvelopeError>({
+    queryKey: ['schedule', 'appointments', { status, date, cursor }],
     queryFn: async () => {
       const params = new URLSearchParams();
-      params.set('limit', '50');
+      params.set('limit', '25');
       if (status !== null) params.set('status', status);
+      if (date !== null && date !== undefined && date !== '') params.set('date', date);
+      if (cursor !== null && cursor !== undefined && cursor !== '') params.set('cursor', cursor);
       const res = await apiClient.get<unknown[]>(`/counselling/appointments?${params.toString()}`);
-      return z.array(appointmentSchema).parse(res.data);
+      return {
+        data: z.array(appointmentSchema).parse(res.data),
+        next: getNextCursor(res),
+      };
     },
   });
 }

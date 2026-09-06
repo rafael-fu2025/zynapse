@@ -40,7 +40,7 @@ final class GuidanceSessionWorkflowContractTest extends TestCase
     public function testReferralCreateSerializesAndRejectsActiveDuplicates(): void
     {
         $service = $this->read('app/Modules/Referrals/Services/ReferralService.php');
-        $this->assertStringContainsString('SELECT `id` FROM `users` WHERE `id` = ? FOR UPDATE', $service);
+        $this->assertStringContainsString('SELECT `id` FROM `users` WHERE `tenant_id` = ? AND `id` = ? FOR UPDATE', $service);
         $this->assertStringContainsString("->where('status !=', REFERRAL_STATUS_CLOSED)", $service);
         $this->assertStringContainsString('referral.active_duplicate', $service);
         $this->assertStringContainsString("'details' => ['referral' => \$referral]", $service);

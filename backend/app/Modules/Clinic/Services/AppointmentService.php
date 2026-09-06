@@ -6,6 +6,7 @@ namespace Modules\Clinic\Services;
 
 use App\Exceptions\ApiException;
 use App\Modules\Shared\BaseService;
+use App\Modules\Shared\ManilaDay;
 use App\Modules\Shared\StateMachineException;
 use App\Pagination\KeysetPaginator;
 use App\Services\Audit\AuditOutboxService;
@@ -304,9 +305,32 @@ final class AppointmentService extends BaseService
         return $this->txn(function () use ($patientSchoolId, $providerUserId, $scheduledAtUtc, $reason, $userId): AppointmentDto {
             $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
 
+            // The provider must be a real, active user of THIS tenant —
+            // the notification outbox fans out to this id, so an
+            // arbitrary number must not be accepted (2026-09 audit).
+            $provider = $this->db->table('users')
+                ->where('users.tenant_id', CurrentTenant::id())
+                ->where('id', $providerUserId)
+                ->where('archived_at', null)
+                ->get()->getRowArray();
+            if ($provider === null || (string) $provider['status'] !== 'active') {
+                throw ApiException::validationFailure([
+                    ['code' => 'validation.field', 'message' => 'provider_user_id must be an active staff member.', 'field' => 'provider_user_id'],
+                ]);
+            }
+
             // Resolve the patient to a user id (identity-consolidated).
             [, $patient] = (new PatientLookupService())->findByIdentifier($patientSchoolId);
             $patientUserId = $patient !== null ? (int) $patient['id'] : null;
+
+            // Same double-booking discipline as self-service: neither the
+            // provider nor the patient may hold another scheduled visit
+            // within ±60 minutes of the slot (back-dating for record
+            // correction stays allowed, clashes do not).
+            $this->assertNoClash('provider_user_id', $providerUserId, $scheduledAtUtc, 'The provider already has an appointment within an hour of this slot.');
+            if ($patientUserId !== null) {
+                $this->assertNoClash('patient_user_id', $patientUserId, $scheduledAtUtc, 'The patient already has an appointment within an hour of this slot.');
+            }
 
             // QR proof-of-booking: mint a high-entropy token, store only its
             // HMAC hash; the plaintext is returned for QR rendering.
@@ -578,6 +602,9 @@ final class AppointmentService extends BaseService
             ->select('u.id, u.first_name, u.last_name, u.username')
             ->join('auth_groups g', 'g.id = gu.group_id')
             ->join('users u', 'u.id = gu.user_id')
+            // Tenant-scope the staff roster: without this, a student's
+            // booking picker listed providers of every tenant (2026-09 audit).
+            ->where('u.tenant_id', CurrentTenant::id())
             ->where('g.name', 'clinic_staff')
             ->where('u.archived_at', null)
             ->orderBy('u.last_name', 'ASC')
@@ -599,15 +626,18 @@ final class AppointmentService extends BaseService
      * Reject when a scheduled/confirmed clinic appointment already
      * overlaps the target instant within ±60 minutes.
      */
-    private function assertNoClash(string $column, int $userId, string $scheduledAtUtc, string $message): void
+    private function assertNoClash(string $column, int $userId, string $scheduledAtUtc, string $message, ?int $excludeId = null): void
     {
-        $clash = $this->db->table('clinic_appointments')
+        $builder = $this->db->table('clinic_appointments')
             ->where('clinic_appointments.tenant_id', CurrentTenant::id())
             ->where($column, $userId)
             ->whereIn('status', ['scheduled', 'confirmed'])
             ->where('ABS(TIMESTAMPDIFF(SECOND, scheduled_at, ' . $this->db->escape($scheduledAtUtc) . ')) <', 3600)
-            ->where('archived_at', null)
-            ->countAllResults();
+            ->where('archived_at', null);
+        if ($excludeId !== null) {
+            $builder->where('clinic_appointments.id !=', $excludeId);
+        }
+        $clash = $builder->countAllResults();
         if ($clash > 0) {
             throw new ApiException('validation.clash', 409, [
                 ['code' => 'validation.clash', 'message' => $message, 'field' => 'scheduled_at'],
@@ -717,11 +747,14 @@ final class AppointmentService extends BaseService
 
         // Row-locked MAX(position) — same discipline as QueueService /
         // CheckinService so kiosk and desk check-ins never collide.
-        $queueDate = (new DateTimeImmutable((string) $appt['scheduled_at'], new DateTimeZone('UTC')))
-            ->setTimezone(new DateTimeZone('Asia/Manila'))->format('Y-m-d');
+        // The patient is standing at the desk NOW, so the queue row
+        // must land on today's Manila queue — not the appointment's
+        // original day (2026-09 audit: checking in a stale appointment
+        // filed the row under a past queue_date, invisible to staff).
+        $queueDate = ManilaDay::today();
         $last = $this->db->query(
-            'SELECT `position` FROM `clinic_queue_entries` WHERE `queue_date` = ? ORDER BY `position` DESC LIMIT 1 FOR UPDATE',
-            [$queueDate],
+            'SELECT `position` FROM `clinic_queue_entries` WHERE `tenant_id` = ? AND `queue_date` = ? ORDER BY `position` DESC LIMIT 1 FOR UPDATE',
+            [CurrentTenant::id(), $queueDate],
         )->getRowArray();
         $position = ($last !== null ? (int) $last['position'] : 0) + 1;
         $this->db->table('clinic_queue_entries')->insert([
@@ -826,6 +859,20 @@ final class AppointmentService extends BaseService
             if ($update === []) {
                 // Nothing to do — caller asked for an idempotent edit.
                 return AppointmentDto::fromRow($this->decorate([$row])[0]);
+            }
+
+            // Re-check the ±60-minute clash discipline when the slot,
+            // provider or patient changed — excluding this row itself.
+            if (in_array('scheduled_at', $changed, true) || in_array('provider_user_id', $changed, true) || in_array('patient_user_id', $update, true)) {
+                $slot    = (string) ($update['scheduled_at'] ?? $row['scheduled_at']);
+                $provId  = (int) ($update['provider_user_id'] ?? $row['provider_user_id']);
+                $patId   = array_key_exists('patient_user_id', $update)
+                    ? ($update['patient_user_id'] !== null ? (int) $update['patient_user_id'] : null)
+                    : ($row['patient_user_id'] !== null ? (int) $row['patient_user_id'] : null);
+                $this->assertNoClash('provider_user_id', $provId, $slot, 'The provider already has an appointment within an hour of this slot.', $appointmentId);
+                if ($patId !== null) {
+                    $this->assertNoClash('patient_user_id', $patId, $slot, 'The patient already has an appointment within an hour of this slot.', $appointmentId);
+                }
             }
 
             $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
@@ -960,5 +1007,87 @@ final class AppointmentService extends BaseService
             }
         }
         return $advanced;
+    }
+
+    /**
+     * No-show aging sweep (2026-09 audit): every `scheduled`
+     * appointment whose slot lies BEFORE today's Manila business day
+     * can never be honoured — transition it to `no_show` so the staff
+     * list stops accumulating ghost "Scheduled" rows and the Counselling
+     * three-strike counter analogue has an input signal. Idempotent and
+     * race-safe: each row is re-locked and status-re-checked inside its
+     * transaction. Run from `synapse:appointments-enqueue-due`.
+     */
+    public function agePastDueNoShows(): int
+    {
+        $now = $this->utcNow();
+        $localStartUtc = ManilaDay::startOfDayUtcSql();
+
+        $ids = $this->db->table('clinic_appointments')
+            ->where('clinic_appointments.tenant_id', CurrentTenant::id())
+            ->select('id')
+            ->where('status', 'scheduled')
+            ->where('archived_at', null)
+            ->where('scheduled_at <', $localStartUtc)
+            ->orderBy('id', 'ASC')
+            ->get()
+            ->getResultArray();
+
+        $aged = 0;
+        foreach ($ids as $r) {
+            $id = (int) $r['id'];
+            try {
+                $aged += $this->txn(function () use ($id, $now): int {
+                    $row = $this->selectForUpdate('clinic_appointments', [
+                        'tenant_id'   => CurrentTenant::id(),
+                        'id'          => $id,
+                        'archived_at' => null,
+                    ]);
+                    if ($row === null || (string) $row['status'] !== 'scheduled') {
+                        return 0; // lost the race
+                    }
+
+                    $this->db->table('clinic_appointments')
+                        ->where('clinic_appointments.tenant_id', CurrentTenant::id())
+                        ->where('id', $id)
+                        ->update(['status' => 'no_show', 'updated_at' => $now]);
+
+                    // No queue-entry cascade is needed here: queue rows
+                    // hang off `encounter_id`, and an appointment that
+                    // aged out never opened an encounter.
+
+                    $providerId = (int) ($row['provider_user_id'] ?? 0);
+                    $this->audit->enqueue(
+                        'clinic.appointment_no_show',
+                        'clinic_appointments',
+                        $id,
+                        $providerId,
+                        [
+                            'previous_status' => 'scheduled',
+                            'next_status'     => 'no_show',
+                            'source'          => 'aging_sweep',
+                        ],
+                    );
+                    $this->notify->enqueue(
+                        $providerId,
+                        'appointment.no_show',
+                        ['resource_code' => 'appointment#' . $id, 'appointment_status' => 'no_show', 'destination' => 'clinic'],
+                    );
+                    $patientId = (int) ($row['patient_user_id'] ?? 0);
+                    if ($patientId > 0) {
+                        $this->notify->enqueue($patientId, 'appointment.no_show', ['resource_code' => 'appointment#' . $id, 'appointment_status' => 'no_show', 'destination' => 'clinic']);
+                    }
+
+                    return 1;
+                });
+            } catch (Throwable $t) {
+                log_message('warning', sprintf(
+                    'AppointmentService::agePastDueNoShows: id=%d skipped (%s)',
+                    $id,
+                    $t->getMessage(),
+                ));
+            }
+        }
+        return $aged;
     }
 }

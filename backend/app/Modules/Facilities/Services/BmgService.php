@@ -849,7 +849,11 @@ final class BmgService extends BaseService
                 ]);
             }
 
-            if (in_array($batch['status'], [BMG_STATE_IDLE, BMG_STATE_CANCELLED], true)) {
+            // `released` is terminal — the batch has left the system and
+            // its unit is idle again; re-cancelling would corrupt the
+            // state machine (2026-09 audit: only idle/cancelled were
+            // blocked, so the API could flip a released batch).
+            if (in_array($batch['status'], [BMG_STATE_IDLE, BMG_STATE_RELEASED, BMG_STATE_CANCELLED], true)) {
                 throw StateMachineException::invalidTransition($batch['status'], BMG_STATE_CANCELLED, 'bmg');
             }
 

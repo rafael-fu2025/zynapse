@@ -43,6 +43,7 @@ import {
 import { useKeysetPagination } from '@/hooks/useKeysetPagination';
 import { useUrlFilter } from '@/hooks/useUrlFilter';
 import { useTableRowKeyboardNav } from '@/hooks/useTableRowKeyboardNav';
+import { useCan } from '@/hooks/useCan';
 import {
   useArchiveMedicine,
   useMedicines,
@@ -77,6 +78,9 @@ export function MedicinesTab() {
   const list = useMedicines(cursor, 25, q === '' ? null : q, showArchived);
   const archive = useArchiveMedicine();
   const unarchive = useUnarchiveMedicine();
+  // Archive/delete is admin-only (`clinic.inventory.delete`) — the
+  // primary clinic_staff role would always 403 (2026-09 audit).
+  const canDelete = useCan('clinic.inventory.delete');
 
   const rows = list.data?.data ?? [];
 
@@ -158,12 +162,14 @@ export function MedicinesTab() {
             <DropdownMenuItem onSelect={() => setEditFor(m)}>
               <Pencil /> Edit
             </DropdownMenuItem>
-            <DropdownMenuItem
-              className="text-muted-foreground"
-              onSelect={() => setArchiveFor(m)}
-            >
-              <Archive /> Archive
-            </DropdownMenuItem>
+            {canDelete && (
+              <DropdownMenuItem
+                className="text-muted-foreground"
+                onSelect={() => setArchiveFor(m)}
+              >
+                <Archive /> Archive
+              </DropdownMenuItem>
+            )}
           </>
         )}
       </DropdownMenuContent>

@@ -31,10 +31,8 @@ export function getNextCursor(response: AxiosResponse): string | null {
 
 let inflightRefresh: Promise<string | null> | null = null;
 
-async function refreshAccessToken(): Promise<string | null> {
-  if (inflightRefresh !== null) return inflightRefresh;
-
-  inflightRefresh = axios
+async function postRefresh(): Promise<string | null> {
+  return axios
     .post<ApiEnvelope<{ access_token: string; expires_in: number }>>(
       `${API_BASE_URL}/auth/refresh`,
       {},
@@ -48,10 +46,28 @@ async function refreshAccessToken(): Promise<string | null> {
     .catch(() => {
       useAuthStore.getState().clear();
       return null;
-    })
-    .finally(() => {
-      inflightRefresh = null;
     });
+}
+
+async function refreshAccessToken(): Promise<string | null> {
+  if (inflightRefresh !== null) return inflightRefresh;
+
+  // Cross-tab serialization (2026-09 audit): the refresh cookie is a
+  // single-use rotation chain shared by every open tab. Two tabs hitting
+  // 401 near expiry each POST /auth/refresh with the SAME cookie; the
+  // second is classified REPLAY and revokes the entire family — logging
+  // out every open tab. Web Locks serializes rotations across tabs (each
+  // waiter then rotates legitimately with the fresh cookie); browsers
+  // without the API keep the previous per-tab single-flight behavior.
+  const locks = (navigator as Navigator & {
+    locks?: { request<R>(name: string, callback: () => Promise<R>): Promise<R> };
+  }).locks;
+
+  inflightRefresh = (locks !== undefined
+    ? locks.request<string | null>('synapse:refresh-token', postRefresh)
+    : postRefresh()).finally(() => {
+    inflightRefresh = null;
+  });
 
   return inflightRefresh;
 }

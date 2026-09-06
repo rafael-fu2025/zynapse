@@ -33,7 +33,6 @@ import {
   Stethoscope,
   Trash2,
   UserX,
-  X,
 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
@@ -321,7 +320,7 @@ function CareDialog({ encounter, onClose }: { encounter: Encounter; onClose: () 
   }
 
   return (
-    <DialogContent className="max-w-2xl">
+    <DialogContent size="2xl">
       <DialogHeader>
         <DialogTitle>Care — encounter #{encounter.id}</DialogTitle>
       </DialogHeader>
@@ -644,19 +643,37 @@ function ClinicEncounterWorkspace({
     { id: 'complete', label: 'Complete', state: encounter.status === 'closed' ? 'complete' : 'available', summary: encounter.closed_at !== null ? fmtUtcToApp(encounter.closed_at) : 'Finish encounter' },
   ];
 
-  return <section className="scroll-mt-6 space-y-3 rounded-xl border bg-card p-4" aria-label={`Encounter #${encounter.id} workspace`}>
-    <header className="flex flex-wrap items-start justify-between gap-2"><div><p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Active Clinic encounter</p><h2 className="text-lg font-semibold">{encounter.patient_name ?? encounter.patient_school_id}</h2><p className="font-mono text-xs text-muted-foreground">{encounter.patient_school_id} · Encounter #{encounter.id}</p></div><div className="flex items-center gap-2"><Badge variant={encounter.status === 'open' ? 'success' : 'secondary'}>{statusLabel(encounter.status)}</Badge><Button size="sm" variant="ghost" onClick={onClose}><X /> Close workspace</Button></div></header>
-    <SessionProgressTracker steps={steps} selected={step} onSelect={setStep} />
-    <div className="rounded-lg border bg-muted/15 p-4">
-      {step === 'started' && <dl className="grid gap-3 text-sm sm:grid-cols-3"><div><dt className="text-xs text-muted-foreground">Queue</dt><dd>{encounter.queue_number ?? 'Manual encounter'}</dd></div><div><dt className="text-xs text-muted-foreground">Complaint</dt><dd>{encounter.chief_complaint}</dd></div><div><dt className="text-xs text-muted-foreground">Started</dt><dd>{fmtUtcToApp(encounter.started_at)}</dd></div><div><dt className="text-xs text-muted-foreground">Appointment</dt><dd>{encounter.appointment_id !== null ? `#${encounter.appointment_id}` : '—'}</dd></div><div><dt className="text-xs text-muted-foreground">Incoming referral</dt><dd>{encounter.incoming_referral_id !== null ? `#${encounter.incoming_referral_id}` : '—'}</dd></div></dl>}
-      {step === 'vitals' && <div><h3 className="font-medium">Vitals</h3><p className="mt-1 text-sm text-muted-foreground">{encounter.vitals_count > 0 ? `${encounter.vitals_count} set of vitals recorded. Height and weight can reuse the previous visit.` : 'Record visit-specific vitals before assessment when possible.'}</p>{encounter.status === 'open' && canWrite && <Button className="mt-3" size="sm" onClick={() => onOpenVitals(encounter)}><Stethoscope />{encounter.vitals_count > 0 ? 'Update vitals' : 'Record vitals'}</Button>}</div>}
-      {step === 'assessment' && <div><h3 className="font-medium">Assessment</h3><p className="mt-1 text-sm text-muted-foreground">{encounter.assessment_recorded ? `Priority: ${titleCase(encounter.triage_priority ?? 'recorded')}. ${encounter.diagnosis ?? ''}` : 'Record triage priority, diagnosis, and progress notes.'}</p>{encounter.status === 'open' && canWrite && <Button className="mt-3" size="sm" onClick={() => onOpenCare(encounter)}><ClipboardPlus />Open assessment</Button>}</div>}
-      {step === 'care' && <div><h3 className="font-medium">Care and treatment</h3><p className="mt-1 text-sm text-muted-foreground">{encounter.treatment_count > 0 ? `${encounter.treatment_count} treatment record${encounter.treatment_count === 1 ? '' : 's'} added.` : 'Optional when no treatment is required. Medication dispensing remains anchored to this encounter.'}</p>{encounter.status === 'open' && canWrite && <Button className="mt-3" size="sm" onClick={() => onOpenCare(encounter)}><ClipboardPlus />Open care record</Button>}</div>}
-      {step === 'referral' && <div><h3 className="font-medium">Guidance referral</h3>{encounter.outgoing_referral !== null ? <p className="mt-1 text-sm text-muted-foreground">Referral #{encounter.outgoing_referral.id} is {encounter.outgoing_referral.status.replace('_', ' ')}. It does not automatically close this encounter.</p> : <p className="mt-1 text-sm text-muted-foreground">Optional. The patient and direction are locked to this encounter.</p>}{encounter.status === 'open' && canRefer && encounter.outgoing_referral === null && <Dialog open={referOpen} onOpenChange={setReferOpen}><Button className="mt-3" size="sm" onClick={() => setReferOpen(true)}>Refer to Guidance</Button>{referOpen && <ClinicGuidanceReferralDialog encounter={encounter} onClose={() => setReferOpen(false)} />}</Dialog>}</div>}
-      {step === 'complete' && <div><h3 className="font-medium">Complete encounter</h3><p className="mt-1 text-sm text-muted-foreground">Completion closes the encounter and synchronizes its queue entry and checked-in appointment. Missing vitals or assessment are shown as warnings, not hard blockers.</p>{encounter.status === 'open' && (encounter.vitals_count === 0 || !encounter.assessment_recorded) && <p className="mt-2 text-sm text-amber-700 dark:text-amber-300">Review recommended steps: {encounter.vitals_count === 0 ? 'vitals' : ''}{encounter.vitals_count === 0 && !encounter.assessment_recorded ? ' and ' : ''}{!encounter.assessment_recorded ? 'assessment' : ''} are not recorded.</p>}{encounter.status === 'open' && canWrite && <Button className="mt-3" size="sm" variant="destructive" onClick={() => setConfirmOpen(true)}>Complete encounter</Button>}</div>}
-    </div>
-    <ConfirmDialog open={confirmOpen} title={`Complete encounter #${encounter.id}?`} description="This closes the encounter, completes its active queue entry, and completes its linked checked-in appointment." confirmLabel="Complete encounter" pending={close.isPending} onConfirm={() => close.mutate(encounter.id, { onSuccess: () => { setConfirmOpen(false); onClose(); } })} onCancel={() => setConfirmOpen(false)} />
-  </section>;
+  return (
+    <DialogContent size="2xl" className="max-h-[85vh] overflow-y-auto">
+      <DialogHeader className="flex flex-row items-start justify-between gap-2 text-left">
+        <div>
+          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Active Clinic encounter</p>
+          <DialogTitle className="text-lg font-semibold">{encounter.patient_name ?? encounter.patient_school_id}</DialogTitle>
+          <p className="font-mono text-xs text-muted-foreground">{encounter.patient_school_id} · Encounter #{encounter.id}</p>
+        </div>
+        <Badge variant={encounter.status === 'open' ? 'success' : 'secondary'} className="mr-6">
+          {statusLabel(encounter.status)}
+        </Badge>
+      </DialogHeader>
+      <div className="space-y-4 py-2">
+        <SessionProgressTracker steps={steps} selected={step} onSelect={setStep} />
+        <div className="rounded-lg border bg-muted/15 p-4">
+          {step === 'started' && <dl className="grid gap-3 text-sm sm:grid-cols-3"><div><dt className="text-xs text-muted-foreground">Queue</dt><dd>{encounter.queue_number ?? 'Manual encounter'}</dd></div><div><dt className="text-xs text-muted-foreground">Complaint</dt><dd>{encounter.chief_complaint}</dd></div><div><dt className="text-xs text-muted-foreground">Started</dt><dd>{fmtUtcToApp(encounter.started_at)}</dd></div><div><dt className="text-xs text-muted-foreground">Appointment</dt><dd>{encounter.appointment_id !== null ? `#${encounter.appointment_id}` : '—'}</dd></div><div><dt className="text-xs text-muted-foreground">Incoming referral</dt><dd>{encounter.incoming_referral_id !== null ? `#${encounter.incoming_referral_id}` : '—'}</dd></div></dl>}
+          {step === 'vitals' && <div><h3 className="font-medium">Vitals</h3><p className="mt-1 text-sm text-muted-foreground">{encounter.vitals_count > 0 ? `${encounter.vitals_count} set of vitals recorded. Height and weight can reuse the previous visit.` : 'Record visit-specific vitals before assessment when possible.'}</p>{encounter.status === 'open' && canWrite && <Button className="mt-3" size="sm" onClick={() => onOpenVitals(encounter)}><Stethoscope />{encounter.vitals_count > 0 ? 'Update vitals' : 'Record vitals'}</Button>}</div>}
+          {step === 'assessment' && <div><h3 className="font-medium">Assessment</h3><p className="mt-1 text-sm text-muted-foreground">{encounter.assessment_recorded ? `Priority: ${titleCase(encounter.triage_priority ?? 'recorded')}. ${encounter.diagnosis ?? ''}` : 'Record triage priority, diagnosis, and progress notes.'}</p>{encounter.status === 'open' && canWrite && <Button className="mt-3" size="sm" onClick={() => onOpenCare(encounter)}><ClipboardPlus />Open assessment</Button>}</div>}
+          {step === 'care' && <div><h3 className="font-medium">Care and treatment</h3><p className="mt-1 text-sm text-muted-foreground">{encounter.treatment_count > 0 ? `${encounter.treatment_count} treatment record${encounter.treatment_count === 1 ? '' : 's'} added.` : 'Optional when no treatment is required. Medication dispensing remains anchored to this encounter.'}</p>{encounter.status === 'open' && canWrite && <Button className="mt-3" size="sm" onClick={() => onOpenCare(encounter)}><ClipboardPlus />Open care record</Button>}</div>}
+          {step === 'referral' && <div><h3 className="font-medium">Guidance referral</h3>{encounter.outgoing_referral !== null ? <p className="mt-1 text-sm text-muted-foreground">Referral #{encounter.outgoing_referral.id} is {encounter.outgoing_referral.status.replace('_', ' ')}. It does not automatically close this encounter.</p> : <p className="mt-1 text-sm text-muted-foreground">Optional. The patient and direction are locked to this encounter.</p>}{encounter.status === 'open' && canRefer && encounter.outgoing_referral === null && <Dialog open={referOpen} onOpenChange={setReferOpen}><Button className="mt-3" size="sm" onClick={() => setReferOpen(true)}>Refer to Guidance</Button>{referOpen && <ClinicGuidanceReferralDialog encounter={encounter} onClose={() => setReferOpen(false)} />}</Dialog>}</div>}
+          {step === 'complete' && <div><h3 className="font-medium">Complete encounter</h3><p className="mt-1 text-sm text-muted-foreground">Completion closes the encounter and synchronizes its queue entry and checked-in appointment. Missing vitals or assessment are shown as warnings, not hard blockers.</p>{encounter.status === 'open' && (encounter.vitals_count === 0 || !encounter.assessment_recorded) && <p className="mt-2 text-sm text-amber-700 dark:text-amber-300">Review recommended steps: {encounter.vitals_count === 0 ? 'vitals' : ''}{encounter.vitals_count === 0 && !encounter.assessment_recorded ? ' and ' : ''}{!encounter.assessment_recorded ? 'assessment' : ''} are not recorded.</p>}{encounter.status === 'open' && canWrite && <Button className="mt-3" size="sm" variant="destructive" onClick={() => setConfirmOpen(true)}>Complete encounter</Button>}</div>}
+        </div>
+      </div>
+      <DialogFooter>
+        <Button variant="outline" size="sm" onClick={onClose}>
+          Close workspace
+        </Button>
+      </DialogFooter>
+      <ConfirmDialog open={confirmOpen} title={`Complete encounter #${encounter.id}?`} description="This closes the encounter, completes its active queue entry, and completes its linked checked-in appointment." confirmLabel="Complete encounter" pending={close.isPending} onConfirm={() => close.mutate(encounter.id, { onSuccess: () => { setConfirmOpen(false); onClose(); } })} onCancel={() => setConfirmOpen(false)} />
+    </DialogContent>
+  );
 }
 
 const QUEUE_STATUS_VARIANT = {
@@ -1432,14 +1449,16 @@ export default function ClinicPage() {
 
         <TabsContent value="queue">
           <div className="space-y-4">
-            {focusId !== null && (
-              <ClinicEncounterWorkspace
-                encounterId={focusId}
-                onClose={() => selectEncounter(null)}
-                onOpenCare={setOpenCare}
-                onOpenVitals={setOpenVitals}
-              />
-            )}
+            <Dialog open={focusId !== null} onOpenChange={(o) => !o && selectEncounter(null)}>
+              {focusId !== null && (
+                <ClinicEncounterWorkspace
+                  encounterId={focusId}
+                  onClose={() => selectEncounter(null)}
+                  onOpenCare={setOpenCare}
+                  onOpenVitals={setOpenVitals}
+                />
+              )}
+            </Dialog>
             <QueueTab onOpenEncounter={(encounterId) => selectEncounter(encounterId)} />
           </div>
         </TabsContent>
@@ -1544,31 +1563,45 @@ function EncounterTable(props: EncounterTableProps) {
                 </TableCell>
               </TableRow>
             )}
-            {props.rows.map((e) => (
-              <TableRow key={e.id} className={props.focusId === e.id ? 'bg-primary/5 outline outline-1 outline-primary/40' : undefined}>
-                <TableCell className="px-3 font-mono text-xs">{e.id}</TableCell>
-                <TableCell className="px-3"><PatientIdCell id={e.patient_school_id} name={e.patient_name} /></TableCell>
-                <TableCell className="px-3">
-                  {e.chief_complaint}
-                  {(e.triage_priority ?? null) !== null && (
-                    <Badge variant={TRIAGE_VARIANT[e.triage_priority as TriagePriority]} className="ml-2">
-                      {titleCase(e.triage_priority ?? '')}
-                    </Badge>
-                  )}
-                  {(e.appointment_id ?? null) !== null && (
-                    <Badge variant="secondary" className="ml-2 gap-1">
-                      <CalendarClock className="size-3" /> From appointment #{e.appointment_id}
-                    </Badge>
-                  )}
-                  <StationBadge station={e.station_id} className="ml-2" />
-                </TableCell>
-                <TableCell className="px-3 text-xs text-muted-foreground">{fmtUtcToApp(e.started_at)}</TableCell>
-                <TableCell className="px-3 text-xs text-muted-foreground">
-                  {e.closed_at === null ? <Badge variant="info">{statusLabel(e.status)}</Badge> : fmtUtcToApp(e.closed_at)}
-                </TableCell>
-                <TableCell className="px-3 text-right">{props.actions(e)}</TableCell>
-              </TableRow>
-            ))}
+            {props.rows.map((e) => {
+              const prio = e.triage_priority as TriagePriority | undefined;
+              return (
+                <TableRow
+                  key={e.id}
+                  className={
+                    props.focusId === e.id
+                      ? 'bg-primary/5 outline outline-1 outline-primary/40'
+                      : prio === 'urgent'
+                        ? 'border-l-4 border-l-destructive bg-destructive/5'
+                        : prio === 'high'
+                          ? 'border-l-4 border-l-amber-500 bg-amber-500/5'
+                          : undefined
+                  }
+                >
+                  <TableCell className="px-3 font-mono text-xs">{e.id}</TableCell>
+                  <TableCell className="px-3"><PatientIdCell id={e.patient_school_id} name={e.patient_name} /></TableCell>
+                  <TableCell className="px-3">
+                    {e.chief_complaint}
+                    {(e.triage_priority ?? null) !== null && (
+                      <Badge variant={TRIAGE_VARIANT[e.triage_priority as TriagePriority]} className="ml-2">
+                        {titleCase(e.triage_priority ?? '')}
+                      </Badge>
+                    )}
+                    {(e.appointment_id ?? null) !== null && (
+                      <Badge variant="secondary" className="ml-2 gap-1">
+                        <CalendarClock className="size-3" /> From appointment #{e.appointment_id}
+                      </Badge>
+                    )}
+                    <StationBadge station={e.station_id} className="ml-2" />
+                  </TableCell>
+                  <TableCell className="px-3 text-xs text-muted-foreground">{fmtUtcToApp(e.started_at)}</TableCell>
+                  <TableCell className="px-3 text-xs text-muted-foreground">
+                    {e.closed_at === null ? <Badge variant="info">{statusLabel(e.status)}</Badge> : fmtUtcToApp(e.closed_at)}
+                  </TableCell>
+                  <TableCell className="px-3 text-right">{props.actions(e)}</TableCell>
+                </TableRow>
+              );
+            })}
           </TableBody>
         </Table>
       </section>
@@ -1589,33 +1622,44 @@ function EncounterTable(props: EncounterTableProps) {
         <p className="rounded-xl border border-dashed p-6 text-center text-sm text-muted-foreground md:hidden">No encounters.</p>
       )}
       <MobileCardList>
-        {props.rows.map((e) => (
-          <MobileCard
-            key={e.id}
-            aria-label={`Encounter ${e.id}`}
-            className={props.focusId === e.id ? 'outline outline-1 outline-primary/40' : undefined}
-          >
-            <div className="mb-1 flex items-center justify-between gap-2">
-              <span className="font-mono text-xs text-muted-foreground">#{e.id}</span>
-              {e.closed_at === null
-                ? <Badge variant="info">{statusLabel(e.status)}</Badge>
-                : <span className="text-xs text-muted-foreground">Closed {fmtUtcToApp(e.closed_at)}</span>}
-            </div>
-            <p className="text-sm font-medium text-foreground">{e.chief_complaint}</p>
-            <div className="mt-1 flex flex-wrap gap-1.5">
-              {(e.triage_priority ?? null) !== null && (
-                <Badge variant={TRIAGE_VARIANT[e.triage_priority as TriagePriority]}>{titleCase(e.triage_priority ?? '')}</Badge>
-              )}
-              {(e.appointment_id ?? null) !== null && (
-                <Badge variant="secondary" className="gap-1"><CalendarClock className="size-3" /> Appt #{e.appointment_id}</Badge>
-              )}
-              <StationBadge station={e.station_id} />
-            </div>
-            <MobileCardField label="Patient"><PatientIdCell id={e.patient_school_id} name={e.patient_name} /></MobileCardField>
-            <MobileCardField label="Started"><span className="text-xs text-muted-foreground">{fmtUtcToApp(e.started_at)}</span></MobileCardField>
-            <MobileCardActions>{props.actions(e)}</MobileCardActions>
-          </MobileCard>
-        ))}
+        {props.rows.map((e) => {
+          const prio = e.triage_priority as TriagePriority | undefined;
+          return (
+            <MobileCard
+              key={e.id}
+              aria-label={`Encounter ${e.id}`}
+              className={
+                props.focusId === e.id
+                  ? 'outline outline-1 outline-primary/40'
+                  : prio === 'urgent'
+                    ? 'border-l-4 border-l-destructive bg-destructive/5'
+                    : prio === 'high'
+                      ? 'border-l-4 border-l-amber-500 bg-amber-500/5'
+                      : undefined
+              }
+            >
+              <div className="mb-1 flex items-center justify-between gap-2">
+                <span className="font-mono text-xs text-muted-foreground">#{e.id}</span>
+                {e.closed_at === null
+                  ? <Badge variant="info">{statusLabel(e.status)}</Badge>
+                  : <span className="text-xs text-muted-foreground">Closed {fmtUtcToApp(e.closed_at)}</span>}
+              </div>
+              <p className="text-sm font-medium text-foreground">{e.chief_complaint}</p>
+              <div className="mt-1 flex flex-wrap gap-1.5">
+                {(e.triage_priority ?? null) !== null && (
+                  <Badge variant={TRIAGE_VARIANT[e.triage_priority as TriagePriority]}>{titleCase(e.triage_priority ?? '')}</Badge>
+                )}
+                {(e.appointment_id ?? null) !== null && (
+                  <Badge variant="secondary" className="gap-1"><CalendarClock className="size-3" /> Appt #{e.appointment_id}</Badge>
+                )}
+                <StationBadge station={e.station_id} />
+              </div>
+              <MobileCardField label="Patient"><PatientIdCell id={e.patient_school_id} name={e.patient_name} /></MobileCardField>
+              <MobileCardField label="Started"><span className="text-xs text-muted-foreground">{fmtUtcToApp(e.started_at)}</span></MobileCardField>
+              <MobileCardActions>{props.actions(e)}</MobileCardActions>
+            </MobileCard>
+          );
+        })}
       </MobileCardList>
 
       <nav className="mt-4 flex items-center justify-between" aria-label="pagination">

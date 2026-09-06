@@ -29,7 +29,7 @@ test('Start Session uses the returned id and opens the exact active workspace', 
   await page.goto('/counselling?tab=queue');
   await page.getByRole('button', { name: 'Start Session' }).click();
   await expect(page).toHaveURL(/\/counselling\?session=127/);
-  await expect(page.getByText('Active Session — #127')).toBeVisible();
+  await expect(page.getByText('Session #127')).toBeVisible();
   await expect(page.getByText('Reyes, Maria')).toBeVisible();
   await expect(page.getByText(/G-004 started — Session #127 is now active/)).toBeVisible();
 });
@@ -39,11 +39,11 @@ test('deep link survives refresh, completion clears selection, and referral fiel
   await mockSessionApis(page);
   await page.route('**/api/v1/counselling/queue', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ success: true, data: [], errors: [], meta: null }) }));
   await page.goto('/counselling?session=127');
-  await expect(page.getByText('Active Session — #127')).toBeVisible();
+  await expect(page.getByText('Session #127')).toBeVisible();
   await page.reload();
-  await expect(page.getByText('Active Session — #127')).toBeVisible();
+  await expect(page.getByText('Session #127')).toBeVisible();
   await page.getByRole('button', { name: /^Referral/ }).click();
-  await page.getByRole('button', { name: 'Refer Clinic' }).click();
+  await page.getByRole('button', { name: 'Refer to Clinic' }).click();
   const dialog = page.getByRole('dialog', { name: 'Refer patient to Clinic' });
   await expect(dialog.getByLabel('From')).toHaveValue('Guidance');
   await expect(dialog.getByLabel('To', { exact: true })).toHaveValue('Clinic');
@@ -62,7 +62,7 @@ test('active duplicate referral displays the existing referral and keeps the ses
   await page.route('**/api/v1/counselling/sessions/127/referrals', (route) => route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ success: false, data: null, errors: [{ code: 'referral.active_duplicate', message: 'Referral #55 is already submitted for this patient.', details: { referral: { id: 55, patient_school_id: '2026-0042', source_encounter_id: null, source_session_id: 127, source_module: 'counselling', target_module: 'clinic', artifact_type: 'referral_letter', status: 'submitted', reason_code: null, provider_user_id: null, provider_name: null, queue_handoff_destination: null, queue_handoff_entry_id: null, queue_handoff_at: null, created_at: '2026-08-14 01:10:00', updated_at: '2026-08-14 01:10:00', qr_expires_at: null, qr_revoked_at: null } } }], meta: null }) }));
   await page.goto('/counselling?session=127');
   await page.getByRole('button', { name: /^Referral/ }).click();
-  await page.getByRole('button', { name: 'Refer Clinic' }).click();
+  await page.getByRole('button', { name: 'Refer to Clinic' }).click();
   await page.getByRole('button', { name: 'Submit referral' }).click();
   await expect(page.getByText('Referral #55', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Continue session' }).click();

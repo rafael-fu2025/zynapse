@@ -76,6 +76,11 @@ dev-fast.ps1
 
 zynapsemobile
 workflow
+.mimosa
+
+ANALYSIS.md
+COUNSELLING_AUDIT.md
+SCREEN_AUDIT.md
 # docs/ contains committed runbooks (SETUP.md, CREDENTIALS.md, ...); do not
 # blanket-ignore it. Add specific subfolder ignores below if any draft dirs
 # are added later.

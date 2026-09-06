@@ -84,9 +84,15 @@ final class PortalAppointmentService extends BaseService
             ]]);
         }
         if ($department === 'clinic') {
-            return $this->clinicRow($this->clinicAppointments->bookSelf(
+            $dto = $this->clinicAppointments->bookSelf(
                 $userId, $provider, $startUtc->format('Y-m-d H:i:s'), $input['reason'] ?? null,
-            )->toArray());
+            )->toArray();
+            $row = $this->clinicRow($dto);
+            // Pass the proof-of-booking QR through — bookSelf mints it,
+            // but clinicRow used to drop the field, so students booked
+            // from the portal could never render their QR (2026-09 audit).
+            $row['qr_token'] = $dto['qr_token'] ?? null;
+            return $row;
         }
         return $this->bookGuidance($userId, $provider, $startLocal, (string) ($input['type'] ?? 'initial'), $input['reason'] ?? null);
     }
@@ -188,9 +194,9 @@ final class PortalAppointmentService extends BaseService
             $user=$this->db->table('users')->select('student_number,employee_number')->where('users.tenant_id', CurrentTenant::id())->where('id',$userId)->get()->getRowArray();
             if($user===null)throw new ApiException('resource.not_found',404,[['code'=>'resource.not_found','message'=>'Patient not found.']]);
             $school=(string)($user['student_number']?:$user['employee_number']); $end=$local->modify('+60 minutes'); $now=gmdate('Y-m-d H:i:s');
-            $window=$this->db->query('SELECT `id`,`max_slots` FROM `counselling_availability` WHERE `counsellor_user_id`=? AND `day_of_week`=? AND `is_active`=1 AND `start_time`<=? AND `end_time`>=? LIMIT 1 FOR UPDATE',[$provider,(int)$local->format('w'),$local->format('H:i:s'),$end->format('H:i:s')])->getRowArray();
+            $window=$this->db->query('SELECT `id`,`max_slots` FROM `counselling_availability` WHERE `tenant_id`=? AND `counsellor_user_id`=? AND `day_of_week`=? AND `is_active`=1 AND `start_time`<=? AND `end_time`>=? LIMIT 1 FOR UPDATE',[CurrentTenant::id(),$provider,(int)$local->format('w'),$local->format('H:i:s'),$end->format('H:i:s')])->getRowArray();
             if($window===null)throw new ApiException('statemachine.schedule.outside_availability',409,[['code'=>'statemachine.schedule.outside_availability','message'=>'The provider is no longer available for that slot.']]);
-            $count=$this->db->query('SELECT COUNT(*) AS n FROM `counselling_appointments` WHERE `counsellor_user_id`=? AND `appointment_date`=? AND `status` IN (?,?) AND NOT (?<=`start_time` OR ?>=`end_time`) FOR UPDATE',[$provider,$local->format('Y-m-d'),'scheduled','confirmed',$end->format('H:i:s'),$local->format('H:i:s')])->getRowArray();
+            $count=$this->db->query('SELECT COUNT(*) AS n FROM `counselling_appointments` WHERE `tenant_id`=? AND `counsellor_user_id`=? AND `appointment_date`=? AND `status` IN (?,?) AND NOT (?<=`start_time` OR ?>=`end_time`) FOR UPDATE',[CurrentTenant::id(),$provider,$local->format('Y-m-d'),'scheduled','confirmed',$end->format('H:i:s'),$local->format('H:i:s')])->getRowArray();
             if((int)($count['n']??0)>=(int)$window['max_slots'])throw new ApiException('statemachine.schedule.slot_full',409,[['code'=>'statemachine.schedule.slot_full','message'=>'That slot was just booked. Choose another time.']]);
             $this->db->table('counselling_appointments')->insert(['tenant_id'=>CurrentTenant::id(),'patient_user_id'=>$userId,'patient_school_id'=>$school,'counsellor_user_id'=>$provider,'appointment_date'=>$local->format('Y-m-d'),'start_time'=>$local->format('H:i:s'),'end_time'=>$end->format('H:i:s'),'type'=>$type,'status'=>'scheduled','reason'=>$reason?:null,'created_by_user_id'=>$userId,'created_at'=>$now,'updated_at'=>$now]);
             $id=(int)$this->db->insertID(); $utc=$local->setTimezone(new DateTimeZone('UTC'));

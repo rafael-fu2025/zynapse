@@ -375,6 +375,7 @@ final class PatientService extends BaseService
 
         return $this->txn(function () use ($studentId, $allergyId, $input, $userId): UserDto {
             $row = $this->db->table('patient_allergies')
+                ->where('tenant_id', CurrentTenant::id())
                 ->where('id', $allergyId)
                 ->where('user_id', $studentId)
                 ->get()->getRowArray();
@@ -384,7 +385,7 @@ final class PatientService extends BaseService
                 ]);
             }
 
-            $this->db->table('patient_allergies')->where('id', $allergyId)->update([
+            $this->db->table('patient_allergies')->where('tenant_id', CurrentTenant::id())->where('id', $allergyId)->update([
                 'allergen'         => (string) $input['allergen'],
                 'severity'         => (string) ($input['severity'] ?? 'mild'),
                 'reaction'         => $this->strOrNull($input, 'reaction'),
@@ -407,6 +408,7 @@ final class PatientService extends BaseService
 
         return $this->txn(function () use ($studentId, $allergyId, $userId): UserDto {
             $row = $this->db->table('patient_allergies')
+                ->where('tenant_id', CurrentTenant::id())
                 ->where('id', $allergyId)
                 ->where('user_id', $studentId)
                 ->get()->getRowArray();
@@ -416,7 +418,7 @@ final class PatientService extends BaseService
                 ]);
             }
 
-            $this->db->table('patient_allergies')->where('id', $allergyId)->delete();
+            $this->db->table('patient_allergies')->where('tenant_id', CurrentTenant::id())->where('id', $allergyId)->delete();
 
             $this->audit->enqueue('clinic.patient_allergy_removed', 'patient_allergies', $allergyId, $userId, [
                 'resource_code' => (string) $row['allergen'],
@@ -439,6 +441,7 @@ final class PatientService extends BaseService
 
         return $this->txn(function () use ($studentId, $contactId, $input, $userId): UserDto {
             $row = $this->db->table('patient_contacts')
+                ->where('tenant_id', CurrentTenant::id())
                 ->where('id', $contactId)
                 ->where('user_id', $studentId)
                 ->get()->getRowArray();
@@ -456,7 +459,7 @@ final class PatientService extends BaseService
                     ->update(['is_primary' => 0]);
             }
 
-            $this->db->table('patient_contacts')->where('id', $contactId)->update([
+            $this->db->table('patient_contacts')->where('tenant_id', CurrentTenant::id())->where('id', $contactId)->update([
                 'contact_name' => (string) $input['contact_name'],
                 'relationship' => (string) $input['relationship'],
                 'phone'        => (string) $input['phone'],
@@ -480,6 +483,7 @@ final class PatientService extends BaseService
 
         return $this->txn(function () use ($studentId, $contactId, $userId): UserDto {
             $row = $this->db->table('patient_contacts')
+                ->where('tenant_id', CurrentTenant::id())
                 ->where('id', $contactId)
                 ->where('user_id', $studentId)
                 ->get()->getRowArray();
@@ -489,7 +493,7 @@ final class PatientService extends BaseService
                 ]);
             }
 
-            $this->db->table('patient_contacts')->where('id', $contactId)->delete();
+            $this->db->table('patient_contacts')->where('tenant_id', CurrentTenant::id())->where('id', $contactId)->delete();
 
             $this->audit->enqueue('clinic.patient_contact_removed', 'patient_contacts', $contactId, $userId, [
                 'resource_code' => (string) $row['contact_name'],

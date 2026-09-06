@@ -26,14 +26,19 @@ import {
   Search,
   Shield,
   Stethoscope,
+  User,
   UserCog,
   UserCircle,
   Users,
 } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { KeyboardEvent, ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '@/store/auth';
+import { useLogout } from '@/hooks/useAuth';
+import { useStudentSearch } from '@/hooks/usePatients';
+import { useDebouncedValue } from '@/hooks/useDebouncedValue';
+import { ConfirmDialog } from '@/components/ConfirmDialog';
 import {
   Dialog,
   DialogContent,
@@ -51,8 +56,11 @@ interface CommandDef {
   /** Search-time aliases — typing any of these matches the command. */
   keywords: string[];
   icon: ReactNode;
-  /** Permission code required to see this command. Omit = visible to all. */
-  permission?: string;
+  /**
+   * Permission code(s) required to see this command. A string requires
+   * that code; an array is any-of. Omit = visible to all.
+   */
+  permission?: string | string[];
   /**
    * Optional route to prefetch on intent (hover / arrow-key
    * highlight). When set, the chunk is warmed before the user
@@ -149,7 +157,9 @@ const COMMANDS: ReadonlyArray<CommandDef> = [
     category: 'Navigate',
     keywords: ['profile', 'employee', 'student', 'me'],
     icon: <UserCircle className="size-4" />,
-    permission: 'employee.portal.read',
+    // Router and sidebar accept either perm for /me (anyOf) — the
+    // palette must not gate it tighter than the pages it opens.
+    permission: ['employee.portal.read', 'student.portal.read'],
     prefetch: '/me',
     run: ({ navigate }) => void navigate('/me'),
   },
@@ -236,7 +246,14 @@ export function CommandPalette() {
   const [highlight, setHighlight] = useState(0);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const navigate = useNavigate();
-  const signOut = useAuthStore((s) => s.clear);
+  // The palette's "Sign out" used to wire the bare store `clear` — it
+  // never called POST /auth/logout, so the refresh-token family stayed
+  // live and shared workstations silently re-authenticated (2026-09
+  // audit). Route it through the real logout mutation behind the same
+  // ConfirmDialog the UserMenu uses.
+  const logout = useLogout();
+  const [confirmSignOut, setConfirmSignOut] = useState(false);
+  const signOut = () => setConfirmSignOut(true);
 
   // Global Cmd/Ctrl-K toggles the palette. Bound at window level so any
   // focused input loses focus cleanly when the dialog opens — Radix
@@ -271,24 +288,47 @@ export function CommandPalette() {
     }
   }, [open]);
 
-  // Subscribe to the effective permission set so the filtered list
-  // updates when the session is loaded / changed.
   const perms = useAuthStore((s) => s.permissions ?? []);
+  const hasPerm = useCallback((p: string | string[] | undefined): boolean => {
+    if (p === undefined) return true;
+    if (perms.includes('*')) return true;
+    return Array.isArray(p) ? p.some((code) => perms.includes(code)) : perms.includes(p);
+  }, [perms]);
+  const canReadPatients = hasPerm('clinic.patients.read');
+
+  const debouncedQuery = useDebouncedValue(query.trim(), 250);
+  const studentResults = useStudentSearch(debouncedQuery, { enabled: canReadPatients });
+  const matchingStudents = useMemo(() => {
+    if (!canReadPatients || debouncedQuery.length < 2) return [];
+    return (studentResults.data ?? []).slice(0, 5).map((s): CommandDef => {
+      const studentNum = s.student_number ?? String(s.id);
+      return {
+        id: `student-${s.id}`,
+        label: `${s.first_name} ${s.last_name} (${studentNum})`,
+        category: 'Navigate',
+        keywords: [studentNum, s.first_name, s.last_name],
+        icon: <User className="size-4 text-primary" />,
+        run: ({ navigate }) => void navigate(`/patients?q=${encodeURIComponent(studentNum)}`),
+      };
+    });
+  }, [canReadPatients, debouncedQuery, studentResults.data]);
 
   // Build the grouped, filtered, query-matched view. Order: declared
   // order within each category, categories in CATEGORY_ORDER.
   const groups = useMemo(() => {
     const q = query.trim().toLowerCase();
     const visible = COMMANDS.filter((c) => {
-      if (c.permission !== undefined && !perms.includes(c.permission) && !perms.includes('*')) {
+      if (!hasPerm(c.permission)) {
         return false;
       }
       return matches(c, q);
     });
-    const out: Record<CommandCategory, CommandDef[]> = { Navigate: [], Account: [] };
-    for (const c of visible) out[c.category].push(c);
+    const out: Record<CommandCategory, CommandDef[]> = {
+      Navigate: [...matchingStudents, ...visible.filter((c) => c.category === 'Navigate')],
+      Account: visible.filter((c) => c.category === 'Account'),
+    };
     return out;
-  }, [query, perms]);
+  }, [query, hasPerm, matchingStudents]);
 
   const flat = CATEGORY_ORDER.flatMap((cat) => groups[cat]);
 
@@ -327,7 +367,8 @@ export function CommandPalette() {
   }
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <>
+      <Dialog open={open} onOpenChange={setOpen}>
       <DialogContent
         // Override the canned padding/sizing + animation. The default
         // DialogContent is a centered modal (top:50% + zoom-in-95); for
@@ -439,7 +480,17 @@ export function CommandPalette() {
           </span>
         </div>
       </DialogContent>
-    </Dialog>
+      </Dialog>
+      <ConfirmDialog
+        open={confirmSignOut}
+        title="Sign out?"
+        description="You will need to sign in again to access SYNAPSE."
+        confirmLabel="Sign out"
+        pending={logout.isPending}
+        onConfirm={() => logout.mutate()}
+        onCancel={() => setConfirmSignOut(false)}
+      />
+      </>
   );
 }
 

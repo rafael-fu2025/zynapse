@@ -37,6 +37,27 @@ export default function LoginPage() {
     if (loginError !== null) loginErrorRef.current?.focus();
   }, [loginError]);
 
+  // Chrome paints autofilled credentials before the Figtree webfont has
+  // finished loading and never repaints them when it arrives — the value
+  // keeps the fallback font (Arial) until the field is focused. Once the
+  // fonts are ready, nudge a re-layout of autofilled inputs so the value
+  // re-renders with the loaded font. When the font loads before Chrome
+  // fills, the fill already paints correctly and the nudge is a no-op.
+  useEffect(() => {
+    let cancelled = false;
+    void document.fonts.ready.then(() => {
+      if (cancelled) return;
+      document.querySelectorAll<HTMLInputElement>('input:-webkit-autofill').forEach((el) => {
+        el.style.letterSpacing = '0.001px';
+        void el.offsetWidth;
+        el.style.removeProperty('letter-spacing');
+      });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   function describeLoginError(error: unknown): string {
     if (!(error instanceof ApiEnvelopeError)) return 'Login failed unexpectedly. Please try again.';
     if (error.httpStatus === 0) return 'Cannot reach the SYNAPSE server. Check your connection and try again.';

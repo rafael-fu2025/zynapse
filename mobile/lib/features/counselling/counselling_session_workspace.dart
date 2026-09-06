@@ -30,6 +30,9 @@ class _CounsellingSessionWorkspaceState
   List<CounsellingNote> _notes = [];
   bool _loading = true;
   bool _saving = false;
+  bool _notesRevealed = false;
+  bool _notesLoading = false;
+  String? _notesError;
   String? _error;
   String _step = 'notes';
   final _notesController = TextEditingController();
@@ -73,14 +76,14 @@ class _CounsellingSessionWorkspaceState
       });
     }
     try {
-      final results = await Future.wait<dynamic>([
-        ApiService.I.counsellingSessionDetail(widget.sessionId),
-        ApiService.I.counsellingNotes(widget.sessionId),
-      ]);
+      // Parity with the SPA (2026-09 audit, finding 3): opening a session
+      // must NOT auto-decrypt the note history — every decrypt is a
+      // recorded audit event, so fetching stays behind an explicit
+      // Reveal action. Only the session detail loads here.
+      final session = await ApiService.I.counsellingSessionDetail(widget.sessionId);
       if (!mounted) return;
       setState(() {
-        _session = results[0] as CounsellingSession;
-        _notes = results[1] as List<CounsellingNote>;
+        _session = session;
         _loading = false;
       });
     } catch (error) {
@@ -88,6 +91,29 @@ class _CounsellingSessionWorkspaceState
       setState(() {
         _error = mapDioError(error).message;
         _loading = false;
+      });
+    }
+  }
+
+  Future<void> _revealNotes() async {
+    if (_notesRevealed || _notesLoading) return;
+    setState(() {
+      _notesLoading = true;
+      _notesError = null;
+    });
+    try {
+      final notes = await ApiService.I.counsellingNotes(widget.sessionId);
+      if (!mounted) return;
+      setState(() {
+        _notes = notes;
+        _notesRevealed = true;
+        _notesLoading = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _notesError = mapDioError(error).message;
+        _notesLoading = false;
       });
     }
   }
@@ -152,7 +178,13 @@ class _CounsellingSessionWorkspaceState
         }
         await ApiService.I.writeCounsellingNotes(widget.sessionId, value);
         _notesController.clear();
-      }, 'Session notes encrypted and saved.');
+        // Re-read after write: a decryption round-trip verifies the
+        // key configuration surfaced only on a later read before the
+        // 2026-09 audit (finding 17).
+        if (_notesRevealed) {
+          _notes = await ApiService.I.counsellingNotes(widget.sessionId);
+        }
+      }, 'Session note saved — encrypted at rest (AES-256-GCM).');
 
   Future<void> _refer() => _run(() async {
         await ApiService.I.createCounsellingReferral(
@@ -265,41 +297,95 @@ class _CounsellingSessionWorkspaceState
     );
   }
 
-  Widget _notesStep() => _section(
-        'Notes / Progress',
-        'Session notes are encrypted and are never copied into a referral.',
-        [
-          if (_notes.isEmpty)
-            const Text('No progress notes recorded.')
-          else
-            for (final note in _notes.reversed)
-              Card(
-                child: ListTile(
-                  title: Text(note.plaintext),
-                  subtitle: Text(fmtUtcToApp(note.createdAt)),
+  Widget _notesStep() {
+    final session = _session!;
+    return _section(
+      'Notes / Progress',
+      'Notes are encrypted at rest (AES-256-GCM) and are never copied into a referral.',
+      [
+        if (!_notesRevealed && session.noteCount > 0)
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              border: Border.all(
+                color: Theme.of(context).colorScheme.outlineVariant,
+              ),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Column(
+              children: [
+                Text(
+                  '${session.noteCount} encrypted note${session.noteCount == 1 ? '' : 's'} on record.',
+                  textAlign: TextAlign.center,
                 ),
-              ),
-          if (_canWrite && _session!.isOpen) ...[
-            const SizedBox(height: 12),
-            TextField(
-              controller: _notesController,
-              minLines: 5,
-              maxLines: 10,
-              maxLength: 16384,
-              decoration: const InputDecoration(
-                labelText: 'New progress note',
-                alignLabelWithHint: true,
-                border: OutlineInputBorder(),
+                const SizedBox(height: 4),
+                Text(
+                  'Decrypting is recorded in the audit log.',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 12),
+                OutlinedButton.icon(
+                  onPressed: _notesLoading ? null : _revealNotes,
+                  icon: _notesLoading
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.lock_open_outlined),
+                  label: const Text('Reveal notes'),
+                ),
+                if (_notesError != null) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    _notesError!,
+                    style: TextStyle(
+                        color: Theme.of(context).colorScheme.error),
+                    textAlign: TextAlign.center,
+                  ),
+                ],
+              ],
+            ),
+          )
+        else if (!_notesRevealed)
+          const Text('No notes on record.')
+        else if (_notes.isEmpty)
+          const Text('No notes on record.')
+        else
+          for (final note in _notes.reversed)
+            Card(
+              child: ListTile(
+                title: Text(note.plaintext),
+                subtitle: Text(fmtUtcToApp(note.createdAt)),
               ),
             ),
-            FilledButton.icon(
-              onPressed: _saving ? null : _saveNotes,
-              icon: const Icon(Icons.lock_outline),
-              label: const Text('Encrypt and save note'),
+        if (_canWrite && session.isOpen) ...[
+          const SizedBox(height: 12),
+          TextField(
+            controller: _notesController,
+            minLines: 5,
+            maxLines: 10,
+            maxLength: 16384,
+            decoration: const InputDecoration(
+              labelText: 'New progress note',
+              alignLabelWithHint: true,
+              border: OutlineInputBorder(),
             ),
-          ],
+          ),
+          FilledButton.icon(
+            onPressed: _saving ? null : _saveNotes,
+            icon: const Icon(Icons.lock_outline),
+            label: const Text('Save note'),
+          ),
         ],
-      );
+      ],
+    );
+  }
 
   Widget _referralStep() {
     final referral = _session!.outgoingReferral;

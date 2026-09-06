@@ -165,7 +165,7 @@ final class ReferralService extends BaseService
 
             // Lock the stable patient row before checking so two concurrent
             // requests for the same direction cannot both pass the lookup.
-            $this->db->query('SELECT `id` FROM `users` WHERE `id` = ? FOR UPDATE', [$patientUserId]);
+            $this->db->query('SELECT `id` FROM `users` WHERE `tenant_id` = ? AND `id` = ? FOR UPDATE', [CurrentTenant::id(), $patientUserId]);
             $existing = $this->db->table('referral_referrals')
                 ->where('tenant_id', CurrentTenant::id())
                 ->where('patient_user_id', $patientUserId)

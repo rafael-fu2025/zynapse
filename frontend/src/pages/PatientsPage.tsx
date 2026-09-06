@@ -34,6 +34,7 @@ import { ConfirmDialog, type ConfirmAction } from '@/components/ConfirmDialog';
 import { QueryErrorRow } from '@/components/QueryErrorState';
 import { MobileCardList, MobileCard, MobileCardField, MobileCardActions } from '@/components/MobileCardList';
 import { useUrlFilter } from '@/hooks/useUrlFilter';
+import { useCan } from '@/hooks/useCan';
 import { useTabParam } from '@/hooks/useTabParam';
 import {
   Dialog,
@@ -1007,6 +1008,10 @@ function EmployeeDetailDialog({ employeeId, onClose }: { employeeId: number; onC
 function DepartmentsPanel() {
   const departments = useDepartments();
   const create = useCreateDepartment();
+  // Creating departments is a separate permission (`clinic.departments.
+  // manage`) — read-only roles still see the list, but not a form that
+  // can only 403 (2026-09 audit).
+  const canManage = useCan('clinic.departments.manage');
   const { register, handleSubmit, formState: { errors }, reset } =
     useForm<CreateDepartmentInput>({ resolver: zodResolver(createDepartmentSchema) });
   const onSubmit = handleSubmit((values) => create.mutate(values, { onSuccess: () => reset() }));
@@ -1014,19 +1019,21 @@ function DepartmentsPanel() {
   return (
     <section className="overflow-hidden rounded-xl border bg-card">
       <header className="border-b px-3 py-2 text-sm font-semibold text-foreground">Departments</header>
-      <form noValidate onSubmit={(e) => void onSubmit(e)} className="flex flex-wrap items-end gap-2 border-b p-3">
-        <div className="space-y-1">
-          <Label htmlFor="dept-name" className="text-xs">Name</Label>
-          <Input id="dept-name" className="h-8 w-44" aria-invalid={errors.name !== undefined} {...register('name')} />
-        </div>
-        <div className="space-y-1">
-          <Label htmlFor="dept-code" className="text-xs">Code</Label>
-          <Input id="dept-code" className="h-8 w-28" aria-invalid={errors.code !== undefined} {...register('code')} />
-        </div>
-        <Button type="submit" size="sm" disabled={create.isPending}>
-          {create.isPending ? <Loader2 className="animate-spin" /> : <Plus />} Add
-        </Button>
-      </form>
+      {canManage && (
+        <form noValidate onSubmit={(e) => void onSubmit(e)} className="flex flex-wrap items-end gap-2 border-b p-3">
+          <div className="space-y-1">
+            <Label htmlFor="dept-name" className="text-xs">Name</Label>
+            <Input id="dept-name" className="h-8 w-44" aria-invalid={errors.name !== undefined} {...register('name')} />
+          </div>
+          <div className="space-y-1">
+            <Label htmlFor="dept-code" className="text-xs">Code</Label>
+            <Input id="dept-code" className="h-8 w-28" aria-invalid={errors.code !== undefined} {...register('code')} />
+          </div>
+          <Button type="submit" size="sm" disabled={create.isPending}>
+            {create.isPending ? <Loader2 className="animate-spin" /> : <Plus />} Add
+          </Button>
+        </form>
+      )}
       <ul className="max-h-40 divide-y overflow-auto text-sm">
         {(departments.data ?? []).map((d) => (
           <li key={d.id} className="flex items-center justify-between px-3 py-1.5">
@@ -1048,6 +1055,9 @@ export default function PatientsPage() {
   const [empCursor, setEmpCursor] = useState<string | null>(null);
   const [empHistory, setEmpHistory] = useState<Array<string | null>>([null]);
   const [tab, setTab] = useTabParam('students');
+  // Registry writes need their own permission (counsellors hold read
+  // only) — hide what the backend would 403 (2026-09 audit).
+  const canWrite = useCan('clinic.patients.write');
   // Filters live in the URL (PRODUCT principle 5): ?q=, ?archived=1 and
   // ?teaching= survive a refresh and can be shared as links. Each tab
   // keeps its own search key so switching tabs re-seeds from the URL.
@@ -1120,34 +1130,40 @@ export default function PatientsPage() {
         <DropdownMenuItem className="min-h-11" onSelect={() => setDetailId(student.id)}>
           <Eye /> View record
         </DropdownMenuItem>
-        <DropdownMenuItem className="min-h-11" onSelect={() => setEditStudent(student)}>
-          <Pencil /> Edit record
-        </DropdownMenuItem>
-        <DropdownMenuSeparator />
-        <DropdownMenuItem
-          className="min-h-11"
-          disabled={setArchived.isPending}
-          onSelect={() => {
-            if (student.archived) {
-              setConfirm({
-                title: `Restore ${student.student_number}?`,
-                description: 'The student is returned to the active registry and their workflows become available again.',
-                confirmLabel: 'Restore',
-                run: () => setArchived.mutate({ id: student.id, archived: false }),
-              });
-            } else {
-              setConfirm({
-                title: `Archive ${student.student_number}?`,
-                description: 'The student is soft-archived (never deleted) and removed from active workflows. You can restore them later.',
-                confirmLabel: 'Archive',
-                run: () => setArchived.mutate({ id: student.id, archived: true }),
-              });
-            }
-          }}
-        >
-          {student.archived ? <ArchiveRestore /> : <Archive />}
-          {student.archived ? 'Restore record' : 'Archive record'}
-        </DropdownMenuItem>
+        {canWrite && (
+          <DropdownMenuItem className="min-h-11" onSelect={() => setEditStudent(student)}>
+            <Pencil /> Edit record
+          </DropdownMenuItem>
+        )}
+        {canWrite && (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              className="min-h-11"
+              disabled={setArchived.isPending}
+              onSelect={() => {
+                if (student.archived) {
+                  setConfirm({
+                    title: `Restore ${student.student_number}?`,
+                    description: 'The student is returned to the active registry and their workflows become available again.',
+                    confirmLabel: 'Restore',
+                    run: () => setArchived.mutate({ id: student.id, archived: false }),
+                  });
+                } else {
+                  setConfirm({
+                    title: `Archive ${student.student_number}?`,
+                    description: 'The student is soft-archived (never deleted) and removed from active workflows. You can restore them later.',
+                    confirmLabel: 'Archive',
+                    run: () => setArchived.mutate({ id: student.id, archived: true }),
+                  });
+                }
+              }}
+            >
+              {student.archived ? <ArchiveRestore /> : <Archive />}
+              {student.archived ? 'Restore record' : 'Archive record'}
+            </DropdownMenuItem>
+          </>
+        )}
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -1163,34 +1179,40 @@ export default function PatientsPage() {
         <DropdownMenuItem className="min-h-11" onSelect={() => setEmpDetailId(employee.id)}>
           <Eye /> View record
         </DropdownMenuItem>
-        <DropdownMenuItem className="min-h-11" onSelect={() => setEditEmp(employee)}>
-          <Pencil /> Edit record
-        </DropdownMenuItem>
-        <DropdownMenuSeparator />
-        <DropdownMenuItem
-          className="min-h-11"
-          disabled={archiveEmp.isPending}
-          onSelect={() => {
-            if (employee.archived) {
-              setConfirm({
-                title: `Restore ${employee.employee_number}?`,
-                description: 'The employee is returned to the active registry and their workflows become available again.',
-                confirmLabel: 'Restore',
-                run: () => archiveEmp.mutate({ id: employee.id, archived: false }),
-              });
-            } else {
-              setConfirm({
-                title: `Archive ${employee.employee_number}?`,
-                description: 'The employee is soft-archived (never deleted) and removed from active workflows. You can restore them later.',
-                confirmLabel: 'Archive',
-                run: () => archiveEmp.mutate({ id: employee.id, archived: true }),
-              });
-            }
-          }}
-        >
-          {employee.archived ? <ArchiveRestore /> : <Archive />}
-          {employee.archived ? 'Restore record' : 'Archive record'}
-        </DropdownMenuItem>
+        {canWrite && (
+          <DropdownMenuItem className="min-h-11" onSelect={() => setEditEmp(employee)}>
+            <Pencil /> Edit record
+          </DropdownMenuItem>
+        )}
+        {canWrite && (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              className="min-h-11"
+              disabled={archiveEmp.isPending}
+              onSelect={() => {
+                if (employee.archived) {
+                  setConfirm({
+                    title: `Restore ${employee.employee_number}?`,
+                    description: 'The employee is returned to the active registry and their workflows become available again.',
+                    confirmLabel: 'Restore',
+                    run: () => archiveEmp.mutate({ id: employee.id, archived: false }),
+                  });
+                } else {
+                  setConfirm({
+                    title: `Archive ${employee.employee_number}?`,
+                    description: 'The employee is soft-archived (never deleted) and removed from active workflows. You can restore them later.',
+                    confirmLabel: 'Archive',
+                    run: () => archiveEmp.mutate({ id: employee.id, archived: true }),
+                  });
+                }
+              }}
+            >
+              {employee.archived ? <ArchiveRestore /> : <Archive />}
+              {employee.archived ? 'Restore record' : 'Archive record'}
+            </DropdownMenuItem>
+          </>
+        )}
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -1232,12 +1254,14 @@ export default function PatientsPage() {
               >
                 <Archive /> {showArchived === '1' ? 'Hide archived' : 'Show archived'}
               </Button>
-              <Dialog open={openCreate} onOpenChange={setOpenCreate}>
-                <Button onClick={() => setOpenCreate(true)}>
-                  <UserPlus /> Register student
-                </Button>
-                {openCreate && <CreateStudentDialog onClose={() => setOpenCreate(false)} />}
-              </Dialog>
+              {canWrite && (
+                <Dialog open={openCreate} onOpenChange={setOpenCreate}>
+                  <Button onClick={() => setOpenCreate(true)}>
+                    <UserPlus /> Register student
+                  </Button>
+                  {openCreate && <CreateStudentDialog onClose={() => setOpenCreate(false)} />}
+                </Dialog>
+              )}
             </div>
           </section>
 
@@ -1387,12 +1411,14 @@ export default function PatientsPage() {
               >
                 <Archive /> {showArchivedEmp === '1' ? 'Hide archived' : 'Show archived'}
               </Button>
-              <Dialog open={openCreateEmp} onOpenChange={setOpenCreateEmp}>
-                <Button onClick={() => setOpenCreateEmp(true)}>
-                  <UserPlus /> Register employee
-                </Button>
-                {openCreateEmp && <CreateEmployeeDialog onClose={() => setOpenCreateEmp(false)} />}
-              </Dialog>
+              {canWrite && (
+                <Dialog open={openCreateEmp} onOpenChange={setOpenCreateEmp}>
+                  <Button onClick={() => setOpenCreateEmp(true)}>
+                    <UserPlus /> Register employee
+                  </Button>
+                  {openCreateEmp && <CreateEmployeeDialog onClose={() => setOpenCreateEmp(false)} />}
+                </Dialog>
+              )}
             </div>
           </section>
 

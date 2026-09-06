@@ -35,6 +35,29 @@ export function apiOrigin(): string {
 }
 
 /**
+ * Bearer token for direct API requests (`request` fixture). The API is
+ * token-authenticated — cookies are never accepted on api_auth routes —
+ * so specs that probe endpoints directly must log in first and pass an
+ * Authorization header.
+ */
+export async function apiToken(email?: string): Promise<string> {
+  const res = await fetch(`${apiOrigin()}/api/v1/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: email ?? liveEmail(), password: livePassword() }),
+  });
+  if (!res.ok) {
+    throw new Error(`API login failed (${res.status}) for the live e2e account.`);
+  }
+  const body = (await res.json()) as { data?: { access_token?: string } };
+  const token = body.data?.access_token;
+  if (!token) {
+    throw new Error('API login response carried no access_token.');
+  }
+  return token;
+}
+
+/**
  * Live credentials. There is deliberately NO default: the dev password
  * must not live in the repository (it leaked into 9 specs historically).
  * Set both variables when running the gated (SYNAPSE_E2E=1) suite.

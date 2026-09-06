@@ -49,6 +49,9 @@ test('Admin Users covers roles, validation, pagination, action names, and respon
           active: true,
           status: 'active',
           groups: ['clinic_staff'],
+          // Identity-consolidation fields the page schema requires.
+          person_kind: null,
+          person_name: null,
           created_at: '2026-08-01 00:00:00',
           updated_at: '2026-08-01 00:00:00',
           last_active: null,
@@ -68,7 +71,7 @@ test('Admin Users covers roles, validation, pagination, action names, and respon
     });
 
     await page.getByRole('searchbox', { name: /search users/i }).fill('synthetic');
-    await page.getByRole('button', { name: 'Search', exact: true }).click();
+    // SearchBox is a debounced auto-search — no explicit Search button.
     const actions = page.getByRole('button', { name: 'Actions for user1@example.test' });
     await expect(actions).toBeVisible();
     await actions.click();

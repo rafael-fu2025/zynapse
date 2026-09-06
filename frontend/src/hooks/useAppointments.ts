@@ -4,7 +4,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { z } from 'zod';
 import { toast } from 'sonner';
-import { apiClient } from '@/api/client';
+import { apiClient, getNextCursor } from '@/api/client';
 import type { ApiEnvelopeError } from '@/api/envelope';
 import {
   appointmentQrVerifySchema,
@@ -41,11 +41,13 @@ export function useAppointments(
       if (cursor !== null) params.set('cursor', cursor);
       params.set('limit', String(limit));
       if (status !== null) params.set('status', status);
-      const res = await apiClient.get<{ data: unknown[]; next: string | null }>(
-        `/clinic/appointments?${params.toString()}`,
-      );
+      const res = await apiClient.get<unknown[]>(`/clinic/appointments?${params.toString()}`);
       const data = z.array(appointmentSchema).parse(res.data);
-      return { data, next: res.data?.next ?? null };
+      // The envelope interceptor unwraps `data` to the bare rows and
+      // moves pagination meta to `synapseMeta` — read the cursor via
+      // the shared helper (2026-09 audit: reading `res.data.next` here
+      // always yielded null and pagination never advanced).
+      return { data, next: getNextCursor(res) };
     },
   });
 }
