@@ -11,8 +11,11 @@ use App\Auth\LoginThrottleService;
 use App\Auth\RefreshTokenService;
 use App\Controllers\Api\ApiController;
 use App\Exceptions\ApiException;
+use App\Exceptions\FuMisInvalidCredentialsException;
 use App\Services\Audit\AuditOutboxService;
+use App\Services\FuMis\FuMisAuthService;
 use CodeIgniter\HTTP\ResponseInterface;
+use Config\FuMis;
 use Config\Services;
 
 final class AuthController extends ApiController
@@ -22,6 +25,7 @@ final class AuthController extends ApiController
     private readonly AuditOutboxService $audit;
     private readonly LoginThrottleService $throttle;
     private readonly AccountStateService $accountState;
+    private readonly ?FuMisAuthService $fuMis;
 
     public function __construct(
         ?JwtService $jwt = null,
@@ -29,23 +33,141 @@ final class AuthController extends ApiController
         ?AuditOutboxService $audit = null,
         ?LoginThrottleService $throttle = null,
         ?AccountStateService $accountState = null,
+        ?FuMisAuthService $fuMis = null,
     ) {
         $this->jwt           = $jwt ?? Services::jwt();
         $this->refreshTokens = $refreshTokens ?? Services::refreshTokenService();
         $this->audit         = $audit ?? Services::auditOutbox();
         $this->throttle      = $throttle ?? new LoginThrottleService();
         $this->accountState  = $accountState ?? new AccountStateService();
+        $this->fuMis         = $fuMis;
     }
 
+    /**
+     * Login — two credential paths, one endpoint.
+     *
+     *   {identifier, password} → MIS-delegated (FUMIS_ENABLED=true):
+     *       student/employee number verified by the university API,
+     *       JIT-provisioned local account. This is the person path.
+     *   {email, password}      → local Shield identity: the admin and
+     *       operational-account path (also the only path while
+     *       FUMIS_ENABLED=false, e.g. off-campus dev/CI).
+     *
+     * Both paths share throttling (keyed on the presented credential),
+     * audit events, and the token issuance in finalizeAuth().
+     */
     public function login(): ResponseInterface
     {
         $payload = $this->request->getJSON(true) ?? [];
+
+        $identifier = trim((string) ($payload['identifier'] ?? ''));
+        $email      = strtolower(trim((string) ($payload['email'] ?? '')));
+
+        if ($identifier !== '' && $email !== '') {
+            // Ambiguous — one credential kind per request.
+            throw ApiException::validationFailure([[
+                'code'    => 'validation.field',
+                'message' => 'Provide either identifier or email, not both.',
+                'field'   => 'identifier',
+            ]]);
+        }
+
+        if ($identifier !== '') {
+            if (mb_strlen($identifier) > 64 || mb_strlen((string) ($payload['password'] ?? '')) > 256) {
+                throw ApiException::validationFailure($this->validationErrorList());
+            }
+
+            return $this->loginWithIdentifier($identifier, (string) ($payload['password'] ?? ''));
+        }
+
+        return $this->loginWithEmail($email, (string) ($payload['password'] ?? ''));
+    }
+
+    /**
+     * MIS-delegated path (student/employee number).
+     */
+    private function loginWithIdentifier(string $identifier, string $password): ResponseInterface
+    {
+        $config = new FuMis();
+        if (! $config->enabled) {
+            // MIS delegation is off (off-campus dev/CI): refuse the
+            // identifier path so nobody silently falls back to a local
+            // password check that MIS users do not have.
+            throw new ApiException('auth.mis_unavailable', 503);
+        }
+
+        if ($password === '') {
+            throw ApiException::validationFailure([[
+                'code'    => 'validation.field',
+                'message' => 'The password field is required.',
+                'field'   => 'password',
+            ]]);
+        }
+
+        if ($this->throttle->isLocked($identifier)) {
+            $this->audit->enqueue(
+                'auth.login_locked',
+                'auth_sessions',
+                null,
+                null,
+                ['auth_method' => 'fumis', 'outcome' => 'locked', ...$this->provenance()],
+            );
+            $this->response->setHeader('Retry-After', (string) $this->throttle->retryAfterSeconds());
+            throw new ApiException(\App\Exceptions\ApiErrorCode::AUTH_LOGIN_LOCKED, 429);
+        }
+
+        try {
+            // FuMisAuthService throws FuMisUpstreamException (502/503)
+            // on unavailability and FuMisInvalidCredentialsException
+            // (401, auth.credentials_invalid) on rejection.
+            $service = $this->fuMis ?? Services::fuMisAuthService();
+            $userId = $service->loginWithIdentifier($identifier, $password);
+        } catch (FuMisInvalidCredentialsException $e) {
+            $this->throttle->registerFailure($identifier);
+            $this->audit->enqueue(
+                'auth.login_failed',
+                'auth_sessions',
+                null,
+                null,
+                ['auth_method' => 'fumis', 'outcome' => 'failure', ...$this->provenance()],
+            );
+            throw $e;
+        }
+
+        $state = $this->accountState->forUser($userId);
+        if ($state === null || ! $state['active']) {
+            throw ApiException::unauthorized('auth.account_disabled');
+        }
+
+        $this->throttle->clear($identifier);
+
+        Services::database()->table('users')->where('id', $userId)->update([
+            'last_active' => date('Y-m-d H:i:s'),
+        ]);
+
+        $this->audit->enqueue(
+            'auth.login_succeeded',
+            'auth_sessions',
+            $userId,
+            $userId,
+            ['auth_method' => 'fumis', 'outcome' => 'success', ...$this->provenance()],
+        );
+
+        return $this->finalizeAuth($userId);
+    }
+
+    /**
+     * Local Shield-identity path (email) — admins, operational accounts,
+     * and the dev/CI mode where FUMIS_ENABLED=false.
+     */
+    private function loginWithEmail(string $email, string $password): ResponseInterface
+    {
+        $payload = ['email' => $email, 'password' => $password];
 
         $rules = [
             'email'    => 'required|valid_email|max_length[255]',
             'password' => 'required|min_length[8]|max_length[256]',
         ];
-
         if (! $this->makeValidation($rules)->run($payload)) {
             throw ApiException::validationFailure($this->validationErrorList());
         }
@@ -178,6 +300,7 @@ final class AuthController extends ApiController
     {
         $userId = CurrentUser::assert();
         $this->refreshTokens->revokeAllFor($userId);
+        $this->bumpTokenEpoch($userId);
 
         $this->audit->enqueue(
             'auth.logout',
@@ -209,9 +332,19 @@ final class AuthController extends ApiController
         // Identity-consolidated: the user IS the person. No persons /
         // patient_identifiers join — the profile lives on `users`.
         $userRow = $db->table('users u')
-            ->select('u.id, u.kind AS person_kind, u.first_name AS person_first_name, u.last_name AS person_last_name, u.is_teaching, u.archived_at')
+            ->select('u.id, u.kind AS person_kind, u.first_name AS person_first_name, u.last_name AS person_last_name, u.is_teaching, u.archived_at, u.student_number, u.employee_number')
             ->where('u.id', $userId)
             ->get()->getRowArray();
+
+        // The university ID number (student or employee, whichever this
+        // person is) — the primary login identifier for MIS users.
+        $identifier = null;
+        if ($userRow !== null) {
+            $identifier = $userRow['student_number'] ?? $userRow['employee_number'] ?? null;
+            if ($identifier !== null && (string) $identifier === '') {
+                $identifier = null;
+            }
+        }
 
         $personName = null;
         if ($userRow !== null) {
@@ -226,6 +359,7 @@ final class AuthController extends ApiController
             'id'          => (int)    $user->id,
             'email'       => (string) $user->email,
             'username'    => (string) $user->username,
+            'identifier'  => $identifier !== null ? (string) $identifier : null,
             'is_active'   => (bool)   $user->active,
             'force_reset' => (bool)   ($user->force_reset ?? false),
             'person_kind' => isset($userRow['person_kind']) && $userRow['person_kind'] !== null ? (string) $userRow['person_kind'] : null,
@@ -276,6 +410,9 @@ final class AuthController extends ApiController
                 'updated_at'  => date('Y-m-d H:i:s'),
             ]);
 
+        // Kill every other session: refresh tokens die, and the epoch bump
+        // invalidates all outstanding access tokens immediately.
+        $this->bumpTokenEpoch($userId);
         $this->refreshTokens->revokeAllFor($userId);
 
         $this->audit->enqueue(
@@ -309,7 +446,10 @@ final class AuthController extends ApiController
 
     private function finalizeAuth(int $userId, ?array $preIssued = null): ResponseInterface
     {
-        $access = $this->jwt->sign($userId);
+        // Read the epoch fresh so a just-bumped epoch (password change,
+        // replay revocation in the same request) is reflected in this token.
+        $state = $this->accountState->forUser($userId);
+        $access = $this->jwt->sign($userId, (int) ($state['token_epoch'] ?? 0));
         $refresh = $preIssued ?? $this->refreshTokens->issue($userId);
 
         $this->response->setCookie([
@@ -327,6 +467,19 @@ final class AuthController extends ApiController
             'token_type'   => 'Bearer',
             'expires_in'   => (int) (getenv('JWT_ACCESS_TTL_SECONDS') ?: 900),
         ]);
+    }
+
+    /**
+     * Invalidate every outstanding access token for the user by advancing
+     * users.token_epoch. The second argument is raw SQL ("token_epoch + 1")
+     * by design — a query-builder literal would be escaped as a string.
+     */
+    private function bumpTokenEpoch(int $userId): void
+    {
+        Services::database()->table('users')
+            ->where('id', $userId)
+            ->set('token_epoch', 'token_epoch + 1', false)
+            ->update();
     }
 
     private function validationErrorList(): array

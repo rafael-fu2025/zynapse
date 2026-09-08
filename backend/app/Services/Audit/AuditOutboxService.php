@@ -32,6 +32,10 @@ final class AuditOutboxService
         // Network provenance for auth/session events (non-PII, standard
         // in security audit trails). Populated by AuthController.
         'ip_address', 'user_agent',
+        // MIS-delegated login provenance (2026-09 integration): which
+        // university identity namespace authenticated the user. The
+        // identifier itself is never audited — only this discriminator.
+        'mis_namespace',
     ];
 
     /**

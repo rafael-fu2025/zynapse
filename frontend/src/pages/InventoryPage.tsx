@@ -14,6 +14,7 @@
  * `src/hooks/useKeysetPagination`.
  */
 import { BarChart3, CalendarClock } from 'lucide-react';
+import { PageHeader } from '@/components/PageHeader';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { useTabParam } from '@/hooks/useTabParam';
@@ -32,25 +33,28 @@ export default function InventoryPage() {
     // makes back-to-back hovers (moving from one row to the next) instant.
     <TooltipProvider delayDuration={150} skipDelayDuration={300}>
     <main className="mx-auto max-w-7xl space-y-4 p-6">
-      <header>
-        <h1 className="text-xl font-semibold text-foreground">Inventory</h1>
-        <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
-          <CalendarClock className="size-3.5" aria-hidden />
-          Medicines are tracked by batch with expiry — earliest expiring dispensed first; supplies use signed stock movements.
-        </p>
-      </header>
-
       <InventoryStockAlertBanner onJumpToTab={setTab} />
 
-      <Tabs value={tab} onValueChange={setTab}>
-        <TabsList>
-          <TabsTrigger value="medicines">Medicines</TabsTrigger>
-          <TabsTrigger value="supplies">Supplies</TabsTrigger>
-          <TabsTrigger value="reorders">Reorders</TabsTrigger>
-          <TabsTrigger value="insights">
-            <BarChart3 className="size-3.5" /> Insights
-          </TabsTrigger>
-        </TabsList>
+      <Tabs value={tab} onValueChange={setTab} className="space-y-4">
+        <PageHeader
+          title="Inventory"
+          description={
+            <span className="flex items-center gap-1.5">
+              <CalendarClock className="size-3.5" aria-hidden />
+              Medicines are tracked by batch with expiry — earliest expiring dispensed first; supplies use signed stock movements.
+            </span>
+          }
+          tabs={
+            <TabsList>
+              <TabsTrigger value="medicines">Medicines</TabsTrigger>
+              <TabsTrigger value="supplies">Supplies</TabsTrigger>
+              <TabsTrigger value="reorders">Reorders</TabsTrigger>
+              <TabsTrigger value="insights">
+                <BarChart3 className="size-3.5" /> Insights
+              </TabsTrigger>
+            </TabsList>
+          }
+        />
         <TabsContent value="medicines">
           <MedicinesTab />
         </TabsContent>

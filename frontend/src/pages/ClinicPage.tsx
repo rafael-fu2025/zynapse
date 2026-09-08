@@ -39,6 +39,7 @@ import { useSearchParams } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
+import { PageHeader } from '@/components/PageHeader';
 import { Button } from '@/components/ui/button';
 import { ComboboxField } from '@/components/ComboboxField';
 import type { TaxonomyEntry } from '@/data/taxonomy';
@@ -1415,37 +1416,35 @@ export default function ClinicPage() {
 
   return (
     <main className="mx-auto max-w-7xl space-y-4 p-6">
-      <header className="flex items-center justify-between">
-        <div>
-          <h1 className="text-xl font-semibold text-foreground">Clinic</h1>
-          <p className="text-sm text-muted-foreground">Encounters are the anchor for clinic actions — isolated from counselling.</p>
-        </div>
-      </header>
-
-      <Tabs value={tab} onValueChange={switchTab}>
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <TabsList>
-            <TabsTrigger value="queue">Queue (today)</TabsTrigger>
-            <TabsTrigger value="closed">Closed</TabsTrigger>
-            <TabsTrigger value="staff">Staff schedules</TabsTrigger>
-          </TabsList>
-
-          {tab === 'staff' && (
-            <div className="flex items-center gap-2">
-              <Button size="sm" onClick={() => setOpenAddShift(true)}>
-                <Plus /> Add shift
-              </Button>
-              <Button
-                size="sm"
-                variant={showArchived ? 'secondary' : 'outline'}
-                aria-pressed={showArchived}
-                onClick={() => setShowArchived((v) => !v)}
-              >
-                <Archive /> {showArchived ? 'Hide archived' : 'Show archived'}
-              </Button>
-            </div>
-          )}
-        </div>
+      <Tabs value={tab} onValueChange={switchTab} className="space-y-4">
+        <PageHeader
+          title="Clinic"
+          description="Encounters are the anchor for clinic actions — isolated from counselling."
+          tabs={
+            <TabsList>
+              <TabsTrigger value="queue">Queue (today)</TabsTrigger>
+              <TabsTrigger value="closed">Closed</TabsTrigger>
+              <TabsTrigger value="staff">Staff schedules</TabsTrigger>
+            </TabsList>
+          }
+          tabsActions={
+            tab === 'staff' && (
+              <div className="flex items-center gap-2">
+                <Button size="sm" onClick={() => setOpenAddShift(true)}>
+                  <Plus /> Add shift
+                </Button>
+                <Button
+                  size="sm"
+                  variant={showArchived ? 'secondary' : 'outline'}
+                  aria-pressed={showArchived}
+                  onClick={() => setShowArchived((v) => !v)}
+                >
+                  <Archive /> {showArchived ? 'Hide archived' : 'Show archived'}
+                </Button>
+              </div>
+            )
+          }
+        />
 
         <TabsContent value="queue">
           <div className="space-y-4">

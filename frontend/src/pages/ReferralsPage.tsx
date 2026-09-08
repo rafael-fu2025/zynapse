@@ -39,6 +39,7 @@ import { DatePicker } from '@/components/ui/date-picker';
 import { TimePicker } from '@/components/ui/time-picker';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { PageHeader } from '@/components/PageHeader';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import {
   Table,
@@ -716,48 +717,47 @@ export default function ReferralsPage() {
 
   return (
     <main className="mx-auto max-w-7xl space-y-4 p-6">
-      <header className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-semibold text-foreground">Referrals</h1>
-          <p className="text-sm text-muted-foreground">
-            Referrals hand off care between Clinic and Counselling — each side keeps its own records.
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <Button variant="outline" onClick={() => setOpenScan(true)}>
-            <Camera /> Verify (scan)
-          </Button>
-          {isNonTeachingEmployee ? (
-            <span className="inline-flex max-w-xs items-center gap-1.5 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-              <ShieldCheck className="size-3.5 shrink-0" /> Only teaching employees (faculty) can refer students to counselling.
-            </span>
-          ) : (
-            <Button onClick={() => setOpenCreate(true)}>
-              <Plus /> New referral
+      <PageHeader
+        title="Referrals"
+        description="Referrals hand off care between Clinic and Counselling — each side keeps its own records."
+        actions={
+          <>
+            <Button variant="outline" onClick={() => setOpenScan(true)}>
+              <Camera /> Verify (scan)
             </Button>
-          )}
-        </div>
-      </header>
-
-      <section className="flex flex-wrap items-center gap-3 rounded-xl border bg-card p-3">
-        {isReferrerScoped && (
-          <Badge variant="secondary" className="gap-1.5">
-            <UserRound className="size-3.5" /> Showing your referrals
-          </Badge>
-        )}
-        <Label htmlFor="status">Status</Label>
-        <Select value={statusFilter} onValueChange={(v) => { setStatusFilter(v); setCursor(null); setHistory([null]); }}>
-          <SelectTrigger id="status" className="w-48" aria-label="Filter by status"><SelectValue /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All</SelectItem>
-            <SelectItem value="submitted">Submitted</SelectItem>
-            <SelectItem value="acknowledged">Acknowledged</SelectItem>
-            <SelectItem value="under_review">Under review</SelectItem>
-            <SelectItem value="closed">Closed</SelectItem>
-          </SelectContent>
-        </Select>
-        {verifyResult !== null && <VerifyResultBadge result={verifyResult} />}
-      </section>
+            {isNonTeachingEmployee ? (
+              <span className="inline-flex max-w-xs items-center gap-1.5 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                <ShieldCheck className="size-3.5 shrink-0" /> Only teaching employees (faculty) can refer students to counselling.
+              </span>
+            ) : (
+              <Button onClick={() => setOpenCreate(true)}>
+                <Plus /> New referral
+              </Button>
+            )}
+          </>
+        }
+        toolbar={
+          <div className="flex flex-wrap items-center gap-3">
+            {isReferrerScoped && (
+              <Badge variant="secondary" className="gap-1.5">
+                <UserRound className="size-3.5" /> Showing your referrals
+              </Badge>
+            )}
+            <Label htmlFor="status">Status</Label>
+            <Select value={statusFilter} onValueChange={(v) => { setStatusFilter(v); setCursor(null); setHistory([null]); }}>
+              <SelectTrigger id="status" className="w-48" aria-label="Filter by status"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All</SelectItem>
+                <SelectItem value="submitted">Submitted</SelectItem>
+                <SelectItem value="acknowledged">Acknowledged</SelectItem>
+                <SelectItem value="under_review">Under review</SelectItem>
+                <SelectItem value="closed">Closed</SelectItem>
+              </SelectContent>
+            </Select>
+            {verifyResult !== null && <VerifyResultBadge result={verifyResult} />}
+          </div>
+        }
+      />
 
       <section className="overflow-hidden rounded-xl border bg-card">
         <Table>

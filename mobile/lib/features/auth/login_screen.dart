@@ -20,14 +20,14 @@ class LoginScreen extends StatefulWidget {
 
 class _LoginScreenState extends State<LoginScreen> {
   final _formKey = GlobalKey<FormState>();
-  final _emailController = TextEditingController();
+  final _identifierController = TextEditingController();
   final _passwordController = TextEditingController();
   bool _obscure = true;
   String? _error;
 
   @override
   void dispose() {
-    _emailController.dispose();
+    _identifierController.dispose();
     _passwordController.dispose();
     super.dispose();
   }
@@ -38,7 +38,7 @@ class _LoginScreenState extends State<LoginScreen> {
 
     final auth = context.read<AuthController>();
     try {
-      await auth.login(_emailController.text, _passwordController.text);
+      await auth.login(_identifierController.text, _passwordController.text);
       // RootGate rebuilds on AuthController notify -> navigates to HomeShell.
     } on ApiException catch (e) {
       setState(() => _error = e.message);
@@ -85,34 +85,36 @@ class _LoginScreenState extends State<LoginScreen> {
                 ),
                 const SizedBox(height: 6),
                 const Text(
-                  'Use your university credentials. All access is audited.',
+                  'Use your university ID number and password. All access is audited.',
                   textAlign: TextAlign.center,
                   style: TextStyle(color: Colors.black54, fontSize: 14),
                 ),
                 const SizedBox(height: 40),
                 Form(
                   key: _formKey,
-                  // Password-manager support (email + password hints).
+                  // Password-manager support (username + password hints).
                   child: AutofillGroup(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
                         TextFormField(
-                          controller: _emailController,
+                          controller: _identifierController,
                           enabled: !busy,
-                          keyboardType: TextInputType.emailAddress,
+                          keyboardType: TextInputType.text,
                           autocorrect: false,
-                          autofillHints: const [AutofillHints.email],
+                          autofillHints: const [AutofillHints.username],
                           textInputAction: TextInputAction.next,
                           decoration: const InputDecoration(
-                            labelText: 'Email',
+                            labelText: 'Student / Employee number',
+                            helperText:
+                                'Administrators: sign in with your email address.',
                             border: OutlineInputBorder(
                               borderRadius:
                                   BorderRadius.all(Radius.circular(12)),
                             ),
                           ),
                           validator: (v) => (v == null || v.trim().isEmpty)
-                              ? 'Enter your email'
+                              ? 'Enter your student or employee number'
                               : null,
                         ),
                       const SizedBox(height: 16),

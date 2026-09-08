@@ -7,6 +7,7 @@ class Session {
     required this.username,
     required this.isActive,
     required this.forceReset,
+    this.identifier,
     this.personKind,
     this.personName,
     this.isTeaching,
@@ -15,10 +16,13 @@ class Session {
 
   factory Session.fromJson(Map<String, dynamic> json) => Session(
         id: json['id'] as int,
-        email: json['email'] as String,
+        email: (json['email'] ?? '') as String,
         username: (json['username'] ?? '') as String,
         isActive: json['is_active'] as bool? ?? true,
         forceReset: json['force_reset'] as bool? ?? false,
+        identifier: (json['identifier'] as String?)?.trim() == ''
+            ? null
+            : json['identifier'] as String?,
         personKind: json['person_kind'] as String?,
         personName: json['person_name'] as String?,
         isTeaching: json['is_teaching'] as bool?,
@@ -31,6 +35,10 @@ class Session {
   final String username;
   final bool isActive;
   final bool forceReset;
+
+  /// University ID number (student_number or employee_number) — the
+  /// login identifier for MIS-delegated accounts; null for admins.
+  final String? identifier;
 
   /// `student` | `employee` | `contractor` | `alumni` | null.
   final String? personKind;

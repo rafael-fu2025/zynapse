@@ -34,8 +34,22 @@ final class AuthenticationFlowTest extends FeatureTestCase
     private function loginFull(?string $email = null): array
     {
         $email ??= $this->uniqueEmail('auth');
-        $this->createUser(['admin'], $email);
+        $user = $this->createUser(['admin'], $email);
 
+        $session = $this->loginFor($email);
+        $session['userId'] = $user['id'];
+
+        return $session;
+    }
+
+    /**
+     * Log in over the real route WITHOUT creating a user — for tests that
+     * need several sessions on one pre-created account.
+     *
+     * @return array{token:string, refresh:string, userId:int, response:TestResponse}
+     */
+    private function loginFor(string $email): array
+    {
         $result = $this->withBodyFormat('json')->call(
             'post',
             'api/v1/auth/login',
@@ -159,11 +173,12 @@ final class AuthenticationFlowTest extends FeatureTestCase
         $afterReplay->assertStatus(401);
         $this->assertErrorCode('auth.refresh_invalid_or_replayed', $afterReplay);
 
-        // 4. The rotated access token from step 1 still authenticates
-        //    (replay detection revokes refreshes, not the bearer token —
-        //    the short TTL is what bounds that exposure).
+        // 4. The replayed use also killed the rotated access token: replay
+        //    revocation advances the user's token epoch, so every bearer
+        //    token issued before the replay dies immediately (not at exp).
         $me = $this->authed($newToken, 'get', 'api/v1/auth/me');
-        $me->assertStatus(200);
+        $me->assertStatus(401);
+        $this->assertErrorCode('auth.token_revoked', $me);
     }
 
     public function testLogoutRevokesTheRefreshFamily(): void
@@ -174,10 +189,71 @@ final class AuthenticationFlowTest extends FeatureTestCase
         $logout->assertStatus(200);
         $this->assertTrue($this->envelope($logout)['data']['logged_out'] ?? false);
 
-        // The access token itself is not server-side blacklisted, but the
-        // refresh family must be: no silent re-entry after logout.
+        // The refresh family AND the bearer token both die at the server:
+        // logout revokes the family and advances the token epoch, so the
+        // stolen-token window after logout is zero, not exp.
         $after = $this->refreshWith($session['refresh']);
         $after->assertStatus(401);
         $this->assertErrorCode('auth.refresh_invalid_or_replayed', $after);
+
+        $me = $this->authed($session['token'], 'get', 'api/v1/auth/me');
+        $me->assertStatus(401);
+        $this->assertErrorCode('auth.token_revoked', $me);
+    }
+
+    /**
+     * A bearer token issued before the epoch column existed carries no
+     * `epoch` claim; while the user's epoch is still 0 it must keep
+     * working (deployment compatibility — no forced re-login on migrate).
+     *
+     * The claim is overwritten to null, which encodes as JSON null; the
+     * filter's (int) cast reads null as 0, exactly like a missing claim.
+     */
+    public function testLegacyTokenWithoutEpochClaimStillAuthenticatesAtEpochZero(): void
+    {
+        $session = $this->loginFull();
+        $userId = (int) $session['userId'];
+
+        $legacy = \Config\Services::jwt()->sign($userId, 0, ['epoch' => null]);
+
+        $me = $this->authed($legacy, 'get', 'api/v1/auth/me');
+        $me->assertStatus(200);
+    }
+
+    public function testChangePasswordKillsOtherSessions(): void
+    {
+        $email = $this->uniqueEmail('auth');
+        $this->createUser(['student'], $email);
+
+        // Two clients hold independent sessions on the SAME account.
+        $clientA = $this->loginFor($email);
+        $clientB = $this->loginFor($email);
+
+        // Client A changes its password.
+        $change = $this->authed($clientA['token'], 'post', 'api/v1/auth/change-password', [
+            'current_password' => self::TEST_PASSWORD,
+            'new_password'     => self::TEST_PASSWORD . 'X',
+        ]);
+        $change->assertStatus(200);
+        $changeBody = $this->envelope($change);
+        $this->assertIsString($changeBody['data']['access_token'] ?? null, 'Password change must return a fresh access token.');
+
+        // Client B's access token is dead: the epoch check rejects it.
+        $meB = $this->authed($clientB['token'], 'get', 'api/v1/auth/me');
+        $meB->assertStatus(401);
+        $this->assertErrorCode('auth.token_revoked', $meB);
+
+        // Client A's fresh token from the change response still works.
+        // (Assert this BEFORE replaying B's refresh cookie: replay
+        // detection bumps the epoch again — by design — and would kill
+        // A's token too.)
+        $meA = $this->authed((string) $changeBody['data']['access_token'], 'get', 'api/v1/auth/me');
+        $meA->assertStatus(200);
+
+        // B's refresh family was revoked by the password change; replaying
+        // it now triggers replay detection (and a further epoch bump).
+        $refreshB = $this->refreshWith($clientB['refresh']);
+        $refreshB->assertStatus(401);
+        $this->assertErrorCode('auth.refresh_invalid_or_replayed', $refreshB);
     }
 }

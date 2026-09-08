@@ -7,12 +7,14 @@
  */
 export const ApiErrorCode = {
   AUTH_UNAUTHORIZED: 'auth.unauthorized',
+  AUTH_TOKEN_REVOKED: 'auth.token_revoked',
   AUTH_REFRESH_MISSING: 'auth.refresh_missing',
   AUTH_REFRESH_INVALID: 'auth.refresh_invalid_or_replayed',
   AUTH_CREDENTIALS_INVALID: 'auth.credentials_invalid',
   AUTH_USER_NOT_FOUND: 'auth.user_not_found',
   AUTH_LOGIN_LOCKED: 'auth.login_locked',
   AUTH_ACCOUNT_DISABLED: 'auth.account_disabled',
+  AUTH_MIS_UNAVAILABLE: 'auth.mis_unavailable',
 
   RBAC_FORBIDDEN: 'rbac.forbidden',
   RBAC_PERMISSION_DENIED: 'rbac.permission_denied',
@@ -75,10 +77,14 @@ export function humanizeCode(code: string): string {
   switch (code) {
     case ApiErrorCode.AUTH_REFRESH_INVALID:
       return 'Your session has expired or was replayed. Please sign in again.';
+    case ApiErrorCode.AUTH_TOKEN_REVOKED:
+      return 'Your session was revoked. Please sign in again.';
     case ApiErrorCode.AUTH_REFRESH_MISSING:
       return 'No active session. Please sign in.';
     case ApiErrorCode.AUTH_CREDENTIALS_INVALID:
       return 'Email or password is incorrect.';
+    case ApiErrorCode.AUTH_MIS_UNAVAILABLE:
+      return 'The university login service is unreachable. Make sure you are on the campus network, or try again later.';
     case ApiErrorCode.AUTH_LOGIN_LOCKED:
       return 'Too many failed attempts. Wait a few minutes, then try again.';
     case ApiErrorCode.AUTH_ACCOUNT_DISABLED:

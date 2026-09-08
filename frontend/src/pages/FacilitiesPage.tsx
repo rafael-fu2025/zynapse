@@ -12,6 +12,7 @@ import { useId, useMemo, useState } from 'react';
 import { Link, Navigate, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
+import { PageHeader } from '@/components/PageHeader';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { ConfirmDialog, type ConfirmAction } from '@/components/ConfirmDialog';
@@ -1670,42 +1671,40 @@ export default function FacilitiesPage() {
 
   return (
     <main className="mx-auto max-w-7xl space-y-4 p-6">
-      <header className="flex flex-wrap items-center justify-between gap-2">
-        <div>
-          <h1 className="text-xl font-semibold text-foreground">Facilities — BMG</h1>
-          <p className="text-sm text-muted-foreground">
-            Drums move Idle → Processing → Awaiting output → Idle (or Cancelled), and can be placed in Maintenance.
-          </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <Button
-            variant={showArchived ? 'secondary' : 'outline'}
-            aria-pressed={showArchived}
-            onClick={() => { setShowArchived((v) => !v); setCursor(null); setHistory([null]); }}
-          >
-            <Archive /> {showArchived ? 'Hide archived' : 'Show archived'}
-          </Button>
-          <Button variant="outline" onClick={() => setOpenHistory('all')}>
-            <History /> Batch history
-          </Button>
-          {/* The primary "New drum" action sits ALONE at the far right,
-              visually separated from the utility buttons by a divider,
-              so the prominent CTA reads as its own group. (Waste
-              categories was removed — it's already in the sidebar.) */}
-          <div className="mx-1 hidden h-6 w-px bg-border sm:block" aria-hidden />
-          <Dialog open={openCreate} onOpenChange={setOpenCreate}>
-            <Button onClick={() => setOpenCreate(true)}>
-              <Plus /> New drum
+      <PageHeader
+        title="Facilities — BMG"
+        description="Drums move Idle → Processing → Awaiting output → Idle (or Cancelled), and can be placed in Maintenance."
+        actions={
+          <>
+            <Button
+              variant={showArchived ? 'secondary' : 'outline'}
+              aria-pressed={showArchived}
+              onClick={() => { setShowArchived((v) => !v); setCursor(null); setHistory([null]); }}
+            >
+              <Archive /> {showArchived ? 'Hide archived' : 'Show archived'}
             </Button>
-            {openCreate && (
-              <CreateUnitDialog
-                onClose={() => setOpenCreate(false)}
-                existingCodes={units.data?.data.map((u) => u.code) ?? []}
-              />
-            )}
-          </Dialog>
-        </div>
-      </header>
+            <Button variant="outline" onClick={() => setOpenHistory('all')}>
+              <History /> Batch history
+            </Button>
+            {/* The primary "New drum" action sits ALONE at the far right,
+                visually separated from the utility buttons by a divider,
+                so the prominent CTA reads as its own group. (Waste
+                categories was removed — it's already in the sidebar.) */}
+            <div className="mx-1 hidden h-6 w-px bg-border sm:block" aria-hidden />
+            <Dialog open={openCreate} onOpenChange={setOpenCreate}>
+              <Button onClick={() => setOpenCreate(true)}>
+                <Plus /> New drum
+              </Button>
+              {openCreate && (
+                <CreateUnitDialog
+                  onClose={() => setOpenCreate(false)}
+                  existingCodes={units.data?.data.map((u) => u.code) ?? []}
+                />
+              )}
+            </Dialog>
+          </>
+        }
+      />
 
       <OpenAlertsBanner />
 

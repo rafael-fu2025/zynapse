@@ -229,24 +229,22 @@ input:-internal-autofill-selected {
 
 /*
  * Mobile topbar page title — the page H1 ("Clinic", "Appointments", …)
- * AND its supporting description live in the topbar on mobile so the
- * user always knows which screen they're on without scrolling up.
- * Hide both elements on mobile to avoid rendering them twice.
+ * AND its supporting description live in the page's PageHeader so the
+ * user always knows which screen they're on without scrolling up, but
+ * on mobile the topbar shows the title instead (Layout.tsx +
+ * pageMeta). Hide both elements on mobile to avoid rendering them
+ * twice.
  *
- * The structural patterns we target across the 12 page headers:
- *   main > header > div > h1   (most pages)
- *   main > header > h1         (Dashboard, no inner wrapper)
- *   main > header > div > p    (description)
- *   main > header > p          (description, no inner wrapper)
- *
- * Selectors are intentionally narrow so they only affect the H1
- * block, not other headings or muted paragraphs in the page body.
+ * Selectors are attribute-based (the PageHeader sets
+ * `data-page-header` / `data-page-header-description`) so they match
+ * regardless of nesting depth — portal pages render their header
+ * inside a wrapper div, where a `main > header > …` selector misses.
+ * Standalone screens (Login, Queue display, Kiosk station, 403) don't
+ * use PageHeader and are unaffected.
  */
 @media (max-width: 767px) {
-  main > header > div > h1,
-  main > header > h1,
-  main > header > div > p.text-sm.text-muted-foreground,
-  main > header > p.text-sm.text-muted-foreground {
+  [data-page-header] h1,
+  [data-page-header] [data-page-header-description] {
     display: none;
   }
 }

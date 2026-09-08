@@ -41,6 +41,9 @@ export function UserMenu() {
   const identity = linkedName ?? me.data?.email ?? me.data?.username ?? null;
   const initials = initialsFor(identity);
   const personKind = me.data?.person_kind ?? null;
+  // University ID number for MIS-delegated accounts; admins keep their
+  // email as the visible handle.
+  const displayHandle = me.data?.identifier ?? me.data?.email ?? '';
 
   return (
     <Popover>
@@ -59,7 +62,7 @@ export function UserMenu() {
             {initials}
           </span>
           <span className="hidden truncate text-muted-foreground sm:block">
-            {me.data?.email ?? ''}
+            {displayHandle}
           </span>
         </button>
       </PopoverTrigger>
@@ -76,6 +79,11 @@ export function UserMenu() {
           {me.data?.username !== undefined && me.data.username !== '' && (
             <p className="truncate text-[11px] text-muted-foreground">
               @{me.data.username}
+            </p>
+          )}
+          {me.data?.identifier != null && me.data.identifier !== '' && (
+            <p className="truncate text-[11px] text-muted-foreground">
+              ID No. {me.data.identifier}
             </p>
           )}
           <p className="mt-1 truncate text-[11px] text-muted-foreground">

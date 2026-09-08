@@ -9,6 +9,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { KeyRound, Loader2, TriangleAlert } from 'lucide-react';
 import { useForm } from 'react-hook-form';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { PageHeader } from '@/components/PageHeader';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -29,24 +30,24 @@ export default function ChangePasswordPage() {
 
   return (
     <main className="mx-auto max-w-md space-y-4 p-6">
-      <header className="space-y-2">
-        <h1 className="flex items-center gap-2 text-xl font-semibold text-foreground">
-          <KeyRound className="size-5" /> Change password
-        </h1>
-        {me.data?.force_reset === true ? (
-          <Alert variant="destructive">
-            <TriangleAlert className="size-4" />
-            <AlertTitle>Password reset required</AlertTitle>
-            <AlertDescription>
-              Your password was reset by an administrator. Choose a new one to continue.
-            </AlertDescription>
-          </Alert>
-        ) : (
-          <p className="text-sm text-muted-foreground">
-            Changing your password signs out every other session.
-          </p>
-        )}
-      </header>
+      <PageHeader
+        title={
+          <span className="flex items-center gap-2">
+            <KeyRound className="size-5" /> Change password
+          </span>
+        }
+        description={me.data?.force_reset === true ? undefined : 'Changing your password signs out every other session.'}
+      />
+
+      {me.data?.force_reset === true && (
+        <Alert variant="destructive">
+          <TriangleAlert className="size-4" />
+          <AlertTitle>Password reset required</AlertTitle>
+          <AlertDescription>
+            Your password was reset by an administrator. Choose a new one to continue.
+          </AlertDescription>
+        </Alert>
+      )}
 
       <Card>
         <CardContent className="pt-6">

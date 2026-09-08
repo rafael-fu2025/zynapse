@@ -13,6 +13,7 @@
 import { useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Badge } from '@/components/ui/badge';
+import { PageHeader } from '@/components/PageHeader';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import {
@@ -73,30 +74,28 @@ export default function CounsellingPage() {
   return (
     <TooltipProvider delayDuration={150} skipDelayDuration={300}>
       <main className="mx-auto max-w-7xl space-y-4 p-6">
-        <header>
-          <h1 className="text-xl font-semibold text-foreground">Counselling</h1>
-          <p className="text-sm text-muted-foreground">
-            Session notes are encrypted at rest (AES-256-GCM). Bookings must fall inside an availability
-            window; repeated no-shows follow the three-strike policy.
-          </p>
-        </header>
-
-        <Tabs value={tab} onValueChange={setTab}>
-          <TabsList>
-            {canReadQueue && (
-              <TabsTrigger value="queue">
-                Queue{' '}
-                {active !== undefined && (
-                  <Badge className="ml-1.5" variant="info">
-                    {active.queue_number}
-                  </Badge>
+        <Tabs value={tab} onValueChange={setTab} className="space-y-4">
+          <PageHeader
+            title="Counselling"
+            description="Session notes are encrypted at rest (AES-256-GCM). Bookings must fall inside an availability window; repeated no-shows follow the three-strike policy."
+            tabs={
+              <TabsList>
+                {canReadQueue && (
+                  <TabsTrigger value="queue">
+                    Queue{' '}
+                    {active !== undefined && (
+                      <Badge className="ml-1.5" variant="info">
+                        {active.queue_number}
+                      </Badge>
+                    )}
+                  </TabsTrigger>
                 )}
-              </TabsTrigger>
-            )}
-            <TabsTrigger value="sessions">Sessions &amp; Notes</TabsTrigger>
-            <TabsTrigger value="scheduling">Scheduling</TabsTrigger>
-            <TabsTrigger value="analytics">Analytics</TabsTrigger>
-          </TabsList>
+                <TabsTrigger value="sessions">Sessions &amp; Notes</TabsTrigger>
+                <TabsTrigger value="scheduling">Scheduling</TabsTrigger>
+                <TabsTrigger value="analytics">Analytics</TabsTrigger>
+              </TabsList>
+            }
+          />
 
           {canReadQueue && (
             <TabsContent value="queue" className="mt-4">

@@ -19,6 +19,7 @@ import { useId, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
+import { PageHeader } from '@/components/PageHeader';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -477,28 +478,34 @@ function DrumDetail({ batch }: { batch: ActiveBatch }) {
 
   return (
     <>
-      <header className="flex flex-wrap items-start justify-between gap-2">
-        <div>
-          <h1 className="flex items-center gap-2 text-xl font-semibold text-foreground">
+      <PageHeader
+        title={
+          <span className="flex items-center gap-2">
             <Cylinder className="size-5 text-primary" />
             <span className="font-mono">{batch.unit_code}</span>
             <Badge variant={isInput ? 'info' : 'warning'} className="uppercase">
               {isInput ? 'Input' : 'Processing'}
             </Badge>
-          </h1>
-          <p className="mt-0.5 text-sm text-muted-foreground">{batch.unit_name}</p>
-          {batch.unit_location !== null && (
-            <p className="mt-0.5 flex items-center gap-1 text-xs text-muted-foreground">
-              <MapPin className="size-3" /> {batch.unit_location}
-            </p>
-          )}
-        </div>
-        <Button variant="outline" asChild>
-          <Link to="/facilities">
-            <ArrowLeft /> Back to Facilities
-          </Link>
-        </Button>
-      </header>
+          </span>
+        }
+        description={
+          <>
+            {batch.unit_name}
+            {batch.unit_location !== null && (
+              <span className="mt-0.5 flex items-center gap-1 text-xs">
+                <MapPin className="size-3" /> {batch.unit_location}
+              </span>
+            )}
+          </>
+        }
+        actions={
+          <Button variant="outline" asChild>
+            <Link to="/facilities">
+              <ArrowLeft /> Back to Facilities
+            </Link>
+          </Button>
+        }
+      />
 
       <Card className="border-l-4 border-l-primary/70">
         <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-3">

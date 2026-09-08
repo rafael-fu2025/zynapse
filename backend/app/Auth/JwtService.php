@@ -23,20 +23,27 @@ final class JwtService
     /**
      * Issue a fresh access token. The `sub` is the internal user id.
      *
+     * The `epoch` claim mirrors `users.token_epoch` at issuance; the auth
+     * filter compares it against the current column value so bumping the
+     * epoch (logout / password change / refresh replay) kills every
+     * outstanding token immediately. Tokens signed before this column
+     * existed carry no claim and read as epoch 0.
+     *
      * @param array<string, mixed> $extraClaims Custom claims (e.g., perms[]).
      */
-    public function sign(int $userId, array $extraClaims = []): string
+    public function sign(int $userId, int $epoch = 0, array $extraClaims = []): string
     {
         /** @var \Config\Auth $cfg */
         $cfg = config('Config\\Auth');
         $now = time();
 
         $payload = array_merge([
-            'iss' => config('Config\\App')->baseURL,
-            'sub' => (string) $userId,
-            'iat' => $now,
-            'exp' => $now + (int) $cfg->jwtAccessTtl,
-            'jti' => bin2hex(random_bytes(16)),
+            'iss'   => config('Config\\App')->baseURL,
+            'sub'   => (string) $userId,
+            'iat'   => $now,
+            'exp'   => $now + (int) $cfg->jwtAccessTtl,
+            'jti'   => bin2hex(random_bytes(16)),
+            'epoch' => $epoch,
         ], $extraClaims);
 
         return JWT::encode($payload, $this->secret(), $cfg->jwtAlgorithm);
