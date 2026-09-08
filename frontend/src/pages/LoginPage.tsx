@@ -59,7 +59,10 @@ export default function LoginPage() {
   }, []);
 
   function describeLoginError(error: unknown): string {
-    if (!(error instanceof ApiEnvelopeError)) return 'Login failed unexpectedly. Please try again.';
+    if (!(error instanceof ApiEnvelopeError)) {
+      console.error('Login error:', error);
+      return 'Login failed unexpectedly. Please try again.';
+    }
     if (error.httpStatus === 0) return 'Cannot reach the SYNAPSE server. Check your connection and try again.';
     if (error.httpStatus >= 500) return 'The SYNAPSE server could not complete the login. Please try again shortly.';
     const primary = error.errors[0];
@@ -139,7 +142,9 @@ export default function LoginPage() {
             <CardTitle id="login-title" className="text-xl">
               Sign in to SYNAPSE
             </CardTitle>
-            <CardDescription>Use your university credentials. All access is audited.</CardDescription>
+            <CardDescription>
+              Use your university ID number and password. All access is audited.
+            </CardDescription>
           </div>
         </CardHeader>
 
@@ -158,18 +163,28 @@ export default function LoginPage() {
               </div>
             )}
             <div className="space-y-1.5">
-              <Label htmlFor="email">Email</Label>
+              <Label htmlFor="identifier">Student / Employee number</Label>
               <Input
-                id="email"
-                type="email"
-                autoComplete="email"
-                aria-invalid={errors.email !== undefined}
-                aria-describedby={errors.email !== undefined ? 'email-err' : undefined}
-                {...register('email', { onChange: () => setLoginError(null) })}
+                id="identifier"
+                type="text"
+                // Autofill stores the admin email here — the wire payload
+                // splitter (loginWirePayload) sends emails as `email`,
+                // so both credential kinds work through one field.
+                autoComplete="username"
+                inputMode="text"
+                aria-invalid={errors.identifier !== undefined}
+                aria-describedby={
+                  errors.identifier !== undefined ? 'identifier-err' : 'identifier-hint'
+                }
+                {...register('identifier', { onChange: () => setLoginError(null) })}
               />
-              {errors.email !== undefined && (
-                <p id="email-err" role="alert" className="text-xs text-destructive">
-                  {errors.email.message}
+              {errors.identifier !== undefined ? (
+                <p id="identifier-err" role="alert" className="text-xs text-destructive">
+                  {errors.identifier.message}
+                </p>
+              ) : (
+                <p id="identifier-hint" className="text-xs text-muted-foreground">
+                  Administrators: sign in with your email address.
                 </p>
               )}
             </div>

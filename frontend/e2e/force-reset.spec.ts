@@ -42,9 +42,9 @@ test('admin reset forces nurse into change-password, rotation unlocks', async ({
   // --- UI: nurse signs in with the temp password.
   await expect(async () => {
     await page.goto('/login', { waitUntil: 'domcontentloaded', timeout: 15_000 });
-    await expect(page.getByLabel(/email/i)).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByLabel(/student|employee|number|email/i)).toBeVisible({ timeout: 10_000 });
   }).toPass({ timeout: 30_000 });
-  await page.getByLabel(/email/i).fill(NURSE_EMAIL);
+  await page.getByLabel(/student|employee|number|email/i).fill(NURSE_EMAIL);
   await page.locator('input[name="password"]').fill(temp);
   const loginResponsePromise = page.waitForResponse(
     (response) => response.url().endsWith('/api/v1/auth/login') && response.request().method() === 'POST',

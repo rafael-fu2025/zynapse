@@ -21,6 +21,7 @@ import { ConfirmDialog, type ConfirmAction } from '@/components/ConfirmDialog';
 import { CopyButton } from '@/components/CopyButton';
 import { QueryErrorState } from '@/components/QueryErrorState';
 import { SearchBox, highlightMatch } from '@/components/ui/SearchBox';
+import { PageHeader } from '@/components/PageHeader';
 import {
   Dialog,
   DialogContent,
@@ -504,63 +505,62 @@ export default function AdminUsersPage() {
 
   return (
     <main className="mx-auto min-w-0 max-w-7xl space-y-5 p-4 sm:p-6">
-      <header className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-        <div>
-          <h1 className="text-xl font-semibold text-foreground">Users</h1>
-          <p className="max-w-2xl text-sm text-muted-foreground">
-            Manage account access, roles, and credential recovery. Accounts are disabled rather than deleted.
-          </p>
-        </div>
-        <Dialog open={openCreate} onOpenChange={setOpenCreate}>
-          <Button onClick={() => setOpenCreate(true)} disabled={roles.isLoading || roles.isError}>
-            <UserPlus aria-hidden /> New user
-          </Button>
-          {openCreate && roles.data !== undefined && (
-            <CreateUserDialog roles={roles.data} onClose={() => setOpenCreate(false)} onCreated={setTempCredential} />
-          )}
-        </Dialog>
-      </header>
+      <PageHeader
+        title="Users"
+        description="Manage account access, roles, and credential recovery. Accounts are disabled rather than deleted."
+        actions={
+          <Dialog open={openCreate} onOpenChange={setOpenCreate}>
+            <Button onClick={() => setOpenCreate(true)} disabled={roles.isLoading || roles.isError}>
+              <UserPlus aria-hidden /> New user
+            </Button>
+            {openCreate && roles.data !== undefined && (
+              <CreateUserDialog roles={roles.data} onClose={() => setOpenCreate(false)} onCreated={setTempCredential} />
+            )}
+          </Dialog>
+        }
+        toolbar={
+          <section aria-labelledby="user-filters-heading" className="w-full space-y-3">
+            <h2 id="user-filters-heading" className="sr-only">User filters</h2>
+            <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
+              <SearchBox
+                value={searchDraft}
+                onValueChange={setSearchDraft}
+                placeholder="Search email or username"
+                ariaLabel="Search users"
+                inputId="users-search"
+                isFetching={list.isFetching && list.data !== undefined}
+                className="sm:flex-[2_1_240px]"
+              />
+              <Select value={filters.status} onValueChange={(value) => updateFilter('status', value)}>
+                <SelectTrigger aria-label="Filter users by status" className="sm:flex-1 sm:min-w-[160px]"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All statuses</SelectItem>
+                  <SelectItem value="active">Active</SelectItem>
+                  <SelectItem value="disabled">Disabled</SelectItem>
+                </SelectContent>
+              </Select>
+              <Select value={filters.group} onValueChange={(value) => updateFilter('group', value)} disabled={roles.isLoading || roles.isError}>
+                <SelectTrigger aria-label="Filter users by role" className="sm:flex-1 sm:min-w-[160px]"><SelectValue placeholder="All roles" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All roles</SelectItem>
+                  {roleOptions.map((role) => <SelectItem key={role.code} value={role.code}>{role.name}</SelectItem>)}
+                </SelectContent>
+              </Select>
+              <Select value={filters.sort} onValueChange={(value) => updateFilter('sort', value)}>
+                <SelectTrigger aria-label="Sort users" className="sm:flex-1 sm:min-w-[160px]"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="newest">Newest first</SelectItem>
+                  <SelectItem value="oldest">Oldest first</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </section>
+        }
+      />
 
       {roles.isError && (
         <QueryErrorState message="Failed to load the authoritative role list." onRetry={() => void roles.refetch()} pending={roles.isFetching} />
       )}
-
-      <section aria-labelledby="user-filters-heading" className="space-y-3 border-y py-4">
-        <h2 id="user-filters-heading" className="sr-only">User filters</h2>
-        <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
-          <SearchBox
-            value={searchDraft}
-            onValueChange={setSearchDraft}
-            placeholder="Search email or username"
-            ariaLabel="Search users"
-            inputId="users-search"
-            isFetching={list.isFetching && list.data !== undefined}
-            className="sm:flex-[2_1_240px]"
-          />
-          <Select value={filters.status} onValueChange={(value) => updateFilter('status', value)}>
-            <SelectTrigger aria-label="Filter users by status" className="sm:flex-1 sm:min-w-[160px]"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All statuses</SelectItem>
-              <SelectItem value="active">Active</SelectItem>
-              <SelectItem value="disabled">Disabled</SelectItem>
-            </SelectContent>
-          </Select>
-          <Select value={filters.group} onValueChange={(value) => updateFilter('group', value)} disabled={roles.isLoading || roles.isError}>
-            <SelectTrigger aria-label="Filter users by role" className="sm:flex-1 sm:min-w-[160px]"><SelectValue placeholder="All roles" /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All roles</SelectItem>
-              {roleOptions.map((role) => <SelectItem key={role.code} value={role.code}>{role.name}</SelectItem>)}
-            </SelectContent>
-          </Select>
-          <Select value={filters.sort} onValueChange={(value) => updateFilter('sort', value)}>
-            <SelectTrigger aria-label="Sort users" className="sm:flex-1 sm:min-w-[160px]"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="newest">Newest first</SelectItem>
-              <SelectItem value="oldest">Oldest first</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-      </section>
 
       <section aria-labelledby="users-list-heading" className="overflow-hidden rounded-xl border bg-card">
         <h2 id="users-list-heading" className="sr-only">User accounts</h2>

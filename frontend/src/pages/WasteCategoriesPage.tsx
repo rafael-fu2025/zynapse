@@ -10,6 +10,7 @@ import { Archive, ArchiveRestore, ArrowLeft, Boxes, Check, ChevronDown, LineChar
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Badge } from '@/components/ui/badge';
+import { PageHeader } from '@/components/PageHeader';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import {
@@ -252,30 +253,30 @@ export default function WasteCategoriesPage() {
 
   return (
     <main className="mx-auto max-w-7xl space-y-4 p-6">
-      <header className="flex flex-wrap items-center justify-between gap-2">
-        <div>
-          <h1 className="flex items-center gap-2 text-xl font-semibold text-foreground">
+      <PageHeader
+        title={
+          <span className="flex items-center gap-2">
             <Boxes className="size-5 text-primary" /> Waste categories
-          </h1>
-          <p className="text-sm text-muted-foreground">
-            Manage the waste types accepted by BMG drums — expected yield and reference decomposition duration drive batch ETAs and progress.
-          </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <Button
-            variant={showArchived ? 'secondary' : 'outline'}
-            aria-pressed={showArchived}
-            onClick={() => setShowArchived((v) => !v)}
-          >
-            <Archive /> {showArchived ? 'Hide archived' : 'Show archived'}
-          </Button>
-          <Button variant="outline" asChild>
-            <Link to="/facilities">
-              <ArrowLeft /> Back to Facilities
-            </Link>
-          </Button>
-        </div>
-      </header>
+          </span>
+        }
+        description="Manage the waste types accepted by BMG drums — expected yield and reference decomposition duration drive batch ETAs and progress."
+        actions={
+          <>
+            <Button
+              variant={showArchived ? 'secondary' : 'outline'}
+              aria-pressed={showArchived}
+              onClick={() => setShowArchived((v) => !v)}
+            >
+              <Archive /> {showArchived ? 'Hide archived' : 'Show archived'}
+            </Button>
+            <Button variant="outline" asChild>
+              <Link to="/facilities">
+                <ArrowLeft /> Back to Facilities
+              </Link>
+            </Button>
+          </>
+        }
+      />
 
       {/* Add form */}
       <Card>

@@ -78,7 +78,12 @@ class AuthController extends ChangeNotifier {
   }
 
   /// Exchanges credentials for a session.
-  Future<Session> login(String email, String password) async {
+  ///
+  /// [identifier] is the student/employee number (MIS-delegated login)
+  /// — but an email-looking value is sent as `email` so admin accounts
+  /// can sign in through the same field, mirroring the SPA's
+  /// `loginWirePayload` split.
+  Future<Session> login(String identifier, String password) async {
     _busy = true;
     notifyListeners();
     try {
@@ -86,9 +91,16 @@ class AuthController extends ChangeNotifier {
       // Set-Cookie from this login response is captured to disk (defensive
       // — bootstrap already initialises it, but a direct login is possible).
       await ApiClient.I.initPersistentCookieJar();
+      final trimmed = identifier.trim();
+      final isEmail = RegExp(
+        r'^[^\s@]+@[^\s@]+\.[^\s@]+$',
+      ).hasMatch(trimmed);
+      final credentials = isEmail
+          ? {'email': trimmed.toLowerCase(), 'password': password}
+          : {'identifier': trimmed, 'password': password};
       final res = await ApiClient.I.dio.post<Map<String, dynamic>>(
         '/auth/login',
-        data: {'email': email.trim(), 'password': password},
+        data: credentials,
       );
       final data = res.data?['data'];
       if (data is! Map<String, dynamic>) {

@@ -196,7 +196,14 @@ export function AppSidebar() {
       <SidebarHeader>
         <SidebarMenu>
           <SidebarMenuItem>
-            <SidebarMenuButton size="lg" asChild tooltip="Dashboard">
+            {/* Brand row — hover/press highlight and the collapsed-rail
+                tooltip are deliberately off: a logo banner is not a
+                menu row. */}
+            <SidebarMenuButton
+              size="lg"
+              asChild
+              className="hover:bg-transparent hover:text-sidebar-foreground active:bg-transparent active:text-sidebar-foreground"
+            >
               <NavLink to="/" onClick={closeMobile}>
                 <img
                   src="/synapse-white.png"

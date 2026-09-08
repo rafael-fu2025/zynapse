@@ -20,6 +20,7 @@ export interface MockSession {
   id: number;
   email: string;
   username: string;
+  identifier?: string | null;
   is_active: boolean;
   force_reset: boolean;
   permissions: string[];
@@ -81,13 +82,15 @@ export function livePassword(): string {
 }
 
 /**
- * The form interaction both flows share. `input[name="password"]` is the
- * stable selector — the field is not a labelled textbox in every theme
- * state, and getByLabel(/password/i) once matched the "forgot password"
- * link text.
+ * The form interaction both flows share. The login field accepts either
+ * a university ID number or an email (admins) — the same wire-payload
+ * split the SPA performs, so live specs keep using the env email here.
+ * `input[name="password"]` is the stable selector — the field is not a
+ * labelled textbox in every theme state, and getByLabel(/password/i)
+ * once matched the "forgot password" link text.
  */
-async function submitLoginForm(page: Page, email: string, password: string): Promise<void> {
-  await page.getByLabel(/email/i).fill(email);
+async function submitLoginForm(page: Page, identifier: string, password: string): Promise<void> {
+  await page.getByLabel(/student|employee|number|email/i).fill(identifier);
   await page.locator('input[name="password"]').fill(password);
   await page.getByRole('button', { name: /sign in/i }).click();
 }
@@ -101,7 +104,7 @@ export async function signInLive(page: Page, email?: string): Promise<void> {
   const password = livePassword();
   await expect(async () => {
     await page.goto('/login', { waitUntil: 'domcontentloaded', timeout: 15_000 });
-    await expect(page.getByLabel(/email/i)).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByLabel(/student|employee|number|email/i)).toBeVisible({ timeout: 10_000 });
   }).toPass({ timeout: 30_000 });
   await submitLoginForm(page, email ?? liveEmail(), password);
   await page.waitForURL(/\/$/, { timeout: 20_000 });

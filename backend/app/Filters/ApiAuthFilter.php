@@ -57,6 +57,16 @@ final class ApiAuthFilter implements FilterInterface
             ]));
         }
 
+        // Token epoch: the claim mirrors users.token_epoch at issuance.
+        // Logout, password change, and refresh-replay revocation bump the
+        // column, so a mismatch means this token was issued before a
+        // server-side revocation — it must die now, not at exp. Tokens
+        // signed before the column existed carry no claim and read as 0.
+        $tokenEpoch = (int) ($payload['epoch'] ?? 0);
+        if ($tokenEpoch !== $state['token_epoch']) {
+            return $this->reject(ApiException::unauthorized(\App\Exceptions\ApiErrorCode::AUTH_TOKEN_REVOKED));
+        }
+
         // Hydrate the request-scoped CurrentUser, and derive the active
         // tenant from the SAME row (users.tenant_id). Binding here, per
         // request, is what makes CurrentTenant request-scoped in practice:

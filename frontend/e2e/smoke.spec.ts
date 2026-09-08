@@ -14,7 +14,7 @@ test('login page renders and the form is reachable', async ({ page }) => {
   // The login title is a styled CardTitle (not a heading element), so
   // assert on text, not the heading role.
   await expect(page.getByText(/sign in to synapse/i)).toBeVisible();
-  await expect(page.getByLabel(/email/i)).toBeVisible();
+  await expect(page.getByLabel(/student|employee|number|email/i)).toBeVisible();
   // "Show password" toggle also matches /password/i — target the textbox.
   await expect(page.getByRole('textbox', { name: 'Password' })).toBeVisible();
 });

@@ -31,7 +31,7 @@ export const PAGE_META: Readonly<Record<string, PageMeta>> = {
   '/counselling': { title: 'Counselling' },
   '/facilities': { title: 'Facilities — BMG' },
   '/facilities/drums': { title: 'Drums' },
-  '/facilities/waste-categories': { title: 'Waste Categories' },
+  '/facilities/waste-categories': { title: 'Waste categories' },
   '/admin': { title: 'Administration' },
   '/admin/kiosk-settings': { title: 'Kiosk Settings' },
   '/admin/users': {
@@ -42,8 +42,8 @@ export const PAGE_META: Readonly<Record<string, PageMeta>> = {
   '/queue-display': { title: 'Queue Display' },
   '/notifications': { title: 'Notifications' },
   '/referrals': { title: 'Referrals' },
-  '/reports': { title: 'Reports & Analytics' },
-  '/audit': { title: 'Audit' },
+  '/reports': { title: 'Reports and analytics' },
+  '/audit': { title: 'Audit evidence' },
   '/change-password': { title: 'Change password' },
 };
 

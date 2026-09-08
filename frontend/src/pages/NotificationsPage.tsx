@@ -10,6 +10,7 @@ import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { PageHeader } from '@/components/PageHeader';
 import { QueryErrorState } from '@/components/QueryErrorState';
 import {
   useMarkAllNotificationsRead,
@@ -92,25 +93,25 @@ export default function NotificationsPage() {
 
   return (
     <main className="mx-auto max-w-3xl space-y-4 p-6">
-      <header className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-semibold text-foreground">Notifications</h1>
-          <p className="text-sm text-muted-foreground">Your in-app notification history.</p>
-        </div>
-        <div className="flex items-center gap-2">
-          <Button
-            variant={onlyUnread ? 'secondary' : 'outline'}
-            size="sm"
-            onClick={() => setOnlyUnread((v) => !v)}
-          >
-            {onlyUnread ? 'Showing unread' : 'All'}
-          </Button>
-          <Button size="sm" variant="outline" disabled={markAll.isPending || !pageHasUnread} onClick={() => markAll.mutate()}>
-            {markAll.isPending && <Loader2 className="size-3.5 animate-spin" aria-hidden />}
-            Mark all read
-          </Button>
-        </div>
-      </header>
+      <PageHeader
+        title="Notifications"
+        description="Your in-app notification history."
+        actions={
+          <>
+            <Button
+              variant={onlyUnread ? 'secondary' : 'outline'}
+              size="sm"
+              onClick={() => setOnlyUnread((v) => !v)}
+            >
+              {onlyUnread ? 'Showing unread' : 'All'}
+            </Button>
+            <Button size="sm" variant="outline" disabled={markAll.isPending || !pageHasUnread} onClick={() => markAll.mutate()}>
+              {markAll.isPending && <Loader2 className="size-3.5 animate-spin" aria-hidden />}
+              Mark all read
+            </Button>
+          </>
+        }
+      />
 
       <section className="overflow-hidden rounded-xl border bg-card">
         {list.isLoading && (

@@ -10,7 +10,7 @@ import { toast } from 'sonner';
 import { apiClient } from '@/api/client';
 import { humanizeCode } from '@/api/errorCodes';
 import type { ApiEnvelopeError } from '@/api/envelope';
-import { sessionSchema, type ChangePasswordInput, type LoginInput, type Session } from '@/schemas/auth';
+import { sessionSchema, loginWirePayload, type ChangePasswordInput, type LoginInput, type Session } from '@/schemas/auth';
 import { useAuthStore } from '@/store/auth';
 
 export function useLogin() {
@@ -23,7 +23,7 @@ export function useLogin() {
     mutationFn: async (input) => {
       const res = await apiClient.post<{ access_token: string; expires_in: number }>(
         '/auth/login',
-        input,
+        loginWirePayload(input),
       );
       setAccessToken(res.data.access_token);
       const me = await apiClient.get<Session>('/auth/me');

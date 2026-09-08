@@ -261,7 +261,7 @@ class _IdentityChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final email = session?.email ?? '';
+    final email = session?.identifier ?? session?.email ?? '';
     return Padding(
       padding: const EdgeInsets.only(right: 8),
       child: InkWell(
@@ -498,7 +498,7 @@ class _IdentityChip extends StatelessWidget {
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Sign out?'),
-        content: Text('You are signed in as ${session?.email}.'),
+        content: Text('You are signed in as ${session?.identifier ?? session?.email}.'),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),

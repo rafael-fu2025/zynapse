@@ -117,11 +117,19 @@ final class RefreshTokenService
             $now = date('Y-m-d H:i:s');
 
             if ($row['revoked_at'] !== null) {
-                // Replay — kill the entire family.
+                // Replay — kill the entire family, and advance the user's
+                // token epoch so replay-detection also kills outstanding
+                // access tokens (a replayed refresh token means the family
+                // is compromised; the access tokens issued under it are
+                // presumed stolen too).
                 $this->db->table('auth_refresh_tokens')
                     ->where('family_id', $row['family_id'])
                     ->where('revoked_at', null)
                     ->update(['revoked_at' => $now]);
+                $this->db->table('users')
+                    ->where('id', (int) $row['user_id'])
+                    ->set('token_epoch', 'token_epoch + 1', false)
+                    ->update();
                 $this->db->transComplete();
                 return [
                     'status'    => 'replayed',

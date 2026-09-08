@@ -17,6 +17,22 @@ declare(strict_types=1);
  */
 
 require __DIR__ . '/../vendor/autoload.php';
+
+/*
+ * Autoload app `Config\` classes for unit tests. CI4's autoloader maps
+ * `Config\` → `app/Config/` in real runs; replicate that mapping here so
+ * unit tests can instantiate `new Config\FuMis()` etc. directly without
+ * booting the framework.
+ */
+spl_autoload_register(static function (string $class): void {
+    if (str_starts_with($class, 'Config\\')) {
+        $short = substr($class, 7);
+        $file  = __DIR__ . '/../app/Config/' . str_replace('\\', '/', $short) . '.php';
+        if (is_file($file)) {
+            require_once $file;
+        }
+    }
+});
 /*
  * Path constants — the CodeIgniter bootstrap normally defines
  * APPPATH / SYSTEMPATH / FCPATH / VENDORPATH / WRITEPATH via

@@ -17,7 +17,7 @@ test('login shows a persistent reason when credentials are rejected', async ({ p
   }));
 
   await page.goto('/login');
-  await page.getByLabel('Email').fill('admin@example.test');
+  await page.getByLabel('Student / Employee number').fill('admin@example.test');
   await page.getByRole('textbox', { name: 'Password' }).fill('WrongPass1!');
   await page.getByRole('button', { name: 'Sign in' }).click();
 

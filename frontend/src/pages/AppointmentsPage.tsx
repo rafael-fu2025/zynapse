@@ -46,6 +46,7 @@ import { Link } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import { AppointmentQrDialog } from '@/components/AppointmentQrDialog';
 import { Badge } from '@/components/ui/badge';
+import { PageHeader } from '@/components/PageHeader';
 import { Button } from '@/components/ui/button';
 import { ConfirmDialog, type ConfirmAction } from '@/components/ConfirmDialog';
 import { QueryErrorRow } from '@/components/QueryErrorState';
@@ -709,76 +710,74 @@ export default function AppointmentsPage() {
 
   return (
     <main className="mx-auto max-w-7xl space-y-4 p-6">
-      <header className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-semibold text-foreground">Appointments</h1>
-          <p className="text-sm text-muted-foreground">Times shown in Asia/Manila; stored in UTC.</p>
-        </div>
-      </header>
-
-      {/* Live-search toolbar — same layout as the Patients page: a
-          bordered card with the magnifier icon INSIDE the input on the
-          left and the actions on the right. Typing >= 2 chars searches
-          as you type (debounced); clearing restores the paged list. */}
-      <section className="flex flex-wrap items-end justify-between gap-3 rounded-xl border bg-card p-3">
-        <div className="w-full space-y-1 sm:w-80 lg:flex-1 lg:max-w-md">
-          <Label htmlFor="appt-search" className="text-xs">Search</Label>
-          <div className="relative">
-            <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-            <Input
-              id="appt-search"
-              aria-label="Search appointments"
-              placeholder="Search number, name, ID, provider, date…"
-              className="pl-9"
-              value={searchDraft}
-              onChange={(e) => setSearch(e.target.value)}
-            />
-          </div>
-        </div>
-        {/* items-end keeps the unlabeled Schedule button bottom-aligned
-            with the Status select field (whose label makes it taller) —
-            items-center would float the button against the block's
-            middle instead of lining it up with the field. */}
-        <div className="flex flex-wrap items-end gap-2">
-          <div className="space-y-1">
-            <Label id="appt-status-label" className="text-xs">Status</Label>
-            <Select
-              value={statusFilter}
-              onValueChange={(v) => { setStatusFilter(v); setCursor(null); setHistory([null]); }}
-            >
-              <SelectTrigger aria-labelledby="appt-status-label" className="w-44">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {STATUS_OPTIONS.map((o) => (
-                  <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <Dialog open={openSchedule} onOpenChange={setOpenSchedule}>
-            {canWrite && (
-              <Button onClick={() => setOpenSchedule(true)}>
-                <CalendarPlus /> Schedule
-              </Button>
-            )}
-            {openSchedule && canWrite && (
-              <ScheduleDialog
-                mode="create"
-                onClose={() => setOpenSchedule(false)}
-                onScheduled={setQrAppt}
-              />
-            )}
-          </Dialog>
-        </div>
-      </section>
-
-      <Tabs value={tab} onValueChange={(v) => setTab(v)}>
-        <TabsList>
-          <TabsTrigger value="all">All ({counts.all})</TabsTrigger>
-          <TabsTrigger value="upcoming">Upcoming ({counts.upcoming})</TabsTrigger>
-          <TabsTrigger value="past">Past ({counts.past})</TabsTrigger>
-        </TabsList>
+      <Tabs value={tab} onValueChange={(v) => setTab(v)} className="space-y-4">
+        <PageHeader
+          title="Appointments"
+          description="Times shown in Asia/Manila; stored in UTC."
+          actions={
+            <Dialog open={openSchedule} onOpenChange={setOpenSchedule}>
+              {canWrite && (
+                <Button onClick={() => setOpenSchedule(true)}>
+                  <CalendarPlus /> Schedule
+                </Button>
+              )}
+              {openSchedule && canWrite && (
+                <ScheduleDialog
+                  mode="create"
+                  onClose={() => setOpenSchedule(false)}
+                  onScheduled={setQrAppt}
+                />
+              )}
+            </Dialog>
+          }
+          tabs={
+            <TabsList>
+              <TabsTrigger value="all">All ({counts.all})</TabsTrigger>
+              <TabsTrigger value="upcoming">Upcoming ({counts.upcoming})</TabsTrigger>
+              <TabsTrigger value="past">Past ({counts.past})</TabsTrigger>
+            </TabsList>
+          }
+          toolbar={
+            /* Live-search toolbar — same layout as the Patients page: a
+               bordered card with the magnifier icon INSIDE the input on the
+               left and the filters on the right. Typing >= 2 chars searches
+               as you type (debounced); clearing restores the paged list. */
+            <div className="flex flex-wrap items-end justify-between gap-3">
+              <div className="w-full space-y-1 sm:w-80 lg:flex-1 lg:max-w-md">
+                <Label htmlFor="appt-search" className="text-xs">Search</Label>
+                <div className="relative">
+                  <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    id="appt-search"
+                    aria-label="Search appointments"
+                    placeholder="Search number, name, ID, provider, date…"
+                    className="pl-9"
+                    value={searchDraft}
+                    onChange={(e) => setSearch(e.target.value)}
+                  />
+                </div>
+              </div>
+              {/* items-end keeps the Status select aligned with the
+                  search field row. */}
+              <div className="space-y-1">
+                <Label id="appt-status-label" className="text-xs">Status</Label>
+                <Select
+                  value={statusFilter}
+                  onValueChange={(v) => { setStatusFilter(v); setCursor(null); setHistory([null]); }}
+                >
+                  <SelectTrigger aria-labelledby="appt-status-label" className="w-44">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {STATUS_OPTIONS.map((o) => (
+                      <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+          }
+        />
 
         <TabsContent value={tab} className="space-y-3">
           <section className="hidden overflow-hidden rounded-xl border bg-card md:block">

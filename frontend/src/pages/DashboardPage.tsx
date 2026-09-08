@@ -19,7 +19,7 @@ import {
   Users,
   type LucideIcon,
 } from 'lucide-react';
-import { useMemo } from 'react';
+import { useMemo, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 
 import {
@@ -28,6 +28,7 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card';
+import { PageHeader } from '@/components/PageHeader';
 import { ClinicAnalyticsView } from '@/components/reports/ClinicAnalyticsView';
 import { useMe } from '@/hooks/useAuth';
 import { useDashboardCounters } from '@/hooks/useDashboard';
@@ -42,7 +43,17 @@ interface Module {
   blurb: string;
   href: string;
   icon: LucideIcon;
-  summary: (c: ReturnType<typeof useDashboardCounters>['data']) => string;
+  /**
+   * Second card line — live counters or the module's term list. Terms
+   * are lowercase to match the counter lines; numbers render bold via
+   * <Count>.
+   */
+  summary: (c: ReturnType<typeof useDashboardCounters>['data']) => ReactNode;
+}
+
+/** One numeric counter inside a module summary line. */
+function Count({ children }: { children: ReactNode }) {
+  return <b className="font-semibold">{children}</b>;
 }
 
 const MODULES: ReadonlyArray<Module> = [
@@ -55,7 +66,11 @@ const MODULES: ReadonlyArray<Module> = [
     summary: (c) => {
       const o = c?.clinic?.open_encounters ?? 0;
       const k = c?.clinic?.closed_encounters ?? 0;
-      return `${o} open · ${k} closed`;
+      return (
+        <>
+          <Count>{o}</Count> open · <Count>{k}</Count> closed
+        </>
+      );
     },
   },
   {
@@ -67,7 +82,11 @@ const MODULES: ReadonlyArray<Module> = [
     summary: (c) => {
       const o = c?.counselling?.open_sessions ?? 0;
       const k = c?.counselling?.closed_sessions ?? 0;
-      return `${o} open · ${k} closed`;
+      return (
+        <>
+          <Count>{o}</Count> open · <Count>{k}</Count> closed
+        </>
+      );
     },
   },
   {
@@ -79,7 +98,15 @@ const MODULES: ReadonlyArray<Module> = [
     summary: (c) => {
       const f = c?.facilities;
       const risk = f?.at_risk ?? 0;
-      return `${f?.units_idle ?? 0} idle · ${f?.units_processing ?? 0} processing · ${f?.units_awaiting ?? 0} awaiting${risk > 0 ? ` · ⚠ ${risk} at risk` : ''}`;
+      return (
+        <>
+          <Count>{f?.units_idle ?? 0}</Count> idle · <Count>{f?.units_processing ?? 0}</Count> processing ·{' '}
+          <Count>{f?.units_awaiting ?? 0}</Count> awaiting
+          {risk > 0 && (
+            <> · ⚠ <Count>{risk}</Count> at risk</>
+          )}
+        </>
+      );
     },
   },
   {
@@ -88,7 +115,7 @@ const MODULES: ReadonlyArray<Module> = [
     blurb: 'Student and employee registry',
     href: '/patients',
     icon: ContactRound,
-    summary: () => 'Students · employees · allergies',
+    summary: () => 'students · employees · allergies',
   },
   {
     code: 'clinic.inventory.read',
@@ -96,7 +123,7 @@ const MODULES: ReadonlyArray<Module> = [
     blurb: 'Supplies, medicines and stock levels',
     href: '/inventory',
     icon: Boxes,
-    summary: () => 'Clinic supplies · stock transactions',
+    summary: () => 'clinic supplies · stock transactions',
   },
   {
     code: 'clinic.appointments.read',
@@ -104,7 +131,7 @@ const MODULES: ReadonlyArray<Module> = [
     blurb: 'Scheduling, check-in and visit history',
     href: '/appointments',
     icon: CalendarClock,
-    summary: () => 'Scheduling · check-in · lifecycle',
+    summary: () => 'scheduling · check-in · lifecycle',
   },
   {
     code: 'referrals.read',
@@ -114,7 +141,11 @@ const MODULES: ReadonlyArray<Module> = [
     icon: Share2,
     summary: (c) => {
       const r = c?.referrals;
-      return `${r?.submitted ?? 0} submitted · ${r?.under_review ?? 0} in review`;
+      return (
+        <>
+          <Count>{r?.submitted ?? 0}</Count> submitted · <Count>{r?.under_review ?? 0}</Count> in review
+        </>
+      );
     },
   },
   {
@@ -123,7 +154,11 @@ const MODULES: ReadonlyArray<Module> = [
     blurb: 'Tamper-evident activity record',
     href: '/audit',
     icon: ScrollText,
-    summary: (c) => `${c?.audit?.events_last_24h ?? 0} events in 24h`,
+    summary: (c) => (
+      <>
+        <Count>{c?.audit?.events_last_24h ?? 0}</Count> events in 24h
+      </>
+    ),
   },
   {
     code: 'rbac.manage',
@@ -131,7 +166,7 @@ const MODULES: ReadonlyArray<Module> = [
     blurb: 'Accounts, roles and password resets',
     href: '/admin/users',
     icon: Users,
-    summary: () => 'Accounts · groups · password resets',
+    summary: () => 'accounts · groups · password resets',
   },
 ];
 
@@ -179,12 +214,14 @@ export default function DashboardPage() {
   if (isClinicRole) {
     return (
       <main className="mx-auto max-w-7xl space-y-6 p-4 md:p-6">
-        <header>
-          <h1 className="text-2xl font-semibold text-foreground">Dashboard</h1>
-          <p className="text-sm text-muted-foreground">
-            Signed in as {data?.email ?? 'unknown'} — Asia/Manila
-          </p>
-        </header>
+        <PageHeader
+          title="Dashboard"
+          description={
+            <>
+              Signed in as {data?.email ?? 'unknown'} — Asia/Manila
+            </>
+          }
+        />
         <ClinicRoleDashboard />
       </main>
     );
@@ -194,12 +231,14 @@ export default function DashboardPage() {
 
   return (
     <main className="mx-auto max-w-6xl space-y-6 p-4 md:p-6">
-      <header>
-        <h1 className="text-2xl font-semibold text-foreground">Dashboard</h1>
-        <p className="text-sm text-muted-foreground">
-          Signed in as {data?.email ?? 'unknown'} — Asia/Manila
-        </p>
-      </header>
+      <PageHeader
+        title="Dashboard"
+        description={
+          <>
+            Signed in as {data?.email ?? 'unknown'} — Asia/Manila
+          </>
+        }
+      />
 
       {/* Identity coverage removed (2026-08-05): it tracked the legacy
           manual user↔patient linking rollout, which is gone after the

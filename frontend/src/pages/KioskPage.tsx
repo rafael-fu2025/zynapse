@@ -28,6 +28,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { PageHeader } from '@/components/PageHeader';
 import { Dialog } from '@/components/ui/dialog';
 import { QueryErrorRow } from '@/components/QueryErrorState';
 import { Input } from '@/components/ui/input';
@@ -108,27 +109,25 @@ export default function KioskPage() {
   return (
     <main className="mx-auto max-w-5xl space-y-4 p-4 md:p-6">
       <ScanFlashOverlay flash={k.flash} />
-      <header className="flex flex-wrap items-center justify-between gap-2">
-        <div>
-          <h1 className="text-xl font-semibold text-foreground">Check-in Kiosk</h1>
-          <p className="text-sm text-muted-foreground">
-            Bookings today are confirmed on scan; everyone else joins the clinic queue for triage.
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" asChild>
-            <Link to="/kiosk-station">
-              <MonitorSmartphone /> Station mode
-            </Link>
-          </Button>
-          {k.pending > 0 && (
-            <Button variant="outline" size="sm" onClick={() => void k.syncBuffer()} disabled={k.syncing}>
-              {k.syncing ? <Loader2 className="animate-spin" /> : <RefreshCw />}
-              Sync {k.pending} offline scan{k.pending === 1 ? '' : 's'}
+      <PageHeader
+        title="Check-in Kiosk"
+        description="Bookings today are confirmed on scan; everyone else joins the clinic queue for triage."
+        actions={
+          <>
+            <Button variant="outline" size="sm" asChild>
+              <Link to="/kiosk-station">
+                <MonitorSmartphone /> Station mode
+              </Link>
             </Button>
-          )}
-        </div>
-      </header>
+            {k.pending > 0 && (
+              <Button variant="outline" size="sm" onClick={() => void k.syncBuffer()} disabled={k.syncing}>
+                {k.syncing ? <Loader2 className="animate-spin" /> : <RefreshCw />}
+                Sync {k.pending} offline scan{k.pending === 1 ? '' : 's'}
+              </Button>
+            )}
+          </>
+        }
+      />
 
       {/* Gap #11: today-at-a-glance stat strip. */}
       <section aria-label="Today's check-in stats" className="grid grid-cols-2 gap-3 sm:grid-cols-4">

@@ -96,6 +96,7 @@ final class TenantScopeFitnessTest extends TestCase
      */
     private const EXEMPT_PATHS = [
         'Auth/',
+        'Services/FuMis/',
         'Services/Rbac/',
         'Services/Audit/',
         'Services/Notify/',

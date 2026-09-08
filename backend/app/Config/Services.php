@@ -11,6 +11,11 @@ use App\Services\Audit\AuditAutoDrainService;
 use App\Services\Audit\AuditDrainService;
 use App\Services\Audit\AuditOutboxService;
 use App\Services\Crypto\EncryptionService;
+use App\Services\FuMis\CurlTransport;
+use App\Services\FuMis\FuMisAuthService;
+use App\Services\FuMis\FuMisClient;
+use App\Services\FuMis\FuMisProfileMapper;
+use App\Services\FuMis\HttpTransport;
 use App\Services\Notify\NotificationAutoDrainService;
 use App\Services\Notify\NotificationDrainService;
 use App\Services\Notify\NotificationOutboxService;
@@ -53,6 +58,34 @@ class Services extends CoreServices
             return static::getSharedInstance('permissionService');
         }
         return new PermissionService();
+    }
+
+    /**
+     * HTTP transport seam for the FU MIS client — the unit suite binds
+     * an in-memory double here (framework-free tests).
+     */
+    public static function fuMisTransport(bool $getShared = true): HttpTransport
+    {
+        if ($getShared) {
+            return static::getSharedInstance('fuMisTransport');
+        }
+        return new CurlTransport();
+    }
+
+    public static function fuMisClient(bool $getShared = true): FuMisClient
+    {
+        if ($getShared) {
+            return static::getSharedInstance('fuMisClient');
+        }
+        return new FuMisClient(new FuMis(), static::fuMisTransport());
+    }
+
+    public static function fuMisAuthService(bool $getShared = true): FuMisAuthService
+    {
+        if ($getShared) {
+            return static::getSharedInstance('fuMisAuthService');
+        }
+        return new FuMisAuthService(new FuMis(), static::fuMisClient(), new FuMisProfileMapper());
     }
 
     public static function auditOutbox(bool $getShared = true): AuditOutboxService

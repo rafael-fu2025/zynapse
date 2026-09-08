@@ -29,6 +29,7 @@ import {
 } from '@/components/MobileCardList';
 import { QueryErrorRow } from '@/components/QueryErrorState';
 import { Badge } from '@/components/ui/badge';
+import { PageHeader } from '@/components/PageHeader';
 import { Button } from '@/components/ui/button';
 import { DateRangePicker } from '@/components/ui/date-range-picker';
 import {
@@ -259,44 +260,41 @@ export default function AuditPage() {
 
   return (
     <main className="mx-auto max-w-[1500px] space-y-5 p-4 sm:p-6">
-      <header className="flex flex-wrap items-end justify-between gap-3 border-b pb-4">
-        <div>
-          <div className="mb-1 flex items-center gap-2">
+      <PageHeader
+        title={
+          <span className="flex items-center gap-2">
             <ShieldCheck className="size-5 text-primary" aria-hidden />
-            <h1 className="text-xl font-semibold text-foreground">Audit evidence</h1>
-          </div>
-          <p className="max-w-2xl text-sm text-muted-foreground">
-            Inspect immutable, hash-chained administrative events. Detail payloads are redacted before display.
-          </p>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => verification.mutate()}
-            disabled={verification.isPending}
-          >
-            {verification.isPending ? <Loader2 className="animate-spin" /> : <ShieldCheck />}
-            Verify chain
-          </Button>
-          {canExport && (
+            Audit evidence
+          </span>
+        }
+        description="Inspect immutable, hash-chained administrative events. Detail payloads are redacted before display."
+        actions={
+          <>
             <Button
               type="button"
-              variant="secondary"
-              onClick={() => exporter.mutate({ cursor: null, limit: 5000, filters: applied })}
-              disabled={exporter.isPending}
+              variant="outline"
+              onClick={() => verification.mutate()}
+              disabled={verification.isPending}
             >
-              {exporter.isPending ? <Loader2 className="animate-spin" /> : <Download />}
-              Export up to 5,000
+              {verification.isPending ? <Loader2 className="animate-spin" /> : <ShieldCheck />}
+              Verify chain
             </Button>
-          )}
-        </div>
-      </header>
-
-      <VerificationStatus verification={verification} />
-
-      <form aria-label="Audit filters" onSubmit={applyFilters} className="border bg-card p-4 shadow-sm">
-        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+            {canExport && (
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={() => exporter.mutate({ cursor: null, limit: 5000, filters: applied })}
+                disabled={exporter.isPending}
+              >
+                {exporter.isPending ? <Loader2 className="animate-spin" /> : <Download />}
+                Export up to 5,000
+              </Button>
+            )}
+          </>
+        }
+        toolbar={
+          <form aria-label="Audit filters" onSubmit={applyFilters} className="w-full">
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3">
             <div>
               <h2 className="text-sm font-semibold text-foreground">Evidence filters</h2>
@@ -404,7 +402,11 @@ export default function AuditPage() {
             <Search /> Apply filters
           </Button>
         </div>
-      </form>
+          </form>
+        }
+      />
+
+      <VerificationStatus verification={verification} />
 
       <div>
         <section aria-labelledby="audit-results-heading" className="min-w-0 space-y-3">

@@ -28,6 +28,7 @@ import {
 import { useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { Badge } from '@/components/ui/badge';
+import { PageHeader, PageToolbar } from '@/components/PageHeader';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { ConfirmDialog, type ConfirmAction } from '@/components/ConfirmDialog';
@@ -1219,23 +1220,41 @@ export default function PatientsPage() {
 
   return (
     <main className="mx-auto max-w-7xl space-y-4 p-6">
-      <header className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-semibold text-foreground">Patients</h1>
-          <p className="text-sm text-muted-foreground">
-            Registry recycled from the legacy system — records are archived, never deleted.
-          </p>
-        </div>
-      </header>
-
-      <Tabs value={tab} onValueChange={setTab}>
-        <TabsList>
-          <TabsTrigger value="students">Students</TabsTrigger>
-          <TabsTrigger value="employees">Employees</TabsTrigger>
-        </TabsList>
+      <Tabs value={tab} onValueChange={setTab} className="space-y-4">
+        <PageHeader
+          title="Patients"
+          description="Registry recycled from the legacy system — records are archived, never deleted."
+          actions={
+            tab === 'students' ? (
+              canWrite ? (
+                <Dialog open={openCreate} onOpenChange={setOpenCreate}>
+                  <Button onClick={() => setOpenCreate(true)}>
+                    <UserPlus /> Register student
+                  </Button>
+                  {openCreate && <CreateStudentDialog onClose={() => setOpenCreate(false)} />}
+                </Dialog>
+              ) : null
+            ) : (
+              canWrite ? (
+                <Dialog open={openCreateEmp} onOpenChange={setOpenCreateEmp}>
+                  <Button onClick={() => setOpenCreateEmp(true)}>
+                    <UserPlus /> Register employee
+                  </Button>
+                  {openCreateEmp && <CreateEmployeeDialog onClose={() => setOpenCreateEmp(false)} />}
+                </Dialog>
+              ) : null
+            )
+          }
+          tabs={
+            <TabsList>
+              <TabsTrigger value="students">Students</TabsTrigger>
+              <TabsTrigger value="employees">Employees</TabsTrigger>
+            </TabsList>
+          }
+        />
 
         <TabsContent value="students" className="space-y-4">
-          <section className="flex flex-wrap items-end justify-between gap-3 rounded-xl border bg-card p-3">
+          <PageToolbar>
             <div className="relative w-full sm:w-80 lg:flex-1 lg:max-w-md">
               <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
               <Input
@@ -1254,16 +1273,8 @@ export default function PatientsPage() {
               >
                 <Archive /> {showArchived === '1' ? 'Hide archived' : 'Show archived'}
               </Button>
-              {canWrite && (
-                <Dialog open={openCreate} onOpenChange={setOpenCreate}>
-                  <Button onClick={() => setOpenCreate(true)}>
-                    <UserPlus /> Register student
-                  </Button>
-                  {openCreate && <CreateStudentDialog onClose={() => setOpenCreate(false)} />}
-                </Dialog>
-              )}
             </div>
-          </section>
+          </PageToolbar>
 
           <section className="hidden overflow-hidden rounded-xl border bg-card md:block">
             <Table>
@@ -1379,7 +1390,7 @@ export default function PatientsPage() {
         </TabsContent>
 
         <TabsContent value="employees" className="space-y-4">
-          <section className="flex flex-wrap items-end justify-between gap-3 rounded-xl border bg-card p-3">
+          <PageToolbar>
             <div className="relative w-full sm:w-80 lg:flex-1 lg:max-w-md">
               <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
               <Input
@@ -1411,16 +1422,8 @@ export default function PatientsPage() {
               >
                 <Archive /> {showArchivedEmp === '1' ? 'Hide archived' : 'Show archived'}
               </Button>
-              {canWrite && (
-                <Dialog open={openCreateEmp} onOpenChange={setOpenCreateEmp}>
-                  <Button onClick={() => setOpenCreateEmp(true)}>
-                    <UserPlus /> Register employee
-                  </Button>
-                  {openCreateEmp && <CreateEmployeeDialog onClose={() => setOpenCreateEmp(false)} />}
-                </Dialog>
-              )}
             </div>
-          </section>
+          </PageToolbar>
 
           <section className="hidden overflow-hidden rounded-xl border bg-card md:block">
             <Table>

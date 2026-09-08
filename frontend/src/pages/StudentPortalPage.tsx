@@ -24,6 +24,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { CopyButton } from '@/components/CopyButton';
+import { PageHeader } from '@/components/PageHeader';
 import { QueryErrorState } from '@/components/QueryErrorState';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -80,12 +81,10 @@ export default function StudentPortalPage() {
 
   return (
     <div className="space-y-6 p-4 sm:p-6">
-      <header>
-        <h1 className="text-2xl font-semibold tracking-tight">My portal</h1>
-        <p className="text-sm text-muted-foreground">
-          Book clinic appointments, track your queue, and review your history.
-        </p>
-      </header>
+      <PageHeader
+        title="My portal"
+        description="Book clinic appointments, track your queue, and review your history."
+      />
 
       {/* Live queue status — stays above the tabs so an alert is never missed. */}
       <YourQueueCard kind="student" />

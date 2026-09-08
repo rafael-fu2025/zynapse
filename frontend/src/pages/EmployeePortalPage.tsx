@@ -27,6 +27,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { CopyButton } from '@/components/CopyButton';
+import { PageHeader } from '@/components/PageHeader';
 import { QueryErrorState } from '@/components/QueryErrorState';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { YourQueueCard } from '@/components/YourQueueCard';
@@ -78,12 +79,10 @@ export default function EmployeePortalPage() {
 
   return (
     <div className="space-y-6 p-4 sm:p-6">
-      <header>
-        <h1 className="text-2xl font-semibold tracking-tight">My portal</h1>
-        <p className="text-sm text-muted-foreground">
-          Your own clinic history, kiosk identifier, and recent notifications. All read-only.
-        </p>
-      </header>
+      <PageHeader
+        title="My portal"
+        description="Your own clinic history, kiosk identifier, and recent notifications. All read-only."
+      />
 
       {/* Live queue status — only appears while you're actually queued. */}
       <YourQueueCard kind="employee" />

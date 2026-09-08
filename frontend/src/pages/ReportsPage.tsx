@@ -29,6 +29,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { Label } from '@/components/ui/label';
+import { PageHeader } from '@/components/PageHeader';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import {
@@ -211,72 +212,34 @@ export default function ReportsPage() {
 
   return (
     <main className="mx-auto max-w-7xl space-y-6 px-3 py-4 sm:px-5 sm:py-6">
-      <header className="flex flex-col gap-4 border-b pb-5 lg:flex-row lg:items-end lg:justify-between">
-        <div className="min-w-0">
-          <h1 className="text-xl font-semibold text-foreground">Reports and analytics</h1>
-          <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
-            Asia/Manila calendar dates. Analytics exports contain aggregated, privacy-reviewed data and every download is audited.
-          </p>
-        </div>
-        <div className="w-full space-y-1 lg:w-auto">
-          <Label htmlFor="report-range">Date range</Label>
-          <DateRangePicker
-            id="report-range"
-            start={draftRange.start}
-            end={draftRange.end}
-            toYear={new Date().getFullYear()}
-            onChange={({ start: nextStart, end: nextEnd }) => {
-              setDraftRange({ start: nextStart, end: nextEnd });
-              if (nextStart !== '' && nextEnd !== '') commitRange(nextStart, nextEnd);
-            }}
-            className="min-h-10 w-full lg:w-[310px]"
-          />
-          <p className="text-xs text-muted-foreground">{start} to {end}, maximum 366 days</p>
-        </div>
-      </header>
-
-      <section aria-labelledby="overview-heading" className="overflow-hidden rounded-xl border bg-card">
-        <div className="border-b px-4 py-3">
-          <h2 id="overview-heading" className="text-sm font-semibold">Institution overview</h2>
-          <p className="text-xs text-muted-foreground">Compared with the immediately preceding period of equal length.</p>
-        </div>
-        {summary.isError ? (
-          <div className="p-4">
-            <QueryErrorState message="Failed to load the analytics overview. Values are unknown, not zero." onRetry={() => void summary.refetch()} pending={summary.isFetching} />
+      <Tabs value={tab} onValueChange={setTab} className="space-y-6">
+      <PageHeader
+        title="Reports and analytics"
+        description="Asia/Manila calendar dates. Analytics exports contain aggregated, privacy-reviewed data and every download is audited."
+        toolbar={
+          <div className="w-full space-y-1 sm:w-auto">
+            <Label htmlFor="report-range">Date range</Label>
+            <DateRangePicker
+              id="report-range"
+              start={draftRange.start}
+              end={draftRange.end}
+              toYear={new Date().getFullYear()}
+              onChange={({ start: nextStart, end: nextEnd }) => {
+                setDraftRange({ start: nextStart, end: nextEnd });
+                if (nextStart !== '' && nextEnd !== '') commitRange(nextStart, nextEnd);
+              }}
+              className="min-h-10 w-full lg:w-[310px]"
+            />
+            <p className="text-xs text-muted-foreground">{start} to {end}, maximum 366 days</p>
           </div>
-        ) : summary.isLoading ? (
-          <div className="grid gap-px bg-border sm:grid-cols-2 xl:grid-cols-5" role="status">
-            {REPORT_MODULES.map((module) => (
-              <div key={module} className="space-y-2 bg-card p-4">
-                <Skeleton className="h-3 w-24" />
-                <Skeleton className="h-7 w-16" />
-                <Skeleton className="h-3 w-32" />
-              </div>
-            ))}
-            <span className="sr-only">Loading overview metrics.</span>
-          </div>
-        ) : summary.data !== undefined ? (
-          <>
-            <dl className="grid divide-y sm:grid-cols-2 sm:divide-x sm:divide-y-0 xl:grid-cols-5">
-              <Metric label="Clinic encounters" value={summary.data.clinic.encounters} detail={summary.data.clinic.checkins + ' kiosk check-ins'} delta={summary.data.clinic.encounters_delta_pct} />
-              <Metric label="Counselling appointments" value={summary.data.counselling.appointments} detail={summary.data.counselling.sessions + ' sessions opened'} delta={summary.data.counselling.appointments_delta_pct} />
-              <Metric label="Units dispensed" value={summary.data.inventory.dispensed_qty} detail={summary.data.inventory.active_batches + ' active batches now'} delta={summary.data.inventory.dispensed_delta_pct} />
-              <Metric label="Referrals created" value={summary.data.referrals.created} detail="New referral activity" delta={summary.data.referrals.created_delta_pct} />
-              <Metric label="Facilities batches completed" value={summary.data.facilities.completed_batches} detail="Completion activity" delta={summary.data.facilities.completed_delta_pct} />
-            </dl>
-            <p className="border-t px-4 py-2 text-xs text-muted-foreground">
-              Current inventory snapshot retrieved {fmtUtcToApp(summary.data.snapshot_at)}.
-            </p>
-          </>
-        ) : null}
-      </section>
-
-      <Tabs value={tab} onValueChange={setTab}>
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+        }
+        tabs={
           <TabsList aria-label="Analytics module">
             {REPORT_MODULES.map((module) => <TabsTrigger key={module} value={module}>{moduleLabel(module)}</TabsTrigger>)}
           </TabsList>
-          <div className="flex flex-wrap items-center gap-2">
+        }
+        tabsActions={
+          <>
             {activeQuery.isFetching && !activeQuery.isLoading && (
               <span role="status" className="inline-flex items-center gap-1 text-xs text-muted-foreground">
                 <Loader2 className="size-3 animate-spin" /> Refreshing
@@ -313,8 +276,45 @@ export default function ReportsPage() {
                 </DropdownMenuContent>
               </DropdownMenu>
             )}
-          </div>
+          </>
+        }
+      />
+
+      <section aria-labelledby="overview-heading" className="overflow-hidden rounded-xl border bg-card">
+        <div className="border-b px-4 py-3">
+          <h2 id="overview-heading" className="text-sm font-semibold">Institution overview</h2>
+          <p className="text-xs text-muted-foreground">Compared with the immediately preceding period of equal length.</p>
         </div>
+        {summary.isError ? (
+          <div className="p-4">
+            <QueryErrorState message="Failed to load the analytics overview. Values are unknown, not zero." onRetry={() => void summary.refetch()} pending={summary.isFetching} />
+          </div>
+        ) : summary.isLoading ? (
+          <div className="grid gap-px bg-border sm:grid-cols-2 xl:grid-cols-5" role="status">
+            {REPORT_MODULES.map((module) => (
+              <div key={module} className="space-y-2 bg-card p-4">
+                <Skeleton className="h-3 w-24" />
+                <Skeleton className="h-7 w-16" />
+                <Skeleton className="h-3 w-32" />
+              </div>
+            ))}
+            <span className="sr-only">Loading overview metrics.</span>
+          </div>
+        ) : summary.data !== undefined ? (
+          <>
+            <dl className="grid divide-y sm:grid-cols-2 sm:divide-x sm:divide-y-0 xl:grid-cols-5">
+              <Metric label="Clinic encounters" value={summary.data.clinic.encounters} detail={summary.data.clinic.checkins + ' kiosk check-ins'} delta={summary.data.clinic.encounters_delta_pct} />
+              <Metric label="Counselling appointments" value={summary.data.counselling.appointments} detail={summary.data.counselling.sessions + ' sessions opened'} delta={summary.data.counselling.appointments_delta_pct} />
+              <Metric label="Units dispensed" value={summary.data.inventory.dispensed_qty} detail={summary.data.inventory.active_batches + ' active batches now'} delta={summary.data.inventory.dispensed_delta_pct} />
+              <Metric label="Referrals created" value={summary.data.referrals.created} detail="New referral activity" delta={summary.data.referrals.created_delta_pct} />
+              <Metric label="Facilities batches completed" value={summary.data.facilities.completed_batches} detail="Completion activity" delta={summary.data.facilities.completed_delta_pct} />
+            </dl>
+            <p className="border-t px-4 py-2 text-xs text-muted-foreground">
+              Current inventory snapshot retrieved {fmtUtcToApp(summary.data.snapshot_at)}.
+            </p>
+          </>
+        ) : null}
+      </section>
 
         {currentNarrative !== undefined && (
           <section className="mt-4 rounded-xl border bg-muted/30 p-4" aria-labelledby="narrative-heading" aria-live="polite">
