@@ -40,6 +40,15 @@ final class FuMisException extends RuntimeException
 
     public function isInvalidCredentials(): bool
     {
-        return $this->upstreamStatus === 401;
+        // The MIS API returns 403 Forbidden with "Account not recognized"
+        // when credentials do not match or when querying the wrong
+        // namespace (e.g. employee ID on student endpoint).
+        if ($this->upstreamStatus === 401 || $this->upstreamStatus === 403) {
+            return true;
+        }
+
+        $message = (string) ($this->upstreamBody['message'] ?? '');
+        return str_contains(strtolower($message), 'not recognized')
+            || str_contains(strtolower($message), 'invalid');
     }
 }

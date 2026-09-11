@@ -6,6 +6,8 @@
  * urgency) — NEVER PII — so these renderers only ever see safe values.
  */
 
+import { hasPermission } from '@/store/auth';
+
 export interface NotificationContext {
   resource_code?: unknown;
   next_status?: unknown;
@@ -121,6 +123,51 @@ export function notificationDetail(
     const sev = context.urgency.toUpperCase();
     const label = sev === 'CRITICAL' ? 'Critical' : sev === 'WARNING' ? 'Warning' : sev;
     return `Severity: ${label}`;
+  }
+  return null;
+}
+
+/**
+ * Resolves the destination URL for a given notification based on template code,
+ * context, and user permissions. Returns `null` if unrecognized or if the user
+ * lacks permission for the target module.
+ */
+export function getNotificationDestination(
+  template: string,
+  context: NotificationContext | null,
+  auth: Parameters<typeof hasPermission>[0],
+): string | null {
+  if (template.startsWith('appointment.')) {
+    if (hasPermission(auth, 'portal.appointments.read')) return '/me';
+    if (context?.destination === 'counselling' && hasPermission(auth, 'counselling.schedule.read')) {
+      return '/counselling?tab=scheduling';
+    }
+    if (hasPermission(auth, 'clinic.appointments.read')) return '/appointments';
+    return null;
+  }
+  if (template.startsWith('referral.') && hasPermission(auth, 'referrals.read')) {
+    return '/referrals';
+  }
+  if (template.startsWith('reorder.') && hasPermission(auth, 'clinic.inventory.read')) {
+    return '/inventory?tab=reorders';
+  }
+  if (template.startsWith('bmg.') && hasPermission(auth, 'facilities.units.read')) {
+    return '/facilities';
+  }
+  if (
+    (template.startsWith('queue.') || template.startsWith('counselling.queue')) &&
+    hasPermission(auth, 'portal.queue.read')
+  ) {
+    return '/me';
+  }
+  if (template.startsWith('counselling.') && hasPermission(auth, 'counselling.records.read')) {
+    return '/counselling';
+  }
+  if (template.startsWith('admin.') && hasPermission(auth, 'rbac.manage')) {
+    return '/admin/users';
+  }
+  if (template.startsWith('kiosk.') && hasPermission(auth, 'kiosk.content.manage')) {
+    return '/admin/kiosk-settings';
   }
   return null;
 }

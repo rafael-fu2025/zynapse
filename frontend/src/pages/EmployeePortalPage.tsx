@@ -13,12 +13,10 @@ import {
   ArrowRight,
   Building2,
   CheckCircle2,
-  Hash,
   IdCard,
   Mail,
   Phone,
   Stethoscope,
-  UserCircle2,
 } from 'lucide-react';
 import { QRCodeCanvas } from 'qrcode.react';
 import { Link } from 'react-router-dom';
@@ -26,7 +24,6 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
-import { CopyButton } from '@/components/CopyButton';
 import { PageHeader } from '@/components/PageHeader';
 import { QueryErrorState } from '@/components/QueryErrorState';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -96,59 +93,34 @@ export default function EmployeePortalPage() {
 
       {profile.data !== undefined && (
         <>
-          {/* Phase 3.4: Unified identity card.
-              Surfaces the cross-cutting person row so the user can verify
-              their user <-> patient link. */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <UserCircle2 className="size-4" aria-hidden /> Identity
-              </CardTitle>
-              <CardDescription>Your SYNAPSE identity across the user and patient registries.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1.5 text-xs">
-                <dt className="text-muted-foreground">Full name</dt>
-                <dd className="font-medium">
-                  {profile.data.first_name} {profile.data.middle_name !== null ? `${profile.data.middle_name} ` : ''}
-                  {profile.data.last_name}
-                </dd>
-                <dt className="text-muted-foreground">Kind</dt>
-                <dd>
-                  <Badge variant="secondary">{(profile.data.kind ?? 'employee')}</Badge>
-                </dd>
-                <dt className="text-muted-foreground">Employee No.</dt>
-                <dd className="flex items-center gap-1.5 font-mono">
-                  <Hash className="size-3" aria-hidden /> {profile.data.employee_number}
-                </dd>
-                <dt className="text-muted-foreground">Email</dt>
-                <dd className="text-foreground">
-                  {me.data?.email ?? <span className="text-muted-foreground">—</span>}
-                </dd>
-              </dl>
-            </CardContent>
-          </Card>
-
-          {/* Profile + Kiosk QR */}
-          <div className="grid gap-4 lg:grid-cols-3">
+          {/* Profile & Clinic Digital Pass */}
+          <div className="grid gap-6 lg:grid-cols-3">
             <Card className="lg:col-span-1">
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
-                  <IdCard className="size-4" aria-hidden /> Profile
+                  <IdCard className="size-4" aria-hidden /> Employee Profile
                 </CardTitle>
-                <CardDescription>Linked to your SYNAPSE account.</CardDescription>
+                <CardDescription>Your registered staff details.</CardDescription>
               </CardHeader>
-              <CardContent className="space-y-3 text-sm">
-                <p className="text-base font-semibold leading-tight">
-                  {profile.data.first_name} {profile.data.middle_name !== null ? `${profile.data.middle_name} ` : ''}
-                  {profile.data.last_name}
-                </p>
-                <dl className="grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1.5 text-xs">
-                  <dt className="text-muted-foreground">Employee No.</dt>
-                  <dd className="font-mono">{profile.data.employee_number}</dd>
+              <CardContent className="space-y-4">
+                <div>
+                  <p className="text-base font-semibold leading-tight text-foreground">
+                    {profile.data.first_name} {profile.data.middle_name !== null ? `${profile.data.middle_name} ` : ''}
+                    {profile.data.last_name}
+                  </p>
+                  <p className="mt-0.5 font-mono text-xs text-muted-foreground">
+                    ID: {profile.data.employee_number}
+                  </p>
+                </div>
+
+                <dl className="grid grid-cols-[max-content_1fr] gap-x-3 gap-y-2 text-xs">
+                  <dt className="text-muted-foreground">Email</dt>
+                  <dd className="truncate text-foreground">
+                    {me.data?.email ?? <span className="text-muted-foreground">—</span>}
+                  </dd>
                   <dt className="text-muted-foreground">Department</dt>
-                  <dd className="flex items-center gap-1.5">
-                    <Building2 className="size-3" aria-hidden /> {profile.data.department ?? '—'}
+                  <dd className="flex items-center gap-1.5 font-medium">
+                    <Building2 className="size-3 text-muted-foreground" aria-hidden /> {profile.data.department ?? '—'}
                   </dd>
                   <dt className="text-muted-foreground">Position</dt>
                   <dd>{profile.data.position ?? '—'}</dd>
@@ -169,75 +141,48 @@ export default function EmployeePortalPage() {
             <Card className="lg:col-span-2">
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
-                  <Stethoscope className="size-4" aria-hidden /> Kiosk identifier
+                  <Stethoscope className="size-4" aria-hidden /> Clinic Check-in Pass
                 </CardTitle>
                 <CardDescription>
-                  Show this at the clinic kiosk to self-admit without typing your employee number.
+                  Present this QR pass at the clinic kiosk scanner to self-admit without typing.
                 </CardDescription>
               </CardHeader>
-              <CardContent className="space-y-3">
-                <div className="flex flex-col items-center gap-3 sm:flex-row">
-                  <div className="shrink-0 rounded-xl border bg-white p-2">
-                    <QRCodeCanvas value={profile.data.kiosk_identifier} size={128} includeMargin />
+              <CardContent className="space-y-4">
+                <div className="flex flex-col items-center gap-4 sm:flex-row sm:items-start">
+                  <div className="shrink-0 rounded-xl border bg-white p-3 shadow-sm">
+                    <QRCodeCanvas value={profile.data.kiosk_identifier} size={136} includeMargin />
                   </div>
-                  <div className="min-w-0 flex-1 space-y-2">
-                    <div className="flex items-center gap-2">
-                      <p className="min-w-0 flex-1 truncate rounded-md border bg-muted/50 px-3 py-2 font-mono text-sm">
-                        {profile.data.kiosk_identifier}
-                      </p>
-                      <CopyButton value={profile.data.kiosk_identifier} label="Copy kiosk identifier" successMessage="Kiosk identifier copied." />
-                    </div>
-                    <p className="text-xs text-muted-foreground">
-                      The kiosk accepts {profile.data.has_qr ? 'QR' : profile.data.has_rfid ? 'RFID' : 'manual entry'}; we send the{' '}
-                      <span className="font-mono">{profile.data.kiosk_identifier.split(':')[0]}</span> variant first.
+                  <div className="min-w-0 flex-1 space-y-2.5 text-center sm:text-left">
+                    <p className="text-sm font-medium text-foreground">
+                      Quick Admission QR
+                    </p>
+                    <p className="text-xs text-muted-foreground leading-relaxed">
+                      Hold your screen in front of the kiosk scanner at the clinic reception to automatically queue or check in for your appointment.
                     </p>
                     {profile.data.has_qr ? (
-                      <p className="flex items-center gap-1.5 text-xs text-emerald-600 dark:text-emerald-400">
-                        <CheckCircle2 className="size-3.5 shrink-0" /> Staff-issued QR on file — scan this at the kiosk.
+                      <p className="flex items-center justify-center gap-1.5 text-xs text-emerald-600 dark:text-emerald-400 sm:justify-start">
+                        <CheckCircle2 className="size-3.5 shrink-0" /> Verified clinic QR pass active
                       </p>
                     ) : (
                       <p className="text-xs text-muted-foreground">
-                        No staff-issued QR on your account yet — this QR uses your <strong>employee number</strong> and still
-                        works at the kiosk. Ask clinic staff to assign a QR in <strong>Patients</strong> for a permanent card.
+                        Standard employee pass linked to your account.
                       </p>
                     )}
+                    <div className="flex flex-wrap items-center justify-center gap-2 pt-1 sm:justify-start">
+                      <Button asChild size="sm" variant="outline">
+                        <Link to="/change-password">
+                          Change password
+                          <ArrowRight className="size-3.5" />
+                        </Link>
+                      </Button>
+                      {profile.data.is_teaching && (
+                        <Button asChild size="sm" variant="outline">
+                          <Link to="/referrals">Refer a student to counselling</Link>
+                        </Button>
+                      )}
+                    </div>
                   </div>
                 </div>
-                <div className="flex flex-wrap gap-2 pt-2">
-                  <Button asChild size="sm" variant="outline">
-                    <Link to="/change-password">
-                      Change password
-                      <ArrowRight />
-                    </Link>
-                  </Button>
-                  {/* Teaching-only action: the backend enforces this
-                      with a 403 (code: referral.teaching_required)
-                      when source_module=clinic and the issuer's
-                      employee row has is_teaching=0. We hide the
-                      button preemptively so non-teaching staff never
-                      see an action that will fail. */}
-                  {profile.data.is_teaching ? (
-                    <Button asChild size="sm" variant="outline">
-                      <Link to="/referrals">Refer a student to counselling</Link>
-                    </Button>
-                  ) : (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      disabled
-                      title="Only teaching employees (faculty) can refer students to counselling."
-                      aria-label="Refer a student to counselling — disabled, teaching-only"
-                    >
-                      Refer a student to counselling
-                    </Button>
-                  )}
-                </div>
-                {!profile.data.is_teaching && (
-                  <p className="pt-1 text-[11px] text-muted-foreground">
-                    The “refer a student” action is only available to <strong>teaching</strong> employees
-                    (faculty). Talk to your supervisor if you believe this is in error.
-                  </p>
-                )}
               </CardContent>
             </Card>
           </div>

@@ -8,11 +8,11 @@
  */
 import { useState } from 'react';
 import { Bell, ChevronRight, Loader2 } from 'lucide-react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { useMarkAllNotificationsRead, useMarkNotificationRead, useNotifications } from '@/hooks/useNotifications';
-import { notificationLabel } from '@/utils/notifications';
+import { useMarkAllNotificationsRead, useMarkNotificationRead, useNotifications, type AppNotification } from '@/hooks/useNotifications';
+import { getNotificationDestination, notificationLabel } from '@/utils/notifications';
 import { fmtRelative } from '@/utils/date';
 import { hasPermission, useAuthStore } from '@/store/auth';
 
@@ -23,6 +23,7 @@ export function NotificationBell() {
   // guard the bell polls `/api/v1/notifications` every 60 s and the
   // browser fills up with 403 noise.
   const authState = useAuthStore();
+  const navigate = useNavigate();
   const canRead = hasPermission(authState, 'notifications.read');
   const list = useNotifications(10);
   const markRead = useMarkNotificationRead();
@@ -35,6 +36,17 @@ export function NotificationBell() {
 
   const items = list.data ?? [];
   const unread = items.filter((n) => n.read_at === null).length;
+
+  const handleNotificationClick = (n: AppNotification) => {
+    if (n.read_at === null) {
+      markRead.mutate(n.id);
+    }
+    const dest = getNotificationDestination(n.template_code, n.context, authState);
+    if (dest) {
+      setOpen(false);
+      navigate(dest);
+    }
+  };
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -94,7 +106,7 @@ export function NotificationBell() {
             <li key={n.id}>
               <button
                 type="button"
-                onClick={() => n.read_at === null && markRead.mutate(n.id)}
+                onClick={() => handleNotificationClick(n)}
                 className={`w-full rounded-md px-2 py-2 text-left text-xs transition-colors hover:bg-accent hover:text-accent-foreground ${
                   n.read_at === null ? 'bg-accent/60' : ''
                 }`}

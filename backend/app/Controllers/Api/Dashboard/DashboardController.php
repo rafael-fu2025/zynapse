@@ -20,25 +20,42 @@ final class DashboardController extends ApiController
 {
     public function counters(): ResponseInterface
     {
-        $out = [];
+        $user = \App\Auth\CurrentUser::assert();
+        $tenantId = CurrentTenant::id();
 
+        $clinicPerm      = $this->permissions->userHas($user, 'clinic.encounters.read');
+        $counsellingPerm = $this->permissions->userHas($user, 'counselling.records.read');
+        $facilitiesPerm  = $this->permissions->userHas($user, 'facilities.units.read');
+        $referralsPerm   = $this->permissions->userHas($user, 'referrals.read');
+        $auditPerm       = $this->permissions->userHas($user, 'audit.read');
+
+        $permSignature = ((int) $clinicPerm) . ':' . ((int) $counsellingPerm) . ':' . ((int) $facilitiesPerm) . ':' . ((int) $referralsPerm) . ':' . ((int) $auditPerm);
+        $cacheKey      = 'dashboard_counters_t' . $tenantId . '_' . md5($permSignature);
+
+        $cache = Services::cache();
+        $cached = $cache->get($cacheKey);
+        if (is_array($cached)) {
+            return $this->ok($cached);
+        }
+
+        $out = [];
         $db = Services::database();
 
-        if ($this->permissions->userHas(\App\Auth\CurrentUser::assert(), 'clinic.encounters.read')) {
+        if ($clinicPerm) {
             $out['clinic'] = [
-                'open_encounters'   => (int) $db->table('clinic_encounters')->where('tenant_id', CurrentTenant::id())->where('status', 'open')->where('archived_at', null)->countAllResults(),
-                'closed_encounters' => (int) $db->table('clinic_encounters')->where('tenant_id', CurrentTenant::id())->where('status', 'closed')->where('archived_at', null)->countAllResults(),
+                'open_encounters'   => (int) $db->table('clinic_encounters')->where('tenant_id', $tenantId)->where('status', 'open')->where('archived_at', null)->countAllResults(),
+                'closed_encounters' => (int) $db->table('clinic_encounters')->where('tenant_id', $tenantId)->where('status', 'closed')->where('archived_at', null)->countAllResults(),
             ];
         }
 
-        if ($this->permissions->userHas(\App\Auth\CurrentUser::assert(), 'counselling.records.read')) {
+        if ($counsellingPerm) {
             $out['counselling'] = [
-                'open_sessions'   => (int) $db->table('counselling_sessions')->where('tenant_id', CurrentTenant::id())->where('ended_at', null)->where('archived_at', null)->countAllResults(),
-                'closed_sessions' => (int) $db->table('counselling_sessions')->where('tenant_id', CurrentTenant::id())->where('ended_at !=', null)->where('archived_at', null)->countAllResults(),
+                'open_sessions'   => (int) $db->table('counselling_sessions')->where('tenant_id', $tenantId)->where('ended_at', null)->where('archived_at', null)->countAllResults(),
+                'closed_sessions' => (int) $db->table('counselling_sessions')->where('tenant_id', $tenantId)->where('ended_at !=', null)->where('archived_at', null)->countAllResults(),
             ];
         }
 
-        if ($this->permissions->userHas(\App\Auth\CurrentUser::assert(), 'facilities.units.read')) {
+        if ($facilitiesPerm) {
             $out['facilities'] = [
                 'units_idle'      => (int) $db->table('facilities_bmg_units')->where('status', 'idle')->where('archived_at', null)->countAllResults(),
                 'units_processing'=> (int) $db->table('facilities_bmg_units')->where('status', 'processing')->where('archived_at', null)->countAllResults(),
@@ -47,30 +64,32 @@ final class DashboardController extends ApiController
                 // live batches (dashboard "at-risk batches" widget).
                 'at_risk'         => (int) $db->table('facilities_bmg_alerts AS a')
                     ->join('facilities_bmg_batches AS b', 'b.id = a.batch_id')
-                    ->where('a.tenant_id', \App\Services\CurrentTenant::id())
+                    ->where('a.tenant_id', $tenantId)
                     ->where('a.acknowledged_at', null)
                     ->whereIn('b.status', ['processing', 'awaiting_output', 'curing'])
                     ->countAllResults(),
             ];
         }
 
-        if ($this->permissions->userHas(\App\Auth\CurrentUser::assert(), 'referrals.read')) {
+        if ($referralsPerm) {
             $out['referrals'] = [
-                'submitted'   => (int) $db->table('referral_referrals')->where('tenant_id', CurrentTenant::id())->where('status', 'submitted')->where('archived_at', null)->countAllResults(),
-                'acknowledged'=> (int) $db->table('referral_referrals')->where('tenant_id', CurrentTenant::id())->where('status', 'acknowledged')->where('archived_at', null)->countAllResults(),
-                'under_review'=> (int) $db->table('referral_referrals')->where('tenant_id', CurrentTenant::id())->where('status', 'under_review')->where('archived_at', null)->countAllResults(),
-                'closed'      => (int) $db->table('referral_referrals')->where('tenant_id', CurrentTenant::id())->where('status', 'closed')->where('archived_at', null)->countAllResults(),
+                'submitted'   => (int) $db->table('referral_referrals')->where('tenant_id', $tenantId)->where('status', 'submitted')->where('archived_at', null)->countAllResults(),
+                'acknowledged'=> (int) $db->table('referral_referrals')->where('tenant_id', $tenantId)->where('status', 'acknowledged')->where('archived_at', null)->countAllResults(),
+                'under_review'=> (int) $db->table('referral_referrals')->where('tenant_id', $tenantId)->where('status', 'under_review')->where('archived_at', null)->countAllResults(),
+                'closed'      => (int) $db->table('referral_referrals')->where('tenant_id', $tenantId)->where('status', 'closed')->where('archived_at', null)->countAllResults(),
             ];
         }
 
-        if ($this->permissions->userHas(\App\Auth\CurrentUser::assert(), 'audit.read')) {
+        if ($auditPerm) {
             $out['audit'] = [
                 'events_last_24h' => (int) $db->table('audit_events')
-                    ->where('tenant_id', CurrentTenant::id())
+                    ->where('tenant_id', $tenantId)
                     ->where('commited_at >=', date('Y-m-d H:i:s', time() - 86_400))
                     ->countAllResults(),
             ];
         }
+
+        $cache->save($cacheKey, $out, 30);
 
         return $this->ok($out);
     }

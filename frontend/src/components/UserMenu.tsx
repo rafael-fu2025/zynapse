@@ -41,9 +41,8 @@ export function UserMenu() {
   const identity = linkedName ?? me.data?.email ?? me.data?.username ?? null;
   const initials = initialsFor(identity);
   const personKind = me.data?.person_kind ?? null;
-  // University ID number for MIS-delegated accounts; admins keep their
-  // email as the visible handle.
-  const displayHandle = me.data?.identifier ?? me.data?.email ?? '';
+  // Priority: person's real name > institutional email > university ID number.
+  const displayHandle = me.data?.person_name ?? me.data?.email ?? me.data?.identifier ?? '';
 
   return (
     <Popover>
@@ -68,27 +67,39 @@ export function UserMenu() {
       </PopoverTrigger>
       <PopoverContent align="end" sideOffset={8} className="w-56 p-1">
         <div className="px-2 py-1.5">
-          {me.data?.person_name !== undefined && me.data.person_name !== null && (
+          {me.data?.person_name ? (
+            <>
+              <p className="truncate text-sm font-medium text-foreground">
+                {me.data.person_name}
+              </p>
+              {me.data?.email && (
+                <p className="truncate text-xs text-muted-foreground">
+                  {me.data.email}
+                </p>
+              )}
+            </>
+          ) : (
             <p className="truncate text-sm font-medium text-foreground">
-              {me.data.person_name}
+              {me.data?.email ?? me.data?.username ?? 'Signed in'}
             </p>
           )}
-          <p className="truncate text-sm font-medium text-foreground">
-            {me.data?.person_name ? '' : (me.data?.email ?? 'Signed in')}
-          </p>
-          {me.data?.username !== undefined && me.data.username !== '' && (
-            <p className="truncate text-[11px] text-muted-foreground">
-              @{me.data.username}
-            </p>
-          )}
-          {me.data?.identifier != null && me.data.identifier !== '' && (
-            <p className="truncate text-[11px] text-muted-foreground">
-              ID No. {me.data.identifier}
-            </p>
-          )}
-          <p className="mt-1 truncate text-[11px] text-muted-foreground">
-            {kindLabel(personKind)}
-          </p>
+          {me.data?.username &&
+            !me.data.username.startsWith('stu-') &&
+            !me.data.username.startsWith('emp-') &&
+            me.data.username !== me.data.identifier && (
+              <p className="truncate text-[11px] text-muted-foreground">
+                @{me.data.username}
+              </p>
+            )}
+          <div className="mt-1 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+            <span>{kindLabel(personKind)}</span>
+            {me.data?.identifier && (
+              <>
+                <span>·</span>
+                <span className="font-mono">{me.data.identifier}</span>
+              </>
+            )}
+          </div>
         </div>
         <div className="my-1 h-px bg-border" />
         <button

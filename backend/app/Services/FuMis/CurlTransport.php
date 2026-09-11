@@ -34,13 +34,15 @@ final class CurlTransport implements HttpTransport
         $options = [
             'timeout'         => $timeoutSeconds,
             'connect_timeout' => $timeoutSeconds,
+            'http_errors'     => false,
             // The MIS API is campus-only; do not let a redirect chain
             // carry credentials off-network.
             'allow_redirects' => false,
         ];
 
+        $requestHeaders = $headers;
         if ($body !== null) {
-            $options['headers']['Content-Type'] = 'application/json';
+            $requestHeaders['Content-Type'] = 'application/json';
         }
 
         /** @var CURLRequest $curl */
@@ -48,7 +50,7 @@ final class CurlTransport implements HttpTransport
 
         try {
             $response = $curl->request($method, $url, [
-                'headers' => $headers,
+                'headers' => $requestHeaders,
                 'body'    => $body === null ? null : json_encode($body, JSON_THROW_ON_ERROR),
             ]);
         } catch (\Throwable $t) {
