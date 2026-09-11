@@ -101,9 +101,11 @@ describe('getNotificationDestination', () => {
       expect(getNotificationDestination('counselling.queue_called', null, auth)).toBe('/me');
     });
 
-    it('routes counselling.* to /counselling for guidance counselors', () => {
+    it('routes counselling.* to /counselling?tab=sessions for guidance counselors', () => {
       const auth = mockAuth(['counselling.records.read']);
-      expect(getNotificationDestination('counselling.session_opened', null, auth)).toBe('/counselling');
+      expect(getNotificationDestination('counselling.session_opened', null, auth)).toBe(
+        '/counselling?tab=sessions',
+      );
     });
 
     it('routes admin.* to /admin/users when user has rbac.manage', () => {

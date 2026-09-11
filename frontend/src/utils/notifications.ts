@@ -161,7 +161,7 @@ export function getNotificationDestination(
     return '/me';
   }
   if (template.startsWith('counselling.') && hasPermission(auth, 'counselling.records.read')) {
-    return '/counselling';
+    return '/counselling?tab=sessions';
   }
   if (template.startsWith('admin.') && hasPermission(auth, 'rbac.manage')) {
     return '/admin/users';

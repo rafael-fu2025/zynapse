@@ -80,7 +80,7 @@ export function SessionsTab({ selectedId, onSelect }: SessionsTabProps) {
       {/* Responsive Master-Detail: 5/12 list + 7/12 workspace on desktop */}
       <section className="grid gap-5 lg:grid-cols-12">
         {/* Master List (5 cols on lg, 12 on mobile) */}
-        <article className="overflow-hidden rounded-xl border bg-card lg:col-span-5">
+        <article className="flex flex-col overflow-hidden rounded-xl border bg-card lg:col-span-5">
           <header className="border-b px-4 py-3 text-sm font-semibold text-foreground">
             All Sessions
           </header>
@@ -156,7 +156,7 @@ export function SessionsTab({ selectedId, onSelect }: SessionsTabProps) {
             </TableBody>
           </Table>
 
-          <nav className="flex items-center justify-between border-t px-4 py-3">
+          <nav className="mt-auto flex items-center justify-between border-t px-4 py-3">
             <Button
               size="sm"
               variant="outline"

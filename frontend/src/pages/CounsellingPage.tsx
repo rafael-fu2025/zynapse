@@ -32,11 +32,16 @@ export default function CounsellingPage() {
     ? ['queue', 'sessions', 'scheduling', 'analytics']
     : ['sessions', 'scheduling', 'analytics'];
 
-  const requestedTab = params.get('tab') ?? 'sessions';
-  const tab = allowedTabs.includes(requestedTab) ? requestedTab : 'sessions';
+  // The first tab is the daily landing surface — queue for queue-capable
+  // staff, sessions for everyone else. A valid ?session=N still implies the
+  // sessions view so existing deep links and breadcrumbs keep working.
+  const defaultTab = canReadQueue ? 'queue' : 'sessions';
   const rawSessionId = params.get('session');
   const parsedSessionId = rawSessionId !== null && /^\d+$/.test(rawSessionId) ? Number(rawSessionId) : null;
   const selectedId = parsedSessionId !== null && parsedSessionId > 0 ? parsedSessionId : null;
+
+  const requestedTab = params.get('tab') ?? (selectedId !== null ? 'sessions' : defaultTab);
+  const tab = allowedTabs.includes(requestedTab) ? requestedTab : defaultTab;
 
   const queue = useGuidanceQueueToday(canReadQueue);
   const active = queue.data?.find((entry) => entry.status === 'called' || entry.status === 'in_session');
@@ -44,20 +49,21 @@ export default function CounsellingPage() {
   useEffect(() => {
     if (
       requestedTab !== tab ||
+      (tab === defaultTab && params.get('tab') !== null) ||
       (rawSessionId !== null && selectedId === null) ||
       (tab !== 'sessions' && rawSessionId !== null)
     ) {
       const next = new URLSearchParams(params);
-      if (tab === 'sessions') next.delete('tab');
+      if (tab === defaultTab) next.delete('tab');
       else next.set('tab', tab);
       if (tab !== 'sessions' || selectedId === null) next.delete('session');
       setParams(next, { replace: true });
     }
-  }, [params, rawSessionId, requestedTab, selectedId, setParams, tab]);
+  }, [params, defaultTab, rawSessionId, requestedTab, selectedId, setParams, tab]);
 
   function setTab(nextTab: string) {
     const next = new URLSearchParams(params);
-    if (nextTab === 'sessions') next.delete('tab');
+    if (nextTab === defaultTab) next.delete('tab');
     else next.set('tab', nextTab);
     if (nextTab !== 'sessions') next.delete('session');
     setParams(next, { replace: true });
@@ -65,9 +71,17 @@ export default function CounsellingPage() {
 
   function selectSession(id: number | null) {
     const next = new URLSearchParams(params);
-    next.delete('tab');
-    if (id === null) next.delete('session');
-    else next.set('session', String(id));
+    if (id === null) {
+      // Closing the workspace stays on Sessions & Notes rather than
+      // bouncing back to the queue default.
+      next.set('tab', 'sessions');
+      next.delete('session');
+    } else {
+      // ?session=N without a tab param resolves to the sessions view —
+      // deep links and HeaderBreadcrumbs rely on that contract.
+      next.delete('tab');
+      next.set('session', String(id));
+    }
     setParams(next, { replace: false });
   }
 

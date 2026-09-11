@@ -92,7 +92,7 @@ export function AppointmentsTable({
   }
 
   return (
-    <article className="overflow-hidden rounded-xl border bg-card">
+    <article className="flex flex-col overflow-hidden rounded-xl border bg-card">
       <header className="flex flex-wrap items-center justify-between gap-2 border-b px-3 py-2">
         <p className="text-sm font-semibold text-foreground">Appointments</p>
         <div className="flex flex-wrap items-center gap-2">
@@ -237,7 +237,7 @@ export function AppointmentsTable({
         </TableBody>
       </Table>
 
-      <nav className="flex items-center justify-between border-t px-3 py-2">
+      <nav className="mt-auto flex items-center justify-between border-t px-3 py-2">
         <p className="text-xs text-muted-foreground">
           {appointments.data?.data.length ?? 0} appointment{(appointments.data?.data.length ?? 0) === 1 ? '' : 's'}
         </p>

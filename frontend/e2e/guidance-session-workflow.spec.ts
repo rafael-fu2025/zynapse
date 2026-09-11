@@ -53,7 +53,9 @@ test('deep link survives refresh, completion clears selection, and referral fiel
   await page.getByRole('button', { name: /^Complete/ }).click();
   await page.getByRole('button', { name: 'Complete Session' }).click();
   await page.getByRole('button', { name: 'Complete session' }).click();
-  await expect(page).toHaveURL('/counselling');
+  // Selection cleared AND the user stays on Sessions & Notes (the queue is
+  // the landing default now, so bare /counselling would bounce them there).
+  await expect(page).toHaveURL('/counselling?tab=sessions');
 });
 
 test('active duplicate referral displays the existing referral and keeps the session open', async ({ page }) => {
