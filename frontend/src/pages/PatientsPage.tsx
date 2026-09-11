@@ -1,10 +1,12 @@
 /**
  * PatientsPage — patient registry (Phase 11, recycled from synapse_ag).
  *
- * Students tab: keyset-paginated list with live search (>= 2 chars),
- * registration dialog (RHF + Zod), and a detail dialog that manages
- * allergies + emergency contacts. Employees tab: list + registration.
- * Archive is soft — registry rows are never deleted.
+ * Students tab: keyset-paginated list with live search (>= 2 chars), a
+ * registration dialog (RHF + Zod), a view-only detail dialog, and a
+ * "Manage medical record" dialog that edits allergies + emergency
+ * contacts. The student record itself is view-only — registry fields
+ * have no edit UI (2026-09 product decision). Employees tab: list +
+ * registration. Archive is soft — registry rows are never deleted.
  */
 import { zodResolver } from '@hookform/resolvers/zod';
 import {
@@ -89,7 +91,6 @@ import {
   useUpdateAllergy,
   useUpdateContact,
   useUpdateEmployee,
-  useUpdateStudent,
 } from '@/hooks/usePatients';
 import {
   addAllergySchema,
@@ -98,7 +99,6 @@ import {
   createEmployeeSchema,
   createStudentSchema,
   updateEmployeeSchema,
-  updateStudentSchema,
   type AddAllergyInput,
   type AddContactInput,
   type CreateDepartmentInput,
@@ -108,7 +108,6 @@ import {
   type PortalAccount,
   type Student,
   type UpdateEmployeeInput,
-  type UpdateStudentInput,
 } from '@/schemas/patients';
 
 const SEVERITY_VARIANT = { mild: 'info', moderate: 'warning', severe: 'destructive' } as const;
@@ -316,116 +315,13 @@ function CreateStudentDialog({ onClose }: { onClose: () => void }) {
 }
 
 /**
- * EditStudentDialog — mirrors the legacy `StudentController::edit`
- * form (Phase 11). All fields are optional on the backend, so we
- * only PATCH what the user actually changed: cleared inputs become
- * the empty string, which the hook strips out of the payload.
+ * ManageMedicalRecordDialog — view AND edit the medical sections of a
+ * student record: allergies and emergency contacts (add / update /
+ * delete inline). The registry snapshot shown above the sections is
+ * context only — the student record itself is view-only, so registry
+ * fields have no edit UI anywhere (2026-09 product decision).
  */
-function EditStudentDialog({ student, onClose }: { student: Student; onClose: () => void }) {
-  const update = useUpdateStudent();
-  const {
-    register,
-    handleSubmit,
-    reset,
-    setValue,
-    watch,
-    formState: { errors },
-  } = useForm<UpdateStudentInput>({
-    resolver: zodResolver(updateStudentSchema),
-    defaultValues: {
-      first_name:  student.first_name,
-      last_name:   student.last_name,
-      middle_name: student.middle_name ?? '',
-      course:      student.course ?? '',
-      year_level:  student.year_level ?? undefined,
-      section:     student.section ?? '',
-      // student.gender is `string | null` from the schema; narrow it to
-      // the male/female/other literal union the edit schema expects.
-      gender:      student.gender === 'male' || student.gender === 'female' || student.gender === 'other'
-        ? student.gender
-        : undefined,
-      blood_type:  student.blood_type ?? '',
-      date_of_birth: student.date_of_birth ?? '',
-      address:     student.address ?? '',
-    },
-  });
-  const gender = watch('gender');
-
-  const onSubmit = handleSubmit((values) => {
-    update.mutate({ id: student.id, input: values }, { onSuccess: () => { reset(); onClose(); } });
-  });
-
-  return (
-    <DialogContent>
-      <DialogHeader>
-        <DialogTitle>Edit student — {student.student_number}</DialogTitle>
-      </DialogHeader>
-      <form noValidate onSubmit={(e) => void onSubmit(e)} className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <div className="space-y-1.5">
-          <Label htmlFor="es-first">First name</Label>
-          <Input id="es-first" {...register('first_name')} />
-        </div>
-        <div className="space-y-1.5">
-          <Label htmlFor="es-last">Last name</Label>
-          <Input id="es-last" {...register('last_name')} />
-        </div>
-        <div className="col-span-2 space-y-1.5">
-          <Label htmlFor="es-middle">Middle name</Label>
-          <Input id="es-middle" {...register('middle_name')} />
-        </div>
-        <div className="space-y-1.5">
-          <Label htmlFor="es-course">Course</Label>
-          <Input id="es-course" {...register('course')} />
-        </div>
-        <div className="space-y-1.5">
-          <Label htmlFor="es-year">Year level (1–6)</Label>
-          <Input
-            id="es-year"
-            type="number"
-            min={1}
-            max={6}
-            aria-invalid={errors.year_level !== undefined}
-            {...register('year_level', { setValueAs: (v: string) => (v === '' ? undefined : Number(v)) })}
-          />
-        </div>
-        <div className="space-y-1.5">
-          <Label id="es-gender-label">Gender</Label>
-          <Select
-            value={gender ?? ''}
-            onValueChange={(v) => setValue('gender', v as UpdateStudentInput['gender'])}
-          >
-            <SelectTrigger aria-labelledby="es-gender-label"><SelectValue placeholder="Select…" /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="male">Male</SelectItem>
-              <SelectItem value="female">Female</SelectItem>
-              <SelectItem value="other">Other</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-        <div className="space-y-1.5">
-          <Label htmlFor="es-blood">Blood type</Label>
-          <Input id="es-blood" placeholder="O+" {...register('blood_type')} />
-        </div>
-        <div className="space-y-1.5">
-          <Label htmlFor="es-dob">Date of birth</Label>
-          <Input id="es-dob" placeholder="YYYY-MM-DD" {...register('date_of_birth')} />
-        </div>
-        <div className="col-span-2 space-y-1.5">
-          <Label htmlFor="es-address">Address</Label>
-          <Input id="es-address" {...register('address')} />
-        </div>
-        <DialogFooter className="col-span-2">
-          <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
-          <Button type="submit" disabled={update.isPending}>
-            {update.isPending && <Loader2 className="animate-spin" />} Save
-          </Button>
-        </DialogFooter>
-      </form>
-    </DialogContent>
-  );
-}
-
-function StudentDetailDialog({ studentId, onClose }: { studentId: number; onClose: () => void }) {
+function ManageMedicalRecordDialog({ studentId, onClose }: { studentId: number; onClose: () => void }) {
   const detail = useStudent(studentId);
   const addAllergy = useAddAllergy();
   const addContact = useAddContact();
@@ -648,6 +544,80 @@ function StudentDetailDialog({ studentId, onClose }: { studentId: number; onClos
                 </Button>
               )}
             </form>
+          </section>
+        </div>
+      )}
+
+      <DialogFooter>
+        <Button variant="outline" onClick={onClose}>Close</Button>
+      </DialogFooter>
+    </DialogContent>
+  );
+}
+
+/**
+ * StudentDetailDialog — VIEW-ONLY student record: registry snapshot plus
+ * the medical sections with no mutation controls. Editing lives in
+ * ManageMedicalRecordDialog so the menu's "View" and "Manage" actions
+ * match what they can actually do.
+ */
+function StudentDetailDialog({ studentId, onClose }: { studentId: number; onClose: () => void }) {
+  const detail = useStudent(studentId);
+  const s = detail.data;
+
+  return (
+    <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-xl">
+      <DialogHeader>
+        <DialogTitle>
+          {s !== undefined ? `${s.last_name}, ${s.first_name} — ${s.student_number}` : 'Student'}
+        </DialogTitle>
+      </DialogHeader>
+
+      {detail.isLoading && <Loader2 className="mx-auto size-5 animate-spin text-muted-foreground" />}
+
+      {s !== undefined && (
+        <div className="space-y-4">
+          <div className="grid grid-cols-3 gap-2 text-sm">
+            <p><span className="text-muted-foreground">Course:</span> {s.course ?? '—'}</p>
+            <p><span className="text-muted-foreground">Year:</span> {s.year_level ?? '—'}</p>
+            <p><span className="text-muted-foreground">Blood:</span> {s.blood_type ?? '—'}</p>
+          </div>
+
+          <section className="space-y-2">
+            <h3 className="flex items-center gap-1.5 text-sm font-semibold">
+              <HeartPulse className="size-4 text-destructive" /> Allergies
+            </h3>
+            {(s.allergies ?? []).length === 0 && (
+              <p className="text-xs text-muted-foreground">None recorded.</p>
+            )}
+            <ul className="space-y-1">
+              {(s.allergies ?? []).map((a) => (
+                <li key={a.id} className="flex items-center gap-2 text-sm">
+                  <Badge variant={SEVERITY_VARIANT[a.severity]}>{a.severity}</Badge>
+                  <span className="font-medium">{a.allergen}</span>
+                  {a.reaction !== null && <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">— {a.reaction}</span>}
+                </li>
+              ))}
+            </ul>
+          </section>
+
+          <section className="space-y-2">
+            <h3 className="flex items-center gap-1.5 text-sm font-semibold">
+              <Phone className="size-4" /> Emergency contacts
+            </h3>
+            {(s.contacts ?? []).length === 0 && (
+              <p className="text-xs text-muted-foreground">None recorded.</p>
+            )}
+            <ul className="space-y-1">
+              {(s.contacts ?? []).map((c) => (
+                <li key={c.id} className="flex items-center gap-2 text-sm">
+                  {c.is_primary && <Badge variant="info">primary</Badge>}
+                  <span className="font-medium">{c.contact_name}</span>
+                  <span className="text-xs text-muted-foreground">({c.relationship})</span>
+                  <span className="min-w-0 flex-1 truncate font-mono text-xs">{c.phone}</span>
+                </li>
+              ))}
+            </ul>
           </section>
         </div>
       )}
@@ -1068,7 +1038,7 @@ export default function PatientsPage() {
   const [openCreateEmp, setOpenCreateEmp] = useState(false);
   const [detailId, setDetailId] = useState<number | null>(null);
   const [empDetailId, setEmpDetailId] = useState<number | null>(null);
-  const [editStudent, setEditStudent] = useState<Student | null>(null);
+  const [manageId, setManageId] = useState<number | null>(null);
   const [editEmp, setEditEmp] = useState<Employee | null>(null);
   const [confirm, setConfirm] = useState<ConfirmAction | null>(null);
   const [showArchived, setShowArchived] = useUrlFilter('archived', { default: '' });
@@ -1132,8 +1102,8 @@ export default function PatientsPage() {
           <Eye /> View record
         </DropdownMenuItem>
         {canWrite && (
-          <DropdownMenuItem className="min-h-11" onSelect={() => setEditStudent(student)}>
-            <Pencil /> Edit record
+          <DropdownMenuItem className="min-h-11" onSelect={() => setManageId(student.id)}>
+            <HeartPulse /> Manage medical record
           </DropdownMenuItem>
         )}
         {canWrite && (
@@ -1178,11 +1148,11 @@ export default function PatientsPage() {
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-48">
         <DropdownMenuItem className="min-h-11" onSelect={() => setEmpDetailId(employee.id)}>
-          <Eye /> View record
+          <Eye /> View employee record
         </DropdownMenuItem>
         {canWrite && (
           <DropdownMenuItem className="min-h-11" onSelect={() => setEditEmp(employee)}>
-            <Pencil /> Edit record
+            <Pencil /> Edit employee record
           </DropdownMenuItem>
         )}
         {canWrite && (
@@ -1571,9 +1541,9 @@ export default function PatientsPage() {
         </Dialog>
       )}
 
-      {editStudent !== null && (
-        <Dialog open onOpenChange={(o) => !o && setEditStudent(null)}>
-          <EditStudentDialog student={editStudent} onClose={() => setEditStudent(null)} />
+      {manageId !== null && (
+        <Dialog open onOpenChange={(o) => !o && setManageId(null)}>
+          <ManageMedicalRecordDialog studentId={manageId} onClose={() => setManageId(null)} />
         </Dialog>
       )}
 
