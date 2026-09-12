@@ -350,9 +350,9 @@ function AlertBanner({ batchId }: { batchId: number }) {
     <section
       role="alert"
       aria-live="polite"
-      className="space-y-2 rounded-md border border-warning/40 bg-warning/5 p-3"
+      className="space-y-2 rounded-md border border-amber-500/40 bg-amber-500/5 p-3"
     >
-      <header className="flex items-center gap-2 text-warning">
+      <header className="flex items-center gap-2 text-amber-500">
         <TriangleAlert className="size-4" />
         <p className="text-sm font-medium">
           {open.length} active alert{open.length === 1 ? '' : 's'}

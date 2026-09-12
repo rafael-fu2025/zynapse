@@ -705,7 +705,7 @@ function AnalyticsDialog({ unit, batchId, onClose }: { unit: BmgUnit; batchId: n
       )}
 
       {blend.data !== undefined && (
-        <div className={`rounded-md border p-3 text-sm ${blend.data.status === 'optimal' ? 'border-success/30 bg-success/5' : blend.data.status === 'unknown' ? '' : 'border-warning/30 bg-warning/5'}`}>
+        <div className={`rounded-md border p-3 text-sm ${blend.data.status === 'optimal' ? 'border-emerald-500/30 bg-emerald-500/5' : blend.data.status === 'unknown' ? '' : 'border-amber-500/30 bg-amber-500/5'}`}>
           <p className="mb-1 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
             <Sparkles className="size-3.5" /> Feedstock C:N blend
           </p>
@@ -877,14 +877,14 @@ function DrumCard({ batch }: { batch: ActiveBatch }) {
       <header className="flex items-start justify-between gap-2 border-b border-border/60 pb-2">
         <div className="min-w-0">
           <p className="font-mono text-sm font-bold tracking-wide text-foreground">{batch.unit_code}</p>
-          <p className="truncate text-xs text-muted-foreground">{batch.unit_name}</p>
+          <p className="truncate text-xs text-muted-foreground" title={batch.unit_name}>{batch.unit_name}</p>
         </div>
         <Badge variant={isInput ? 'info' : 'warning'} className="shrink-0 uppercase">
           {isInput ? 'Input' : 'Processing'}
         </Badge>
       </header>
 
-      <dl className="space-y-1 text-xs">
+      <dl className="space-y-1 text-[13px]">
         <div className="flex items-center justify-between">
           <dt className="text-muted-foreground">Batch</dt>
           <dd className="font-mono font-semibold text-foreground">{batch.batch_code}</dd>
@@ -907,8 +907,8 @@ function DrumCard({ batch }: { batch: ActiveBatch }) {
               <p
                 className={
                   overdue
-                    ? 'mt-0.5 text-[10px] font-medium text-destructive'
-                    : 'mt-0.5 text-[10px] font-medium text-muted-foreground'
+                    ? 'mt-0.5 text-[11px] font-medium text-destructive'
+                    : 'mt-0.5 text-[11px] font-medium text-muted-foreground'
                 }
               >
                 {overdue
@@ -941,7 +941,7 @@ function DrumCard({ batch }: { batch: ActiveBatch }) {
         <Badge variant={days > 30 ? 'warning' : 'info'}>
           {days} day{days === 1 ? '' : 's'} active
         </Badge>
-        <span className="inline-flex items-center gap-1 text-xs font-medium text-primary opacity-70 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100">
+        <span className="inline-flex items-center gap-1 text-xs font-medium text-primary transition-colors group-hover:underline group-focus-visible:underline">
           <Eye className="size-3" /> Open
         </span>
       </footer>
@@ -1761,11 +1761,11 @@ export default function FacilitiesPage() {
                       <div className="flex items-center gap-2">
                         <div className="h-1.5 w-16 overflow-hidden rounded-full bg-muted">
                           <div
-                            className={`h-full rounded-full ${u.utilization_pct >= 90 ? 'bg-destructive' : u.utilization_pct >= 70 ? 'bg-warning' : 'bg-success'}`}
+                            className={`h-full rounded-full ${u.utilization_pct >= 90 ? 'bg-destructive' : u.utilization_pct >= 70 ? 'bg-amber-500' : 'bg-emerald-500'}`}
                             style={{ width: `${Math.min(u.utilization_pct, 100)}%` }}
                           />
                         </div>
-                        <span className="font-mono text-xs text-muted-foreground">{u.utilization_pct}%</span>
+                        <span className="font-mono text-xs font-medium text-foreground">{u.utilization_pct}%</span>
                       </div>
                     )}
                   </TableCell>
@@ -1824,11 +1824,11 @@ export default function FacilitiesPage() {
                   <div className="flex items-center gap-2">
                     <div className="h-1.5 w-16 overflow-hidden rounded-full bg-muted">
                       <div
-                        className={`h-full rounded-full ${u.utilization_pct >= 90 ? 'bg-destructive' : u.utilization_pct >= 70 ? 'bg-warning' : 'bg-success'}`}
+                        className={`h-full rounded-full ${u.utilization_pct >= 90 ? 'bg-destructive' : u.utilization_pct >= 70 ? 'bg-amber-500' : 'bg-emerald-500'}`}
                         style={{ width: `${Math.min(u.utilization_pct, 100)}%` }}
                       />
                     </div>
-                    <span className="font-mono text-xs text-muted-foreground">{u.utilization_pct}%</span>
+                    <span className="font-mono text-xs font-medium text-foreground">{u.utilization_pct}%</span>
                   </div>
                 </MobileCardField>
               )}
