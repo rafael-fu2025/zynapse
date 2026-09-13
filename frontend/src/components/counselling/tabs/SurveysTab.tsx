@@ -530,7 +530,9 @@ function ResponsesDialog({ survey, onClose }: { survey: Survey; onClose: () => v
                                       {typeof a.value === 'boolean'
                                         ? 'Completed'
                                         : Array.isArray(a.value)
-                                          ? a.value.map((id) => question?.options.find((o) => o.id === id)?.text ?? id).join(', ')
+                                          ? (a.value as Array<number | string>)
+                                              .map((id) => question?.options.find((o) => o.id === id)?.text ?? String(id))
+                                              .join(', ')
                                           : String(a.value)}
                                     </p>
                                   </li>

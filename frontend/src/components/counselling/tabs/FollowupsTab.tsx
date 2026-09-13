@@ -106,7 +106,8 @@ export function FollowupsTab() {
   const [mineOnly, setMineOnly] = useState(false);
   const followups = useGuidanceFollowups(status, mineOnly);
   const [transitionFor, setTransitionFor] = useState<{ followup: GuidanceFollowup; action: string } | null>(null);
-  const rows = followups.data ?? [];
+  // Memoized so the openCount useMemo below has stable dependencies.
+  const rows = useMemo(() => followups.data ?? [], [followups.data]);
 
   const openCount = useMemo(
     () => rows.filter((r) => r.status === 'new' || r.status === 'in_review').length,

@@ -101,7 +101,7 @@ function ServiceDialog({
             student portal.
           </DialogDescription>
         </DialogHeader>
-        <form onSubmit={handleSubmit(submit)} className="space-y-4" noValidate>
+        <form onSubmit={(event) => { void handleSubmit(submit)(event); }} className="space-y-4" noValidate>
           <div className="space-y-1.5">
             <Label htmlFor="svc-name">Name</Label>
             <Input id="svc-name" {...register('name')} aria-invalid={errors.name !== undefined} />

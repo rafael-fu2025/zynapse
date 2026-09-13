@@ -100,7 +100,7 @@ function AnnouncementDialog({
   const isRequired = watch('is_required');
 
   function submit(values: AnnouncementInput) {
-    const payload = { ...values, audience: values.audience as AnnouncementAudience };
+    const payload = { ...values, audience: values.audience };
     if (existing !== null) {
       update.mutate({ id: existing.id, input: payload }, { onSuccess: onClose });
     } else {
@@ -118,7 +118,7 @@ function AnnouncementDialog({
             end time. Required posts surface on the student portal feed.
           </DialogDescription>
         </DialogHeader>
-        <form onSubmit={handleSubmit(submit)} className="space-y-4" noValidate>
+        <form onSubmit={(event) => { void handleSubmit(submit)(event); }} className="space-y-4" noValidate>
           <div className="space-y-1.5">
             <Label htmlFor="ann-title">Title</Label>
             <Input id="ann-title" {...register('title')} aria-invalid={errors.title !== undefined} />
