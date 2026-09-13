@@ -36,6 +36,10 @@ export const adminRoleSchema = z.object({
   code: z.string(),
   name: z.string(),
   permissions: z.array(z.string()),
+  // 2026-09 RBAC rework: privileged set P (grant/revoke needs
+  // rbac.privileged.manage) and the sole wildcard holder flag.
+  privileged: z.boolean().default(false),
+  wildcard: z.boolean().default(false),
 });
 export type AdminRole = z.infer<typeof adminRoleSchema>;
 

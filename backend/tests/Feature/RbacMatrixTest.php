@@ -8,7 +8,8 @@ namespace Tests\Feature;
  * The RBAC 403 matrix, end-to-end: a permission the caller holds passes,
  * one it lacks is refused, and the refusal is the canonical envelope —
  * not a framework error page. Group→permission grants live in
- * app/Config/AuthGroups.php; the wildcard '*' is admin-only.
+ * app/Config/AuthGroups.php; the wildcard '*' is superadmin-only
+ * (2026-09 RBAC rework).
  */
 final class RbacMatrixTest extends FeatureTestCase
 {
@@ -52,11 +53,37 @@ final class RbacMatrixTest extends FeatureTestCase
         $this->assertIsArray($body['data']);
     }
 
-    public function testAdminWildcardGrantsEverything(): void
+    public function testSuperadminWildcardGrantsEverything(): void
     {
-        $session = $this->login(['admin']);
+        // 2026-09 RBAC rework: superadmin (Platform Owner) is the ONLY
+        // wildcard holder.
+        $session = $this->login(['superadmin']);
 
         $result = $this->authed($session['token'], 'get', 'api/v1/audit/events');
+
+        $result->assertStatus(200);
+    }
+
+    public function testClinicAdminHasExplicitMatrixWithoutAudit(): void
+    {
+        // The former `admin` wildcard tier is now clinic_admin with an
+        // explicit matrix — audit.* is deliberately absent (strict D1).
+        $session = $this->login(['clinic_admin']);
+
+        $result = $this->authed($session['token'], 'get', 'api/v1/audit/events');
+
+        $result->assertStatus(403);
+        $body = $this->envelope($result);
+        $this->assertFalse($body['success']);
+    }
+
+    public function testClinicAdminKeepsClinicSurface(): void
+    {
+        // Guards the rename contract: former admin functionality on the
+        // clinic unit (queue read) survives the move to an explicit matrix.
+        $session = $this->login(['clinic_admin']);
+
+        $result = $this->authed($session['token'], 'get', 'api/v1/clinic/queue/state');
 
         $result->assertStatus(200);
     }

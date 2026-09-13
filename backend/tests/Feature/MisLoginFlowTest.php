@@ -204,7 +204,7 @@ final class MisLoginFlowTest extends FeatureTestCase
     public function testLocalAdminEmailLoginStillWorksUnderFumis(): void
     {
         $email = $this->uniqueEmail('admin-mis');
-        $this->createUser(['admin'], $email);
+        $this->createUser(['clinic_admin'], $email);
 
         $res = $this->withBodyFormat('json')->call(
             'post',

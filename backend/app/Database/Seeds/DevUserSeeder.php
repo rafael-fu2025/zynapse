@@ -10,16 +10,18 @@ use CodeIgniter\Database\Seeder;
  * DevUserSeeder — DEV/STAGING ONLY. Creates the canonical dev accounts
  * with password `DevPassw0rd!` and their group memberships:
  *
- *   - admin@synapse.dev             → admin (wildcard)
+ *   - admin@synapse.dev             → superadmin + clinic_admin
  *   - nurse@synapse.dev             → clinic_staff
  *   - report_viewer@synapse.dev     → report_viewer
  *
  * The live e2e suite (frontend/e2e, SYNAPSE_E2E=1) contractually signs
  * in as all three; the nurse/report_viewer accounts were added 2026-09
  * when the suite was run against a fresh dev schema that only had the
- * admin. The admin derives every permission from the group wildcard
- * (`*`); it holds NO explicit per-user grants (RBAC_SECURITY_REVIEW
- * R5), and any pre-existing ones are removed on run.
+ * admin. The admin identity carries the superadmin wildcard (`*`) since
+ * the 2026-09 RBAC rework (Platform Owner) PLUS clinic_admin so the
+ * unit-admin governance paths are exercisable in dev; it holds NO
+ * explicit per-user grants (RBAC_SECURITY_REVIEW R5), and any
+ * pre-existing ones are removed on run.
  *
  * Idempotent: existing identities are adopted, not duplicated.
  * Refuses to run in production.
@@ -28,11 +30,11 @@ final class DevUserSeeder extends Seeder
 {
     private const PASSWORD = 'DevPassw0rd!';
 
-    /** @var array<string, array{username: string, group: string}> */
+    /** @var array<string, array{username: string, groups: list<string>}> */
     private const ACCOUNTS = [
-        'admin@synapse.dev'         => ['username' => 'synapse-admin', 'group' => 'admin'],
-        'nurse@synapse.dev'         => ['username' => 'synapse-nurse', 'group' => 'clinic_staff'],
-        'report_viewer@synapse.dev' => ['username' => 'synapse-report-viewer', 'group' => 'report_viewer'],
+        'admin@synapse.dev'         => ['username' => 'synapse-admin', 'groups' => ['superadmin', 'clinic_admin']],
+        'nurse@synapse.dev'         => ['username' => 'synapse-nurse', 'groups' => ['clinic_staff']],
+        'report_viewer@synapse.dev' => ['username' => 'synapse-report-viewer', 'groups' => ['report_viewer']],
     ];
 
     public function run(): void
@@ -45,7 +47,9 @@ final class DevUserSeeder extends Seeder
 
         foreach (self::ACCOUNTS as $email => $spec) {
             $userId = $this->upsertUser($email, $spec['username'], $now);
-            $this->assignGroup((int) $userId, $spec['group'], $now);
+            foreach ($spec['groups'] as $groupName) {
+                $this->assignGroup((int) $userId, $groupName, $now);
+            }
         }
 
         // The admin identity for RBAC purposes is whichever account maps
@@ -53,8 +57,9 @@ final class DevUserSeeder extends Seeder
         // admin here.
         $adminId = $this->findUserId('admin@synapse.dev');
         if ($adminId !== null) {
-            // RBAC_SECURITY_REVIEW R5: the admin derives EVERY permission from
-            // the `admin` group wildcard (`*`) resolved in PermissionService.
+            // RBAC_SECURITY_REVIEW R5: the admin derives EVERY permission
+            // from the superadmin group wildcard (`*`) resolved in
+            // PermissionService.
             // Explicit per-user grants are redundant and harmful — they are
             // "sticky" (they survive a group demotion) and, before the R1
             // wildcard-exclusion fix, an explicit `counselling.records.*` row

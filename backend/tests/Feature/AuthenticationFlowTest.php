@@ -34,7 +34,7 @@ final class AuthenticationFlowTest extends FeatureTestCase
     private function loginFull(?string $email = null): array
     {
         $email ??= $this->uniqueEmail('auth');
-        $user = $this->createUser(['admin'], $email);
+        $user = $this->createUser(['clinic_admin'], $email);
 
         $session = $this->loginFor($email);
         $session['userId'] = $user['id'];

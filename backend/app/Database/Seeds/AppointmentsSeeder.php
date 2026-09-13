@@ -37,10 +37,10 @@ final class AppointmentsSeeder extends Seeder
     private function appointments(): array
     {
         $patientBase   = (int) (getenv('APPT_PATIENT_BASE') ?: '6');
-        // Providers resolved dynamically (identity-consolidated): admin +
-        // the clinic_staff role demo user. Falls back to admin if the
-        // staff role user is missing.
-        $adminProvider = $this->resolveGroupUser('admin') ?? 1;
+        // Providers resolved dynamically (identity-consolidated): clinic
+        // administrator + the clinic_staff role demo user. Falls back to
+        // the clinic administrator if the staff role user is missing.
+        $adminProvider = $this->resolveGroupUser('clinic_admin') ?? 1;
         $staffProvider = $this->resolveGroupUser('clinic_staff') ?? $adminProvider;
 
         // Build "today" at the timezone used by the demo. We work in

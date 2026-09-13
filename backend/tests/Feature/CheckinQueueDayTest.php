@@ -28,7 +28,7 @@ final class CheckinQueueDayTest extends FeatureTestCase
     protected function setUp(): void
     {
         parent::setUp();
-        $this->admin = $this->login(['admin']);
+        $this->admin = $this->login(['clinic_admin']);
     }
 
     /** @return array<string, mixed> */

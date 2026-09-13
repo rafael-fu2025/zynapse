@@ -17,6 +17,7 @@ SYNAPSE is a university health-services platform in three parts: a stateless RES
 | [`backend/`](backend/README.md) | CodeIgniter 4 REST API — the source of truth. 5 domain modules over a shared kernel, JWT auth, RBAC, audit hash chain, 85 migrations. |
 | [`frontend/`](frontend/README.md) | React 18 + Vite SPA — staff and student portal, web kiosk check-in, public lobby queue display. Strict TypeScript, Zod-validated responses. |
 | [`mobile/`](mobile/README.md) | Flutter client — every module except kiosk check-in, with PDF report export and the same hardened token flow as the browser. |
+| [`docs/`](docs/) | Compliance & operations: external-API data-sharing terms (RA 10173) and the RBAC/key-rotation runbook. |
 | [`CREDENTIALS.md`](CREDENTIALS.md) | Dev/staging demo account matrix. Never production. |
 | [`PRODUCT.md`](PRODUCT.md) | Product context, design principles, accessibility targets. |
 
@@ -109,6 +110,7 @@ Backend `.env` (from `backend/.env.example`, never committed):
 | `REFERRAL_HMAC_KEY` | QR token HMAC |
 | `CORS_ALLOWED_ORIGINS` | Strict allowlist — no wildcards in production |
 | `RATELIMIT_GLOBAL_PER_MIN` · `RATELIMIT_AUTH_PER_MIN` | Fixed-window buckets (600 / 30) |
+| `EXTERNAL_AUDIT_SAMPLE_LIVE` · `EXTERNAL_AUDIT_SAMPLE_TEST` | External-API `external.request` audit sampling per key env (1.0 / 0.2) |
 | `LOGIN_LOCKOUT_MAX_FAILURES` · `LOGIN_LOCKOUT_WINDOW_SECONDS` | Per-account lockout (5 failures / 15 min) |
 | `FFMPEG_BINARY` | Kiosk video thumbnails |
 
@@ -159,8 +161,9 @@ CI ([`ci.yml`](.github/workflows/ci.yml)) runs every suite except live e2e on ea
 1. MariaDB/MySQL with `utf8mb4_unicode_ci`; `php spark migrate --all`.
 2. `composer install --no-dev`; production `.env` (`CI_ENVIRONMENT = production`, `REFRESH_COOKIE_SECURE = true`, strict `CORS_ALLOWED_ORIGINS`).
 3. `npm run build`; serve `frontend/dist` behind a proxy that forwards `/api/v1` to the PHP backend (Apache/PHP-FPM with OPcache — the single-threaded `spark serve` is dev-only and the measured bottleneck on Windows).
-4. Install the cron workers above and wire their failures to alerting.
-5. Do **not** seed `DevUserSeeder` or any demo seeder in production.
+4. Re-run the PermissionsAndGroupsSeeder after the 2026-09 RBAC migration and mint the Platform Owner: `php spark synapse:promote-superadmin <email> --confirm`. Old `admin` memberships carry over to `clinic_admin`; staff sign in again to refresh their permission set. See [`docs/OPERATIONS.md`](docs/OPERATIONS.md).
+5. Install the cron workers above and wire their failures to alerting.
+6. Do **not** seed `DevUserSeeder` or any demo seeder in production (this includes `SandboxTenantSeeder` — a production sandbox tenant starts empty by design).
 
 ## Troubleshooting
 

@@ -8,6 +8,8 @@ use App\Exceptions\ApiException;
 use App\Modules\Shared\BaseService;
 use App\Services\Audit\AuditOutboxService;
 use App\Pagination\KeysetPaginator;
+use App\Services\Rbac\PermissionService;
+use App\Services\Rbac\PrivilegedRoles;
 use App\Services\CurrentTenant;
 use CodeIgniter\Database\Exceptions\DatabaseException;
 use Config\Services;
@@ -19,11 +21,22 @@ use DateTimeZone;
  *
  * Users ARE the person: list/create read `users.kind`, `users.first_name`
  * and `users.last_name` directly (no `persons` join, no `person_id` link).
+ *
+ * 2026-09 RBAC rework governance (D2, see PrivilegedRoles):
+ *   - Granting/revoking a privileged role (set P) requires
+ *     `rbac.privileged.manage` — superadmin only.
+ *   - Kiosk machine accounts are created/reset only by clinic_admin
+ *     or superadmin.
+ *   - No user can revoke their own last privileged role; the last
+ *     holder of any privileged role is irremovable.
+ *   - Every privileged grant/revoke is audited.
  */
 final class UserAdminService extends BaseService
 {
-    public function __construct(private readonly AuditOutboxService $audit)
-    {
+    public function __construct(
+        private readonly AuditOutboxService $audit,
+        private readonly PermissionService $permissions = new PermissionService(),
+    ) {
         parent::__construct();
     }
 
@@ -109,6 +122,7 @@ final class UserAdminService extends BaseService
         $actorId = \App\Auth\CurrentUser::assert();
         $this->assertAtLeastOneGroup($groups);
         $this->assertMayAssignGroups($actorId, $groups);
+        $this->assertKioskAccountAccess($actorId, $groups);
         $email = strtolower(trim($email));
         $temporaryPassword = $password !== null && $password !== ''
             ? $password
@@ -162,6 +176,7 @@ final class UserAdminService extends BaseService
                 'resource_code' => 'groups#' . implode(',', $groups),
                 'next_status'   => 'active',
             ]);
+            $this->auditPrivilegedRoleDiff($actorId, $userId, [], $groups);
 
             return [
                 'id'                 => $userId,
@@ -222,9 +237,12 @@ final class UserAdminService extends BaseService
                 throw ApiException::notFound('resource.not_found');
             }
 
+            $previousGroups = $this->groupsFor([$userId])[$userId] ?? [];
+
             $this->assertAtLeastOneGroup($groups);
             $this->assertMayAssignGroups($actorId, $groups);
-            $this->assertNotRemovingLastOrOwnAdmin($actorId, $userId, $groups);
+            $this->assertKioskAccountAccess($actorId, $groups);
+            $this->assertPrivilegedRemovalSafe($actorId, $userId, $previousGroups, $groups);
 
             $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
             $this->replaceGroupsInTxn($userId, $groups, $now);
@@ -232,6 +250,7 @@ final class UserAdminService extends BaseService
             $this->audit->enqueue('admin.user_groups_changed', 'users', $userId, $actorId, [
                 'resource_code' => 'groups#' . implode(',', $groups),
             ]);
+            $this->auditPrivilegedRoleDiff($actorId, $userId, $previousGroups, $groups);
 
             return ['id' => $userId, 'groups' => array_values($groups)];
         });
@@ -242,6 +261,10 @@ final class UserAdminService extends BaseService
         $actorId = \App\Auth\CurrentUser::assert();
 
         return $this->txn(function () use ($userId, $actorId): array {
+            // Kiosk machine accounts: reset restricted to clinic_admin
+            // or superadmin (D2).
+            $this->assertKioskAccountAccess($actorId, $this->groupsFor([$userId])[$userId] ?? []);
+
             $identity = $this->selectForUpdate('auth_identities', ['user_id' => $userId, 'type' => 'email_password']);
             if ($identity === null) {
                 throw ApiException::notFound('resource.not_found');
@@ -297,12 +320,94 @@ final class UserAdminService extends BaseService
     }
 
     /**
+     * Privileged role set P (superadmin, clinic_admin, guidance_admin,
+     * bmg_admin) may only be granted/revoked by a holder of
+     * `rbac.privileged.manage` — the superadmin wildcard satisfies it.
+     *
      * @param list<string> $groups
      */
     private function assertMayAssignGroups(int $actorId, array $groups): void
     {
-        if (in_array('admin', $groups, true) && ! $this->userIsAdmin($actorId)) {
+        $privilegedTargets = array_intersect($groups, PrivilegedRoles::SET_P);
+        if ($privilegedTargets !== [] && ! $this->permissions->userHas($actorId, 'rbac.privileged.manage')) {
             throw ApiException::forbidden('rbac.escalation_forbidden');
+        }
+    }
+
+    /**
+     * Kiosk accounts are MACHINE accounts: creation/reset is restricted
+     * to the clinic unit administrator (or superadmin) per D2.
+     *
+     * @param list<string> $groups the kiosk-bearing group set being
+     *                             created/assigned (or the target's
+     *                             current groups when resetting)
+     */
+    private function assertKioskAccountAccess(int $actorId, array $groups): void
+    {
+        if (! in_array(PrivilegedRoles::KIOSK_GROUP, $groups, true)) {
+            return;
+        }
+        if ($this->permissions->userHas($actorId, 'rbac.privileged.manage')) {
+            return; // superadmin (wildcard) or an explicit platform grant.
+        }
+        $actorGroups = $this->groupsFor([$actorId])[$actorId] ?? [];
+        if (in_array(PrivilegedRoles::CLINIC_ADMIN_GROUP, $actorGroups, true)) {
+            return;
+        }
+        throw ApiException::forbidden('rbac.kiosk_restricted');
+    }
+
+    /**
+     * Own-protection + continuity for privileged roles, generalized from
+     * the former own/last-admin guard to the whole of set P:
+     *   - a user can never remove their own LAST privileged role;
+     *   - the last holder of any privileged role is irremovable
+     *     (otherwise privileged management could be locked out entirely).
+     *
+     * @param list<string> $previousGroups the target's groups before the change
+     * @param list<string> $nextGroups     the target's groups after the change
+     */
+    private function assertPrivilegedRemovalSafe(int $actorId, int $userId, array $previousGroups, array $nextGroups): void
+    {
+        $removedPrivileged = array_diff(array_intersect($previousGroups, PrivilegedRoles::SET_P), $nextGroups);
+        if ($removedPrivileged === []) {
+            return;
+        }
+
+        $remainingPrivileged = array_diff(array_intersect($previousGroups, PrivilegedRoles::SET_P), $removedPrivileged);
+        if ($userId === $actorId && $remainingPrivileged === []) {
+            throw new ApiException('request.validation_failed', 422, [
+                ['code' => 'validation.invalid', 'message' => 'You cannot remove your own last privileged role.'],
+            ]);
+        }
+
+        foreach ($removedPrivileged as $role) {
+            if ($this->groupHolderCount((string) $role) <= 1) {
+                throw new ApiException('request.validation_failed', 422, [
+                    ['code' => 'validation.invalid', 'message' => "Cannot remove the last holder of the privileged role '{$role}'."],
+                ]);
+            }
+        }
+    }
+
+    /**
+     * Audits every change to set-P membership so privileged elevation is
+     * always traceable (D8 action codes).
+     *
+     * @param list<string> $previousGroups
+     * @param list<string> $nextGroups
+     */
+    private function auditPrivilegedRoleDiff(int $actorId, int $userId, array $previousGroups, array $nextGroups): void
+    {
+        foreach (array_intersect(array_diff($nextGroups, $previousGroups), PrivilegedRoles::SET_P) as $role) {
+            $this->audit->enqueue('rbac.privileged_role_granted', 'users', $userId, $actorId, [
+                'resource_code' => 'role#' . $role,
+            ]);
+        }
+        foreach (array_intersect(array_diff($previousGroups, $nextGroups), PrivilegedRoles::SET_P) as $role) {
+            $this->audit->enqueue('rbac.privileged_role_revoked', 'users', $userId, $actorId, [
+                'resource_code' => 'role#' . $role,
+            ]);
         }
     }
 
@@ -316,43 +421,11 @@ final class UserAdminService extends BaseService
         }
     }
 
-    /**
-     * @param list<string> $groups
-     */
-    private function assertNotRemovingLastOrOwnAdmin(int $actorId, int $userId, array $groups): void
-    {
-        if (in_array('admin', $groups, true)) {
-            return;
-        }
-        if (! $this->userIsAdmin($userId)) {
-            return;
-        }
-        if ($userId === $actorId) {
-            throw new ApiException('request.validation_failed', 422, [
-                ['code' => 'validation.invalid', 'message' => 'You cannot remove your own admin role.'],
-            ]);
-        }
-        if ($this->adminCount() <= 1) {
-            throw new ApiException('request.validation_failed', 422, [
-                ['code' => 'validation.invalid', 'message' => 'Cannot remove the last administrator.'],
-            ]);
-        }
-    }
-
-    private function userIsAdmin(int $userId): bool
+    private function groupHolderCount(string $groupName): int
     {
         return (int) $this->db->table('auth_groups_users gu')
             ->join('auth_groups g', 'g.id = gu.group_id')
-            ->where('g.name', 'admin')
-            ->where('gu.user_id', $userId)
-            ->countAllResults() > 0;
-    }
-
-    private function adminCount(): int
-    {
-        return (int) $this->db->table('auth_groups_users gu')
-            ->join('auth_groups g', 'g.id = gu.group_id')
-            ->where('g.name', 'admin')
+            ->where('g.name', $groupName)
             ->countAllResults();
     }
 

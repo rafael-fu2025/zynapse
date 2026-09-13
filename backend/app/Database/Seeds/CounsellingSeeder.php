@@ -67,9 +67,11 @@ final class CounsellingSeeder extends Seeder
 
     private function findAdminUserId(): ?int
     {
+        // Renamed 2026-09: the old `admin` group is now clinic_admin
+        // (memberships carried over through the rename migration).
         $row = $this->db->table('auth_groups_users')
             ->select('user_id')
-            ->join('auth_groups g', 'g.id = auth_groups_users.group_id AND g.name = "admin"', 'inner', false)
+            ->join('auth_groups g', 'g.id = auth_groups_users.group_id AND g.name = "clinic_admin"', 'inner', false)
             ->limit(1)
             ->get()->getRowArray();
         return $row !== null ? (int) $row['user_id'] : null;

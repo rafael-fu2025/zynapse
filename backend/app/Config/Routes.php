@@ -52,6 +52,9 @@ Modules\Counselling\Routes::register($routes);
 Modules\Facilities\Routes::register($routes);
 Modules\Referrals\Routes::register($routes);
 Modules\Reports\Routes::register($routes);
+// External surface — API-key authenticated data API (`api_key_auth`)
+// plus the superadmin developer portal (`api_auth`); see Modules\External.
+Modules\External\Routes::register($routes);
 
 // Public media content uses an unguessable UUID and contains no gallery
 // metadata. Management remains authenticated under /admin below.

@@ -15,7 +15,8 @@ namespace Tests\Feature;
  * session notes. The remediated rule:
  *
  *   - readNotes / writeNotes / close are OWN-SESSION for counsellors;
- *   - `counselling.records.read_any` (clinical_supervisor + admin) is
+ *   - `counselling.records.read_any` (guidance_supervisor + superadmin)
+ *     is
  *     the deliberate, audited oversight path;
  *   - POST sessions/{id}/reassign transfers ownership so coverage is a
  *     recorded operational act instead of a standing exception.
@@ -50,7 +51,7 @@ final class CounsellingNoteAccessTest extends FeatureTestCase
 
         $this->counsellorA = $this->login(['counsellor']);
         $this->counsellorB = $this->login(['counsellor']);
-        $this->supervisor  = $this->login(['clinical_supervisor']);
+        $this->supervisor  = $this->login(['guidance_supervisor']);
     }
 
     protected function tearDown(): void

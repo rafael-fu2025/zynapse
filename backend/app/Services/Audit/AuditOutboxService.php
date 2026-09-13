@@ -36,6 +36,11 @@ final class AuditOutboxService
         // university identity namespace authenticated the user. The
         // identifier itself is never audited — only this discriminator.
         'mis_namespace',
+        // External API surface (2026-09, D4/D8): app/key identity for
+        // api_app.*, api_key.* and external.request events. Only the
+        // key PREFIX is ever audited — never the secret or its hash.
+        'app_id', 'key_id', 'key_env', 'key_prefix',
+        'endpoint', 'http_method', 'http_status',
     ];
 
     /**

@@ -11,7 +11,10 @@ use Config\Services;
  * PermissionService — DB-driven RBAC.
  *
  * Effective permissions for `user_id` are computed as
- *   effective = (global_permissions UNION group_permissions) + adminWildcard
+ *   effective = (global_permissions UNION group_permissions) + superadminWildcard
+ *
+ * The wildcard ('*') is held ONLY by the `superadmin` group (Platform
+ * Owner, 2026-09 RBAC rework) — see App\Services\Rbac\PrivilegedRoles.
  *
  * Caches the result per-process to avoid hammering the DB on every
  * `authorize()` call. Cache is keyed on `(userId, groupSnapshot)`.
@@ -99,8 +102,9 @@ final class PermissionService
             $agg[$p] = true;
         }
 
-        // Step 3: Apply admin wildcard.
-        if (in_array('admin', $userGroups, true)) {
+        // Step 3: Apply the superadmin wildcard (the ONLY wildcard
+        // holder since the 2026-09 RBAC rework).
+        if (in_array(PrivilegedRoles::WILDCARD_GROUP, $userGroups, true)) {
             $agg[$groups->adminWildcard] = true;
         }
 
@@ -119,8 +123,8 @@ final class PermissionService
      * Permission-driven notification fan-out ("notify everyone who can
      * acknowledge counselling-bound referrals"): group memberships are
      * resolved from `Config\AuthGroups::$groupPermissions` (the source
-     * of truth), the admin group always qualifies via the wildcard, and
-     * explicit per-user grants in `user_permissions` are folded in.
+     * of truth), the superadmin group always qualifies via the wildcard,
+     * and explicit per-user grants in `user_permissions` are folded in.
      *
      * @return array<int, int>
      */
@@ -131,7 +135,8 @@ final class PermissionService
 
         $wantedGroups = [];
         foreach ($groups->groupPermissions as $groupName => $perms) {
-            if ($groupName === 'admin' || $this->grants($perms, $code, $groups->adminWildcard)) {
+            if ($groupName === PrivilegedRoles::WILDCARD_GROUP
+                || $this->grants($perms, $code, $groups->adminWildcard)) {
                 $wantedGroups[] = $groupName;
             }
         }

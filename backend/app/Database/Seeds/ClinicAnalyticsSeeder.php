@@ -48,7 +48,8 @@ final class ClinicAnalyticsSeeder extends Seeder
             throw new \RuntimeException('ClinicAnalyticsSeeder must never run in production.');
         }
 
-        $admin = $this->resolveGroupUser('admin');
+        // 2026-09 RBAC rework: the old `admin` group is clinic_admin now.
+        $admin = $this->resolveGroupUser('clinic_admin');
         $staff = $this->resolveGroupUser('clinic_staff');
         $counsellor = $this->resolveGroupUser('counsellor');
         if ($admin === null || $staff === null) {

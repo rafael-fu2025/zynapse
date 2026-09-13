@@ -15,6 +15,11 @@ use CodeIgniter\Test\Mock\MockCache;
  * `Undefined array key` instead of returning 1. Production handlers
  * (FileHandler, RedisHandler) handle the miss; only the test double is
  * broken. This subclass only adds the missing guard.
+ *
+ * NOTE: the return type stays `bool` (MockCache's contract, and PHP
+ * forbids widening it). Filters that need the counter VALUE must
+ * increment() then get() — production handlers return the new count
+ * from increment(), but the double cannot.
  */
 final class SafeMockCache extends MockCache
 {

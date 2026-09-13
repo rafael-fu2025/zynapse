@@ -29,7 +29,13 @@ final class AppointmentQueueParityContractTest extends TestCase
     public function testKioskContentPermissionDoesNotGrantUserAdministration(): void
     {
         $groups=$this->read('app/Config/AuthGroups.php');preg_match("/'clinic_staff'\s*=>\s*\[(.*?)\n\s*\],/s",$groups,$clinic);
-        $this->assertStringContainsString('kiosk.content.manage',$clinic[1]??'');$this->assertStringNotContainsString('rbac.manage',$clinic[1]??'');
+        preg_match("/'clinic_admin'\s*=>\s*\[(.*?)\n\s*\],/s",$groups,$admin);
+        // 2026-09 RBAC rework: kiosk content is clinic_admin-only
+        // configuration; clinic_staff holds no user-administration code.
+        $this->assertStringNotContainsString('kiosk.content.manage',$clinic[1]??'');
+        $this->assertStringContainsString('kiosk.content.manage',$admin[1]??'');
+        $this->assertStringNotContainsString('rbac.manage',$clinic[1]??'');
+        $this->assertStringContainsString('rbac.manage',$admin[1]??'');
     }
     private function read(string $path):string{$source=file_get_contents(__DIR__.'/../../'.$path);$this->assertIsString($source);return$source;}
 }

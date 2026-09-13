@@ -17,12 +17,14 @@ namespace Tests\Feature;
 final class BmgWorkflowTest extends FeatureTestCase
 {
     /** @var array{id:int, email:string} */
-    private array $admin = [];
+    private array $bmgAdmin = [];
 
     protected function setUp(): void
     {
         parent::setUp();
-        $this->admin = $this->login(['admin']);
+        // 2026-09 RBAC rework: the BMG unit administrator holds the full
+        // facilities.* matrix (the old wildcard admin no longer exists).
+        $this->bmgAdmin = $this->login(['bmg_admin']);
     }
 
     /** @return array<string, mixed> */
@@ -47,7 +49,7 @@ final class BmgWorkflowTest extends FeatureTestCase
     {
         if ($this->tokenValue === '') {
             $res = $this->withBodyFormat('json')->call('post', 'api/v1/auth/login', [
-                'email'    => $this->admin['email'],
+                'email'    => $this->bmgAdmin['email'],
                 'password' => self::TEST_PASSWORD,
             ]);
             $res->assertStatus(200);

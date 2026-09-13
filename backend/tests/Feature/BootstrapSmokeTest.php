@@ -78,7 +78,7 @@ final class BootstrapSmokeTest extends FeatureTestCase
 
     public function testLoginHelperReturnsAWorkingAccessToken(): void
     {
-        $session = $this->login(['admin']);
+        $session = $this->login(['clinic_admin']);
 
         $this->assertNotSame('', $session['token']);
 

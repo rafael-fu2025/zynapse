@@ -16,6 +16,7 @@ use CodeIgniter\Filters\PerformanceMetrics;
 use CodeIgniter\Filters\SecureHeaders;
 
 use App\Filters\ApiAuthFilter;
+use App\Filters\ApiKeyAuthFilter;
 use App\Filters\ApiRateLimitFilter;
 use App\Filters\ApiRequestLoggerFilter;
 use App\Filters\ApiExceptionFilter;
@@ -39,6 +40,7 @@ class Filters extends BaseFilters
 
         // SYNAPSE-specific filters
         'api_auth'      => ApiAuthFilter::class,
+        'api_key_auth'  => ApiKeyAuthFilter::class,
         'api_ratelimit' => ApiRateLimitFilter::class,
         'api_log'       => ApiRequestLoggerFilter::class,
         'api_exc'       => ApiExceptionFilter::class,

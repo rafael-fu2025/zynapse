@@ -41,8 +41,9 @@ final class SeedDemoUsersSeeder extends Seeder
         ['first' => 'Tina',  'last' => 'Aquino',     'username' => 'synapse-audit-reader',        'group' => 'audit_reader'],
         // Phase 19 (ACTOR_ACCESS_ANALYSIS): read-only analytics role.
         ['first' => 'Paul',  'last' => 'Mendoza',    'username' => 'synapse-report-viewer',       'group' => 'report_viewer'],
-        // RBAC_SECURITY_REVIEW R4: clinical oversight / break-glass role.
-        ['first' => 'Ana',   'last' => 'Garcia',     'username' => 'synapse-clinical-supervisor', 'group' => 'clinical_supervisor'],
+        // RBAC_SECURITY_REVIEW R4: counselling oversight / break-glass role
+        // (renamed from clinical_supervisor, 2026-09 RBAC rework).
+        ['first' => 'Ana',   'last' => 'Garcia',     'username' => 'synapse-guidance-supervisor', 'group' => 'guidance_supervisor'],
     ];
 
     public function run(): void
