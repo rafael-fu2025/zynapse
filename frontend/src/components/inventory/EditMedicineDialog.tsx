@@ -42,7 +42,7 @@ export function EditMedicineDialog({ medicine, onClose }: { medicine: Medicine; 
   });
 
   return (
-    <DialogContent>
+    <DialogContent lockDismiss>
       <DialogHeader>
         <DialogTitle>Edit — {medicine.generic_name}</DialogTitle>
       </DialogHeader>

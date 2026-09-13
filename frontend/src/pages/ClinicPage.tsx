@@ -205,7 +205,7 @@ function VitalsDialog({ encounter, onClose }: { encounter: Encounter; onClose: (
   });
 
   return (
-    <DialogContent>
+    <DialogContent lockDismiss>
       <DialogHeader>
         <DialogTitle>Vitals — encounter #{encounter.id}</DialogTitle>
       </DialogHeader>
@@ -321,7 +321,7 @@ function CareDialog({ encounter, onClose }: { encounter: Encounter; onClose: () 
   }
 
   return (
-    <DialogContent size="2xl">
+    <DialogContent lockDismiss size="2xl">
       <DialogHeader>
         <DialogTitle>Care — encounter #{encounter.id}</DialogTitle>
       </DialogHeader>
@@ -597,7 +597,7 @@ function ClinicGuidanceReferralDialog({ encounter, onClose }: { encounter: Encou
     },
   }));
 
-  return <DialogContent>
+  return <DialogContent lockDismiss>
     <DialogHeader><DialogTitle>Refer patient to Guidance</DialogTitle></DialogHeader>
     {result !== null ? <div className="space-y-4"><div className="rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-4"><p className="font-medium">Referral #{result.id}</p><p className="text-sm text-muted-foreground">Status: {result.status.replace('_', ' ')}</p><p className="mt-2 text-sm">The Clinic encounter remains active. Guidance acknowledgement, review, and queue handoff are separate actions.</p></div><DialogFooter><Button onClick={onClose}>Continue encounter</Button></DialogFooter></div> : <form noValidate onSubmit={(event) => void submit(event)} className="space-y-4">
       <div className="rounded-lg border bg-muted/30 p-3"><p className="font-medium">{encounter.patient_name ?? encounter.patient_school_id}</p><p className="font-mono text-xs text-muted-foreground">{encounter.patient_school_id}</p></div>
@@ -1211,7 +1211,7 @@ function AddShiftDialog({ onClose }: { onClose: () => void }) {
   }
 
   return (
-    <DialogContent className="max-w-md">
+    <DialogContent lockDismiss className="max-w-md">
       <DialogHeader>
         <DialogTitle>Add staff shift</DialogTitle>
       </DialogHeader>
@@ -1298,7 +1298,7 @@ function EditShiftDialog({ schedule, onClose }: { schedule: StaffSchedule; onClo
   }
 
   return (
-    <DialogContent className="max-w-md">
+    <DialogContent lockDismiss className="max-w-md">
       <DialogHeader>
         <DialogTitle>Edit shift #{schedule.id}</DialogTitle>
       </DialogHeader>

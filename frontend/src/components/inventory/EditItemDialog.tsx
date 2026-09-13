@@ -46,7 +46,7 @@ export function EditItemDialog({ item, onClose }: { item: InventoryItem; onClose
   });
 
   return (
-    <DialogContent>
+    <DialogContent lockDismiss>
       <DialogHeader>
         <DialogTitle>Edit — {item.sku}</DialogTitle>
       </DialogHeader>

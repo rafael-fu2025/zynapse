@@ -52,16 +52,31 @@ const DIALOG_SIZE_CLASSES: Record<DialogSize, string> = {
 interface DialogContentProps
   extends React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content> {
   size?: DialogSize;
+  /**
+   * Blocks accidental dismissal: outside-tap/overlay-click and Escape
+   * do nothing, so only the explicit controls (X icon, Cancel button)
+   * close the dialog. Use on form dialogs where losing typed input to
+   * a stray click is worse than an extra click to leave.
+   */
+  lockDismiss?: boolean;
 }
 
 const DialogContent = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Content>,
   DialogContentProps
->(({ className, children, size = 'lg', ...props }, ref) => (
+>(({ className, children, size = 'lg', lockDismiss = false, ...props }, ref) => (
   <DialogPortal>
     <DialogOverlay />
     <DialogPrimitive.Content
       ref={ref}
+      {...(lockDismiss
+        ? {
+            // Blocks overlay-click/tap AND Escape; only the explicit
+            // controls (X icon, Cancel) close the dialog.
+            onInteractOutside: (event: { preventDefault(): void }) => event.preventDefault(),
+            onEscapeKeyDown: (event: { preventDefault(): void }) => event.preventDefault(),
+          }
+        : {})}
       className={cn(
         // Mobile: bottom sheet — pinned to the bottom, full width,
         // capped height, top-rounded, slides up, scrolls inside, and

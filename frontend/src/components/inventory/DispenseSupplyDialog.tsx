@@ -41,7 +41,7 @@ export function DispenseSupplyDialog({ item, onClose }: { item: InventoryItem; o
   const hasEncounter = Number.isInteger(encId) && encId > 0;
 
   return (
-    <DialogContent>
+    <DialogContent lockDismiss>
       <DialogHeader>
         <DialogTitle>Dispense — {item.name}</DialogTitle>
       </DialogHeader>

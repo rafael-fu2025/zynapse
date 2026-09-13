@@ -45,7 +45,7 @@ export function AddSlotDialog({ onClose }: { onClose: () => void }) {
   });
 
   return (
-    <DialogContent>
+    <DialogContent lockDismiss>
       <DialogHeader>
         <DialogTitle>Add availability window</DialogTitle>
       </DialogHeader>

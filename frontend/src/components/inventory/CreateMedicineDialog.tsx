@@ -87,7 +87,7 @@ export function CreateMedicineDialog({ onClose }: { onClose: () => void }) {
   });
 
   return (
-    <DialogContent>
+    <DialogContent lockDismiss>
       <DialogHeader>
         <DialogTitle>New medicine</DialogTitle>
       </DialogHeader>

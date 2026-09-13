@@ -204,7 +204,7 @@ function CreateReferralDialog({ onClose }: { onClose: () => void }) {
   }, [customArtifact, source, target, artifactType, setValue]);
 
   return (
-    <DialogContent>
+    <DialogContent lockDismiss>
       <DialogHeader>
         <DialogTitle>New referral</DialogTitle>
       </DialogHeader>
@@ -467,7 +467,7 @@ function ScanDialog({ onClose, onResult }: { onClose: () => void; onResult: (r: 
   }
 
   return (
-    <DialogContent>
+    <DialogContent lockDismiss>
       <DialogHeader>
         <DialogTitle className="flex items-center gap-2">
           <ShieldCheck className="size-4" /> Verify a referral
@@ -582,7 +582,7 @@ function ReferralBookingDialog({ referral, onClose }: { referral: Referral; onCl
   });
 
   return (
-    <DialogContent>
+    <DialogContent lockDismiss>
       <DialogHeader>
         <DialogTitle className="flex items-center gap-2">
           <CalendarPlus className="size-4" /> Book counselling — referral #{referral.id}

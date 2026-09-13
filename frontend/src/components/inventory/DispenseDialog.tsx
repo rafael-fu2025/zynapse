@@ -51,7 +51,7 @@ export function DispenseDialog({ medicine, onClose }: { medicine: Medicine; onCl
   const openEncounters = encounters.data?.data ?? [];
 
   return (
-    <DialogContent>
+    <DialogContent lockDismiss>
       <DialogHeader>
         <DialogTitle>Dispense — {medicine.generic_name}</DialogTitle>
       </DialogHeader>

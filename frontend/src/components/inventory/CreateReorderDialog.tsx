@@ -87,7 +87,7 @@ export function CreateReorderDialog({ onClose }: { onClose: () => void }) {
   });
 
   return (
-    <DialogContent>
+    <DialogContent lockDismiss>
       <DialogHeader>
         <DialogTitle>New reorder request</DialogTitle>
       </DialogHeader>

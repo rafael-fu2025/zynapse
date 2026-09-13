@@ -40,7 +40,7 @@ export function GuidanceClinicReferralDialog({ session, onClose }: { session: Se
   const shown = result ?? duplicate;
 
   return (
-    <DialogContent>
+    <DialogContent lockDismiss>
       <DialogHeader><DialogTitle>Refer patient to Clinic</DialogTitle></DialogHeader>
       {shown !== null ? (
         <div className="space-y-4">

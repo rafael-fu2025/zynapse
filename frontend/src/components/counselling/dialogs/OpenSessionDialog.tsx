@@ -30,7 +30,7 @@ export function OpenSessionDialog({ onClose }: { onClose: () => void }) {
   });
 
   return (
-    <DialogContent>
+    <DialogContent lockDismiss>
       <DialogHeader>
         <DialogTitle>Open session</DialogTitle>
       </DialogHeader>

@@ -171,7 +171,7 @@ function StartBatchDialog({ unit, onClose }: { unit: BmgUnit; onClose: () => voi
   }
 
   return (
-    <DialogContent>
+    <DialogContent lockDismiss>
       <DialogHeader>
         <DialogTitle>Start batch on {unit.code}</DialogTitle>
       </DialogHeader>
@@ -272,7 +272,7 @@ function RecordOutputDialog({ unit, batchId, onClose }: { unit: BmgUnit; batchId
   }
 
   return (
-    <DialogContent>
+    <DialogContent lockDismiss>
       <DialogHeader>
         <DialogTitle>Record output for batch #{batchId} on {unit.code}</DialogTitle>
       </DialogHeader>
@@ -327,7 +327,7 @@ function AddUpdateDialog({ unit, batchId, onClose }: { unit: BmgUnit; batchId: n
   }
 
   return (
-    <DialogContent>
+    <DialogContent lockDismiss>
       <DialogHeader>
         <DialogTitle>Add update — batch #{batchId} on {unit.code}</DialogTitle>
         <p className="text-sm text-muted-foreground">
@@ -453,7 +453,7 @@ function FinishBatchDialog({ unit, batchId, onClose }: { unit: BmgUnit; batchId:
   }
 
   return (
-    <DialogContent>
+    <DialogContent lockDismiss>
       <DialogHeader>
         <DialogTitle>Finish batch #{batchId} on {unit.code}</DialogTitle>
         <p className="text-sm text-muted-foreground">
@@ -590,7 +590,7 @@ function ProcessLogsDialog({ unit, batchId, onClose }: { unit: BmgUnit; batchId:
   }
 
   return (
-    <DialogContent className="max-w-lg">
+    <DialogContent lockDismiss className="max-w-lg">
       <DialogHeader>
         <DialogTitle className="flex items-center gap-2">
           <ClipboardList className="size-4" /> Process log — batch #{batchId} on {unit.code}
@@ -1044,7 +1044,7 @@ function CreateUnitDialog({ onClose, existingCodes }: { onClose: () => void; exi
   }
 
   return (
-    <DialogContent>
+    <DialogContent lockDismiss>
       <DialogHeader>
         <DialogTitle className="flex items-center gap-2">
           <Plus className="size-4" /> New BMG drum
@@ -1168,7 +1168,7 @@ function EditUnitDialog({ unit, onClose }: { unit: BmgUnit; onClose: () => void 
   }
 
   return (
-    <DialogContent>
+    <DialogContent lockDismiss>
       <DialogHeader>
         <DialogTitle className="flex items-center gap-2">
           <Pencil className="size-4" /> Edit {unit.code}
@@ -1302,7 +1302,7 @@ function ReleaseBatchDialog({ unit, batchId, onClose }: { unit: BmgUnit; batchId
   }
 
   return (
-    <DialogContent>
+    <DialogContent lockDismiss>
       <DialogHeader>
         <DialogTitle className="flex items-center gap-2">
           <ShieldCheck className="size-4 text-primary" /> Release batch #{batchId} on {unit.code}
@@ -1442,7 +1442,7 @@ function BatchHistoryDialog({ unitId, onClose }: { unitId: number | null; onClos
   }
 
   return (
-    <DialogContent className="max-w-5xl sm:max-w-5xl">
+    <DialogContent lockDismiss className="max-w-5xl sm:max-w-5xl">
       <DialogHeader>
         <DialogTitle className="flex items-center gap-2">
           <History className="size-4 text-primary" /> Batch history

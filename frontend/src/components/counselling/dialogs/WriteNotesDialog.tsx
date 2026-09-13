@@ -54,7 +54,7 @@ export function WriteNotesDialog({
 
   return (
     <>
-      <DialogContent onPointerDownOutside={(e) => { if (isDirty) e.preventDefault(); }}>
+      <DialogContent lockDismiss onPointerDownOutside={(e) => { if (isDirty) e.preventDefault(); }}>
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Lock className="size-4" />{' '}

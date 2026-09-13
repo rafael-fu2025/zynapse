@@ -26,6 +26,7 @@ import { QueryErrorState } from '@/components/QueryErrorState';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { YourQueueCard } from '@/components/YourQueueCard';
+import { GuidancePortalTab } from '@/components/GuidancePortalTab';
 import { useTabParam } from '@/hooks/useTabParam';
 import { PortalAppointments } from '@/components/PortalAppointments';
 import { useMe } from '@/hooks/useAuth';
@@ -99,6 +100,7 @@ export default function StudentPortalPage() {
               <TabsTrigger value="overview">Overview</TabsTrigger>
               <TabsTrigger value="appointments">Appointments</TabsTrigger>
               <TabsTrigger value="history">History</TabsTrigger>
+              <TabsTrigger value="guidance">Guidance</TabsTrigger>
               <TabsTrigger value="notifications">Notifications</TabsTrigger>
             </TabsList>
 
@@ -201,6 +203,10 @@ export default function StudentPortalPage() {
 
           <TabsContent value="appointments" className="space-y-6 pt-4">
             <PortalAppointments />
+          </TabsContent>
+
+          <TabsContent value="guidance" className="space-y-6 pt-4">
+            <GuidancePortalTab />
           </TabsContent>
 
           <TabsContent value="history" className="space-y-6 pt-4">

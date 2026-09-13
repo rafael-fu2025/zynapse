@@ -56,7 +56,7 @@ export function BookAppointmentDialog({ onClose }: { onClose: () => void }) {
   });
 
   return (
-    <DialogContent>
+    <DialogContent lockDismiss>
       <DialogHeader>
         <DialogTitle>Book appointment</DialogTitle>
       </DialogHeader>

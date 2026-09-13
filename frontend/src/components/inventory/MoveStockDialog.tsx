@@ -47,7 +47,7 @@ export function MoveStockDialog({ item, onClose }: { item: InventoryItem; onClos
   });
 
   return (
-    <DialogContent>
+    <DialogContent lockDismiss>
       <DialogHeader>
         <DialogTitle>Adjust stock — {item.sku}</DialogTitle>
       </DialogHeader>

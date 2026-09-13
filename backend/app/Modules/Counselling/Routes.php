@@ -46,6 +46,46 @@ final class Routes implements BaseRoutes
             // Scheduling analytics (Phase P5a — deterministic no-show optimizer).
             $r->get('analytics',                      'ScheduleController::listAnalytics');
             $r->post('analytics/recompute',           'ScheduleController::recomputeAnalytics');
+
+            // Guidance content (2026-09 parity plan Phase A) — staff CRUD.
+            $r->get('announcements',                  'GuidanceContentController::listAnnouncements');
+            $r->post('announcements',                 'GuidanceContentController::createAnnouncement');
+            $r->post('announcements/(:num)/update',   'GuidanceContentController::updateAnnouncement/$1');
+            $r->post('announcements/(:num)/archive',  'GuidanceContentController::archiveAnnouncement/$1');
+            $r->get('services',                       'GuidanceContentController::listServices');
+            $r->post('services',                      'GuidanceContentController::createService');
+            $r->post('services/(:num)/update',        'GuidanceContentController::updateService/$1');
+            $r->post('services/(:num)/archive',       'GuidanceContentController::archiveService/$1');
+
+            // Surveys engine (2026-09 parity plan Phase B) — builder,
+            // publish, responses.
+            $r->get('surveys',                        'SurveyController::listSurveys');
+            $r->get('surveys/(:num)',                 'SurveyController::showSurvey/$1');
+            $r->post('surveys',                       'SurveyController::createSurvey');
+            $r->post('surveys/(:num)/update',         'SurveyController::updateSurvey/$1');
+            $r->post('surveys/(:num)/questions',      'SurveyController::setQuestions/$1');
+            $r->post('surveys/(:num)/publish',        'SurveyController::publishSurvey/$1');
+            $r->post('surveys/(:num)/archive',        'SurveyController::archiveSurvey/$1');
+            $r->get('surveys/(:num)/responses',       'SurveyController::listResponses/$1');
+            $r->get('surveys/(:num)/responses/(:num)', 'SurveyController::responseDetail/$1/$2');
+
+            // Aftercare loop (2026-09 parity plan Phase C) — RA 11036 §24.
+            $r->get('followups',                      'GuidanceFollowupController::listFollowups');
+            $r->post('followups/(:num)/assign',       'GuidanceFollowupController::assign/$1');
+            $r->post('followups/(:num)/transition',   'GuidanceFollowupController::transition/$1');
+            $r->get('surveys/(:num)/aggregate',       'GuidanceFollowupController::aggregate/$1');
+            $r->get('sessions/(:num)/interviews',     'GuidanceFollowupController::sessionInterviews/$1');
+        });
+
+        // Student self-service guidance feed — mounted at /api/v1/me/guidance
+        // like the other /me surfaces (self-scoped; no staff permission).
+        $routes->group('api/v1/me/guidance', ['namespace' => 'Modules\\Counselling\\Controllers', 'filter' => 'api_auth'], static function (RouteCollection $r): void {
+            $r->get('announcements', 'GuidanceContentController::feedAnnouncements');
+            $r->get('services',      'GuidanceContentController::feedServices');
+            $r->get('surveys',       'SurveyController::mySurveys');
+            $r->get('surveys/(:num)', 'SurveyController::myForm/$1');
+            $r->post('surveys/(:num)/submit', 'SurveyController::submit/$1');
+            $r->get('requirements',  'SurveyController::myRequirements');
         });
     }
 }

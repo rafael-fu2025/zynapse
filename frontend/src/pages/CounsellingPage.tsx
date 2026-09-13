@@ -17,10 +17,14 @@ import { PageHeader } from '@/components/PageHeader';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import {
+  AnnouncementsTab,
+  FollowupsTab,
   GuidanceQueueTab,
   SessionsTab,
   SchedulingTab,
   AnalyticsTab,
+  ServicesTab,
+  SurveysTab,
 } from '@/components/counselling/tabs';
 import { useGuidanceQueueToday } from '@/hooks/useQueue';
 import { hasPermission, useAuthStore } from '@/store/auth';
@@ -28,14 +32,26 @@ import { hasPermission, useAuthStore } from '@/store/auth';
 export default function CounsellingPage() {
   const [params, setParams] = useSearchParams();
   const canReadQueue = useAuthStore((state) => hasPermission(state, 'counselling.queue.read'));
-  const allowedTabs = canReadQueue
-    ? ['queue', 'sessions', 'scheduling', 'analytics']
-    : ['sessions', 'scheduling', 'analytics'];
+  const canManageAnnouncements = useAuthStore((state) => hasPermission(state, 'counselling.announcements.manage'));
+  const canManageServices = useAuthStore((state) => hasPermission(state, 'counselling.services.manage'));
+  const canManageSurveys = useAuthStore((state) => hasPermission(state, 'counselling.surveys.manage'));
+  const canSeeFollowups = useAuthStore((state) => hasPermission(state, 'counselling.responses.read_any'));
+
+  const allowedTabs = [
+    ...(canReadQueue ? ['queue'] : []),
+    ...(canSeeFollowups ? ['followups'] : []),
+    'sessions',
+    'scheduling',
+    'analytics',
+    ...(canManageSurveys ? ['surveys'] : []),
+    ...(canManageAnnouncements ? ['announcements'] : []),
+    ...(canManageServices ? ['services'] : []),
+  ];
 
   // The first tab is the daily landing surface — queue for queue-capable
   // staff, sessions for everyone else. A valid ?session=N still implies the
   // sessions view so existing deep links and breadcrumbs keep working.
-  const defaultTab = canReadQueue ? 'queue' : 'sessions';
+  const defaultTab = allowedTabs[0] ?? 'sessions';
   const rawSessionId = params.get('session');
   const parsedSessionId = rawSessionId !== null && /^\d+$/.test(rawSessionId) ? Number(rawSessionId) : null;
   const selectedId = parsedSessionId !== null && parsedSessionId > 0 ? parsedSessionId : null;
@@ -104,9 +120,13 @@ export default function CounsellingPage() {
                     )}
                   </TabsTrigger>
                 )}
+                {canSeeFollowups && <TabsTrigger value="followups">Follow-ups</TabsTrigger>}
                 <TabsTrigger value="sessions">Sessions &amp; Notes</TabsTrigger>
                 <TabsTrigger value="scheduling">Scheduling</TabsTrigger>
                 <TabsTrigger value="analytics">Analytics</TabsTrigger>
+                {canManageSurveys && <TabsTrigger value="surveys">Surveys</TabsTrigger>}
+                {canManageAnnouncements && <TabsTrigger value="announcements">Announcements</TabsTrigger>}
+                {canManageServices && <TabsTrigger value="services">Services</TabsTrigger>}
               </TabsList>
             }
           />
@@ -114,6 +134,12 @@ export default function CounsellingPage() {
           {canReadQueue && (
             <TabsContent value="queue" className="mt-4">
               <GuidanceQueueTab onOpenSession={selectSession} />
+            </TabsContent>
+          )}
+
+          {canSeeFollowups && (
+            <TabsContent value="followups" className="mt-4">
+              <FollowupsTab />
             </TabsContent>
           )}
 
@@ -128,6 +154,24 @@ export default function CounsellingPage() {
           <TabsContent value="analytics" className="mt-4">
             <AnalyticsTab />
           </TabsContent>
+
+          {canManageSurveys && (
+            <TabsContent value="surveys" className="mt-4">
+              <SurveysTab />
+            </TabsContent>
+          )}
+
+          {canManageAnnouncements && (
+            <TabsContent value="announcements" className="mt-4">
+              <AnnouncementsTab />
+            </TabsContent>
+          )}
+
+          {canManageServices && (
+            <TabsContent value="services" className="mt-4">
+              <ServicesTab />
+            </TabsContent>
+          )}
         </Tabs>
       </main>
     </TooltipProvider>

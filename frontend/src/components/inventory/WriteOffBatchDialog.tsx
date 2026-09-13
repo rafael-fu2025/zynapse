@@ -34,7 +34,7 @@ export function WriteOffBatchDialog({
   const [note, setNote] = useState('');
 
   return (
-    <DialogContent className="max-w-md">
+    <DialogContent lockDismiss className="max-w-md">
       <DialogHeader>
         <DialogTitle className="flex items-center gap-2">
           {reason === 'expire' ? <CalendarX2 className="size-4" /> : <ShieldAlert className="size-4" />}

@@ -44,7 +44,7 @@ export function CreateItemDialog({ onClose }: { onClose: () => void }) {
   });
 
   return (
-    <DialogContent>
+    <DialogContent lockDismiss>
       <DialogHeader>
         <DialogTitle>New inventory item</DialogTitle>
       </DialogHeader>

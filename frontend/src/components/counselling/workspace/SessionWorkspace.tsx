@@ -21,6 +21,7 @@ import { hasPermission, useAuthStore } from '@/store/auth';
 import { fmtUtcToApp } from '@/utils/date';
 import { WriteNotesDialog, GuidanceClinicReferralDialog } from '../dialogs';
 import { SessionNotesList } from './SessionNotesList';
+import { SessionInterviewsPanel } from './SessionInterviewsPanel';
 
 interface SessionWorkspaceProps {
   sessionId: number;
@@ -201,6 +202,9 @@ export function SessionWorkspace({ sessionId, onCloseWorkspace }: SessionWorkspa
             }}
           />
         )}
+
+        {/* Phase C session linkage: the student's latest interviews. */}
+        <SessionInterviewsPanel sessionId={selected.id} />
       </div>
 
       <Dialog open={writeOpen} onOpenChange={(open) => { setWriteOpen(open); if (!open) setAmendNoteId(null); }}>

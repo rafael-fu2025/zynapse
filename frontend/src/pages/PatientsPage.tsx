@@ -156,7 +156,7 @@ function PortalCredentialModal({
 }) {
   return (
     <Dialog open onOpenChange={(open) => ! open && onClose()}>
-      <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-md">
+      <DialogContent lockDismiss className="max-h-[90dvh] overflow-y-auto sm:max-w-md">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <KeyRound className="size-4" aria-hidden /> Portal account created
@@ -216,7 +216,7 @@ function CreateStudentDialog({ onClose }: { onClose: () => void }) {
   }
 
   return (
-    <DialogContent>
+    <DialogContent lockDismiss>
       <DialogHeader>
         <DialogTitle>Register student</DialogTitle>
       </DialogHeader>
@@ -395,7 +395,7 @@ function ManageMedicalRecordDialog({ studentId, onClose }: { studentId: number; 
   });
 
   return (
-    <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-xl">
+    <DialogContent lockDismiss className="max-h-[85vh] overflow-y-auto sm:max-w-xl">
       <DialogHeader>
         <DialogTitle>
           {s !== undefined ? `${s.last_name}, ${s.first_name} — ${s.student_number}` : 'Student'}
@@ -566,7 +566,7 @@ function StudentDetailDialog({ studentId, onClose }: { studentId: number; onClos
   const s = detail.data;
 
   return (
-    <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-xl">
+    <DialogContent lockDismiss className="max-h-[85vh] overflow-y-auto sm:max-w-xl">
       <DialogHeader>
         <DialogTitle>
           {s !== undefined ? `${s.last_name}, ${s.first_name} — ${s.student_number}` : 'Student'}
@@ -659,7 +659,7 @@ function CreateEmployeeDialog({ onClose }: { onClose: () => void }) {
   }
 
   return (
-    <DialogContent>
+    <DialogContent lockDismiss>
       <DialogHeader>
         <DialogTitle>Register employee</DialogTitle>
       </DialogHeader>
@@ -782,7 +782,7 @@ function EditEmployeeDialog({ employee, onClose }: { employee: Employee; onClose
   });
 
   return (
-    <DialogContent>
+    <DialogContent lockDismiss>
       <DialogHeader>
         <DialogTitle>Edit employee — {employee.employee_number}</DialogTitle>
       </DialogHeader>

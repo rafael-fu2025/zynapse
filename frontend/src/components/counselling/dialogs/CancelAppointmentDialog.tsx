@@ -17,7 +17,7 @@ export function CancelAppointmentDialog({ appointment, onClose }: { appointment:
   const [reason, setReason] = useState('');
 
   return (
-    <DialogContent>
+    <DialogContent lockDismiss>
       <DialogHeader>
         <DialogTitle>Cancel appointment #{appointment.id}</DialogTitle>
       </DialogHeader>

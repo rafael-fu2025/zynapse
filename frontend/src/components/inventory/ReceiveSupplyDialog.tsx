@@ -40,7 +40,7 @@ export function ReceiveSupplyDialog({ item, onClose }: { item: InventoryItem; on
   }, [order, qty]);
 
   return (
-    <DialogContent>
+    <DialogContent lockDismiss>
       <DialogHeader>
         <DialogTitle>Receive — {item.name}</DialogTitle>
       </DialogHeader>

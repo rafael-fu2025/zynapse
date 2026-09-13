@@ -261,7 +261,7 @@ function ScheduleDialog({
   const pending = schedule.isPending || update.isPending;
 
   return (
-    <DialogContent>
+    <DialogContent lockDismiss>
       <DialogHeader>
         <DialogTitle>
           {isEdit ? `Edit appointment #${initial!.id}` : 'Schedule appointment'}

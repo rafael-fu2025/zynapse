@@ -58,7 +58,7 @@ export function AddBatchDialog({ medicine, onClose }: { medicine: Medicine; onCl
   const quantity = watch('quantity');
 
   return (
-    <DialogContent>
+    <DialogContent lockDismiss>
       <DialogHeader>
         <DialogTitle>Receive batch — {medicine.generic_name}</DialogTitle>
       </DialogHeader>
