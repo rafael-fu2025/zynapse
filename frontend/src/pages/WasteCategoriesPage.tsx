@@ -148,7 +148,7 @@ function WasteCategoryRow({ cat }: { cat: WasteCategory }) {
           {cat.expected_days !== null
             ? `${cat.expected_days} expected days${cat.sample_count > 0
                 ? ` · avg ${cat.historical_avg_days ?? 0}d from ${cat.sample_count} trial${cat.sample_count === 1 ? '' : 's'}`
-                : ' (reference)'}`
+                : ''}`
             : 'no expected days'}
         </span>
       </div>
