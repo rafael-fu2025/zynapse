@@ -7,6 +7,7 @@ import { Megaphone, Pencil, Plus } from 'lucide-react';
 import { useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
+import { DateTimeField } from '@/components/DateTimeField';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -155,11 +156,19 @@ function AnnouncementDialog({
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-1.5">
               <Label htmlFor="ann-publish">Publish at <span className="text-muted-foreground">(optional)</span></Label>
-              <Input id="ann-publish" type="datetime-local" {...register('publish_at')} />
+              <DateTimeField
+                id="ann-publish"
+                value={watch('publish_at')}
+                onChange={(v) => setValue('publish_at', v, { shouldDirty: true })}
+              />
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="ann-unpublish">Unpublish at <span className="text-muted-foreground">(optional)</span></Label>
-              <Input id="ann-unpublish" type="datetime-local" {...register('unpublish_at')} />
+              <DateTimeField
+                id="ann-unpublish"
+                value={watch('unpublish_at')}
+                onChange={(v) => setValue('unpublish_at', v, { shouldDirty: true })}
+              />
             </div>
           </div>
           <div className="grid gap-4 sm:grid-cols-[1fr_10rem]">

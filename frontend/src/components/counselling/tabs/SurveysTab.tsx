@@ -6,6 +6,7 @@
  */
 import { ClipboardList, Eye, Pencil, Plus, Send, Trash2 } from 'lucide-react';
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
+import { DateTimeField } from '@/components/DateTimeField';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -326,11 +327,21 @@ function SurveyBuilderForm({
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="survey-publish">Open at <span className="text-muted-foreground">(optional)</span></Label>
-              <Input id="survey-publish" type="datetime-local" value={meta.publish_at ?? ''} disabled={immutable} onChange={(e) => setMeta({ ...meta, publish_at: e.target.value })} />
+              <DateTimeField
+                id="survey-publish"
+                value={meta.publish_at ?? ''}
+                disabled={immutable}
+                onChange={(v) => setMeta({ ...meta, publish_at: v })}
+              />
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="survey-close">Closes at <span className="text-muted-foreground">(optional)</span></Label>
-              <Input id="survey-close" type="datetime-local" value={meta.close_at ?? ''} disabled={immutable} onChange={(e) => setMeta({ ...meta, close_at: e.target.value })} />
+              <DateTimeField
+                id="survey-close"
+                value={meta.close_at ?? ''}
+                disabled={immutable}
+                onChange={(v) => setMeta({ ...meta, close_at: v })}
+              />
             </div>
           </div>
 
