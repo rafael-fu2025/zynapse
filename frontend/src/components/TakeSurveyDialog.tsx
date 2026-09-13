@@ -3,6 +3,7 @@
  * the published form's questions by type and submits; the backend owns
  * validation, one-submission-per-student, and the encrypted record.
  */
+import { ExternalLink } from 'lucide-react';
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
@@ -156,18 +157,36 @@ export function TakeSurveyDialog({
                       maxLength={2000}
                     />
                   )}
-                  {q.question_type === 'external_url' && (
-                    <div className="flex items-center gap-2">
-                      <Checkbox
-                        id={`q-${q.id}`}
-                        checked={value === true}
-                        onCheckedChange={(checked) => patch(q.id, checked === true)}
-                      />
-                      <Label htmlFor={`q-${q.id}`} className="cursor-pointer text-sm font-normal">
-                        I completed this activity
-                      </Label>
-                    </div>
-                  )}
+                  {q.question_type === 'external_url' && (() => {
+                    // The admin pastes the activity link (e.g. a Google
+                    // Form or EducationPlanner test) into the question
+                    // text; the first URL becomes the clickable link.
+                    const url = q.question_text.match(/https?:\/\/[^\s<"]+/)?.[0];
+                    return (
+                      <div className="space-y-2">
+                        {url !== undefined && (
+                          <a
+                            href={url}
+                            target="_blank"
+                            rel="noreferrer noopener"
+                            className="inline-flex items-center gap-1 text-sm font-medium text-primary underline underline-offset-2"
+                          >
+                            Open the activity <ExternalLink className="size-3.5" aria-hidden />
+                          </a>
+                        )}
+                        <div className="flex items-center gap-2">
+                          <Checkbox
+                            id={`q-${q.id}`}
+                            checked={value === true}
+                            onCheckedChange={(checked) => patch(q.id, checked === true)}
+                          />
+                          <Label htmlFor={`q-${q.id}`} className="cursor-pointer text-sm font-normal">
+                            I completed this activity
+                          </Label>
+                        </div>
+                      </div>
+                    );
+                  })()}
                 </div>
               );
             })}

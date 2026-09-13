@@ -388,6 +388,12 @@ function SurveyBuilderForm({
                       onChange={(e) => patchQuestion(index, { options_text: e.target.value })}
                     />
                   )}
+                  {q.question_type === 'external_url' && (
+                    <p className="text-xs text-muted-foreground">
+                      Paste the activity link (e.g. a Google Form or EducationPlanner test) into the question text —
+                      students get a clickable link plus a completion checkbox that feeds the clearance gate.
+                    </p>
+                  )}
                   <div className="flex items-center gap-2 pb-1">
                     <Checkbox
                       id={`q-required-${index}`}
