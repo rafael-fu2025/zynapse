@@ -10,7 +10,7 @@ const TAB_LABELS: Record<string, string> = {
   staff: 'Staff Schedules',
   medicines: 'Medicines',
   supplies: 'Supplies',
-  reorders: 'Reorders',
+  reorders: 'Purchases',
   insights: 'Insights',
   sessions: 'Sessions & Notes',
   scheduling: 'Scheduling',

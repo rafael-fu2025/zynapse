@@ -45,7 +45,7 @@ export function BatchesDialog({ medicineId, onClose }: { medicineId: number; onC
               <TableHead>Lot</TableHead>
               <TableHead>Remaining</TableHead>
               <TableHead>Expires</TableHead>
-              <TableHead>Supplier</TableHead>
+              <TableHead>Purchased from</TableHead>
               <TableHead>Status</TableHead>
               <TableHead className="text-right">Actions</TableHead>
             </TableRow>

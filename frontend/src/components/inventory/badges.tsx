@@ -128,14 +128,14 @@ export function ExpiryChip({ days }: { days: number | null }): JSX.Element | nul
 }
 
 /**
- * EtaBadge — countdown chip for in-flight reorders. The original
+ * EtaBadge — countdown chip for in-flight purchase requests. The original
  * table just showed the raw `eta 2026-02-15` string, which forces the
  * operator to do the day-math in their head. This turns the date
- * into "arrives tomorrow" / "in 3d" / "overdue 2d" so a row with a
- * slipping ETA pops immediately.
+ * into "due tomorrow" / "in 3d" / "overdue 2d" so a slipping
+ * stock-in date pops immediately.
  *
  * Returns null for terminal statuses (`completed`, `cancelled`) or
- * when no ETA has been set on the reorder yet — those rows just show
+ * when no date has been set on the request yet — those rows just show
  * the raw date text.
  */
 export function EtaBadge({ status, expected }: { status: Reorder['status']; expected: string | null }): JSX.Element | null {
@@ -143,8 +143,8 @@ export function EtaBadge({ status, expected }: { status: Reorder['status']; expe
   if (status === 'completed' || status === 'cancelled') return null;
   const days = daysUntil(expected);
   if (days < 0) return <Badge variant="destructive" className="ml-1.5">overdue {Math.abs(days)}d</Badge>;
-  if (days === 0) return <Badge variant="destructive" className="ml-1.5">arrives today</Badge>;
-  if (days === 1) return <Badge variant="warning" className="ml-1.5">arrives tomorrow</Badge>;
+  if (days === 0) return <Badge variant="destructive" className="ml-1.5">due today</Badge>;
+  if (days === 1) return <Badge variant="warning" className="ml-1.5">due tomorrow</Badge>;
   if (days <= 7) return <Badge variant="warning" className="ml-1.5">in {days}d</Badge>;
   return <Badge variant="info" className="ml-1.5">in {days}d</Badge>;
 }

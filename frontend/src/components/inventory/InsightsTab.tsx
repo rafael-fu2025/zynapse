@@ -83,7 +83,7 @@ export function InsightsTab({ onJumpToTab }: { onJumpToTab: (tab: 'medicines' | 
         />
         <StatTile
           icon={<Truck className="size-4" />}
-          label="Reorders in flight"
+          label="Purchases in flight"
           value={pendingReorderCount}
           tone={pendingReorderCount === 0 ? 'success' : 'info'}
           loading={reorders.isLoading}
@@ -105,7 +105,7 @@ export function InsightsTab({ onJumpToTab }: { onJumpToTab: (tab: 'medicines' | 
         <Card>
           <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-3">
             <div>
-              <CardTitle className="text-base">Medicines that need reordering</CardTitle>
+              <CardTitle className="text-base">Medicines to buy</CardTitle>
               <CardDescription>Below the reorder threshold</CardDescription>
             </div>
             <Button variant="ghost" size="sm" onClick={() => onJumpToTab('medicines')}>

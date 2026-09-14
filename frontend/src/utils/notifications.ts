@@ -48,7 +48,7 @@ export function notificationLabel(
     case 'referral.closed':
       return `Referral closed ${suffix}`.trim();
     case 'reorder.created':
-      return `Low stock — reorder created ${suffix}`.trim();
+      return `Low stock — purchase request created ${suffix}`.trim();
     case 'queue.called':
     case 'counselling.queue_called': {
       const destination = context?.destination === 'counselling' ? 'Guidance' : 'Clinic';

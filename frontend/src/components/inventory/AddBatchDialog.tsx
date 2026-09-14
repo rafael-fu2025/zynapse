@@ -23,10 +23,10 @@ import {
 
 /**
  * AddBatchDialog — receive a delivered lot. The quantity defaults to
- * the medicine's `received` reorder request (procurement loop), but
+ * the medicine's `received` purchase request (procurement loop), but
  * the operator can lower it for partial deliveries (Gap 8) and add a
  * shortage reason that lands in the ledger. When no delivery has
- * been marked received on the Reorders tab, receiving is blocked —
+ * been marked received on the Purchases tab, receiving is blocked —
  * mirroring the backend's 409 gate.
  */
 export function AddBatchDialog({ medicine, onClose }: { medicine: Medicine; onClose: () => void }) {
@@ -67,18 +67,18 @@ export function AddBatchDialog({ medicine, onClose }: { medicine: Medicine; onCl
 
       {!receivable.isLoading && order === null && (
         <p role="alert" className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
-          No received delivery for this medicine. Order it on the Reorders tab and mark
-          the request as <span className="font-medium">received</span> when the delivery
-          arrives — then the batch can be entered here.
+          No purchase to receive yet. Create the request on the Purchases tab, approve it,
+          then mark it bought and <span className="font-medium">delivered</span> — after
+          that the batch can be entered here.
         </p>
       )}
 
       {order !== null && (
         <form noValidate onSubmit={(e) => void onSubmit(e)} className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <p className="col-span-2 rounded-md bg-muted/50 p-2 text-xs text-muted-foreground">
-            Receiving reorder <span className="font-mono">#{order.id}</span> —{' '}
+            Receiving purchase <span className="font-mono">#{order.id}</span> —{' '}
             <span className="font-medium text-foreground">{order.requested_quantity} {medicine.unit}</span>{' '}
-            ordered. Lower the quantity below for a partial delivery and explain the shortfall.
+            bought. Lower the quantity below for a partial delivery and explain the shortfall.
           </p>
           <div className="space-y-1.5">
             <Label htmlFor="batch_number">Batch / lot number</Label>
@@ -111,7 +111,7 @@ export function AddBatchDialog({ medicine, onClose }: { medicine: Medicine; onCl
                 id="shortage_note"
                 rows={2}
                 maxLength={255}
-                placeholder="e.g. supplier back-ordered 30, expected next week."
+                placeholder="e.g. pharmacy only had 20 of 30; rest expected next week."
                 aria-invalid={errors.shortage_note !== undefined}
                 {...register('shortage_note')}
               />
@@ -120,7 +120,7 @@ export function AddBatchDialog({ medicine, onClose }: { medicine: Medicine; onCl
               )}
               <p className="text-xs text-muted-foreground">
                 Short by {order.requested_quantity - (quantity ?? order.requested_quantity)} {medicine.unit}.
-                The reorder will stay open so you can chase the supplier or raise a follow-up.
+                The request will stay open so you can chase the balance or raise a follow-up.
               </p>
             </div>
           )}
@@ -132,7 +132,7 @@ export function AddBatchDialog({ medicine, onClose }: { medicine: Medicine; onCl
             )}
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="supplier">Supplier</Label>
+            <Label htmlFor="supplier">Purchased from</Label>
             <Input id="supplier" {...register('supplier')} />
           </div>
           <DialogFooter className="col-span-2">

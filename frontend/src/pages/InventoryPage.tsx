@@ -48,7 +48,7 @@ export default function InventoryPage() {
             <TabsList>
               <TabsTrigger value="medicines">Medicines</TabsTrigger>
               <TabsTrigger value="supplies">Supplies</TabsTrigger>
-              <TabsTrigger value="reorders">Reorders</TabsTrigger>
+              <TabsTrigger value="reorders">Purchases</TabsTrigger>
               <TabsTrigger value="insights">
                 <BarChart3 className="size-3.5" /> Insights
               </TabsTrigger>

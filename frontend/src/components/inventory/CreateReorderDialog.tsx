@@ -89,7 +89,7 @@ export function CreateReorderDialog({ onClose }: { onClose: () => void }) {
   return (
     <DialogContent lockDismiss>
       <DialogHeader>
-        <DialogTitle>New reorder request</DialogTitle>
+        <DialogTitle>New purchase request</DialogTitle>
       </DialogHeader>
       <form noValidate onSubmit={(e) => void onSubmit(e)} className="space-y-3">
         <div className="space-y-1.5">

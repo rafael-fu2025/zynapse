@@ -149,7 +149,7 @@ const COMMANDS: ReadonlyArray<CommandDef> = [
     id: 'go-inventory',
     label: 'Inventory',
     category: 'Navigate',
-    keywords: ['medicine', 'med', 'stock', 'supply', 'reorder', 'drug', 'pill'],
+    keywords: ['medicine', 'med', 'stock', 'supply', 'reorder', 'purchase', 'buy', 'drug', 'pill'],
     icon: <Pill className="size-4" />,
     permission: 'clinic.inventory.read',
     prefetch: '/inventory',

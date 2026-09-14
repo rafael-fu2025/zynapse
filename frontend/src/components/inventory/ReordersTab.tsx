@@ -6,7 +6,7 @@ import {
   PackageCheck,
   Plus,
   RefreshCw,
-  Truck,
+  ShoppingCart,
   X,
 } from 'lucide-react';
 import { useState } from 'react';
@@ -44,7 +44,12 @@ import { titleCase } from '@/lib/utils';
 import { CreateReorderDialog } from './CreateReorderDialog';
 import { OrderReorderDialog } from './OrderReorderDialog';
 import { EtaBadge } from './badges';
-import { REORDER_STATUS_VARIANT, URGENCY_VARIANT } from './constants';
+import { REORDER_STATUS_LABEL, REORDER_STATUS_VARIANT, URGENCY_VARIANT } from './constants';
+
+/** Lowercase display label for a raw status value (used in empty states). */
+function statusLabel(status: string): string {
+  return ((REORDER_STATUS_LABEL as Record<string, string>)[status] ?? status).toLowerCase();
+}
 
 export function ReordersTab() {
   const [openCreate, setOpenCreate] = useState(false);
@@ -80,7 +85,7 @@ export function ReordersTab() {
       {r.status === 'approved' && (
         <Button size="sm" variant="secondary" disabled={transition.isPending}
           onClick={() => setOrderingId(r.id)}>
-          <Truck /> Order
+          <ShoppingCart /> Mark bought
         </Button>
       )}
       {r.status === 'ordered' && (
@@ -97,7 +102,7 @@ export function ReordersTab() {
       {(r.status === 'pending' || r.status === 'approved' || r.status === 'ordered') && (
         <Button size="sm" variant="outline" disabled={transition.isPending}
           onClick={() => setConfirm({
-            title: `Cancel reorder #${r.id}?`,
+            title: `Cancel purchase request #${r.id}?`,
             description: 'The purchase request will be cancelled. This cannot be undone.',
             confirmLabel: 'Cancel request',
             run: () => transition.mutate({ id: r.id, action: 'cancel' }),
@@ -117,7 +122,7 @@ export function ReordersTab() {
             onValueChange={setQ}
             placeholder="Search by medicine or note…"
             inputId="reorders-search"
-            ariaLabel="Search reorder requests by medicine or note"
+            ariaLabel="Search purchase requests by medicine or note"
             isFetching={list.isFetching && list.data !== undefined}
             className="w-full sm:w-64"
           />
@@ -137,8 +142,8 @@ export function ReordersTab() {
               <SelectItem value="all">All statuses</SelectItem>
               <SelectItem value="pending">Pending</SelectItem>
               <SelectItem value="approved">Approved</SelectItem>
-              <SelectItem value="ordered">Ordered</SelectItem>
-              <SelectItem value="received">Received</SelectItem>
+              <SelectItem value="ordered">Purchased</SelectItem>
+              <SelectItem value="received">Delivered</SelectItem>
               <SelectItem value="completed">Completed</SelectItem>
               <SelectItem value="cancelled">Cancelled</SelectItem>
             </SelectContent>
@@ -165,7 +170,7 @@ export function ReordersTab() {
             <TableRow>
               <TableHead className="px-3">#</TableHead>
               <TableHead className="px-3">Item</TableHead>
-              <TableHead className="px-3">Qty to order</TableHead>
+              <TableHead className="px-3">Qty to buy</TableHead>
               <TableHead className="px-3">Threshold</TableHead>
               <TableHead className="px-3">Urgency</TableHead>
               <TableHead className="px-3">Status</TableHead>
@@ -185,15 +190,15 @@ export function ReordersTab() {
               <TableRow>
                 <TableCell colSpan={8} className="px-3 py-6 text-center text-muted-foreground">
                   {debouncedQ !== ''
-                    ? `No reorder requests match "${debouncedQ}".`
+                    ? `No purchase requests match "${debouncedQ}".`
                     : statusFilter === 'all'
-                      ? 'No reorder requests.'
-                      : `No ${statusFilter} requests.`}
+                      ? 'No purchase requests.'
+                      : `No ${statusLabel(statusFilter)} requests.`}
                 </TableCell>
               </TableRow>
             )}
             {list.isError && !list.isLoading && (
-              <QueryErrorRow colSpan={8} message="Failed to load reorder requests." onRetry={() => void list.refetch()} pending={list.isFetching} />
+              <QueryErrorRow colSpan={8} message="Failed to load purchase requests." onRetry={() => void list.refetch()} pending={list.isFetching} />
             )}
             {rows.map((r, idx) => (
               <TableRow key={r.id} {...reorderRowNav.getRowProps(idx)}>
@@ -215,13 +220,13 @@ export function ReordersTab() {
                   <Badge variant={URGENCY_VARIANT[r.urgency]}>{titleCase(r.urgency)}</Badge>
                 </TableCell>
                 <TableCell className="px-3">
-                  <Badge variant={REORDER_STATUS_VARIANT[r.status]}>{titleCase(r.status)}</Badge>
+                  <Badge variant={REORDER_STATUS_VARIANT[r.status]}>{REORDER_STATUS_LABEL[r.status]}</Badge>
                 </TableCell>
                 <TableCell className="px-3 text-xs text-muted-foreground">
-                  {r.order_date !== null && <>ordered {r.order_date}<br /></>}
+                  {r.order_date !== null && <>bought {r.order_date}<br /></>}
                   {r.expected_delivery_date !== null && (
                     <>
-                      eta {r.expected_delivery_date}
+                      due {r.expected_delivery_date}
                       <EtaBadge status={r.status} expected={r.expected_delivery_date} />
                     </>
                   )}
@@ -247,39 +252,39 @@ export function ReordersTab() {
       )}
       {list.isError && !list.isLoading && (
         <div className="rounded-xl border border-destructive/30 bg-destructive/5 p-4 text-center text-sm text-destructive md:hidden">
-          <p>Failed to load reorder requests.</p>
+          <p>Failed to load purchase requests.</p>
           <Button variant="outline" size="sm" className="mt-2" onClick={() => void list.refetch()} disabled={list.isFetching}>Retry</Button>
         </div>
       )}
       {!list.isLoading && !list.isError && rows.length === 0 && (
         <p className="rounded-xl border border-dashed p-6 text-center text-sm text-muted-foreground md:hidden">
-          {debouncedQ !== '' ? `No reorder requests match "${debouncedQ}".` : statusFilter === 'all' ? 'No reorder requests.' : `No ${statusFilter} requests.`}
+          {debouncedQ !== '' ? `No purchase requests match "${debouncedQ}".` : statusFilter === 'all' ? 'No purchase requests.' : `No ${statusLabel(statusFilter)} requests.`}
         </p>
       )}
       <MobileCardList>
         {rows.map((r) => (
-          <MobileCard key={r.id} aria-label={`Reorder ${r.id}`}>
+          <MobileCard key={r.id} aria-label={`Purchase request ${r.id}`}>
             <div className="mb-1 flex items-center justify-between gap-2">
               <span className="text-sm font-medium text-foreground">
                 {r.item_name === null
                   ? `#${r.medicine_id ?? r.supply_item_id ?? '?'}`
                   : highlightMatch(r.item_name, debouncedQ)}
               </span>
-              <Badge variant={REORDER_STATUS_VARIANT[r.status]}>{titleCase(r.status)}</Badge>
+              <Badge variant={REORDER_STATUS_VARIANT[r.status]}>{REORDER_STATUS_LABEL[r.status]}</Badge>
             </div>
             <div className="mb-1 flex flex-wrap gap-1.5">
               {r.auto_triggered && <Badge variant="outline">Auto</Badge>}
               {r.item_type === 'supply' && <Badge variant="outline">Supply</Badge>}
               <Badge variant={URGENCY_VARIANT[r.urgency]}>{titleCase(r.urgency)}</Badge>
             </div>
-            <MobileCardField label="Qty to order"><span className="font-mono text-xs">{r.requested_quantity} {r.unit ?? ''}</span></MobileCardField>
+            <MobileCardField label="Qty to buy"><span className="font-mono text-xs">{r.requested_quantity} {r.unit ?? ''}</span></MobileCardField>
             <MobileCardField label="Threshold"><span className="font-mono text-xs text-muted-foreground">{r.reorder_level}</span></MobileCardField>
             <MobileCardField label="Dates">
               <span className="text-xs text-muted-foreground">
-                {r.order_date !== null && <>ordered {r.order_date}<br /></>}
+                {r.order_date !== null && <>bought {r.order_date}<br /></>}
                 {r.expected_delivery_date !== null && (
                   <>
-                    eta {r.expected_delivery_date}
+                    due {r.expected_delivery_date}
                     <EtaBadge status={r.status} expected={r.expected_delivery_date} />
                   </>
                 )}

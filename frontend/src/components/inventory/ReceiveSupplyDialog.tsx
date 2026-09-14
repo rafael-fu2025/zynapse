@@ -16,9 +16,9 @@ import type { InventoryItem } from '@/schemas/inventory';
 
 /**
  * ReceiveSupplyDialog — supply-side twin of the medicine batch
- * receive: quantity is detected from the item's `received` reorder
+ * receive: quantity is detected from the item's `received` purchase
  * request; receiving is blocked until a delivery has been marked
- * received on the Reorders tab (backend enforces the same 409 gate).
+ * received on the Purchases tab (backend enforces the same 409 gate).
  */
 export function ReceiveSupplyDialog({ item, onClose }: { item: InventoryItem; onClose: () => void }) {
   const receive = useReceiveSupply();
@@ -49,18 +49,18 @@ export function ReceiveSupplyDialog({ item, onClose }: { item: InventoryItem; on
 
       {!receivable.isLoading && order === null && (
         <p role="alert" className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
-          No received delivery for this item. Order it on the Reorders tab and mark the
-          request as <span className="font-medium">received</span> when the delivery
-          arrives — then the stock can be entered here.
+          No purchase to receive yet. Create the request on the Purchases tab, approve it,
+          then mark it bought and <span className="font-medium">delivered</span> — after
+          that the stock can be entered here.
         </p>
       )}
 
       {order !== null && (
         <div className="space-y-3">
           <p className="rounded-md bg-muted/50 p-2 text-xs text-muted-foreground">
-            Receiving reorder <span className="font-mono">#{order.id}</span> —{' '}
+            Receiving purchase <span className="font-mono">#{order.id}</span> —{' '}
             <span className="font-medium text-foreground">{ordered} {item.unit}</span>{' '}
-            ordered. Lower the quantity below for a partial delivery.
+            bought. Lower the quantity below for a partial delivery.
           </p>
           <div className="space-y-1.5">
             <Label htmlFor="receive_supply_qty">Quantity received</Label>
@@ -86,11 +86,11 @@ export function ReceiveSupplyDialog({ item, onClose }: { item: InventoryItem; on
                 maxLength={255}
                 value={shortage}
                 onChange={(e) => setShortage(e.target.value)}
-                placeholder="e.g. supplier short-shipped 5, expected next week."
+                placeholder="e.g. pharmacy only had 15 of 20; rest expected next week."
               />
               <p className="text-xs text-muted-foreground">
-                Short by {ordered - parsed} {item.unit}. The reorder will stay open so you can
-                chase the supplier or raise a follow-up.
+                Short by {ordered - parsed} {item.unit}. The request will stay open so you can
+                chase the balance or raise a follow-up.
               </p>
             </div>
           )}
