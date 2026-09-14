@@ -32,14 +32,21 @@ final class ReorderAutoCheckService
 
     private const LOCK_FILE = 'synapse_reorder_auto_at';
 
-    /** Admin account (id 1) — wildcard `*` covers `clinic.reorders.manage`. */
-    private const SYSTEM_USER_ID = 1;
+    /** Admin account — wildcard `*` covers `clinic.reorders.manage`. */
+    private readonly int $systemUserId;
 
     private string $writableDir;
 
     public function __construct(?string $writableDir = null)
     {
         $this->writableDir = $writableDir ?? (string) (WRITEPATH . 'cache');
+
+        // The sweep runs outside the auth filter, so it needs a user whose
+        // wildcard permission satisfies the policy check. Default is the
+        // seeded admin (id 1); deployments that remove that account point
+        // SYNAPSE_SYSTEM_USER_ID at another wildcard holder.
+        $env = getenv('SYNAPSE_SYSTEM_USER_ID');
+        $this->systemUserId = ($env === false || $env === '') ? 1 : max(1, (int) $env);
     }
 
     public function maybeRun(bool $force = false): void
@@ -50,7 +57,7 @@ final class ReorderAutoCheckService
             }
 
             $previous = CurrentUser::id();
-            CurrentUser::bind(self::SYSTEM_USER_ID);
+            CurrentUser::bind($this->systemUserId);
             try {
                 (new ReorderService(new ClinicPolicy(), Services::auditOutbox(), Services::notificationOutbox()))->autoCheck();
             } finally {

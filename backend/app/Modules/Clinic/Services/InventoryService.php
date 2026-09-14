@@ -6,6 +6,7 @@ namespace Modules\Clinic\Services;
 
 use App\Exceptions\ApiException;
 use App\Modules\Shared\BaseService;
+use App\Modules\Shared\ManilaDay;
 use App\Pagination\KeysetPaginator;
 use App\Services\Audit\AuditOutboxService;
 use App\Services\CurrentTenant;
@@ -374,7 +375,11 @@ final class InventoryService extends BaseService
      * Partial deliveries are supported (inventory audit fix): a lower
      * `quantity` keeps the reorder in `received` so the operator can
      * chase the supplier, and the shortage is surfaced in the ledger +
-     * an audit row — mirroring the medicine `addBatch` flow.
+     * an audit row — mirroring the medicine `addBatch` flow. Partials
+     * are CUMULATIVE: once the booked total reaches the ordered
+     * quantity, the reorder completes (a first partial used to wedge
+     * the request open forever, since any follow-up receive was also
+     * compared against the full ordered amount).
      */
     public function receiveOrdered(int $itemId, ?string $note, ?int $quantity = null, ?string $shortageNote = null): InventoryItemDto
     {
@@ -404,14 +409,28 @@ final class InventoryService extends BaseService
             }
 
             $ordered = (int) $reorder['requested_quantity'];
-            $qty     = $quantity !== null && $quantity > 0 ? $quantity : $ordered;
-            if ($qty > $ordered) {
+
+            // Stock already booked against THIS request — partial
+            // deliveries accumulate, so a follow-up receive of the
+            // remainder closes the loop instead of wedging the request
+            // open forever (`received` counts as OPEN, so a wedged
+            // request also blocks future auto-checks for the item).
+            $already   = $this->receivedAgainstReorder((int) $reorder['id']);
+            $remaining = max(0, $ordered - $already);
+            if ($remaining < 1) {
+                throw new ApiException('statemachine.reorder.not_received', 409, [
+                    ['code' => 'statemachine.reorder.not_received', 'message' => 'This delivery has already been fully received.'],
+                ]);
+            }
+
+            $qty = $quantity !== null && $quantity > 0 ? $quantity : $remaining;
+            if ($qty > $remaining) {
                 throw ApiException::validationFailure([
                     ['code' => 'validation.field', 'message' => 'quantity cannot exceed the ordered amount.', 'field' => 'quantity'],
                 ]);
             }
 
-            $isPartial = $qty < $ordered;
+            $isPartial = ($already + $qty) < $ordered;
             $newQty    = (int) $item['quantity_on_hand'] + $qty;
             $now       = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
 
@@ -424,7 +443,7 @@ final class InventoryService extends BaseService
             // visible without joining tables (mirrors addBatch).
             $shortageSuffix = '';
             if ($isPartial) {
-                $shortage = $ordered - $qty;
+                $shortage = $remaining - $qty;
                 $reason   = $shortageNote !== null && $shortageNote !== '' ? ' — ' . $shortageNote : '';
                 $shortageSuffix = sprintf(' (short by %d%s)', $shortage, $reason);
             }
@@ -452,7 +471,7 @@ final class InventoryService extends BaseService
                     ->where('id', (int) $reorder['id'])
                     ->update([
                         'status'               => 'received',
-                        'actual_delivery_date' => substr($now, 0, 10),
+                        'actual_delivery_date' => ManilaDay::today(),
                         'updated_at'           => $now,
                     ]);
                 $this->audit->enqueue(
@@ -492,6 +511,24 @@ final class InventoryService extends BaseService
             $row = $this->db->table('clinic_inventory_items')->where('clinic_inventory_items.tenant_id', CurrentTenant::id())->where('id', $itemId)->get()->getRowArray();
             return InventoryItemDto::fromRow($row);
         });
+    }
+
+    /**
+     * Quantity already booked against a reorder request (sum of its
+     * `receive` ledger rows). Consistent with the caller's view: the
+     * reorder row is locked for the surrounding transaction.
+     */
+    private function receivedAgainstReorder(int $reorderId): int
+    {
+        $row = $this->db->table('clinic_inventory_movements')
+            ->selectSum('qty_delta', 'total')
+            ->where('clinic_inventory_movements.tenant_id', CurrentTenant::id())
+            ->where('reference_type', 'reorder')
+            ->where('reference_id', $reorderId)
+            ->where('reason_code', 'receive')
+            ->get()->getRowArray();
+
+        return (int) ($row['total'] ?? 0);
     }
 
     /**

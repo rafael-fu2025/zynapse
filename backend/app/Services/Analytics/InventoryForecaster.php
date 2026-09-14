@@ -65,7 +65,9 @@ final class InventoryForecaster
             'seasonality_factor'        => $seasonalityFactor,
             'confidence_interval_lower' => round(max(0.01, $dailyRate * 0.8), 4),
             'confidence_interval_upper' => round($dailyRate * 1.2, 4),
-            'accuracy_metrics'          => ['mae' => 0.145, 'rmse' => 0.188, 'mape' => 8.5],
+            // No backtest exists, so there is nothing honest to report
+            // here — null rather than fabricated metrics.
+            'accuracy_metrics'          => null,
         ];
     }
 }

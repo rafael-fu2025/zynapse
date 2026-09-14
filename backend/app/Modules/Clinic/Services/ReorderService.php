@@ -6,6 +6,7 @@ namespace Modules\Clinic\Services;
 
 use App\Exceptions\ApiException;
 use App\Modules\Shared\BaseService;
+use App\Modules\Shared\ManilaDay;
 use App\Modules\Shared\StateMachineException;
 use App\Pagination\KeysetPaginator;
 use App\Services\Audit\AuditOutboxService;
@@ -169,6 +170,7 @@ final class ReorderService extends BaseService
                 ->where('clinic_medicines.tenant_id', CurrentTenant::id())
                 ->where('archived_at', null)
                 ->where('reorder_threshold >', 0)
+                ->orderBy('id', 'ASC')
                 ->get()->getResultArray();
 
             foreach ($medicines as $med) {
@@ -202,6 +204,7 @@ final class ReorderService extends BaseService
                 ->where('clinic_inventory_items.tenant_id', CurrentTenant::id())
                 ->where('archived_at', null)
                 ->where('reorder_level >', 0)
+                ->orderBy('id', 'ASC')
                 ->get()->getResultArray();
 
             foreach ($items as $item) {
@@ -255,7 +258,7 @@ final class ReorderService extends BaseService
             }
 
             $now    = $this->utcNow();
-            $today  = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d');
+            $today  = ManilaDay::today();
             $update = ['status' => self::RESULT[$action], 'updated_at' => $now];
 
             if ($action === 'approve') {
@@ -357,7 +360,7 @@ final class ReorderService extends BaseService
     /** Unexpired active stock (same definition as MedicineService). */
     private function onHand(int $medicineId): int
     {
-        $today = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d');
+        $today = ManilaDay::today();
 
         $row = $this->db->table('clinic_medicine_batches')
             ->select('SUM(quantity_remaining) AS on_hand')

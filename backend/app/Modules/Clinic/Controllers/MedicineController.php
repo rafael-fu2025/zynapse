@@ -105,8 +105,10 @@ final class MedicineController extends ApiController
             // Gap 8 — optional overrides for partial deliveries. Backend
             // clamps `quantity` to the reorder's `requested_quantity` in
             // the service so a fat-finger over the ordered amount is
-            // rejected with a clear message.
-            'quantity'        => 'permit_empty|is_natural',
+            // rejected with a clear message. `0` is rejected outright —
+            // CI4's permit_empty does NOT treat 0 as empty, and the
+            // service would otherwise book the full ordered quantity.
+            'quantity'        => 'permit_empty|is_natural_no_zero',
             'shortage_note'   => 'permit_empty|max_length[255]',
         ];
         if (! $this->makeValidation($rules)->run($payload)) {
@@ -199,11 +201,13 @@ final class MedicineController extends ApiController
 
     public function lowStock(): ResponseInterface
     {
+        $this->authorize('clinic.inventory.read');
         return $this->ok($this->service->listLowStock());
     }
 
     public function expiring(): ResponseInterface
     {
+        $this->authorize('clinic.inventory.read');
         $days = (int) ($this->request->getGet('days') ?? 30);
         return $this->ok($this->service->listExpiring($days));
     }
@@ -220,6 +224,7 @@ final class MedicineController extends ApiController
             throw ApiException::validationFailure($this->collectErrors());
         }
         return $this->ok($this->service->expireBatch(
+            $medicineId,
             $batchId,
             isset($payload['note']) ? (string) $payload['note'] : null,
         ));
@@ -237,6 +242,7 @@ final class MedicineController extends ApiController
             throw ApiException::validationFailure($this->collectErrors());
         }
         return $this->ok($this->service->recallBatch(
+            $medicineId,
             $batchId,
             isset($payload['note']) ? (string) $payload['note'] : null,
         ));
@@ -247,6 +253,7 @@ final class MedicineController extends ApiController
      */
     public function expired(): ResponseInterface
     {
+        $this->authorize('clinic.inventory.read');
         $days = (int) ($this->request->getGet('days') ?? 90);
         return $this->ok($this->service->listWrittenOff($days));
     }
@@ -256,6 +263,7 @@ final class MedicineController extends ApiController
      */
     public function usageSummary(): ResponseInterface
     {
+        $this->authorize('clinic.inventory.read');
         $days = (int) ($this->request->getGet('days') ?? 30);
         return $this->ok($this->service->usageSummary($days));
     }

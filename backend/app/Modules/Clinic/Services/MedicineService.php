@@ -177,6 +177,10 @@ final class MedicineService extends BaseService
      * marked `completed` in the SAME transaction, closing the loop
      * between the Reorders tab and the batch ledger.
      *
+     * Partial deliveries are cumulative: a lowered `quantity` keeps the
+     * reorder in `received`, and the receive that brings the booked
+     * total up to the ordered quantity completes it.
+     *
      * @param array<string, mixed> $input validated payload
      */
     public function addBatch(int $medicineId, array $input): MedicineDto
@@ -218,23 +222,34 @@ final class MedicineService extends BaseService
                 ]);
             }
 
-            // Quantity defaults to the reorder's requested quantity but can
+            // Quantity defaults to the reorder's REMAINING quantity but can
             // be lowered by the payload to record a partial delivery (Gap 8).
             // `0` is rejected — a "we got nothing" delivery doesn't justify
             // a batch row; the operator should keep the reorder in `received`
-            // and chase the supplier instead.
+            // and chase the supplier instead. Partials are CUMULATIVE: the
+            // final partial receive completes the request (previously every
+            // receive was compared against the full ordered amount, so a
+            // partial could never close the loop without overbooking).
             $ordered = (int) $reorder['requested_quantity'];
-            $qty     = isset($input['quantity']) && (int) $input['quantity'] > 0
+            $already = $this->receivedAgainstReorder((int) $reorder['id']);
+            $remaining = max(0, $ordered - $already);
+            if ($remaining < 1) {
+                throw new ApiException('statemachine.reorder.not_received', 409, [
+                    ['code' => 'statemachine.reorder.not_received', 'message' => 'This delivery has already been fully received.'],
+                ]);
+            }
+
+            $qty = isset($input['quantity']) && (int) $input['quantity'] > 0
                 ? (int) $input['quantity']
-                : $ordered;
-            if ($qty > $ordered) {
+                : $remaining;
+            if ($qty > $remaining) {
                 throw ApiException::validationFailure([
                     ['code' => 'validation.field', 'message' => 'quantity cannot exceed the ordered amount.', 'field' => 'quantity'],
                 ]);
             }
 
             $expires  = (string) $input['expiration_date'];
-            $received = (string) ($input['received_date'] ?? (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d'));
+            $received = (string) ($input['received_date'] ?? ManilaDay::today());
             if ($expires <= $received) {
                 throw ApiException::validationFailure([
                     ['code' => 'validation.field', 'message' => 'expiration_date must be after received_date.', 'field' => 'expiration_date'],
@@ -260,10 +275,10 @@ final class MedicineService extends BaseService
             // shortage so the discrepancy is visible without joining tables.
             $baseNote       = $this->strOrNull($input, 'note');
             $shortageNote   = $this->strOrNull($input, 'shortage_note');
-            $isPartial      = $qty < $ordered;
+            $isPartial      = ($already + $qty) < $ordered;
             $shortageSuffix = '';
             if ($isPartial) {
-                $shortage = $ordered - $qty;
+                $shortage = $remaining - $qty;
                 $reason   = $shortageNote !== null ? ' — ' . $shortageNote : '';
                 $shortageSuffix = sprintf(' (short by %d%s)', $shortage, $reason);
             }
@@ -276,6 +291,8 @@ final class MedicineService extends BaseService
                 'type'                 => 'received',
                 'quantity'             => $qty,
                 'balance_after'        => $this->lastBalance($medicineId) + $qty,
+                'reference_type'       => 'reorder',
+                'reference_id'         => (int) $reorder['id'],
                 'performed_by_user_id' => $userId,
                 'note'                 => $ledgerNote !== '' ? $ledgerNote : null,
                 'created_at'           => $now,
@@ -367,7 +384,7 @@ final class MedicineService extends BaseService
                 ]);
             }
 
-            $today = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d');
+            $today = ManilaDay::today();
 
             // FEFO order, locked. Raw SQL is the sanctioned escape hatch
             // for row locking (see BaseService::selectForUpdate).
@@ -517,9 +534,9 @@ final class MedicineService extends BaseService
      *
      * @return array<string, mixed> the updated batch row (DTO shape)
      */
-    public function expireBatch(int $batchId, ?string $note = null): array
+    public function expireBatch(int $medicineId, int $batchId, ?string $note = null): array
     {
-        return $this->writeOffBatch($batchId, 'expired', 'expired', 'clinic.medicine_batch_expired', $note);
+        return $this->writeOffBatch($medicineId, $batchId, 'expired', 'expired', 'clinic.medicine_batch_expired', $note);
     }
 
     /**
@@ -528,9 +545,9 @@ final class MedicineService extends BaseService
      *
      * @return array<string, mixed> the updated batch row (DTO shape)
      */
-    public function recallBatch(int $batchId, ?string $note = null): array
+    public function recallBatch(int $medicineId, int $batchId, ?string $note = null): array
     {
-        return $this->writeOffBatch($batchId, 'recalled', 'recalled', 'clinic.medicine_batch_recalled', $note);
+        return $this->writeOffBatch($medicineId, $batchId, 'recalled', 'recalled', 'clinic.medicine_batch_recalled', $note);
     }
 
     /**
@@ -674,21 +691,48 @@ final class MedicineService extends BaseService
     }
 
     /**
+     * Quantity already booked against a reorder request (sum of its
+     * `received` transactions, which carry the reorder reference).
+     * Consistent with the caller's view: the reorder row is locked for
+     * the surrounding transaction.
+     */
+    private function receivedAgainstReorder(int $reorderId): int
+    {
+        $row = $this->db->table('clinic_medicine_transactions')
+            ->selectSum('quantity', 'total')
+            ->where('clinic_medicine_transactions.tenant_id', CurrentTenant::id())
+            ->where('type', 'received')
+            ->where('reference_type', 'reorder')
+            ->where('reference_id', $reorderId)
+            ->get()->getRowArray();
+
+        return (int) ($row['total'] ?? 0);
+    }
+
+    /**
      * Shared write-off path for `expireBatch` / `recallBatch` (see
      * their docblocks). Runs inside the caller's transaction.
      *
      * @return array<string, mixed> the updated batch row (DTO shape)
      */
-    private function writeOffBatch(int $batchId, string $status, string $txnType, string $auditCode, ?string $note): array
+    private function writeOffBatch(int $medicineId, int $batchId, string $status, string $txnType, string $auditCode, ?string $note): array
     {
         $this->policy->check('inventoryWrite');
         $userId = \App\Auth\CurrentUser::assert();
 
-        return $this->txn(function () use ($batchId, $status, $txnType, $auditCode, $note, $userId): array {
+        return $this->txn(function () use ($medicineId, $batchId, $status, $txnType, $auditCode, $note, $userId): array {
             $batch = $this->selectForUpdate('clinic_medicine_batches', ['tenant_id' => CurrentTenant::id(), 'id' => $batchId]);
             if ($batch === null) {
                 throw new ApiException('resource.not_found', 404, [
                     ['code' => 'resource.not_found', 'message' => "Batch #{$batchId} not found."],
+                ]);
+            }
+            // The route names a medicine/batch pair — a mismatch means the
+            // caller used a stale or foreign medicine id. 404, not 409: the
+            // addressed resource does not exist at this URL.
+            if ((int) $batch['medicine_id'] !== $medicineId) {
+                throw new ApiException('resource.not_found', 404, [
+                    ['code' => 'resource.not_found', 'message' => "Batch #{$batchId} not found for medicine #{$medicineId}."],
                 ]);
             }
             if ((string) $batch['status'] !== 'active') {
@@ -784,10 +828,10 @@ final class MedicineService extends BaseService
             (int) $med['reorder_threshold'],
             $totalDispensed30d,
             $med['category'] !== null ? (string) $med['category'] : null,
-            new DateTimeImmutable('now', new DateTimeZone('UTC')),
+            new DateTimeImmutable('now', new DateTimeZone(ManilaDay::TZ)),
         );
 
-        $today = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d');
+        $today = ManilaDay::today();
         $now   = $this->utcNow();
 
         return $this->txn(function () use ($medicineId, $result, $today, $now, $userId): array {
@@ -829,7 +873,10 @@ final class MedicineService extends BaseService
      */
     public function getLatestForecast(int $medicineId): ?array
     {
-        $this->policy->check('inventoryForecast');
+        // Viewing a persisted forecast is a READ (matches the controller's
+        // authorize on the GET route); only computing one needs the
+        // forecast permission.
+        $this->policy->check('inventoryRead');
 
         $row = $this->db->table('clinic_medicine_forecasts')
             ->where('clinic_medicine_forecasts.tenant_id', CurrentTenant::id())
@@ -867,7 +914,7 @@ final class MedicineService extends BaseService
             return [];
         }
 
-        $today = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d');
+        $today = ManilaDay::today();
 
         $rows = $this->db->table('clinic_medicine_batches')
             ->where('clinic_medicine_batches.tenant_id', CurrentTenant::id())
