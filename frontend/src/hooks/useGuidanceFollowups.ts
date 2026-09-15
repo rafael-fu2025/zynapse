@@ -24,9 +24,10 @@ const followupSchema = z.object({
 });
 export type GuidanceFollowup = z.infer<typeof followupSchema>;
 
-export function useGuidanceFollowups(status: string, mineOnly: boolean) {
+export function useGuidanceFollowups(status: string, mineOnly: boolean, enabled = true) {
   return useQuery<GuidanceFollowup[], ApiEnvelopeError>({
     queryKey: ['guidance', 'followups', { status, mineOnly }],
+    enabled,
     queryFn: async () => {
       const params = new URLSearchParams();
       if (status !== 'all') params.set('status', status);

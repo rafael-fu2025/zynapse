@@ -62,6 +62,7 @@ import {
   useVerifyQr,
 } from '@/hooks/useReferrals';
 import { useAvailability, useBookAppointment } from '@/hooks/useSchedule';
+import { useDashboardCounters } from '@/hooks/useDashboard';
 import { useMe } from '@/hooks/useAuth';
 import type { KioskLookupResult } from '@/hooks/usePatientLookup';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
@@ -651,6 +652,11 @@ function ReferralBookingDialog({ referral, onClose }: { referral: Referral; onCl
   );
 }
 
+/** "Submitted (2)" — plain label while the counters query is still loading. */
+function labelWithCount(label: string, count: number | undefined): string {
+  return count === undefined ? label : `${label} (${count})`;
+}
+
 export default function ReferralsPage() {
   const me = useMe();
   // Client-side mirror of ReferralPolicy: acknowledge/review/close/
@@ -694,6 +700,14 @@ export default function ReferralsPage() {
   const revokeQr = useRevokeReferralQr();
 
   const list = useReferrals(cursor, statusFilter === 'all' ? null : statusFilter, 25);
+  // Status counts come from the same dashboard counters the sidebar
+  // badge uses, so the dropdown breaks the module number down by the
+  // same statuses the list filters on. Omitted while loading (labels
+  // stay plain) and absent entirely if the counters call fails.
+  const refCounts = useDashboardCounters().data?.referrals;
+  const totalCount = refCounts === undefined
+    ? undefined
+    : refCounts.submitted + refCounts.acknowledged + refCounts.under_review + refCounts.closed;
   const ack = useAcknowledgeReferral();
   const rev = useReviewReferral();
   const close = useCloseReferral();
@@ -747,11 +761,11 @@ export default function ReferralsPage() {
             <Select value={statusFilter} onValueChange={(v) => { setStatusFilter(v); setCursor(null); setHistory([null]); }}>
               <SelectTrigger id="status" className="w-48" aria-label="Filter by status"><SelectValue /></SelectTrigger>
               <SelectContent>
-                <SelectItem value="all">All</SelectItem>
-                <SelectItem value="submitted">Submitted</SelectItem>
-                <SelectItem value="acknowledged">Acknowledged</SelectItem>
-                <SelectItem value="under_review">Under review</SelectItem>
-                <SelectItem value="closed">Closed</SelectItem>
+                <SelectItem value="all">{labelWithCount('All', totalCount)}</SelectItem>
+                <SelectItem value="submitted">{labelWithCount('Submitted', refCounts?.submitted)}</SelectItem>
+                <SelectItem value="acknowledged">{labelWithCount('Acknowledged', refCounts?.acknowledged)}</SelectItem>
+                <SelectItem value="under_review">{labelWithCount('Under review', refCounts?.under_review)}</SelectItem>
+                <SelectItem value="closed">{labelWithCount('Closed', refCounts?.closed)}</SelectItem>
               </SelectContent>
             </Select>
             {verifyResult !== null && <VerifyResultBadge result={verifyResult} />}
