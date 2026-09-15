@@ -4,7 +4,7 @@ import { useExpiringMedicines, useLowStockMedicines } from '@/hooks/useMedicines
 export function InventoryStockAlertBanner({
   onJumpToTab,
 }: {
-  onJumpToTab: (tab: 'medicines' | 'supplies' | 'reorders') => void;
+  onJumpToTab: (tab: 'medicines' | 'supplies' | 'equipment' | 'reorders') => void;
 }) {
   const lowStock = useLowStockMedicines();
   const expiring = useExpiringMedicines(30);

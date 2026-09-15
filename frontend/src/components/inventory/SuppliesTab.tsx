@@ -161,11 +161,11 @@ export function SuppliesTab() {
         <SearchBox
           value={qDraft}
           onValueChange={setQ}
-          placeholder="Search by SKU or name…"
+          placeholder="Search by SKU or name"
           inputId="supplies-search"
           ariaLabel="Search supplies by SKU or name"
           isFetching={list.isFetching && list.data !== undefined}
-          className="w-full sm:w-64"
+          className="w-full sm:w-64 lg:w-96"
         />
         <div className="flex flex-wrap items-center gap-2">
           {/* Low-stock filter chip — toggles server-side `low_stock=1`

@@ -1,10 +1,14 @@
 import {
   Download,
+  Factory,
   FileText,
   Loader2,
+  MessagesSquare,
   Minus,
+  Package,
   Share2,
   Sparkles,
+  Stethoscope,
   TrendingDown,
   TrendingUp,
 } from 'lucide-react';
@@ -31,7 +35,8 @@ import {
 import { Label } from '@/components/ui/label';
 import { PageHeader } from '@/components/PageHeader';
 import { Skeleton } from '@/components/ui/skeleton';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Tabs, TabsContent } from '@/components/ui/tabs';
+import { TabSections, type TabSection } from '@/components/TabSections';
 import {
   useClinicReport,
   useCounsellingReport,
@@ -71,6 +76,20 @@ function isValidRange(start: string, end: string): boolean {
 export function moduleLabel(module: ReportModule): string {
   return module.charAt(0).toUpperCase() + module.slice(1);
 }
+
+/** Section nav for the analytics modules (sidebar on wide screens). */
+const MODULE_ICONS: Record<ReportModule, TabSection['icon']> = {
+  clinic: Stethoscope,
+  counselling: MessagesSquare,
+  inventory: Package,
+  referrals: Share2,
+  facilities: Factory,
+};
+const REPORT_TABS: readonly TabSection[] = REPORT_MODULES.map((module) => ({
+  value: module,
+  label: moduleLabel(module),
+  icon: MODULE_ICONS[module],
+}));
 
 function rows(input: Array<Array<string | number>>, prefix: string): ReportTableRow[] {
   return input.map((cells) => ({ id: prefix + ':' + cells.join(':'), cells }));
@@ -211,34 +230,12 @@ export default function ReportsPage() {
   const currentNarrative = narratives[narrativeKey];
 
   return (
-    <main className="mx-auto max-w-7xl space-y-6 px-3 py-4 sm:px-5 sm:py-6">
-      <Tabs value={tab} onValueChange={setTab} className="space-y-6">
+    <main className="space-y-4 p-6">
+      <Tabs value={tab} onValueChange={setTab} className="space-y-4">
       <PageHeader
         title="Reports and analytics"
         description="Asia/Manila calendar dates. Analytics exports contain aggregated, privacy-reviewed data and every download is audited."
-        toolbar={
-          <div className="w-full space-y-1 sm:w-auto">
-            <Label htmlFor="report-range">Date range</Label>
-            <DateRangePicker
-              id="report-range"
-              start={draftRange.start}
-              end={draftRange.end}
-              toYear={new Date().getFullYear()}
-              onChange={({ start: nextStart, end: nextEnd }) => {
-                setDraftRange({ start: nextStart, end: nextEnd });
-                if (nextStart !== '' && nextEnd !== '') commitRange(nextStart, nextEnd);
-              }}
-              className="min-h-10 w-full lg:w-[310px]"
-            />
-            <p className="text-xs text-muted-foreground">{start} to {end}, maximum 366 days</p>
-          </div>
-        }
-        tabs={
-          <TabsList aria-label="Analytics module">
-            {REPORT_MODULES.map((module) => <TabsTrigger key={module} value={module}>{moduleLabel(module)}</TabsTrigger>)}
-          </TabsList>
-        }
-        tabsActions={
+        actions={
           <>
             {activeQuery.isFetching && !activeQuery.isLoading && (
               <span role="status" className="inline-flex items-center gap-1 text-xs text-muted-foreground">
@@ -278,6 +275,23 @@ export default function ReportsPage() {
             )}
           </>
         }
+        toolbar={
+          <div className="w-full space-y-1 sm:w-auto">
+            <Label htmlFor="report-range">Date range</Label>
+            <DateRangePicker
+              id="report-range"
+              start={draftRange.start}
+              end={draftRange.end}
+              toYear={new Date().getFullYear()}
+              onChange={({ start: nextStart, end: nextEnd }) => {
+                setDraftRange({ start: nextStart, end: nextEnd });
+                if (nextStart !== '' && nextEnd !== '') commitRange(nextStart, nextEnd);
+              }}
+              className="min-h-10 w-full lg:w-[310px]"
+            />
+            <p className="text-xs text-muted-foreground">{start} to {end}, maximum 366 days</p>
+          </div>
+        }
       />
 
       <section aria-labelledby="overview-heading" className="overflow-hidden rounded-xl border bg-card">
@@ -305,7 +319,7 @@ export default function ReportsPage() {
             <dl className="grid divide-y sm:grid-cols-2 sm:divide-x sm:divide-y-0 xl:grid-cols-5">
               <Metric label="Clinic encounters" value={summary.data.clinic.encounters} detail={summary.data.clinic.checkins + ' kiosk check-ins'} delta={summary.data.clinic.encounters_delta_pct} />
               <Metric label="Counselling appointments" value={summary.data.counselling.appointments} detail={summary.data.counselling.sessions + ' sessions opened'} delta={summary.data.counselling.appointments_delta_pct} />
-              <Metric label="Units dispensed" value={summary.data.inventory.dispensed_qty} detail={summary.data.inventory.active_batches + ' active batches now'} delta={summary.data.inventory.dispensed_delta_pct} />
+              <Metric label="Units dispensed" value={summary.data.inventory.dispensed_qty} detail={summary.data.inventory.active_batches + ' active batches · ' + summary.data.inventory.equipment_for_replacement + ' equipment to replace'} delta={summary.data.inventory.dispensed_delta_pct} />
               <Metric label="Referrals created" value={summary.data.referrals.created} detail="New referral activity" delta={summary.data.referrals.created_delta_pct} />
               <Metric label="Facilities batches completed" value={summary.data.facilities.completed_batches} detail="Completion activity" delta={summary.data.facilities.completed_delta_pct} />
             </dl>
@@ -327,15 +341,16 @@ export default function ReportsPage() {
           </section>
         )}
 
-        <TabsContent value="clinic" className="space-y-4">
-          <ClinicAnalyticsView
-            report={clinic.data}
-            isLoading={clinic.isLoading}
-            isError={clinic.isError}
-            isFetching={clinic.isFetching}
-            onRetry={() => void clinic.refetch()}
-          />
-        </TabsContent>
+        <TabSections tabs={REPORT_TABS} ariaLabel="Analytics module">
+          <TabsContent value="clinic" className="space-y-4">
+            <ClinicAnalyticsView
+              report={clinic.data}
+              isLoading={clinic.isLoading}
+              isError={clinic.isError}
+              isFetching={clinic.isFetching}
+              onRetry={() => void clinic.refetch()}
+            />
+          </TabsContent>
 
         <TabsContent value="counselling" className="space-y-4">
           {counselling.isError && counselling.data === undefined ? (
@@ -383,6 +398,33 @@ export default function ReportsPage() {
                   <ReportDataTable title="Top dispensed medicines" columns={['Medicine', 'Quantity']} loading={inventory.isLoading} rows={rows((inventory.data?.top_dispensed ?? []).map((item) => [item.generic_name + (item.brand_name !== null ? ' (' + item.brand_name + ')' : ''), item.qty + ' ' + item.unit]), 'inventory-top')} />
                 </div>
               </section>
+              <section className="space-y-3" aria-labelledby="inventory-equipment-heading">
+                <div>
+                  <h2 id="inventory-equipment-heading" className="text-base font-semibold">Equipment status</h2>
+                  <p className="text-xs text-muted-foreground">
+                    Durable assets the clinic owns — current state, not range-bound. The replacement list is what management acts on.
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge variant={inventory.data !== undefined && inventory.data.equipment.status_summary.for_replacement > 0 ? 'destructive' : 'success'}>
+                    {inventory.data?.equipment.status_summary.working ?? '—'} working
+                  </Badge>
+                  <Badge variant={inventory.data !== undefined && inventory.data.equipment.status_summary.for_repair > 0 ? 'warning' : 'secondary'}>
+                    {inventory.data?.equipment.status_summary.for_repair ?? '—'} for repair
+                  </Badge>
+                  <Badge variant={inventory.data !== undefined && inventory.data.equipment.status_summary.for_replacement > 0 ? 'destructive' : 'secondary'}>
+                    {inventory.data?.equipment.status_summary.for_replacement ?? '—'} for replacement
+                  </Badge>
+                  <Badge variant="secondary">{inventory.data?.equipment.status_summary.retired ?? '—'} retired</Badge>
+                  <span className="text-xs text-muted-foreground">
+                    across {inventory.data?.equipment.total_items ?? '—'} equipment item(s)
+                  </span>
+                </div>
+                <div className="grid min-w-0 gap-4 xl:grid-cols-2">
+                  <ReportDataTable title="For replacement" columns={['Equipment', 'Location', 'Units', 'Flagged since']} loading={inventory.isLoading} rows={rows((inventory.data?.equipment.needs_replacement ?? []).map((item) => [item.name, item.location ?? '—', String(item.units), item.oldest_flagged !== null ? fmtUtcToApp(item.oldest_flagged) : '—']), 'inventory-equipment-replace')} emptyMessage="No equipment is flagged for replacement." />
+                  <ReportDataTable title="For repair" columns={['Equipment', 'Location', 'Units']} loading={inventory.isLoading} rows={rows((inventory.data?.equipment.items ?? []).filter((item) => item.for_repair > 0).map((item) => [item.name, item.location ?? '—', String(item.for_repair)]), 'inventory-equipment-repair')} emptyMessage="No equipment is waiting for repair." />
+                </div>
+              </section>
             </>
           )}
         </TabsContent>
@@ -422,7 +464,8 @@ export default function ReportsPage() {
               </div>
             </>
           )}
-        </TabsContent>
+          </TabsContent>
+        </TabSections>
       </Tabs>
 
       <SavedReportsSection start={start} end={end} canConfigure={canConfigure} canExport={canExport} />

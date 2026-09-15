@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:synapse_mobile/core/models/appointment.dart';
+import 'package:synapse_mobile/core/models/equipment.dart';
 import 'package:synapse_mobile/core/models/notification.dart';
 import 'package:synapse_mobile/core/models/queue.dart';
 import 'package:synapse_mobile/core/models/session.dart';
@@ -120,6 +121,102 @@ void main() {
       });
       expect(n.isRead, isFalse);
       expect(n.templateCode, 'referral.created');
+    });
+  });
+
+  group('Equipment', () {
+    test('parses a catalog row with per-status counts', () {
+      final e = Equipment.fromJson(const {
+        'id': 7,
+        'name': 'BP apparatus (aneroid)',
+        'category': 'Diagnostic',
+        'location': 'Consultation Room 1',
+        'notes': null,
+        'archived': false,
+        'working': 3,
+        'for_repair': 1,
+        'for_replacement': 1,
+        'retired': 0,
+        'total_units': 5,
+        'created_at': '2026-09-14 00:00:00',
+      });
+      expect(e.name, 'BP apparatus (aneroid)');
+      expect(e.totalUnits, 5);
+      expect(e.attentionUnits, 2); // for_repair + for_replacement
+      expect(e.archived, isFalse);
+    });
+
+    test('parses a unit with wire status and nullable fields', () {
+      final u = EquipmentUnit.fromJson(const {
+        'id': 41,
+        'status': 'for_replacement',
+        'condition_note': 'Cuff leak beyond repair',
+        'acquired_date': '2021-03-02',
+        'status_changed_at': '2026-09-02 00:00:00',
+        'created_at': '2026-09-14 00:00:00',
+      });
+      expect(u.status, EquipmentStatus.forReplacement);
+      expect(u.status.label, 'For replacement');
+      expect(u.conditionNote, 'Cuff leak beyond repair');
+      expect(u.acquiredDate, '2021-03-02');
+    });
+
+    test('status enum maps unknown wire values to working', () {
+      expect(EquipmentStatus.fromWire('nonsense'), EquipmentStatus.working);
+      expect(EquipmentStatus.fromWire(null), EquipmentStatus.working);
+      expect(EquipmentStatus.forRepair.wire, 'for_repair');
+    });
+
+    test('detail groups the status log per unit, oldest first', () {
+      final d = EquipmentDetail.fromJson(const {
+        'id': 7,
+        'name': 'Wheelchair',
+        'archived': false,
+        'working': 1,
+        'for_repair': 0,
+        'for_replacement': 1,
+        'retired': 0,
+        'total_units': 2,
+        'created_at': '2026-09-14 00:00:00',
+        'units': [
+          {
+            'id': 51,
+            'status': 'for_replacement',
+            'condition_note': 'Frame corrosion',
+            'acquired_date': '2019-08-14',
+            'status_changed_at': '2026-08-24 00:00:00',
+            'created_at': '2026-09-14 00:00:00',
+          },
+        ],
+        'status_log': [
+          {
+            'id': 2,
+            'unit_id': 51,
+            'from_status': 'working',
+            'to_status': 'for_replacement',
+            'note': 'Frame corrosion',
+            'user_email': 'nurse@synapse.dev',
+            'created_at': '2026-08-24 00:00:00',
+          },
+          {
+            'id': 1,
+            'unit_id': 51,
+            'from_status': null,
+            'to_status': 'working',
+            'note': 'Procured',
+            'user_email': 'nurse@synapse.dev',
+            'created_at': '2026-09-13 00:00:00',
+          },
+        ],
+      });
+      expect(d.units, hasLength(1));
+      final log = d.logFor(51);
+      expect(log, hasLength(2));
+      // Oldest first: the initial working entry precedes the change.
+      expect(log.first.fromStatus, isNull);
+      expect(log.first.toStatus, EquipmentStatus.working);
+      expect(log.last.toStatus, EquipmentStatus.forReplacement);
+      expect(log.last.note, 'Frame corrosion');
     });
   });
 }

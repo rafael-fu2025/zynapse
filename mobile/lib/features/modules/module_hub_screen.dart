@@ -7,6 +7,7 @@ import '../admin/admin_users_screen.dart';
 import '../audit/audit_screen.dart';
 import '../clinic/clinic_screen.dart';
 import '../counselling/counselling_screen.dart';
+import '../equipment/equipment_screen.dart';
 import '../facilities/facilities_screen.dart';
 import '../facilities/waste_categories_screen.dart';
 import '../inventory/inventory_screen.dart';
@@ -42,6 +43,8 @@ const _modules = <_Module>[
       PatientsScreen(), ['clinic.patients.read']),
   _Module('Inventory', HugeIcons.strokeRoundedPackage02, Color(0xFFB45309),
       InventoryScreen(), ['clinic.inventory.read']),
+  _Module('Equipment', HugeIcons.strokeRoundedHospitalBed01, Color(0xFF8D6E63),
+      EquipmentScreen(), ['clinic.inventory.read']),
   _Module('Medicines', HugeIcons.strokeRoundedMedicine01, Color(0xFF1B7A43),
       MedicinesScreen(), ['clinic.inventory.read']),
   _Module('Counselling', HugeIcons.strokeRoundedMessage01, Color(0xFF5B4BA6),

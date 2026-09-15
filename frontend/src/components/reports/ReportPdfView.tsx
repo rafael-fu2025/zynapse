@@ -245,6 +245,16 @@ function InventoryReportView({ data }: { data: InventoryReport }) {
         headers={['Medicine', 'Batch', 'Remaining', 'Expires']}
         rows={data.expiring.map((m) => [m.generic_name, m.batch_number, m.quantity_remaining + ' ' + m.unit, m.expiration_date])}
       />
+      <div style={{ display: 'flex', gap: 10, marginBottom: 16, marginTop: 20 }}>
+        <Kpi label="Equipment working" value={data.equipment.status_summary.working.toLocaleString()} />
+        <Kpi label="For repair" value={data.equipment.status_summary.for_repair.toLocaleString()} />
+        <Kpi label="For replacement" value={data.equipment.status_summary.for_replacement.toLocaleString()} detail={data.equipment.total_items.toLocaleString() + ' equipment items'} />
+      </div>
+      <Table
+        title="Equipment for replacement"
+        headers={['Equipment', 'Location', 'Units', 'Flagged since']}
+        rows={data.equipment.needs_replacement.map((e) => [e.name, e.location ?? '—', String(e.units), e.oldest_flagged ?? '—'])}
+      />
     </>
   );
 }

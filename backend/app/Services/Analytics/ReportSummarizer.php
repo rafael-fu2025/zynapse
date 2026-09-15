@@ -95,6 +95,16 @@ final class ReportSummarizer
         } else {
             $n .= 'Stock levels are healthy with no low-stock or near-expiry alerts.';
         }
+
+        // Equipment status — the management-visible replacement picture.
+        $eqWorking = (int) ($d['equipment_working'] ?? 0);
+        $eqRepair  = (int) ($d['equipment_for_repair'] ?? 0);
+        $eqReplace = (int) ($d['equipment_for_replacement'] ?? 0);
+        if ($eqRepair > 0 || $eqReplace > 0) {
+            $n .= " Equipment status: {$eqWorking} unit(s) working, {$eqRepair} for repair, and {$eqReplace} flagged for replacement — the itemised replacement list is in the equipment section of this report.";
+        } else {
+            $n .= " Equipment status: {$eqWorking} unit(s) working, none flagged for repair or replacement.";
+        }
         return $n;
     }
 

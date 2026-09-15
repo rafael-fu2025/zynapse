@@ -170,6 +170,22 @@ export const INVENTORY_UNITS: ReadonlyArray<TaxonomyEntry> = [
   { value: 'sachet' },
 ];
 
+// ------------------------------------------------------ equipment
+
+/**
+ * Equipment categories (durable-asset catalog). The field is open —
+ * `allowCreate` is on at the call site — this list is just the curated
+ * starter set so clerks don't fragment "Diagnostic" into three spellings.
+ */
+export const EQUIPMENT_CATEGORIES: ReadonlyArray<TaxonomyEntry> = [
+  { value: 'Diagnostic', hint: 'BP apparatus, thermometers, scales' },
+  { value: 'Treatment', hint: 'Nebulizers, first-aid equipment' },
+  { value: 'Mobility', hint: 'Wheelchairs, stretchers' },
+  { value: 'Furniture', hint: 'Examination tables, beds' },
+  { value: 'Office', hint: 'Non-clinical fixtures' },
+  { value: 'Other' },
+];
+
 // ---------------------------------------------------------- strengths
 
 /**

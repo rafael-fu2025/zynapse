@@ -54,6 +54,7 @@ export const reportSummarySchema = z.object({
     dispensed_qty: z.number().int(),
     previous_dispensed_qty: z.number().int(),
     dispensed_delta_pct: deltaSchema,
+    equipment_for_replacement: z.number().int(),
   }),
   referrals: z.object({
     created: z.number().int(),
@@ -139,6 +140,34 @@ export const inventoryReportSchema = z.object({
     unit: z.string(),
     qty: z.number().int(),
   })),
+  // Durable-asset picture (current state, not range-bound): what the
+  // clinic owns and what needs replacing — the management payoff.
+  equipment: z.object({
+    total_items: z.number().int(),
+    status_summary: z.object({
+      working: z.number().int(),
+      for_repair: z.number().int(),
+      for_replacement: z.number().int(),
+      retired: z.number().int(),
+    }),
+    items: z.array(z.object({
+      id: z.number().int(),
+      name: z.string(),
+      category: z.string().nullable(),
+      location: z.string().nullable(),
+      working: z.number().int(),
+      for_repair: z.number().int(),
+      for_replacement: z.number().int(),
+      retired: z.number().int(),
+    })),
+    needs_replacement: z.array(z.object({
+      name: z.string(),
+      category: z.string().nullable(),
+      location: z.string().nullable(),
+      units: z.number().int(),
+      oldest_flagged: z.string().nullable(),
+    })),
+  }),
 });
 export type InventoryReport = z.infer<typeof inventoryReportSchema>;
 

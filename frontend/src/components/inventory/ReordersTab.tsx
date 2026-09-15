@@ -120,11 +120,11 @@ export function ReordersTab() {
           <SearchBox
             value={q}
             onValueChange={setQ}
-            placeholder="Search by medicine or note…"
+            placeholder="Search by medicine or note"
             inputId="reorders-search"
             ariaLabel="Search purchase requests by medicine or note"
             isFetching={list.isFetching && list.data !== undefined}
-            className="w-full sm:w-64"
+            className="w-full sm:w-64 lg:w-96"
           />
           <p className="hidden text-xs text-muted-foreground sm:block">
             Auto-check files a request when stock falls to the threshold.

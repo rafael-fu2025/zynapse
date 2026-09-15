@@ -182,11 +182,11 @@ export function MedicinesTab() {
         <SearchBox
           value={qDraft}
           onValueChange={setQ}
-          placeholder="Search by name, brand, or category…"
+          placeholder="Search by name, brand, or category"
           inputId="medicines-search"
           ariaLabel="Search medicines by name, brand, or category"
           isFetching={list.isFetching && list.data !== undefined}
-          className="w-full sm:w-64"
+          className="w-full sm:w-64 lg:w-96"
         />
         <div className="flex flex-wrap items-center gap-2">
           <Button

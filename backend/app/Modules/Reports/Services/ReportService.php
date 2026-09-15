@@ -104,6 +104,9 @@ final class ReportService extends BaseService
                 'dispensed_qty' => $dispensed['current'],
                 'previous_dispensed_qty' => $dispensed['previous'],
                 'dispensed_delta_pct' => $this->deltaPct($dispensed['current'], $dispensed['previous']),
+                'equipment_for_replacement' => $this->countWhere('clinic_equipment_units', [
+                    'status' => 'for_replacement',
+                ]),
             ],
             'referrals' => [
                 'created' => $referrals['current'],
@@ -298,6 +301,57 @@ final class ReportService extends BaseService
             ->where('t.type', 'dispensed')
             ->groupBy('m.id')->orderBy('qty', 'DESC')->limit(8)->get()->getResultArray();
 
+        // Equipment (durable assets): current-state status counts per
+        // non-archived catalog item. Deliberately NOT range-bound — the
+        // report answers "what do we own and what needs replacing NOW".
+        $equipmentItems = $this->db->table('clinic_equipment e')
+            ->where('e.tenant_id', CurrentTenant::id())
+            ->select("e.id, e.name, e.category, e.location,
+                SUM(u.status = 'working') AS working,
+                SUM(u.status = 'for_repair') AS for_repair,
+                SUM(u.status = 'for_replacement') AS for_replacement,
+                SUM(u.status = 'retired') AS retired", false)
+            ->join('clinic_equipment_units u', 'u.equipment_id = e.id', 'left')
+            ->where('e.archived_at', null)
+            ->groupBy('e.id')
+            ->orderBy('for_replacement', 'DESC')
+            ->orderBy('e.name', 'ASC')
+            ->get()->getResultArray();
+
+        // How long each equipment's oldest for-replacement unit has been
+        // flagged — the age of the replacement ask, for management.
+        $oldestFlaggedRows = $this->db->table('clinic_equipment_units u')
+            ->where('u.tenant_id', CurrentTenant::id())
+            ->select('u.equipment_id, MIN(u.status_changed_at) AS oldest_flagged')
+            ->join('clinic_equipment e', 'e.id = u.equipment_id')
+            ->where('u.status', 'for_replacement')
+            ->where('e.archived_at', null)
+            ->groupBy('u.equipment_id')
+            ->get()->getResultArray();
+        $oldestFlagged = [];
+        foreach ($oldestFlaggedRows as $r) {
+            $oldestFlagged[(int) $r['equipment_id']] = (string) $r['oldest_flagged'];
+        }
+
+        $needsReplacement = [];
+        $equipmentSummary = ['working' => 0, 'for_repair' => 0, 'for_replacement' => 0, 'retired' => 0];
+        foreach ($equipmentItems as $item) {
+            $equipmentSummary['working']         += (int) $item['working'];
+            $equipmentSummary['for_repair']      += (int) $item['for_repair'];
+            $equipmentSummary['for_replacement'] += (int) $item['for_replacement'];
+            $equipmentSummary['retired']         += (int) $item['retired'];
+
+            if ((int) $item['for_replacement'] > 0) {
+                $needsReplacement[] = [
+                    'name'           => $item['name'],
+                    'category'       => $item['category'],
+                    'location'       => $item['location'],
+                    'units'          => (int) $item['for_replacement'],
+                    'oldest_flagged' => $oldestFlagged[(int) $item['id']] ?? null,
+                ];
+            }
+        }
+
         return [
             'range' => $range,
             'snapshot_at' => $this->utcNow(),
@@ -308,6 +362,12 @@ final class ReportService extends BaseService
             'dispensing_trend' => $this->intify($dispensingTrend),
             'total_dispensed' => array_sum(array_map(static fn (array $r): int => (int) $r['qty'], $dispensingTrend)),
             'top_dispensed' => $this->intify($topDispensed),
+            'equipment' => [
+                'total_items' => count($equipmentItems),
+                'status_summary' => $equipmentSummary,
+                'items' => $this->intify($equipmentItems),
+                'needs_replacement' => $needsReplacement,
+            ],
         ];
     }
 
@@ -510,6 +570,9 @@ final class ReportService extends BaseService
                 'expired' => count($report['expired'] ?? []),
                 'expiring' => count($report['expiring'] ?? []),
                 'dispensed' => (int) ($report['total_dispensed'] ?? 0),
+                'equipment_working' => (int) ($report['equipment']['status_summary']['working'] ?? 0),
+                'equipment_for_repair' => (int) ($report['equipment']['status_summary']['for_repair'] ?? 0),
+                'equipment_for_replacement' => (int) ($report['equipment']['status_summary']['for_replacement'] ?? 0),
             ],
             'referrals' => [
                 'total' => (int) ($report['total_referrals'] ?? 0),
@@ -652,7 +715,7 @@ final class ReportService extends BaseService
     private function intify(array $rows): array
     {
         return array_map(static function (array $row): array {
-            foreach (['cnt', 'qty', 'id', 'total_stock', 'reorder_threshold', 'quantity_remaining'] as $column) {
+            foreach (['cnt', 'qty', 'id', 'total_stock', 'reorder_threshold', 'quantity_remaining', 'working', 'for_repair', 'for_replacement', 'retired'] as $column) {
                 if (array_key_exists($column, $row) && $row[$column] !== null) {
                     $row[$column] = (int) $row[$column];
                 }

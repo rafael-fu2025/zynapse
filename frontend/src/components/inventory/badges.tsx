@@ -8,7 +8,9 @@ import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
 import type { InventoryItemLastMovement } from '@/schemas/inventory';
 import type { MedicineLastMovement } from '@/schemas/medicines';
+import type { EquipmentItem, EquipmentStatus } from '@/schemas/equipment';
 import type { Reorder } from '@/schemas/reorders';
+import { EQUIPMENT_STATUS_LABEL, EQUIPMENT_STATUS_VARIANT } from './constants';
 import { daysUntil, fmtRelativeFromNow, initialsFromEmail } from './format';
 
 /**
@@ -125,6 +127,44 @@ export function ExpiryChip({ days }: { days: number | null }): JSX.Element | nul
   if (days <= 0) return <Badge variant="destructive" className="ml-1.5">expired</Badge>;
   if (days <= 7) return <Badge variant="destructive" className="ml-1.5">{days}d</Badge>;
   return <Badge variant="warning" className="ml-1.5">{days}d</Badge>;
+}
+
+/**
+ * EquipmentStatusBadge — single unit status chip (units dialog rows).
+ */
+export function EquipmentStatusBadge({ status }: { status: EquipmentStatus }): JSX.Element {
+  return <Badge variant={EQUIPMENT_STATUS_VARIANT[status]}>{EQUIPMENT_STATUS_LABEL[status]}</Badge>;
+}
+
+/**
+ * EquipmentStatusChips — the row-level status mix for an equipment
+ * catalog item ("4 working · 1 for repair · 1 for replacement"). Zero
+ * counts are omitted; an item with no units shows a muted hint instead
+ * (freshly created catalog row).
+ */
+export function EquipmentStatusChips({ item }: { item: EquipmentItem }): JSX.Element {
+  if (item.total_units === 0) {
+    return <span className="text-xs text-muted-foreground">No units yet</span>;
+  }
+
+  const entries: Array<[EquipmentStatus, number]> = [
+    ['working', item.working],
+    ['for_repair', item.for_repair],
+    ['for_replacement', item.for_replacement],
+    ['retired', item.retired],
+  ];
+
+  return (
+    <span className="inline-flex flex-wrap items-center gap-1">
+      {entries
+        .filter(([, count]) => count > 0)
+        .map(([status, count]) => (
+          <Badge key={status} variant={EQUIPMENT_STATUS_VARIANT[status]} className="gap-1">
+            {count} {EQUIPMENT_STATUS_LABEL[status]}
+          </Badge>
+        ))}
+    </span>
+  );
 }
 
 /**

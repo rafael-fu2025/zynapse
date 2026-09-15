@@ -5,6 +5,7 @@ import {
   Pill,
   TrendingUp,
   Truck,
+  Wrench,
 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -17,6 +18,7 @@ import {
   useWrittenOffMedicines,
 } from '@/hooks/useMedicines';
 import { useReorders } from '@/hooks/useReorders';
+import { useEquipmentItems } from '@/hooks/useEquipment';
 import { fmtUtcToApp } from '@/utils/date';
 import { ExpiryChip, StockBadge } from './badges';
 import { BATCH_STATUS_VARIANT } from './constants';
@@ -25,11 +27,11 @@ import { daysUntil } from './format';
 /**
  * InsightsTab — top-down view of the catalogue. Built from existing
  * analytics endpoints (`/medicines/low-stock`, `/medicines/expiring`,
- * `/reorders`) — no new backend surface. The "click a tile to dive
- * into the underlying tab" interaction uses the page-level tab state
- * so the four tabs still share the URL param.
+ * `/reorders`, `/equipment`) — no new backend surface. The "click a tile
+ * to dive into the underlying tab" interaction uses the page-level tab
+ * state so the tabs still share the URL param.
  */
-export function InsightsTab({ onJumpToTab }: { onJumpToTab: (tab: 'medicines' | 'supplies' | 'reorders') => void }) {
+export function InsightsTab({ onJumpToTab }: { onJumpToTab: (tab: 'medicines' | 'supplies' | 'equipment' | 'reorders') => void }) {
   const lowStock = useLowStockMedicines();
   const expiring = useExpiringMedicines(30);
   const writtenOff = useWrittenOffMedicines(90);
@@ -38,6 +40,9 @@ export function InsightsTab({ onJumpToTab }: { onJumpToTab: (tab: 'medicines' | 
   // only need the number, not the rows (the Reorders tab has the full
   // list with ETAs + actions from Gap 9).
   const reorders = useReorders(null, null, 50);
+  // Equipment: one page of the catalog carries the per-status counts —
+  // enough for the attention tile and the replacement panel.
+  const equipment = useEquipmentItems(null, 100);
 
   const lowStockCount  = lowStock.data?.length ?? 0;
   const expiringCount  = expiring.data?.length ?? 0;
@@ -46,6 +51,14 @@ export function InsightsTab({ onJumpToTab }: { onJumpToTab: (tab: 'medicines' | 
   const pendingReorderCount = (reorders.data?.data ?? []).filter((r) =>
     r.status === 'pending' || r.status === 'approved' || r.status === 'ordered',
   ).length;
+
+  const equipmentRows = equipment.data?.data ?? [];
+  const equipmentAttentionCount = equipmentRows.reduce(
+    (sum, it) => sum + it.for_repair + it.for_replacement, 0,
+  );
+  const equipmentReplacementTop = equipmentRows
+    .filter((it) => it.for_replacement > 0)
+    .slice(0, 5);
 
   // Top-of-list slices — full data lives on the source tab.
   const lowStockTop = (lowStock.data ?? []).slice(0, 5);
@@ -56,7 +69,7 @@ export function InsightsTab({ onJumpToTab }: { onJumpToTab: (tab: 'medicines' | 
     <div className="space-y-4">
       {/* Stat tiles — the morning stock-check dashboard. Color shifts
           from neutral → warning → destructive as the count grows. */}
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-6">
         <StatTile
           icon={<Pill className="size-4" />}
           label="Needs to reorder"
@@ -88,6 +101,14 @@ export function InsightsTab({ onJumpToTab }: { onJumpToTab: (tab: 'medicines' | 
           tone={pendingReorderCount === 0 ? 'success' : 'info'}
           loading={reorders.isLoading}
           onClick={() => onJumpToTab('reorders')}
+        />
+        <StatTile
+          icon={<Wrench className="size-4" />}
+          label="Equipment attention"
+          value={equipmentAttentionCount}
+          tone={equipmentAttentionCount === 0 ? 'success' : equipmentAttentionCount <= 2 ? 'warning' : 'destructive'}
+          loading={equipment.isLoading}
+          onClick={() => onJumpToTab('equipment')}
         />
         <StatTile
           icon={<TrendingUp className="size-4" />}
@@ -208,6 +229,43 @@ export function InsightsTab({ onJumpToTab }: { onJumpToTab: (tab: 'medicines' | 
                     </div>
                   </div>
                   <Badge variant={BATCH_STATUS_VARIANT[b.status]}>{titleCase(b.status)}</Badge>
+                </li>
+              ))}
+            </ul>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Equipment for replacement — the management-visible ask. Status
+          changes happen on the Equipment tab's units dialog. */}
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-3">
+          <div>
+            <CardTitle className="text-base">Equipment for replacement</CardTitle>
+            <CardDescription>Units flagged as beyond economical repair</CardDescription>
+          </div>
+          <Button variant="ghost" size="sm" onClick={() => onJumpToTab('equipment')}>
+            View all →
+          </Button>
+        </CardHeader>
+        <CardContent>
+          {equipment.isLoading && <Loader2 className="mx-auto size-4 animate-spin text-muted-foreground" />}
+          {!equipment.isLoading && equipmentReplacementTop.length === 0 && (
+            <p className="text-sm text-muted-foreground">No equipment is flagged for replacement.</p>
+          )}
+          {!equipment.isLoading && equipmentReplacementTop.length > 0 && (
+            <ul className="divide-y">
+              {equipmentReplacementTop.map((it) => (
+                <li key={it.id} className="flex items-center justify-between gap-2 py-2 text-sm">
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate font-medium">{it.name}</div>
+                    <div className="truncate text-xs text-muted-foreground">
+                      {[it.category, it.location].filter((v) => v !== null).join(' · ') || '—'}
+                    </div>
+                  </div>
+                  <Badge variant="destructive">
+                    {it.for_replacement} to replace
+                  </Badge>
                 </li>
               ))}
             </ul>

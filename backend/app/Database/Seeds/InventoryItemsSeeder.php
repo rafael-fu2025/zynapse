@@ -20,6 +20,11 @@ use CodeIgniter\Database\Seeder;
  * Reorder levels are set so 3 items sit BELOW the reorder level —
  * that exercises the `low-stock` filter and reorder auto-check.
  *
+ * Also seeds `clinic_equipment` (durable assets) with units in mixed
+ * statuses — 2 for-replacement and 1 for-repair — so the inventory
+ * report's equipment section and the insights tile show replacement
+ * needs on first load.
+ *
  * Refuses to run in production. Idempotent.
  */
 final class InventoryItemsSeeder extends Seeder
@@ -43,6 +48,59 @@ final class InventoryItemsSeeder extends Seeder
         ];
     }
 
+    /**
+     * Durable assets. Each unit: [status, acquired (Y-m-d), days ago the
+     * current status was set, condition note].
+     *
+     * @return list<array{name:string, category:string, location:string, notes:?string, archived:?bool, units:list<array{0:string,1:string,2:int,3:?string}>}>
+     */
+    private function equipment(): array
+    {
+        return [
+            [
+                'name' => 'BP apparatus (aneroid)', 'category' => 'Diagnostic', 'location' => 'Consultation Room 1', 'notes' => null, 'archived' => null,
+                'units' => [
+                    ['working', '2023-06-15', 0, null],
+                    ['working', '2023-06-15', 0, null],
+                    ['working', '2025-01-10', 0, null],
+                    ['for_repair', '2023-06-15', 6, 'Cuff leak — needs re-cuffing.'],
+                    ['for_replacement', '2021-03-02', 12, 'Repeated calibration drift; beyond economical repair.'],
+                ],
+            ],
+            [
+                'name' => 'Wheelchair', 'category' => 'Mobility', 'location' => 'Receiving Area', 'notes' => 'Standard adult.', 'archived' => null,
+                'units' => [
+                    ['working', '2024-02-20', 0, null],
+                    ['for_replacement', '2019-08-14', 21, 'Frame corrosion; left brake stuck.'],
+                ],
+            ],
+            [
+                'name' => 'Nebulizer set', 'category' => 'Treatment', 'location' => 'Treatment Room', 'notes' => null, 'archived' => null,
+                'units' => [
+                    ['working', '2024-09-05', 0, null],
+                ],
+            ],
+            [
+                'name' => 'Weighing scale (digital)', 'category' => 'Diagnostic', 'location' => 'Consultation Room 2', 'notes' => null, 'archived' => null,
+                'units' => [
+                    ['working', '2025-03-18', 0, null],
+                ],
+            ],
+            [
+                'name' => 'Stretcher', 'category' => 'Mobility', 'location' => 'Receiving Area', 'notes' => null, 'archived' => null,
+                'units' => [
+                    ['working', '2022-11-30', 0, null],
+                ],
+            ],
+            [
+                'name' => 'Examination table (legacy)', 'category' => 'Furniture', 'location' => 'Storage', 'notes' => 'Replaced by the new exam beds.', 'archived' => true,
+                'units' => [
+                    ['retired', '2015-05-01', 40, 'Surplus; pending disposal.'],
+                ],
+            ],
+        ];
+    }
+
     public function run(): void
     {
         if (defined('ENVIRONMENT') && ENVIRONMENT === 'production') {
@@ -57,10 +115,13 @@ final class InventoryItemsSeeder extends Seeder
         $this->wipe();
         $itemIds = $this->seedItems();
         $this->seedMovements($itemIds, $nurseId);
+        [$equipmentCount, $unitCount] = $this->seedEquipment($nurseId);
 
-        fwrite(STDOUT, sprintf("InventoryItemsSeeder: %d items + %d movements inserted (3 below reorder level).\n",
+        fwrite(STDOUT, sprintf("InventoryItemsSeeder: %d items + %d movements inserted (3 below reorder level). %d equipment + %d units (2 for replacement, 1 for repair).\n",
             count($itemIds),
             count($itemIds) * 2,
+            $equipmentCount,
+            $unitCount,
         ));
     }
 
@@ -85,6 +146,9 @@ final class InventoryItemsSeeder extends Seeder
             $this->db->table('clinic_reorder_requests')->emptyTable();
             $this->db->table('clinic_inventory_movements')->emptyTable();
             $this->db->table('clinic_inventory_items')->emptyTable();
+            $this->db->table('clinic_equipment_status_log')->emptyTable();
+            $this->db->table('clinic_equipment_units')->emptyTable();
+            $this->db->table('clinic_equipment')->emptyTable();
         } finally {
             $this->db->query('SET FOREIGN_KEY_CHECKS = 1');
         }
@@ -93,6 +157,9 @@ final class InventoryItemsSeeder extends Seeder
                 ->like('action_code', 'clinic.inventory_', 'after')
                 ->orWhere('entity_type', 'clinic_inventory_items')
                 ->orWhere('entity_type', 'clinic_inventory_movements')
+                ->orLike('action_code', 'clinic.equipment_', 'after')
+                ->orWhere('entity_type', 'clinic_equipment')
+                ->orWhere('entity_type', 'clinic_equipment_units')
             ->groupEnd()
             ->delete();
     }
@@ -156,5 +223,90 @@ final class InventoryItemsSeeder extends Seeder
             ];
         }
         $this->db->table('clinic_inventory_movements')->insertBatch($rows);
+    }
+
+    /**
+     * Seed the equipment catalog, its units, and the matching status-log
+     * trail (initial working entry per unit + one entry per status
+     * change) so unit history is complete from first load.
+     *
+     * @return array{0:int, 1:int} [equipment count, unit count]
+     */
+    private function seedEquipment(int $userId): array
+    {
+        $now = new \DateTimeImmutable('now', new \DateTimeZone('UTC'));
+
+        $catalogRows = [];
+        foreach ($this->equipment() as $e) {
+            $catalogRows[] = [
+                'name'        => $e['name'],
+                'category'    => $e['category'],
+                'location'    => $e['location'],
+                'notes'       => $e['notes'],
+                'archived_at' => $e['archived'] ? $now->format('Y-m-d H:i:s') : null,
+                'created_at'  => $now->format('Y-m-d H:i:s'),
+                'updated_at'  => $now->format('Y-m-d H:i:s'),
+            ];
+        }
+        $this->db->table('clinic_equipment')->insertBatch($catalogRows);
+
+        $equipmentIds = array_map(
+            static fn (array $r): int => (int) $r['id'],
+            $this->db->table('clinic_equipment')->select('id')->orderBy('id', 'ASC')->get()->getResultArray(),
+        );
+
+        $unitRows  = [];
+        $unitIndex = [];
+        $i         = 0;
+        foreach ($this->equipment() as $eIdx => $e) {
+            foreach ($e['units'] as [$status, $acquired, $daysAgo, $note]) {
+                $unitIndex[$i] = [$eIdx, $status, $daysAgo, $note];
+                $unitRows[]    = [
+                    'equipment_id'      => $equipmentIds[$eIdx],
+                    'status'            => $status,
+                    'condition_note'    => $note,
+                    'acquired_date'     => $acquired,
+                    'status_changed_at' => $now->modify("-{$daysAgo} days")->format('Y-m-d H:i:s'),
+                    'created_at'        => $now->modify('-1 year')->format('Y-m-d H:i:s'),
+                    'updated_at'        => $now->modify("-{$daysAgo} days")->format('Y-m-d H:i:s'),
+                ];
+                $i++;
+            }
+        }
+        $this->db->table('clinic_equipment_units')->insertBatch($unitRows);
+
+        $unitIds = array_map(
+            static fn (array $r): int => (int) $r['id'],
+            $this->db->table('clinic_equipment_units')->select('id')->orderBy('id', 'ASC')->get()->getResultArray(),
+        );
+
+        // Status log: initial working entry (from NULL) at roughly the
+        // acquired time, plus the working→X change when the unit was
+        // flagged. Mirrors what the service writes in production.
+        $logRows = [];
+        foreach ($unitIds as $idx => $unitId) {
+            [, $status, $daysAgo, $note] = $unitIndex[$idx];
+            $logRows[] = [
+                'unit_id'            => $unitId,
+                'from_status'        => null,
+                'to_status'          => 'working',
+                'note'               => null,
+                'changed_by_user_id' => $userId,
+                'created_at'         => $now->modify('-1 year')->format('Y-m-d H:i:s'),
+            ];
+            if ($status !== 'working') {
+                $logRows[] = [
+                    'unit_id'            => $unitId,
+                    'from_status'        => 'working',
+                    'to_status'          => $status,
+                    'note'               => $note,
+                    'changed_by_user_id' => $userId,
+                    'created_at'         => $now->modify("-{$daysAgo} days")->format('Y-m-d H:i:s'),
+                ];
+            }
+        }
+        $this->db->table('clinic_equipment_status_log')->insertBatch($logRows);
+
+        return [count($catalogRows), count($unitRows)];
     }
 }

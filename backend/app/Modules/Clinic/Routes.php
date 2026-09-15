@@ -80,6 +80,19 @@ final class Routes implements BaseRoutes
             $r->post('inventory/(:num)/receive',             'InventoryController::receiveOrdered/$1');
             $r->get('inventory/(:num)/movements',            'InventoryController::listMovements/$1');
 
+            // Equipment (durable-asset tracking — the third inventory
+            // catalog). The literal `units` segments precede nothing
+            // conflicting: (:num) cannot match the word "units".
+            $r->get('equipment',                             'EquipmentController::listItems');
+            $r->post('equipment',                            'EquipmentController::createItem');
+            $r->get('equipment/(:num)',                      'EquipmentController::getEquipment/$1');
+            $r->post('equipment/(:num)',                     'EquipmentController::updateItem/$1');
+            $r->post('equipment/(:num)/archive',             'EquipmentController::archiveItem/$1');
+            $r->post('equipment/(:num)/unarchive',           'EquipmentController::unarchiveItem/$1');
+            $r->post('equipment/(:num)/units',               'EquipmentController::addUnits/$1');
+            $r->post('equipment/units/(:num)',               'EquipmentController::updateUnit/$1');
+            $r->post('equipment/units/(:num)/status',        'EquipmentController::changeUnitStatus/$1');
+
             // Appointments (Phase 9)
             $r->get('appointments',                          'AppointmentController::list');
             $r->post('appointments',                         'AppointmentController::schedule');

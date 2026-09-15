@@ -9,6 +9,7 @@ import '../models/clinic.dart';
 import '../models/counselling.dart';
 import '../models/dashboard.dart';
 import '../models/facilities.dart';
+import '../models/equipment.dart';
 import '../models/inventory.dart';
 import '../models/kiosk.dart';
 import '../models/medicine.dart';
@@ -518,6 +519,43 @@ class ApiService {
           .toList(),
       meta: PaginationMeta.fromJson(body?['meta'] as Map<String, dynamic>?),
     );
+  }
+
+  // ---------------------------------------------------------------------
+  // Equipment (clinic.inventory.read) — durable-asset catalog
+  // ---------------------------------------------------------------------
+
+  /// `GET /clinic/equipment?limit=&cursor=&q=&include_archived=`
+  Future<ApiPage<Equipment>> equipmentItems({
+    int limit = 25,
+    String? cursor,
+    String? q,
+    bool includeArchived = false,
+  }) async {
+    final query = <String, dynamic>{
+      'limit': limit,
+      if (includeArchived) 'include_archived': '1',
+      if (cursor != null && cursor.isNotEmpty) 'cursor': cursor,
+      if (q != null && q.isNotEmpty) 'q': q,
+    };
+    final res = await _dio.get<Map<String, dynamic>>(
+      '/clinic/equipment',
+      queryParameters: query,
+    );
+    final body = res.data;
+    return ApiPage(
+      items: (body?['data'] as List? ?? [])
+          .whereType<Map<String, dynamic>>()
+          .map(Equipment.fromJson)
+          .toList(),
+      meta: PaginationMeta.fromJson(body?['meta'] as Map<String, dynamic>?),
+    );
+  }
+
+  /// `GET /clinic/equipment/{id}` — catalog + units + status log.
+  Future<EquipmentDetail> equipmentDetail(int id) async {
+    final res = await _dio.get<Map<String, dynamic>>('/clinic/equipment/$id');
+    return EquipmentDetail.fromJson(_unwrapObject(res));
   }
 
   // ---------------------------------------------------------------------
@@ -1406,9 +1444,58 @@ class ApiService {
 
   /// `POST /clinic/inventory/{id}/receive` — quantity + shortage_note.
   Future<void> receiveInventoryStock(
-      int id, Map<String, dynamic> payload) async {
+    int id, Map<String, dynamic> payload) async {
     await _dio.post<Map<String, dynamic>>('/clinic/inventory/$id/receive',
         data: payload);
+  }
+
+  // ---------------------------------------------------------------------
+  // Equipment CRUD (clinic.inventory.write)
+  // ---------------------------------------------------------------------
+
+  /// `POST /clinic/equipment`
+  Future<EquipmentDetail> createEquipment(
+      Map<String, dynamic> payload) async {
+    final res = await _dio.post<Map<String, dynamic>>(
+      '/clinic/equipment',
+      data: payload,
+    );
+    return EquipmentDetail.fromJson(_unwrapObject(res));
+  }
+
+  /// `POST /clinic/equipment/{id}`
+  Future<void> updateEquipment(int id, Map<String, dynamic> payload) async {
+    await _dio.post<Map<String, dynamic>>('/clinic/equipment/$id',
+        data: payload);
+  }
+
+  /// `POST /clinic/equipment/{id}/archive` / `.../unarchive`
+  Future<void> archiveEquipment(int id, {bool archived = true}) async {
+    await _dio.post<Map<String, dynamic>>(
+      '/clinic/equipment/$id/${archived ? 'archive' : 'unarchive'}',
+    );
+  }
+
+  /// `POST /clinic/equipment/{id}/units` — quantity + acquired_date + note.
+  /// New units start working; the addition is logged per unit.
+  Future<EquipmentDetail> addEquipmentUnits(
+      int id, Map<String, dynamic> payload) async {
+    final res = await _dio.post<Map<String, dynamic>>(
+      '/clinic/equipment/$id/units',
+      data: payload,
+    );
+    return EquipmentDetail.fromJson(_unwrapObject(res));
+  }
+
+  /// `POST /clinic/equipment/units/{unitId}/status` — status + note.
+  /// The one-click status change; every change lands in the log.
+  Future<EquipmentDetail> changeEquipmentUnitStatus(
+      int unitId, Map<String, dynamic> payload) async {
+    final res = await _dio.post<Map<String, dynamic>>(
+      '/clinic/equipment/units/$unitId/status',
+      data: payload,
+    );
+    return EquipmentDetail.fromJson(_unwrapObject(res));
   }
 
   // ---------------------------------------------------------------------
