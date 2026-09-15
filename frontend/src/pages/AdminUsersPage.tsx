@@ -576,7 +576,7 @@ export default function AdminUsersPage() {
                 ariaLabel="Search users"
                 inputId="users-search"
                 isFetching={list.isFetching && list.data !== undefined}
-                className="sm:flex-[2_1_240px]"
+                className="w-full sm:flex-[2_1_240px] lg:max-w-md"
               />
               <Select value={filters.status} onValueChange={(value) => updateFilter('status', value)}>
                 <SelectTrigger aria-label="Filter users by status" className="sm:flex-1 sm:min-w-[160px]"><SelectValue /></SelectTrigger>
