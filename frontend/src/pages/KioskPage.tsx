@@ -14,6 +14,13 @@
  *
  * This is the STAFF surface (trail + stats). The fullscreen station
  * variant for lobby hardware is /kiosk-station (KioskStationPage).
+ *
+ * Layout (2026-09-14 redesign — the old grid was a wall of equal boxes):
+ * destination → purpose are the once-per-session settings (muted chips,
+ * not outlined buttons), the scan input is the ONE hero control, and
+ * method / camera / station live in a quiet footer row. Today's stats
+ * ride the trail header instead of their own card strip, and the trail
+ * drops the # and Station columns (constants for a single kiosk).
  */
 import {
   Camera,
@@ -93,7 +100,8 @@ export default function KioskPage() {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [k.inputRef, modalOpen]);
 
-  // Gap #11: daily stat strip from the already-fetched trail.
+  // Gap #11: daily stats from the already-fetched trail — rendered as a
+  // quiet inline line in the trail header, not a card strip.
   const stats = useMemo(() => {
     const rows = trail.data ?? [];
     return {
@@ -107,11 +115,11 @@ export default function KioskPage() {
   }, [trail.data]);
 
   return (
-    <main className="mx-auto max-w-5xl space-y-4 p-4 md:p-6">
+    <main className="mx-auto max-w-7xl space-y-4 p-6">
       <ScanFlashOverlay flash={k.flash} />
       <PageHeader
         title="Check-in Kiosk"
-        description="Bookings today are confirmed on scan; everyone else joins the clinic queue for triage."
+        description="Scan an ID to check in — today's bookings are confirmed automatically; walk-ins join the triage queue."
         actions={
           <>
             <Button variant="outline" size="sm" asChild>
@@ -129,28 +137,55 @@ export default function KioskPage() {
         }
       />
 
-      {/* Gap #11: today-at-a-glance stat strip. */}
-      <section aria-label="Today's check-in stats" className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        {(
-          [
-            ['Total scans', stats.total],
-            ['Queued', stats.queued],
-            ['Appointments confirmed', stats.confirmed],
-            ['Duplicates', stats.duplicates],
-          ] as const
-        ).map(([label, value]) => (
-          <article key={label} className="rounded-xl border bg-card p-3">
-            <p className="text-xs text-muted-foreground">{label}</p>
-            <p className="text-2xl font-bold tabular-nums text-foreground">{value}</p>
-          </article>
-        ))}
-      </section>
+      <section className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_340px]">
+        {/* Check-in console. Reads top-down as the workflow: set the
+            destination and purpose once per session, then scan each
+            patient against the hero input. */}
+        <article className="space-y-5 rounded-xl border bg-card p-4 md:p-5">
+          <div className="space-y-1.5">
+            <Label id="kiosk-destination-label" className="text-xs font-normal uppercase tracking-wide text-muted-foreground">Destination</Label>
+            <div className="grid grid-cols-2 gap-2" role="group" aria-labelledby="kiosk-destination-label">
+              {KIOSK_DESTINATIONS.map((d) => (
+                <Button
+                  key={d.value}
+                  type="button"
+                  size="sm"
+                  variant={k.destination === d.value ? 'default' : 'secondary'}
+                  aria-pressed={k.destination === d.value}
+                  onClick={() => k.setDestination(d.value)}
+                >
+                  {d.label}
+                </Button>
+              ))}
+            </div>
+          </div>
 
-      <section className="grid gap-4 lg:grid-cols-2">
-        <article className="space-y-4 rounded-xl border bg-card p-4">
+          <div className="space-y-1.5">
+            <Label id="kiosk-purpose-label" className="text-xs font-normal uppercase tracking-wide text-muted-foreground">Purpose</Label>
+            <div className="flex flex-wrap gap-1.5" role="group" aria-labelledby="kiosk-purpose-label">
+              {k.destination !== null && KIOSK_PURPOSES[k.destination].map((p) => (
+                <Button
+                  key={p}
+                  type="button"
+                  size="sm"
+                  variant={k.purpose === p ? 'default' : 'secondary'}
+                  aria-pressed={k.purpose === p}
+                  onClick={() => k.setPurpose(p)}
+                >
+                  {p}
+                </Button>
+              ))}
+            </div>
+            {k.purpose === '' && (
+              <p className="text-xs text-muted-foreground">Pick a purpose to enable check-in.</p>
+            )}
+          </div>
+
+          {/* The hero — this is the control the operator hits for every
+              patient, so it gets the size and the focus. */}
           <div className="space-y-1.5">
             <div className="flex items-center justify-between">
-              <Label htmlFor="kiosk-id">Student / Employee ID / QR / RFID</Label>
+              <Label htmlFor="kiosk-id">Student / Employee ID</Label>
               <ScanReadyBadge focused={k.focused} />
             </div>
             <div className="flex gap-2">
@@ -171,10 +206,10 @@ export default function KioskPage() {
                 }}
                 aria-invalid={k.scanError !== null}
                 aria-describedby={k.scanError !== null ? 'kiosk-id-error' : undefined}
-                className="h-12 text-lg"
+                className="h-14 text-lg"
               />
               <Button
-                className="h-12"
+                className="h-14 px-6 text-base"
                 onClick={k.submit}
                 disabled={k.scanPending || k.identifier.trim() === '' || k.purpose === ''}
                 title={k.purpose === '' ? 'Pick a purpose to check in.' : undefined}
@@ -185,156 +220,116 @@ export default function KioskPage() {
             </div>
             <ScanErrorBanner message={k.scanError} errorId="kiosk-id-error" />
           </div>
-          {/* Destination + purpose are part of the check-in contract (the
-              backend rejects scans without them); the staff form must
-              collect the same fields as the fullscreen station. */}
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <div className="space-y-1.5">
-              <Label id="kiosk-destination-label">Destination</Label>
-              <div className="flex gap-2" role="group" aria-labelledby="kiosk-destination-label">
-                {KIOSK_DESTINATIONS.map((d) => (
-                  <Button
-                    key={d.value}
-                    type="button"
-                    size="sm"
-                    variant={k.destination === d.value ? 'default' : 'outline'}
-                    aria-pressed={k.destination === d.value}
-                    onClick={() => k.setDestination(d.value)}
-                  >
-                    {d.label}
-                  </Button>
-                ))}
-              </div>
+
+          {/* Quiet footer — rarely-touched settings, one row, no labels
+              shouting. Method records how the scan arrived; the camera
+              opens the QR decoder; the station tags this console. */}
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-t pt-3">
+            <div className="flex items-center gap-2">
+              <span id="kiosk-method-label" className="text-xs text-muted-foreground">Method</span>
+              <Select value={k.method} onValueChange={(v) => k.setMethod(v as ScanMethod)}>
+                <SelectTrigger aria-labelledby="kiosk-method-label" className="h-8 w-24 text-xs"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {SCAN_METHODS.map((m) => (
+                    <SelectItem key={m} value={m}>{m.toUpperCase()}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
-            <div className="space-y-1.5">
-              <Label id="kiosk-purpose-label">Purpose</Label>
-              <div className="flex flex-wrap gap-1.5" role="group" aria-labelledby="kiosk-purpose-label">
-                {k.destination !== null && KIOSK_PURPOSES[k.destination].map((p) => (
-                  <Button
-                    key={p}
-                    type="button"
-                    size="sm"
-                    variant={k.purpose === p ? 'default' : 'outline'}
-                    aria-pressed={k.purpose === p}
-                    onClick={() => k.setPurpose(p)}
-                  >
-                    {p}
-                  </Button>
-                ))}
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label="Scan QR with camera"
+              onClick={() => setOpenCamera(true)}
+            >
+              <Camera />
+            </Button>
+            {editStation ? (
+              <div className="flex items-center gap-1.5">
+                <Input
+                  id="kiosk-station"
+                  className="h-8 w-32 text-xs"
+                  maxLength={64}
+                  value={k.station}
+                  onChange={(e) => k.setStation(e.target.value)}
+                />
+                <Button variant="outline" size="sm" className="h-8" onClick={() => setEditStation(false)}>Done</Button>
               </div>
-              {k.purpose === '' && (
-                <p className="text-xs text-muted-foreground">Pick a purpose to enable check-in.</p>
-              )}
-            </div>
-          </div>
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <div className="space-y-1.5">
-              <Label id="kiosk-method-label">Method</Label>
-              <div className="flex gap-2">
-                <Select value={k.method} onValueChange={(v) => k.setMethod(v as ScanMethod)}>
-                  <SelectTrigger aria-labelledby="kiosk-method-label"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    {SCAN_METHODS.map((m) => (
-                      <SelectItem key={m} value={m}>{m.toUpperCase()}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+            ) : (
+              <div className="flex items-center gap-1">
+                <Badge variant="secondary" className="font-mono text-xs">{k.station}</Badge>
                 <Button
-                  variant="outline"
-                  size="icon"
-                  aria-label="Scan QR with camera"
-                  onClick={() => setOpenCamera(true)}
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label="Edit station id"
+                  onClick={() => setEditStation(true)}
                 >
-                  <Camera />
+                  <Settings2 />
                 </Button>
               </div>
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="kiosk-station">Station</Label>
-              {/* Gap #7: persisted station id behind a gear affordance. */}
-              {editStation ? (
-                <div className="flex gap-2">
-                  <Input
-                    id="kiosk-station"
-                    maxLength={64}
-                    value={k.station}
-                    onChange={(e) => k.setStation(e.target.value)}
-                  />
-                  <Button variant="outline" onClick={() => setEditStation(false)}>Done</Button>
-                </div>
-              ) : (
-                <div className="flex h-10 items-center gap-2 md:h-9">
-                  <Badge variant="secondary" className="font-mono">{k.station}</Badge>
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    aria-label="Edit station id"
-                    onClick={() => setEditStation(true)}
-                  >
-                    <Settings2 />
-                  </Button>
-                </div>
-              )}
-            </div>
+            )}
+            {k.pending > 0 && (
+              <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                <CloudOff className="size-3.5" /> {k.pending} scan{k.pending === 1 ? '' : 's'} buffered — auto-syncs when back online.
+              </p>
+            )}
           </div>
-          {k.pending > 0 && (
-            <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
-              <CloudOff className="size-3.5" /> {k.pending} scan{k.pending === 1 ? '' : 's'} buffered offline — auto-syncs when back online.
-            </p>
-          )}
           <RejectedScansAlert rejected={k.rejected} onDismiss={k.dismissRejected} />
         </article>
 
         <ScanResultCard result={k.result} secondsLeft={k.secondsLeft} />
       </section>
 
+      {/* Today's trail — stats live in the header line; the table keeps
+          only the columns staff actually scan (method hides on mobile). */}
       <section className="overflow-hidden rounded-xl border bg-card">
-        <header className="border-b px-3 py-2 text-sm font-semibold text-foreground">
-          Today's check-ins
+        <header className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 border-b px-3 py-2">
+          <span className="text-sm font-semibold text-foreground">Today's check-ins</span>
+          <span className="text-xs tabular-nums text-muted-foreground">
+            {stats.total} scans · {stats.queued} queued · {stats.confirmed} confirmed · {stats.duplicates} duplicates
+          </span>
         </header>
-        <Table>
-          <TableHeader className="bg-muted/50">
-            <TableRow>
-              <TableHead className="px-3">#</TableHead>
-              <TableHead className="px-3">Patient</TableHead>
-              <TableHead className="px-3">Method</TableHead>
-              <TableHead className="px-3">Station</TableHead>
-              <TableHead className="px-3">Outcome</TableHead>
-              <TableHead className="px-3">Scanned</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {trail.isLoading && (
+        <div className="max-h-[480px] overflow-y-auto">
+          <Table>
+            <TableHeader className="bg-muted/50">
               <TableRow>
-                <TableCell colSpan={6} className="px-3 py-6 text-center text-muted-foreground">
-                  <Loader2 className="mx-auto size-4 animate-spin" />
-                </TableCell>
+                <TableHead className="px-3">Patient</TableHead>
+                <TableHead className="hidden px-3 md:table-cell">Method</TableHead>
+                <TableHead className="px-3">Outcome</TableHead>
+                <TableHead className="px-3 text-right">Scanned</TableHead>
               </TableRow>
-            )}
-            {!trail.isLoading && (trail.data?.length ?? 0) === 0 && (
-              <TableRow>
-                <TableCell colSpan={6} className="px-3 py-6 text-center text-muted-foreground">
-                  No check-ins yet today.
-                </TableCell>
-              </TableRow>
-            )}
-            {trail.isError && !trail.isLoading && (
-              <QueryErrorRow colSpan={6} message="Failed to load today's check-ins." onRetry={() => void trail.refetch()} pending={trail.isFetching} />
-            )}
-            {trail.data?.map((c) => (
-              <TableRow key={c.id}>
-                <TableCell className="px-3 font-mono text-xs">{c.id}</TableCell>
-                <TableCell className="px-3 font-mono text-xs">{c.patient_school_id}</TableCell>
-                <TableCell className="px-3 text-xs uppercase">{c.method}</TableCell>
-                <TableCell className="px-3 text-xs">{c.station_id ?? '—'}</TableCell>
-                <TableCell className="px-3">
-                  <Badge variant={OUTCOME_VARIANT[c.outcome]}>{OUTCOME_LABEL[c.outcome]}</Badge>
-                </TableCell>
-                <TableCell className="px-3 text-xs text-muted-foreground">{fmtUtcToApp(c.scanned_at)}</TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
+            </TableHeader>
+            <TableBody>
+              {trail.isLoading && (
+                <TableRow>
+                  <TableCell colSpan={4} className="px-3 py-6 text-center text-muted-foreground">
+                    <Loader2 className="mx-auto size-4 animate-spin" />
+                  </TableCell>
+                </TableRow>
+              )}
+              {!trail.isLoading && (trail.data?.length ?? 0) === 0 && (
+                <TableRow>
+                  <TableCell colSpan={4} className="px-3 py-6 text-center text-muted-foreground">
+                    No check-ins yet today.
+                  </TableCell>
+                </TableRow>
+              )}
+              {trail.isError && !trail.isLoading && (
+                <QueryErrorRow colSpan={4} message="Failed to load today's check-ins." onRetry={() => void trail.refetch()} pending={trail.isFetching} />
+              )}
+              {trail.data?.map((c) => (
+                <TableRow key={c.id}>
+                  <TableCell className="px-3 font-mono text-xs">{c.patient_school_id}</TableCell>
+                  <TableCell className="hidden px-3 text-xs uppercase md:table-cell">{c.method}</TableCell>
+                  <TableCell className="px-3">
+                    <Badge variant={OUTCOME_VARIANT[c.outcome]}>{OUTCOME_LABEL[c.outcome]}</Badge>
+                  </TableCell>
+                  <TableCell className="px-3 text-right text-xs text-muted-foreground">{fmtUtcToApp(c.scanned_at)}</TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
       </section>
 
       <Dialog open={openCamera} onOpenChange={setOpenCamera}>

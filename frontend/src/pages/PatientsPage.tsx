@@ -12,10 +12,12 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import {
   Archive,
   ArchiveRestore,
+  Briefcase,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
   Eye,
+  GraduationCap,
   HeartPulse,
   KeyRound,
   Loader2,
@@ -70,7 +72,8 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Tabs, TabsContent } from '@/components/ui/tabs';
+import { TabSections, type TabSection } from '@/components/TabSections';
 import {
   useAddAllergy,
   useAddContact,
@@ -111,6 +114,12 @@ import {
 } from '@/schemas/patients';
 
 const SEVERITY_VARIANT = { mild: 'info', moderate: 'warning', severe: 'destructive' } as const;
+
+/** Registry sections — Students / Employees. */
+const PATIENT_TABS: readonly TabSection[] = [
+  { value: 'students', label: 'Students', icon: GraduationCap },
+  { value: 'employees', label: 'Employees', icon: Briefcase },
+];
 
 /**
  * Human label for an employee's employment status. The API stores
@@ -1189,7 +1198,7 @@ export default function PatientsPage() {
   );
 
   return (
-    <main className="mx-auto max-w-7xl space-y-4 p-6">
+    <main className="space-y-4 p-6">
       <Tabs value={tab} onValueChange={setTab} className="space-y-4">
         <PageHeader
           title="Patients"
@@ -1215,22 +1224,17 @@ export default function PatientsPage() {
               ) : null
             )
           }
-          tabs={
-            <TabsList>
-              <TabsTrigger value="students">Students</TabsTrigger>
-              <TabsTrigger value="employees">Employees</TabsTrigger>
-            </TabsList>
-          }
         />
 
+        <TabSections tabs={PATIENT_TABS} ariaLabel="Patient registry sections">
         <TabsContent value="students" className="space-y-4">
           <PageToolbar>
             <div className="relative w-full sm:w-80 lg:flex-1 lg:max-w-md">
               <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
               <Input
                 aria-label="Search students"
-                placeholder="Search number or name (min 2 chars)…"
-                className="pl-9"
+                placeholder="Search number or name (min 2 chars)"
+                className="pl-9 placeholder:truncate"
                 value={queryDraft}
                 onChange={(e) => setQuery(e.target.value)}
               />
@@ -1365,8 +1369,8 @@ export default function PatientsPage() {
               <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
               <Input
                 aria-label="Search employees"
-                placeholder="Search number, name, department (min 2 chars)…"
-                className="pl-9"
+                placeholder="Search number, name, department (min 2 chars)"
+                className="pl-9 placeholder:truncate"
                 value={empQueryDraft}
                 onChange={(e) => setEmpQuery(e.target.value)}
               />
@@ -1533,6 +1537,7 @@ export default function PatientsPage() {
 
           <DepartmentsPanel />
         </TabsContent>
+        </TabSections>
       </Tabs>
 
       {detailId !== null && (

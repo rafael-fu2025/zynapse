@@ -1,9 +1,11 @@
-import { ArrowDown, ArrowUp, Eye, Image, Megaphone, Play, RotateCcw, Save, Trash2, Video } from 'lucide-react';
+import { ArrowDown, ArrowUp, Eye, Image, Megaphone, Monitor, Play, RotateCcw, Save, Trash2, Video, Volume2 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import { fetchKioskSettings, updateKioskSettings } from '@/api/kioskSettings';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { PageHeader } from '@/components/PageHeader';
+import { TabSections, type TabSection } from '@/components/TabSections';
+import { useTabParam } from '@/hooks/useTabParam';
 import { KioskMediaLibrary } from '@/components/KioskMediaLibrary';
 import { MediaPlaylistPanel } from '@/components/MediaPlaylistPanel';
 import { Button } from '@/components/ui/button';
@@ -11,7 +13,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Tabs, TabsContent } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { playConfiguredChime, unlockAudio } from '@/lib/chime';
 import {
@@ -27,6 +29,14 @@ import {
   type MediaPlaylistItem,
 } from '@/lib/kioskSettings';
 import type { KioskMediaAsset } from '@/schemas/kioskMedia';
+
+/** Settings sections — settings-style sidebar on wide screens. */
+const KIOSK_SETTINGS_TABS: readonly TabSection[] = [
+  { value: 'sound', label: 'Sound', icon: Volume2 },
+  { value: 'display', label: 'Display', icon: Monitor },
+  { value: 'playlist', label: 'Media Playlist', icon: Image },
+  { value: 'preview', label: 'Preview', icon: Eye },
+];
 
 function Switch({ id, label, description, checked, onChange }: { id: string; label: string; description?: string; checked: boolean; onChange: (checked: boolean) => void }) {
   return <div className="flex items-center justify-between gap-4 rounded-lg border p-3"><div><Label htmlFor={id}>{label}</Label>{description !== undefined && <p className="text-xs text-muted-foreground">{description}</p>}</div><input id={id} type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} className="size-5 accent-primary" /></div>;
@@ -100,6 +110,7 @@ function TvPreview({ settings }: { settings: KioskSettings }) {
 }
 
 export default function AdminKioskSettingsPage() {
+  const [tab, setTab] = useTabParam('sound');
   const [saved, setSaved] = useState<KioskSettings>(() => loadKioskSettings());
   const [settings, setSettings] = useState<KioskSettings>(() => loadKioskSettings());
   const [selectedId, setSelectedId] = useState<string | null>(settings.playlist[0]?.id ?? null);
@@ -141,17 +152,18 @@ export default function AdminKioskSettingsPage() {
 
   return <main className="mx-auto min-w-0 max-w-6xl space-y-5 p-4 sm:p-6">
     {errors.length > 0 && <div role="alert" className="rounded-lg border border-destructive/50 bg-destructive/5 p-3 text-sm text-destructive"><p className="font-semibold">Settings need attention</p><ul className="list-disc pl-5">{errors.map((error) => <li key={error}>{error}</li>)}</ul></div>}
-    <Tabs defaultValue="sound" className="space-y-5">
+    <Tabs value={tab} onValueChange={setTab} className="space-y-5">
       <PageHeader
         title="Kiosk Settings"
         description="Shared sound, display, and media playlist configuration for every kiosk device."
         actions={<div className="flex gap-2">{dirty && <span className="self-center rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-900">Unsaved changes</span>}<Button variant="outline" disabled={!dirty || remotePending} onClick={() => { setSettings(saved); setSelectedId(saved.playlist[0]?.id ?? null); setErrors([]); toast.info('Unsaved changes discarded.'); }}>Discard</Button><Button disabled={remotePending} onClick={() => void save()}><Save /> {remotePending ? 'Syncing…' : 'Save'}</Button></div>}
-        tabs={<TabsList><TabsTrigger value="sound">Sound</TabsTrigger><TabsTrigger value="display">Display</TabsTrigger><TabsTrigger value="playlist">Media Playlist</TabsTrigger><TabsTrigger value="preview">Preview</TabsTrigger></TabsList>}
       />
+      <TabSections tabs={KIOSK_SETTINGS_TABS} ariaLabel="Kiosk settings sections">
       <TabsContent value="sound"><Card><CardHeader><CardTitle>Sound</CardTitle><CardDescription>Queue calls always take audio priority over playlist videos.</CardDescription></CardHeader><CardContent className="space-y-5"><Switch id="sound-enabled" label="Enable call chime" checked={settings.enabled} onChange={(enabled) => setSettings((current) => ({ ...current, enabled }))} /><div className="grid gap-3 sm:grid-cols-2">{CHIME_PRESETS.map((preset) => <label key={preset.value} className="flex gap-3 rounded-lg border p-3"><input type="radio" name="sound" checked={settings.preset === preset.value} onChange={() => setSettings((current) => ({ ...current, preset: preset.value }))} /><span><b className="block">{preset.label}</b><span className="text-xs text-muted-foreground">{preset.description}</span></span></label>)}</div><NumberField id="volume" label="Volume (0–100%)" value={Math.round(settings.volume * 100)} min={0} max={100} onChange={(value) => setSettings((current) => ({ ...current, volume: Math.min(100, Math.max(0, value)) / 100 }))} /><Button variant="outline" onClick={() => { if (!settings.enabled) return toast.warning('Enable sound first.'); unlockAudio(); playConfiguredChime(settings, 'C-008'); }}><Play /> Test sound</Button></CardContent></Card></TabsContent>
       <TabsContent value="display"><Card><CardHeader><CardTitle>Display</CardTitle><CardDescription>Safe numeric ranges are enforced again when saved.</CardDescription></CardHeader><CardContent className="grid gap-4 sm:grid-cols-2"><Switch id="media-panel" label="Enable media panel" checked={settings.display.mediaEnabled} onChange={(value) => updateDisplay('mediaEnabled', value)} /><Switch id="captions" label="Show media captions" checked={settings.display.showCaptions} onChange={(value) => updateDisplay('showCaptions', value)} /><Switch id="progress" label="Show playlist progress" checked={settings.display.showProgress} onChange={(value) => updateDisplay('showProgress', value)} /><Switch id="auto-scroll" label="Automatic waiting-list scrolling" checked={settings.display.autoScroll} onChange={(value) => updateDisplay('autoScroll', value)} /><SelectField id="media-height" label="Media height" value={settings.display.mediaHeight} options={['compact', 'standard', 'large']} onChange={(value) => updateDisplay('mediaHeight', value)} /><SelectField id="transition" label="Playlist transition" value={settings.display.transition} options={['none', 'fade', 'slide']} onChange={(value) => updateDisplay('transition', value)} /><NumberField id="transition-duration" label="Transition duration (ms)" value={settings.display.transitionDurationMs} min={0} max={3_000} step={100} onChange={(value) => updateDisplay('transitionDurationMs', value)} /><NumberField id="default-duration" label="Default item duration (seconds)" value={settings.display.defaultItemDurationMs / 1_000} min={2} max={120} onChange={(value) => updateDisplay('defaultItemDurationMs', value * 1_000)} /><SelectField id="media-background" label="Media background" value={settings.display.background} options={['black', 'neutral', 'brand']} onChange={(value) => updateDisplay('background', value)} /><SelectField id="photo-fit-default" label="Default photo fit" value={settings.display.photoFit} options={['contain', 'cover']} onChange={(value) => updateDisplay('photoFit', value)} /><SelectField id="video-fit-default" label="Default video fit" value={settings.display.videoFit} options={['contain', 'cover']} onChange={(value) => updateDisplay('videoFit', value)} /><SelectField id="waiting-size" label="Waiting-list text size" value={settings.display.waitingTextSize} options={['compact', 'standard', 'large']} onChange={(value) => updateDisplay('waitingTextSize', value)} /><NumberField id="scroll-speed" label="Auto-scroll speed (pixels/second)" value={settings.display.autoScrollSpeed} min={8} max={80} onChange={(value) => updateDisplay('autoScrollSpeed', value)} /></CardContent></Card></TabsContent>
       <TabsContent value="playlist"><Card><CardHeader><CardTitle>Media Playlist</CardTitle><CardDescription>Upload approved files to the server gallery or use HTTPS and same-origin media URLs. Saving updates every kiosk device.</CardDescription></CardHeader><CardContent className="space-y-4"><KioskMediaLibrary onUse={addAsset} /><div className="flex flex-wrap gap-2"><Button variant="outline" onClick={() => add('announcement')}><Megaphone /> Add announcement</Button><Button variant="outline" onClick={() => add('photo')}><Image /> Add photo by URL</Button><Button variant="outline" onClick={() => add('video')}><Video /> Add video by URL</Button><Button variant="outline" onClick={() => setConfirmReset(true)}><RotateCcw /> Reset playlist</Button></div>{ordered.length === 0 && <p className="rounded-lg border border-dashed p-6 text-center text-muted-foreground">The playlist is empty. The public display will show its default placeholder.</p>}<div className="grid gap-4 lg:grid-cols-[18rem_1fr]"><ul className="space-y-2">{ordered.map((item, index) => <li key={item.id} className={`rounded-lg border p-2 ${selectedId === item.id ? 'border-primary bg-primary/5' : ''}`}><button className="w-full text-left" onClick={() => setSelectedId(item.id)}><span className="block truncate font-medium">{item.label}</span><span className="text-xs capitalize text-muted-foreground">{item.type} · {item.enabled ? 'active' : 'disabled'}</span></button><div className="mt-2 flex gap-1"><Button size="icon" variant="ghost" aria-label={`Move ${item.label} up`} disabled={index === 0} onClick={() => move(item.id, -1)}><ArrowUp /></Button><Button size="icon" variant="ghost" aria-label={`Move ${item.label} down`} disabled={index === ordered.length - 1} onClick={() => move(item.id, 1)}><ArrowDown /></Button><Button size="icon" variant="ghost" aria-label={`Preview ${item.label}`} onClick={() => setSelectedId(item.id)}><Eye /></Button><Button size="icon" variant="ghost" aria-label={`Remove ${item.label}`} onClick={() => remove(item.id)}><Trash2 /></Button></div></li>)}</ul><div>{selected !== undefined ? <><ItemEditor item={selected} onChange={updateItem} /><div className="mt-4"><h3 className="mb-2 font-semibold">Item preview</h3><MediaPlaylistPanel settings={settings} previewItem={selected} /></div></> : <p className="text-sm text-muted-foreground">Select an item to edit and preview it.</p>}</div></div></CardContent></Card></TabsContent>
       <TabsContent value="preview"><Card><CardHeader><CardTitle>Complete layout preview</CardTitle><CardDescription>Representative 16:9 preview with sample Guidance and Clinic data. It does not call queue actions.</CardDescription></CardHeader><CardContent><TvPreview settings={settings} /></CardContent></Card></TabsContent>
+      </TabSections>
     </Tabs>
     <ConfirmDialog open={confirmReset} title="Reset media playlist?" description="This removes all playlist items. Sound and display settings are preserved; use Save to apply the reset." confirmLabel="Reset playlist" onConfirm={resetPlaylist} onCancel={() => setConfirmReset(false)} />
   </main>;

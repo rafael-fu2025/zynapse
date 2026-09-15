@@ -28,12 +28,15 @@
  */
 import { zodResolver } from '@hookform/resolvers/zod';
 import {
+  CalendarClock,
   CalendarPlus,
   Check,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
   Eye,
+  History,
+  Inbox,
   Loader2,
   Pencil,
   QrCode,
@@ -85,7 +88,8 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Tabs, TabsContent } from '@/components/ui/tabs';
+import { TabSections, type TabSection } from '@/components/TabSections';
 import { useTabParam } from '@/hooks/useTabParam';
 import { useCan } from '@/hooks/useCan';
 import { useUrlFilter } from '@/hooks/useUrlFilter';
@@ -708,8 +712,16 @@ export default function AppointmentsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- openAndUpcoming closes over `now`
   }, [rows, tab, now]);
 
+  // Filter buckets with live counts — client-side views of the loaded
+  // rows, so the counts update as data arrives.
+  const tabs: readonly TabSection[] = [
+    { value: 'all', label: `All (${counts.all})`, icon: Inbox },
+    { value: 'upcoming', label: `Upcoming (${counts.upcoming})`, icon: CalendarClock },
+    { value: 'past', label: `Past (${counts.past})`, icon: History },
+  ];
+
   return (
-    <main className="mx-auto max-w-7xl space-y-4 p-6">
+    <main className="space-y-4 p-6">
       <Tabs value={tab} onValueChange={(v) => setTab(v)} className="space-y-4">
         <PageHeader
           title="Appointments"
@@ -730,13 +742,6 @@ export default function AppointmentsPage() {
               )}
             </Dialog>
           }
-          tabs={
-            <TabsList>
-              <TabsTrigger value="all">All ({counts.all})</TabsTrigger>
-              <TabsTrigger value="upcoming">Upcoming ({counts.upcoming})</TabsTrigger>
-              <TabsTrigger value="past">Past ({counts.past})</TabsTrigger>
-            </TabsList>
-          }
           toolbar={
             /* Live-search toolbar — same layout as the Patients page: a
                bordered card with the magnifier icon INSIDE the input on the
@@ -750,8 +755,8 @@ export default function AppointmentsPage() {
                   <Input
                     id="appt-search"
                     aria-label="Search appointments"
-                    placeholder="Search number, name, ID, provider, date…"
-                    className="pl-9"
+                    placeholder="Search number, name, ID, provider, date"
+                    className="pl-9 placeholder:truncate"
                     value={searchDraft}
                     onChange={(e) => setSearch(e.target.value)}
                   />
@@ -779,6 +784,7 @@ export default function AppointmentsPage() {
           }
         />
 
+        <TabSections tabs={tabs} ariaLabel="Appointment filters">
         <TabsContent value={tab} className="space-y-3">
           <section className="hidden overflow-hidden rounded-xl border bg-card md:block">
             <Table>
@@ -880,6 +886,7 @@ export default function AppointmentsPage() {
             </nav>
           )}
         </TabsContent>
+        </TabSections>
       </Tabs>
 
       {editing !== null && (

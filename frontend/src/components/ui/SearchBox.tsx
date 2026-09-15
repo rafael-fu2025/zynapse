@@ -37,6 +37,11 @@ export function SearchBox({
   isFetching = false,
   className,
 }: SearchBoxProps) {
+  // The right-hand icon zone (spinner / clear X) is empty until the user
+  // types or a fetch is in flight — reserve its 36px ONLY then, so the
+  // placeholder gets the full width on an idle field instead of
+  // truncating ~36px early with dead space after it.
+  const reserveRightZone = isFetching || value !== '';
   return (
     <div className={cn('relative min-w-0', className)}>
       <Search
@@ -47,8 +52,14 @@ export function SearchBox({
         id={inputId}
         type="search"
         // Hide the native Webkit clear/decoration button so we don't get
-        // a second X next to our custom one.
-        className="h-9 pl-9 pr-9 [&::-webkit-search-cancel-button]:appearance-none [&::-webkit-search-decoration]:appearance-none"
+        // a second X next to our custom one. `placeholder:truncate` is
+        // the full trio (overflow-hidden + text-ellipsis + nowrap) —
+        // `text-overflow` alone renders nothing without `overflow:
+        // hidden`, which is why the placeholder hard-cropped before.
+        className={cn(
+          'h-9 pl-9 placeholder:truncate [&::-webkit-search-cancel-button]:appearance-none [&::-webkit-search-decoration]:appearance-none',
+          reserveRightZone ? 'pr-9' : 'pr-3',
+        )}
         value={value}
         onChange={(event) => onValueChange(event.target.value)}
         placeholder={placeholder}
