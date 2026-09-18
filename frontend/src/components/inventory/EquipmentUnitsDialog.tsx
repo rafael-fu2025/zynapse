@@ -1,5 +1,6 @@
 import { ChevronDown, Loader2 } from 'lucide-react';
 import { useState } from 'react';
+import { CountBadge } from '@/components/CountBadge';
 import { Button } from '@/components/ui/button';
 import {
   DialogContent,
@@ -169,7 +170,8 @@ function UnitRow({
         <details className="mt-2">
           <summary className="cursor-pointer list-none text-xs text-muted-foreground hover:text-foreground">
             <ChevronDown className="mr-1 inline-block size-3" aria-hidden />
-            History ({log.length})
+            History
+            <CountBadge count={log.length} className="ml-1.5" />
           </summary>
           <ul className="mt-1 space-y-1 border-l pl-3">
             {log.map((entry) => (

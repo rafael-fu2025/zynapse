@@ -30,7 +30,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { NavLink, useLocation } from 'react-router-dom';
-import { Badge } from '@/components/ui/badge';
+import { CountBadge } from '@/components/CountBadge';
 import {
   Sidebar,
   SidebarContent,
@@ -66,9 +66,10 @@ interface NavItem {
    */
   hideForAdmin?: boolean;
   /**
-   * Extract count badge from dashboard counters.
+   * Extract count badge from dashboard counters. Color is owned by
+   * CountBadge (adaptive tint) — call sites only supply the number.
    */
-  badge?: (c: ReturnType<typeof useDashboardCounters>['data']) => { count: number; variant?: 'default' | 'destructive' | 'outline' | 'secondary' | 'warning' | 'info' } | null;
+  badge?: (c: ReturnType<typeof useDashboardCounters>['data']) => { count: number } | null;
 }
 
 function hasAnyPermission(state: ReturnType<typeof useAuthStore.getState>, perm: string | string[] | null): boolean {
@@ -104,7 +105,7 @@ const NAV_SECTIONS: ReadonlyArray<{ title: string; items: ReadonlyArray<NavItem>
         permission: 'clinic.encounters.read',
         badge: (c) => {
           const n = c?.clinic?.open_encounters ?? 0;
-          return n > 0 ? { count: n, variant: 'info' } : null;
+          return n > 0 ? { count: n } : null;
         },
       },
       { label: 'Appointments', href: '/appointments', icon: CalendarClock, permission: 'clinic.appointments.read' },
@@ -123,7 +124,7 @@ const NAV_SECTIONS: ReadonlyArray<{ title: string; items: ReadonlyArray<NavItem>
         permission: 'counselling.records.read',
         badge: (c) => {
           const n = c?.counselling?.open_sessions ?? 0;
-          return n > 0 ? { count: n, variant: 'info' } : null;
+          return n > 0 ? { count: n } : null;
         },
       },
     ],
@@ -138,7 +139,7 @@ const NAV_SECTIONS: ReadonlyArray<{ title: string; items: ReadonlyArray<NavItem>
         permission: 'referrals.read',
         badge: (c) => {
           const n = (c?.referrals?.submitted ?? 0) + (c?.referrals?.under_review ?? 0);
-          return n > 0 ? { count: n, variant: 'warning' } : null;
+          return n > 0 ? { count: n } : null;
         },
       },
     ],
@@ -153,7 +154,7 @@ const NAV_SECTIONS: ReadonlyArray<{ title: string; items: ReadonlyArray<NavItem>
         permission: 'facilities.units.read',
         badge: (c) => {
           const risk = c?.facilities?.at_risk ?? 0;
-          return risk > 0 ? { count: risk, variant: 'destructive' } : null;
+          return risk > 0 ? { count: risk } : null;
         },
       },
       // Waste categories now live on their own screen (no longer a
@@ -280,12 +281,10 @@ export function AppSidebar() {
                             const b = item.badge(counters.data);
                             if (!b || b.count <= 0) return null;
                             return (
-                              <Badge
-                                variant={b.variant ?? 'default'}
-                                className="ml-auto px-1.5 py-0 text-[10px] font-mono h-4 shrink-0 group-data-[collapsible=icon]:hidden"
-                              >
-                                {b.count}
-                              </Badge>
+                              <CountBadge
+                                count={b.count}
+                                className="ml-auto group-data-[collapsible=icon]:hidden"
+                              />
                             );
                           })()}
                         </NavLink>

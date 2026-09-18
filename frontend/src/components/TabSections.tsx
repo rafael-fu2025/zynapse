@@ -52,7 +52,9 @@ export function TabSections({
         {tabs.map((t) => (
           <TabsTrigger key={t.value} value={t.value}>
             {t.label}
-            {t.badge}
+            {t.badge !== undefined && (
+              <span className="ml-1.5 inline-flex shrink-0">{t.badge}</span>
+            )}
           </TabsTrigger>
         ))}
       </TabsList>

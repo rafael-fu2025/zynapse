@@ -1432,7 +1432,7 @@ export default function ClinicPage() {
   const closedCount = counters.data?.clinic?.closed_encounters ?? 0;
   const tabs: readonly TabSection[] = [
     { value: 'queue', label: 'Queue (today)', icon: ListOrdered, badge: <CountBadge count={waiting} /> },
-    { value: 'closed', label: 'Closed', icon: CheckCircle2, badge: <CountBadge count={closedCount} variant="secondary" /> },
+    { value: 'closed', label: 'Closed', icon: CheckCircle2, badge: <CountBadge count={closedCount} /> },
     { value: 'staff', label: 'Staff schedules', icon: CalendarClock },
   ];
 

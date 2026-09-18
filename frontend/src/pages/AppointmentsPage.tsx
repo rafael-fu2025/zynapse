@@ -89,6 +89,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { Tabs, TabsContent } from '@/components/ui/tabs';
+import { CountBadge } from '@/components/CountBadge';
 import { TabSections, type TabSection } from '@/components/TabSections';
 import { useTabParam } from '@/hooks/useTabParam';
 import { useCan } from '@/hooks/useCan';
@@ -713,11 +714,12 @@ export default function AppointmentsPage() {
   }, [rows, tab, now]);
 
   // Filter buckets with live counts — client-side views of the loaded
-  // rows, so the counts update as data arrives.
+  // rows, so the counts update as data arrives. Zero counts hide the
+  // badge (CountBadge suppression), matching the other tabs.
   const tabs: readonly TabSection[] = [
-    { value: 'all', label: `All (${counts.all})`, icon: Inbox },
-    { value: 'upcoming', label: `Upcoming (${counts.upcoming})`, icon: CalendarClock },
-    { value: 'past', label: `Past (${counts.past})`, icon: History },
+    { value: 'all', label: 'All', icon: Inbox, badge: <CountBadge count={counts.all} /> },
+    { value: 'upcoming', label: 'Upcoming', icon: CalendarClock, badge: <CountBadge count={counts.upcoming} /> },
+    { value: 'past', label: 'Past', icon: History, badge: <CountBadge count={counts.past} /> },
   ];
 
   return (

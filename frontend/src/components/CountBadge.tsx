@@ -1,25 +1,42 @@
 /**
- * CountBadge — the tab-level counterpart of the sidebar's nav-item
- * counter. Same compact styling (10px mono, h-4) so a module's number
- * reads identically in the sidebar and on its tab, and the same
- * zero-suppression rule: nothing to count, nothing to render.
+ * CountBadge — the app-wide counter badge: sidebar nav rows, TabSections
+ * labels, and dialog section headings all render their counts through
+ * this one component so the numeral reads identically everywhere.
  *
- * The ml-1.5/lg:ml-0 pair slots it after the label in TabSections —
- * inline spacing on the mobile pill bar, none on the desktop rail
- * where TabSections already pushes badges to the right edge.
+ * `count` also carries the Counselling "now serving" ticket number (a
+ * string like "G-012"), which renders as the same chip stretched to a
+ * stadium — one geometry for every live indicator in the shell.
+ *
+ * Shape is a perfect circle at one digit (16px, matching the bell dot)
+ * that grows into a stadium for more digits. The fill is a solid
+ * muted-foreground chip with a background-colored numeral: mid-gray is
+ * the one tone that keeps ≥2.8:1 separation from every surface the
+ * badge sits on — maroon rail, dark rail, white active pill, muted
+ * panels, white cards — so one color serves all of them (an earlier
+ * 15% adaptive tint merged into the rails). No per-call-site colors.
+ *
+ * Spacing is owned by the call site via `className` (TabSections wraps
+ * the badge; the sidebar pushes it to the row edge with ml-auto).
  */
-import { Badge, type BadgeProps } from '@/components/ui/badge';
+import { cn } from '@/lib/utils';
+import { Badge } from '@/components/ui/badge';
 
 export function CountBadge({
   count,
-  variant = 'info',
+  className,
 }: {
-  count: number;
-  variant?: BadgeProps['variant'];
+  count: number | string;
+  className?: string;
 }): JSX.Element | null {
-  if (count <= 0) return null;
+  if (count === '' || (typeof count === 'number' && count <= 0)) return null;
   return (
-    <Badge variant={variant} className="ml-1.5 h-4 shrink-0 px-1.5 py-0 font-mono text-[10px] lg:ml-0">
+    <Badge
+      variant="outline"
+      className={cn(
+        'h-4 min-w-4 justify-center rounded-full border-transparent bg-muted-foreground px-1 py-0 font-mono text-[10px] text-background',
+        className,
+      )}
+    >
       {count}
     </Badge>
   );

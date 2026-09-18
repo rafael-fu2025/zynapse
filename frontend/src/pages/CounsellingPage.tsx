@@ -24,7 +24,6 @@ import {
 } from 'lucide-react';
 import { useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Badge } from '@/components/ui/badge';
 import { CountBadge } from '@/components/CountBadge';
 import { PageHeader } from '@/components/PageHeader';
 import { TabSections, type TabSection } from '@/components/TabSections';
@@ -98,9 +97,7 @@ export default function CounsellingPage() {
       // Live "now serving" number while someone is called or in
       // session; otherwise the waiting backlog count.
       badge: active?.queue_number !== undefined ? (
-        <Badge variant="info" className="ml-1.5 h-4 shrink-0 px-1.5 py-0 font-mono text-[10px] lg:ml-0">
-          {active.queue_number}
-        </Badge>
+        <CountBadge count={active.queue_number} />
       ) : <CountBadge count={waiting} />,
     }] : []),
     ...(canSeeFollowups ? [{
