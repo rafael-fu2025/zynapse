@@ -58,14 +58,17 @@
   --card-foreground: oklch(0.985 0 0);
   --popover: oklch(0.205 0 0);
   --popover-foreground: oklch(0.985 0 0);
-  /* Dark mode lightens the brand maroon: #800000 on near-black surfaces
-     sits at ~1.9:1 contrast, which rendered links, focus rings and
-     progress fills effectively invisible. #d47575 keeps the FU hue at
-     ~4.2:1 on cards; the foreground flips dark so text on primary
-     buttons passes AA. The sidebar rail keeps #800000 via its own
-     --sidebar tokens in both schemes. */
-  --primary: #d47575;
-  --primary-foreground: #1a0808;
+  /* Dark mode inverts the primary pair (2026-09): white fill with brand
+     maroon #800000 text (~10:1). Earlier iterations — salmon #d47575
+     fill with dark #1a0808 text (6.1:1), then white text (3.2:1, under
+     AA for body-size) — were tried and rejected; #800000 as the fill
+     itself measured ~1.9:1 on near-black, which is why the fill went
+     light instead. Side effects to know: text-primary accents (icons,
+     links) render white in dark, while the salmon hue survives as an
+     accent in --ring/--chart-1. The sidebar rail keeps #800000 via its
+     own --sidebar tokens in both schemes. */
+  --primary: oklch(0.985 0 0);
+  --primary-foreground: #800000;
   --secondary: oklch(0.269 0 0);
   --secondary-foreground: oklch(0.985 0 0);
   --muted: oklch(0.269 0 0);
@@ -82,14 +85,16 @@
   --chart-3: oklch(0.556 0 0);
   --chart-4: oklch(0.85 0 0);
   --chart-5: oklch(0.4 0 0);
-  --sidebar: #800000;
+  /* Dark sidebar: the rail drops the light-mode maroon for the page
+     background tone, so the shell reads as one dark canvas separated
+     by hairlines. Active rows become the white pill + maroon text the
+     TabSections sidebars use (via --sidebar-primary); hover is a white
+     tint. The light-mode rail keeps #800000 with its #9a1f1f accent. */
+  --sidebar: oklch(0.145 0 0);
   --sidebar-foreground: oklch(0.985 0 0);
   --sidebar-primary: oklch(0.985 0 0);
   --sidebar-primary-foreground: #800000;
-  /* Accent is a LIGHTER maroon than the #800000 rail so hover and
-     active nav items visibly highlight (previously it matched the
-     background exactly, so hover/active had no visible effect). */
-  --sidebar-accent: #9a1f1f;
+  --sidebar-accent: oklch(1 0 0 / 10%);
   --sidebar-accent-foreground: oklch(0.985 0 0);
   --sidebar-border: oklch(1 0 0 / 14%);
   --sidebar-ring: oklch(0.985 0 0);
