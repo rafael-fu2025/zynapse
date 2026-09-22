@@ -18,17 +18,33 @@ test('login → dashboard → clinic → audit (screenshots)', async ({ page, re
 
   await signInLive(page);
 
-  // Self-sufficient precondition: schedule one appointment so the
-  // provider (admin) has an `appointment.assigned` in-app row after the
-  // opportunistic notification drain (10s cooldown). The dev registry
-  // always holds consolidated student users starting `2026`.
+  // Self-sufficient preconditions. The demo registry seeders were removed
+  // (2026-09-16), so this spec provisions its own student via the admin
+  // API and drives the flow through that account — no seeded data needed
+  // beyond the DevUserSeeder admin.
   const bearer = await apiToken();
+  const studentNumber = '2026' + String(Math.floor(Math.random() * 900000) + 100000);
+  const student = await request.post(`${apiOrigin()}/api/v1/clinic/students`, {
+    headers: { authorization: `Bearer ${bearer}` },
+    data: {
+      student_number: studentNumber,
+      first_name: 'Fullflow',
+      last_name: 'E2E',
+      course: 'BSIT',
+      year_level: 1,
+    },
+  });
+  expect([200, 201, 409], 'student precondition status').toContain(student.status());
+
+  // Schedule one appointment so the provider (admin) has an
+  // `appointment.assigned` in-app row after the opportunistic notification
+  // drain (10s cooldown).
   const scheduledAt = new Date(Date.now() + 3 * 24 * 3600 * 1000)
     .toISOString().slice(0, 19).replace('T', ' ');
   const created = await request.post(`${apiOrigin()}/api/v1/clinic/appointments`, {
     headers: { authorization: `Bearer ${bearer}` },
     data: {
-      patient_school_id: '20261970',
+      patient_school_id: studentNumber,
       provider_user_id: 1,
       scheduled_at: scheduledAt,
       reason: 'full-flow notification seed',
@@ -57,7 +73,7 @@ test('login → dashboard → clinic → audit (screenshots)', async ({ page, re
   const checkin = await request.post(`${apiOrigin()}/api/v1/clinic/checkins`, {
     headers: { authorization: `Bearer ${bearer}` },
     data: {
-      identifier: '20261970',
+      identifier: studentNumber,
       method: 'manual',
       destination: 'clinic',
       purpose: 'Consultation',
@@ -69,7 +85,7 @@ test('login → dashboard → clinic → audit (screenshots)', async ({ page, re
   await page.waitForURL(/\/clinic$/);
   // The queue row identifies by patient identifier + station (the
   // purpose lives on the encounter, not the queue row).
-  await expect(page.getByText(/20261970/i).first()).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByText(studentNumber).first()).toBeVisible({ timeout: 15_000 });
   await page.screenshot({ path: 'e2e/artifacts/03-clinic.png', fullPage: true });
 
   // Audit — drained auth events should be listed.
@@ -106,7 +122,7 @@ test('login → dashboard → clinic → audit (screenshots)', async ({ page, re
   await page.waitForURL(/\/$/);
   await page.getByRole('link', { name: /appointments/i }).first().click();
   await page.waitForURL(/\/appointments$/);
-  await expect(page.getByText(/20261970/i).first()).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByText(studentNumber).first()).toBeVisible({ timeout: 15_000 });
   await page.screenshot({ path: 'e2e/artifacts/06-appointments.png', fullPage: true });
 
   // Admin users (Phase 10 page) — nurse account with its group chip.

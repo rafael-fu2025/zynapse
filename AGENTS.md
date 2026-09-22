@@ -65,8 +65,6 @@ CI (`.github/workflows/ci.yml`) runs three parallel jobs and mirrors these exact
   document's or module's structure, match its depth and richness — do not emit a
   section-for-section empty clone.
 - The `employees` endpoint silently caps `limit` near 200; do not request 500.
-- Demo/seed accounts are dev-only and gated out of production. `CREDENTIALS.md`
-  is **stale** (wrong emails, passwords, and table names) — trust the seeders in
-  `backend/app/Database/Seeds/` instead.
-- Do not commit or push unless explicitly asked. Working branch: `feat/bmg`.
+- Demo/seed accounts are dev-only and gated out of production.
+- Do not commit or push unless explicitly asked. Working branch: `feat/superadmin`.
 - Don't add dependencies to any tier without asking first.

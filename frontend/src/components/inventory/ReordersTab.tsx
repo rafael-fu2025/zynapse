@@ -12,7 +12,7 @@ import {
 import { useState } from 'react';
 import { ConfirmDialog, type ConfirmAction } from '@/components/ConfirmDialog';
 import { MobileCardList, MobileCard, MobileCardField, MobileCardActions } from '@/components/MobileCardList';
-import { QueryErrorRow } from '@/components/QueryErrorState';
+import { TableStateRows } from '@/components/TableStates';
 import { SearchBox, highlightMatch } from '@/components/ui/SearchBox';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -115,13 +115,14 @@ export function ReordersTab() {
 
   return (
     <div className="space-y-4">
-      <section className="flex flex-wrap items-center justify-between gap-3 rounded-xl border bg-card p-3">
-        <div className="flex flex-1 flex-wrap items-center gap-3">
+      <section className="flex flex-wrap items-end justify-between gap-3 rounded-xl border bg-card p-3">
+        <div className="flex flex-1 flex-wrap items-end gap-3">
           <SearchBox
             value={q}
             onValueChange={setQ}
             placeholder="Search by medicine or note"
             inputId="reorders-search"
+            label="Search"
             ariaLabel="Search purchase requests by medicine or note"
             isFetching={list.isFetching && list.data !== undefined}
             className="w-full sm:w-64 lg:w-96"
@@ -165,7 +166,7 @@ export function ReordersTab() {
       </section>
 
       <section className="hidden overflow-hidden rounded-xl border bg-card md:block">
-        <Table>
+        <Table ariaLabel="Purchase requests with urgency and status">
           <TableHeader className="bg-muted/50">
             <TableRow>
               <TableHead className="px-3">#</TableHead>
@@ -179,27 +180,41 @@ export function ReordersTab() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {list.isLoading && (
-              <TableRow>
-                <TableCell colSpan={8} className="px-3 py-6 text-center text-muted-foreground">
-                  <Loader2 className="mx-auto size-4 animate-spin" />
-                </TableCell>
-              </TableRow>
-            )}
-            {!list.isLoading && rows.length === 0 && (
-              <TableRow>
-                <TableCell colSpan={8} className="px-3 py-6 text-center text-muted-foreground">
-                  {debouncedQ !== ''
+            <TableStateRows
+              colSpan={8}
+              isLoading={list.isLoading}
+              isError={list.isError}
+              isEmpty={rows.length === 0}
+              onRetry={() => void list.refetch()}
+              pending={list.isFetching}
+              errorMessage="Failed to load purchase requests."
+              loadingLabel="Loading purchase requests"
+              empty={{
+                title: 'No purchase requests.',
+                description: 'Requests are filed automatically when stock falls to the reorder threshold.',
+              }}
+              noResults={{
+                title:
+                  debouncedQ !== ''
                     ? `No purchase requests match "${debouncedQ}".`
-                    : statusFilter === 'all'
-                      ? 'No purchase requests.'
-                      : `No ${statusLabel(statusFilter)} requests.`}
-                </TableCell>
-              </TableRow>
-            )}
-            {list.isError && !list.isLoading && (
-              <QueryErrorRow colSpan={8} message="Failed to load purchase requests." onRetry={() => void list.refetch()} pending={list.isFetching} />
-            )}
+                    : `No ${statusLabel(statusFilter)} requests.`,
+                description: 'Adjust or clear the filters to see more.',
+                action: (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      setQ('');
+                      setStatusFilter('all');
+                      reset();
+                    }}
+                  >
+                    Clear filters
+                  </Button>
+                ),
+              }}
+              hasFilters={debouncedQ !== '' || statusFilter !== 'all'}
+            />
             {rows.map((r, idx) => (
               <TableRow key={r.id} {...reorderRowNav.getRowProps(idx)}>
                 <TableCell className="px-3 font-mono text-xs">

@@ -31,10 +31,6 @@ final class PermissionsAndGroupsSeeder extends Seeder
         // 2026-09 RBAC rework: grant/revoke of privileged roles
         // (superadmin, clinic_admin, guidance_admin, bmg_admin).
         'rbac.privileged.manage'                     => 'platform',
-        // 2026-09 external API apps (D4): superadmin-only management
-        // and read of the developer-portal surface.
-        'api_apps.manage'                            => 'platform',
-        'api_apps.read'                              => 'platform',
         'portal.appointments.read'                   => 'core',
         'portal.appointments.manage'                 => 'core',
         'portal.queue.read'                          => 'core',
@@ -62,7 +58,6 @@ final class PermissionsAndGroupsSeeder extends Seeder
         'clinic.treatments.read'                     => 'clinic',
         'clinic.triage.use'                          => 'clinic',
         'clinic.inventory.forecast'                  => 'clinic',
-        'clinic.departments.manage'                  => 'clinic',
         'clinic.schedules.manage'                    => 'clinic',
 
         // Notifications (in-app)

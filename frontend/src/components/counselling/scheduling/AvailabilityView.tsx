@@ -1,9 +1,9 @@
 import { useState } from 'react';
-import { CalendarDays, List, Loader2, Plus, Trash2 } from 'lucide-react';
+import { CalendarDays, List, Plus, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ConfirmDialog, type ConfirmAction } from '@/components/ConfirmDialog';
 import { Dialog } from '@/components/ui/dialog';
-import { QueryErrorRow } from '@/components/QueryErrorState';
+import { TableStateBlock, TableStateRows } from '@/components/TableStates';
 import {
   Table,
   TableBody,
@@ -31,6 +31,7 @@ export function AvailabilityView({ view, onViewChange }: AvailabilityViewProps) 
   const [confirm, setConfirm] = useState<ConfirmAction | null>(null);
 
   const availability = useAvailability();
+  const availabilityRows = availability.data ?? [];
   const removeSlot = useRemoveSlot();
 
   function confirmRemove(w: Availability) {
@@ -76,7 +77,7 @@ export function AvailabilityView({ view, onViewChange }: AvailabilityViewProps) 
       </header>
 
       {view === 'list' && (
-        <Table>
+        <Table ariaLabel="Weekly availability windows">
           <TableHeader className="bg-muted/50">
             <TableRow>
               <TableHead className="px-3">Day</TableHead>
@@ -86,23 +87,20 @@ export function AvailabilityView({ view, onViewChange }: AvailabilityViewProps) 
             </TableRow>
           </TableHeader>
           <TableBody>
-            {availability.isLoading && (
-              <TableRow>
-                <TableCell colSpan={4} className="px-3 py-6 text-center text-muted-foreground">
-                  <Loader2 className="mx-auto size-4 animate-spin" />
-                </TableCell>
-              </TableRow>
-            )}
-            {!availability.isLoading && (availability.data?.length ?? 0) === 0 && (
-              <TableRow>
-                <TableCell colSpan={4} className="px-3 py-6 text-center text-muted-foreground">
-                  No active windows. Add one to accept bookings.
-                </TableCell>
-              </TableRow>
-            )}
-            {availability.isError && !availability.isLoading && (
-              <QueryErrorRow colSpan={4} message="Failed to load availability windows." onRetry={() => void availability.refetch()} pending={availability.isFetching} />
-            )}
+            <TableStateRows
+              colSpan={4}
+              isLoading={availability.isLoading}
+              isError={availability.isError}
+              isEmpty={availabilityRows.length === 0}
+              onRetry={() => void availability.refetch()}
+              pending={availability.isFetching}
+              errorMessage="Failed to load availability windows."
+              loadingLabel="Loading availability windows"
+              empty={{
+                title: 'No active windows.',
+                description: 'Add one to accept bookings.',
+              }}
+            />
             {availability.data?.map((w) => (
               <TableRow key={w.id}>
                 <TableCell className="px-3 text-xs font-medium">{DAY_NAMES[w.day_of_week]}</TableCell>
@@ -131,25 +129,20 @@ export function AvailabilityView({ view, onViewChange }: AvailabilityViewProps) 
 
       {view === 'calendar' && (
         <div>
-          {availability.isLoading && (
-            <div className="px-3 py-6 text-center text-muted-foreground">
-              <Loader2 className="mx-auto size-4 animate-spin" />
-            </div>
-          )}
-          {!availability.isLoading && !availability.isError && (availability.data?.length ?? 0) === 0 && (
-            <p className="px-3 py-6 text-center text-sm text-muted-foreground">
-              No active windows. Add one to accept bookings.
-            </p>
-          )}
-          {availability.isError && !availability.isLoading && (
-            <div className="space-y-2 px-3 py-6 text-center">
-              <p className="text-sm text-muted-foreground">Failed to load availability windows.</p>
-              <Button size="sm" variant="outline" onClick={() => void availability.refetch()} disabled={availability.isFetching}>
-                {availability.isFetching && <Loader2 className="animate-spin" />} Retry
-              </Button>
-            </div>
-          )}
-          {!availability.isLoading && !availability.isError && (availability.data?.length ?? 0) > 0 && (
+          <TableStateBlock
+            isLoading={availability.isLoading}
+            isError={availability.isError}
+            isEmpty={availabilityRows.length === 0}
+            onRetry={() => void availability.refetch()}
+            pending={availability.isFetching}
+            errorMessage="Failed to load availability windows."
+            loadingLabel="Loading availability windows"
+            empty={{
+              title: 'No active windows.',
+              description: 'Add one to accept bookings.',
+            }}
+          />
+          {!availability.isLoading && !availability.isError && availabilityRows.length > 0 && (
             <AvailabilityCalendar
               windows={availability.data ?? []}
               onRemove={canMutate ? confirmRemove : () => undefined}

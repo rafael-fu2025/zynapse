@@ -2,14 +2,13 @@ import { useState } from 'react';
 import {
   ChevronLeft,
   ChevronRight,
-  Loader2,
   Lock,
   Plus,
 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Dialog } from '@/components/ui/dialog';
-import { QueryErrorRow } from '@/components/QueryErrorState';
+import { TableStateRows } from '@/components/TableStates';
 import {
   Sheet,
   SheetContent,
@@ -41,6 +40,7 @@ export function SessionsTab({ selectedId, onSelect }: SessionsTabProps) {
   const [mobileSheetOpen, setMobileSheetOpen] = useState(false);
 
   const sessions = useSessions(cursor, 25);
+  const sessionRows = sessions.data?.data ?? [];
 
   function nextPage() {
     if (sessions.data?.next !== null && sessions.data?.next !== undefined) {
@@ -84,7 +84,7 @@ export function SessionsTab({ selectedId, onSelect }: SessionsTabProps) {
           <header className="border-b px-4 py-3 text-sm font-semibold text-foreground">
             All Sessions
           </header>
-          <Table>
+          <Table ariaLabel="Counselling sessions and their notes">
             <TableHeader className="bg-muted/50">
               <TableRow>
                 <TableHead className="px-3">#</TableHead>
@@ -95,28 +95,20 @@ export function SessionsTab({ selectedId, onSelect }: SessionsTabProps) {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {sessions.isLoading && (
-                <TableRow>
-                  <TableCell colSpan={5} className="px-3 py-8 text-center text-muted-foreground">
-                    <Loader2 className="mx-auto size-5 animate-spin" />
-                  </TableCell>
-                </TableRow>
-              )}
-              {!sessions.isLoading && (sessions.data?.data.length ?? 0) === 0 && (
-                <TableRow>
-                  <TableCell colSpan={5} className="px-3 py-8 text-center text-muted-foreground">
-                    No sessions found.
-                  </TableCell>
-                </TableRow>
-              )}
-              {sessions.isError && !sessions.isLoading && (
-                <QueryErrorRow
-                  colSpan={5}
-                  message="Failed to load sessions."
-                  onRetry={() => void sessions.refetch()}
-                  pending={sessions.isFetching}
-                />
-              )}
+              <TableStateRows
+                colSpan={5}
+                isLoading={sessions.isLoading}
+                isError={sessions.isError}
+                isEmpty={sessionRows.length === 0}
+                onRetry={() => void sessions.refetch()}
+                pending={sessions.isFetching}
+                errorMessage="Failed to load sessions."
+                loadingLabel="Loading sessions"
+                empty={{
+                  title: 'No sessions found.',
+                  description: 'Sessions appear here when a Guidance queue entry is started.',
+                }}
+              />
               {sessions.data?.data.map((s) => {
                 const isSelected = selectedId === s.id;
                 return (

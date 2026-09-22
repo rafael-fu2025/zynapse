@@ -37,7 +37,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { PageHeader } from '@/components/PageHeader';
 import { Dialog } from '@/components/ui/dialog';
-import { QueryErrorRow } from '@/components/QueryErrorState';
+import { TableStateRows } from '@/components/TableStates';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
@@ -76,6 +76,7 @@ import { fmtUtcToApp } from '@/utils/date';
 export default function KioskPage() {
   const k = useKioskController();
   const trail = useCheckinsToday();
+  const trailRows = trail.data ?? [];
   const [openCamera, setOpenCamera] = useState(false);
   const [editStation, setEditStation] = useState(false);
   const modalOpen = hasQueueAssignment(k.result);
@@ -115,7 +116,7 @@ export default function KioskPage() {
   }, [trail.data]);
 
   return (
-    <main className="mx-auto max-w-7xl space-y-4 p-6">
+    <main className="space-y-4 p-6">
       <ScanFlashOverlay flash={k.flash} />
       <PageHeader
         title="Check-in Kiosk"
@@ -290,7 +291,7 @@ export default function KioskPage() {
           </span>
         </header>
         <div className="max-h-[480px] overflow-y-auto">
-          <Table>
+          <Table ariaLabel="Today's kiosk check-ins">
             <TableHeader className="bg-muted/50">
               <TableRow>
                 <TableHead className="px-3">Patient</TableHead>
@@ -300,26 +301,36 @@ export default function KioskPage() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {trail.isLoading && (
-                <TableRow>
-                  <TableCell colSpan={4} className="px-3 py-6 text-center text-muted-foreground">
-                    <Loader2 className="mx-auto size-4 animate-spin" />
-                  </TableCell>
-                </TableRow>
-              )}
-              {!trail.isLoading && (trail.data?.length ?? 0) === 0 && (
-                <TableRow>
-                  <TableCell colSpan={4} className="px-3 py-6 text-center text-muted-foreground">
-                    No check-ins yet today.
-                  </TableCell>
-                </TableRow>
-              )}
-              {trail.isError && !trail.isLoading && (
-                <QueryErrorRow colSpan={4} message="Failed to load today's check-ins." onRetry={() => void trail.refetch()} pending={trail.isFetching} />
-              )}
+              <TableStateRows
+                colSpan={4}
+                isLoading={trail.isLoading}
+                isError={trail.isError}
+                isEmpty={trailRows.length === 0}
+                onRetry={() => void trail.refetch()}
+                pending={trail.isFetching}
+                errorMessage="Failed to load today's check-ins."
+                loadingLabel="Loading today's check-ins"
+                empty={{
+                  title: 'No check-ins yet today.',
+                  description: 'Scans appear here as students and employees check in.',
+                }}
+              />
               {trail.data?.map((c) => (
                 <TableRow key={c.id}>
-                  <TableCell className="px-3 font-mono text-xs">{c.patient_school_id}</TableCell>
+                  <TableCell className="px-3">
+                    {/* Guest check-ins carry no school ID — showing the cell
+                        blank left the operator unable to identify the person.
+                        Fall back to the recorded guest name, then an em dash. */}
+                    {c.patient_school_id !== null ? (
+                      <span className="font-mono text-xs">{c.patient_school_id}</span>
+                    ) : c.guest_name !== null && c.guest_name !== '' ? (
+                      <span>
+                        {c.guest_name} <span className="text-xs text-muted-foreground">(guest)</span>
+                      </span>
+                    ) : (
+                      <span className="text-muted-foreground">—</span>
+                    )}
+                  </TableCell>
                   <TableCell className="hidden px-3 text-xs uppercase md:table-cell">{c.method}</TableCell>
                   <TableCell className="px-3">
                     <Badge variant={OUTCOME_VARIANT[c.outcome]}>{OUTCOME_LABEL[c.outcome]}</Badge>

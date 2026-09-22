@@ -26,9 +26,6 @@ const AuditPage = lazyWithRetry(() => import('@/pages/AuditPage'));
 const AdminUsersPage = lazyWithRetry(() => import('@/pages/AdminUsersPage'));
 const AdminRolesPage = lazyWithRetry(() => import('@/pages/AdminRolesPage'));
 const AdminKioskSettingsPage = lazyWithRetry(() => import('@/pages/AdminKioskSettingsPage'));
-const DeveloperAppsPage = lazyWithRetry(() => import('@/pages/DeveloperAppsPage'));
-const DeveloperDocsPage = lazyWithRetry(() => import('@/pages/DeveloperDocsPage'));
-const DeveloperSandboxPage = lazyWithRetry(() => import('@/pages/DeveloperSandboxPage'));
 const AppointmentsPage = lazyWithRetry(() => import('@/pages/AppointmentsPage'));
 const ChangePasswordPage = lazyWithRetry(() => import('@/pages/ChangePasswordPage'));
 const EmployeePortalPage = lazyWithRetry(() => import('@/pages/EmployeePortalPage'));
@@ -344,30 +341,6 @@ const router = createBrowserRouter([
         element: (
           <ProtectedRoute anyOf={['kiosk.content.manage']}>
             <AdminKioskSettingsPage />
-          </ProtectedRoute>
-        ),
-      },
-      {
-        path: '/developer',
-        element: (
-          <ProtectedRoute anyOf={['api_apps.manage']}>
-            <DeveloperAppsPage />
-          </ProtectedRoute>
-        ),
-      },
-      {
-        path: '/developer/docs',
-        element: (
-          <ProtectedRoute anyOf={['api_apps.read']}>
-            <DeveloperDocsPage />
-          </ProtectedRoute>
-        ),
-      },
-      {
-        path: '/developer/sandbox',
-        element: (
-          <ProtectedRoute anyOf={['api_apps.manage']}>
-            <DeveloperSandboxPage />
           </ProtectedRoute>
         ),
       },

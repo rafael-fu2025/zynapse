@@ -9,7 +9,7 @@ import { apiClient, getNextCursor } from '@/api/client';
 import type { ApiEnvelopeError } from '@/api/envelope';
 
 export const adminUserSchema = z.object({
-  id: z.number().int().positive(),
+  id: z.number().int(),
   username: z.string().nullable(),
   email: z.string().nullable(),
   active: z.boolean(),
@@ -22,6 +22,8 @@ export const adminUserSchema = z.object({
   updated_at: z.string(),
   last_active: z.string().nullable(),
   force_reset: z.boolean(),
+  is_directory_record: z.boolean().optional(),
+  directory_identifier: z.string().optional(),
 });
 export type AdminUser = z.infer<typeof adminUserSchema>;
 
@@ -150,5 +152,40 @@ export function useResetUserPassword() {
     },
     onSuccess: () => void qc.invalidateQueries({ queryKey: ['admin', 'users'] }),
     onError: (err) => toast.error(err.errors[0]?.message ?? 'Reset failed.'),
+  });
+}
+
+export interface ProvisionDirectoryUserInput {
+  identifier: string;
+  kind: 'student' | 'employee';
+  /**
+   * Roles to ADD. The server unions these with the person's ACTUAL
+   * current roles — this is not a replacement list, and directory
+   * defaults must never be treated as the authoritative role set.
+   */
+  groups?: string[];
+}
+
+/**
+ * Resolve/JIT-provision a university-directory person and additively grant
+ * roles. Success invalidates BOTH the admin user list (the synthetic
+ * directory row is now a real local account) and the patient caches (the
+ * person becomes findable/lookup-able in clinic flows).
+ */
+export function useProvisionDirectoryUser() {
+  const qc = useQueryClient();
+  return useMutation<AdminUser, ApiEnvelopeError, ProvisionDirectoryUserInput>({
+    mutationFn: async ({ identifier, kind, groups }) => {
+      const body: Record<string, unknown> = { identifier, kind };
+      if (groups !== undefined) body.groups = groups;
+      const res = await apiClient.post<unknown>('/admin/users/provision', body);
+      return adminUserSchema.parse(res.data);
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['admin', 'users'] });
+      void qc.invalidateQueries({ queryKey: ['patients'] });
+      void qc.invalidateQueries({ queryKey: ['kiosk-lookup'] });
+    },
+    onError: (err) => toast.error(err.errors[0]?.message ?? 'Provisioning directory user failed.'),
   });
 }

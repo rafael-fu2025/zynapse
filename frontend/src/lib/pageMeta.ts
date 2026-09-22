@@ -42,7 +42,7 @@ export const PAGE_META: Readonly<Record<string, PageMeta>> = {
   '/queue-display': { title: 'Queue Display' },
   '/notifications': { title: 'Notifications' },
   '/referrals': { title: 'Referrals' },
-  '/reports': { title: 'Reports and analytics' },
+  '/reports': { title: 'Reports and Analytics' },
   '/audit': { title: 'Audit evidence' },
   '/change-password': { title: 'Change password' },
 };

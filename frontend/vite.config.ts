@@ -18,7 +18,11 @@ function serveKioskThumbnailsDirectly(): Plugin {
           return;
         }
 
-        const thumbnailPath = path.join(kioskThumbnailDirectory, filename);
+        const thumbnailPath = path.resolve(kioskThumbnailDirectory, filename);
+        if (!thumbnailPath.startsWith(kioskThumbnailDirectory + path.sep)) {
+          next();
+          return;
+        }
         if (!fs.existsSync(thumbnailPath)) {
           next();
           return;
@@ -81,8 +85,6 @@ export default defineConfig({
       'date-fns-tz',
       'react-day-picker',
       'lucide-react',
-      'recharts',
-      'recharts/types',
       'clsx',
       'tailwind-merge',
       'class-variance-authority',

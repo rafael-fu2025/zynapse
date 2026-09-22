@@ -12,7 +12,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { ConfirmDialog, type ConfirmAction } from '@/components/ConfirmDialog';
-import { QueryErrorState } from '@/components/QueryErrorState';
+import { TableStateBlock } from '@/components/TableStates';
 import {
   Dialog,
   DialogContent,
@@ -30,7 +30,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { Skeleton } from '@/components/ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Textarea } from '@/components/ui/textarea';
 import {
@@ -218,31 +217,37 @@ export function AnnouncementsTab() {
         </Button>
       </div>
 
-      {announcements.isError && (
-        <QueryErrorState message="Failed to load announcements." onRetry={() => void announcements.refetch()} pending={announcements.isFetching} />
-      )}
+      <TableStateBlock
+        isLoading={announcements.isLoading}
+        isError={announcements.isError}
+        isEmpty={rows.length === 0}
+        onRetry={() => void announcements.refetch()}
+        pending={announcements.isFetching}
+        errorMessage="Failed to load announcements."
+        loadingLabel="Loading announcements"
+        empty={{
+          title: 'No announcements yet',
+          description: 'Create the first post — it replaces the hand-maintained kiosk list.',
+          action: (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                setEditing(null);
+                setDialogOpen(true);
+              }}
+            >
+              <Plus aria-hidden /> New announcement
+            </Button>
+          ),
+        }}
+      />
 
-      {announcements.isLoading && (
-        <div role="status" aria-label="Loading announcements" className="space-y-3">
-          <Skeleton className="h-14 w-full" />
-          <Skeleton className="h-14 w-full" />
-        </div>
-      )}
-
-      {announcements.data !== undefined && rows.length === 0 && (
-        <section className="rounded-xl border bg-card p-8 text-center">
-          <p className="font-medium text-foreground">No announcements yet</p>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Create the first post — it replaces the hand-maintained kiosk list.
-          </p>
-        </section>
-      )}
-
-      {announcements.data !== undefined && rows.length > 0 && (
+      {!announcements.isLoading && !announcements.isError && rows.length > 0 && (
         <section aria-labelledby="ann-list-heading" className="overflow-hidden rounded-xl border bg-card">
           <h2 id="ann-list-heading" className="sr-only">Announcements</h2>
           <div className="overflow-x-auto">
-            <Table>
+            <Table ariaLabel="Counselling announcements">
               <TableHeader className="bg-muted/50">
                 <TableRow>
                   <TableHead className="px-3">Title</TableHead>

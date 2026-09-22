@@ -125,7 +125,7 @@ export async function signInMocked(
 ): Promise<void> {
   const tokenBody = JSON.stringify({
     success: true,
-    data: { access_token: 'test-token', expires_in: 900 },
+    data: { access_token: process.env.TEST_TOKEN ?? 'tok', expires_in: 900 },
     errors: [],
     meta: null,
   });

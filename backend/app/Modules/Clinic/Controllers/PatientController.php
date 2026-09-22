@@ -72,7 +72,7 @@ final class PatientController extends ApiController
         );
     }
 
-    public function showStudent(int $id): ResponseInterface
+    public function showStudent(int|string $id): ResponseInterface
     {
         return $this->ok($this->service->getStudent($id)->toArray());
     }
@@ -201,22 +201,40 @@ final class PatientController extends ApiController
         $cursor   = (string) ($this->request->getGet('cursor') ?? '');
         $limit    = (int)    ($this->request->getGet('limit')  ?? 25);
         $archived = (string) ($this->request->getGet('include_archived') ?? '');
-        // teaching = all | teaching | non_teaching (inventory/audit fix:
-        // let staff triage faculty vs support staff, since only teaching
-        // employees can refer students to counselling).
+        // teaching = all | teaching | non_teaching. Retained for API
+        // compatibility (the mobile client still sends it); the web UI no
+        // longer exposes it because the MIS employee payload carries no
+        // teaching flag, so it could never match MIS-sourced rows.
         $teaching = (string) ($this->request->getGet('teaching') ?? '');
+        // Facet filters — the two categorical fields MIS actually supplies.
+        // department = MIS department_name (local `users.department`);
+        // position   = MIS position.
+        $department = (string) ($this->request->getGet('department') ?? '');
+        $position   = (string) ($this->request->getGet('position') ?? '');
 
         $page = $this->service->listEmployees(
             $cursor !== '' ? $cursor : null,
             $limit,
             $archived === '1' || $archived === 'true',
             $teaching !== '' ? $teaching : null,
+            $department !== '' ? $department : null,
+            $position !== '' ? $position : null,
         );
 
         return $this->ok(
             $page['data'],
             \App\Http\ApiResponse::paginationMeta($page['count'], $page['next'], null),
         );
+    }
+
+    /**
+     * Facet options for the Employees tab filters — distinct MIS-supplied
+     * department / position values present in the tenant's live directory.
+     * Feeds the Department and Position selects.
+     */
+    public function employeeFacets(): ResponseInterface
+    {
+        return $this->ok($this->service->employeeFacets());
     }
 
     public function createEmployee(): ResponseInterface
@@ -255,7 +273,7 @@ final class PatientController extends ApiController
         return $this->ok($out, null, 201);
     }
 
-    public function showEmployee(int $id): ResponseInterface
+    public function showEmployee(int|string $id): ResponseInterface
     {
         return $this->ok($this->service->getEmployee($id)->toArray());
     }
@@ -268,7 +286,16 @@ final class PatientController extends ApiController
                 ['code' => 'validation.field', 'message' => 'Query must be at least 2 characters.', 'field' => 'q'],
             ]);
         }
-        return $this->ok($this->service->searchEmployees(trim($q)));
+        // Facets stay in force while searching, matching the list endpoint.
+        $department = (string) ($this->request->getGet('department') ?? '');
+        $position   = (string) ($this->request->getGet('position') ?? '');
+
+        return $this->ok($this->service->searchEmployees(
+            trim($q),
+            20,
+            $department !== '' ? $department : null,
+            $position !== '' ? $position : null,
+        ));
     }
 
     public function updateEmployee(int $id): ResponseInterface
@@ -317,26 +344,6 @@ final class PatientController extends ApiController
             ]);
         }
         return $this->ok($this->service->syncHrEmployees(array_values($records)));
-    }
-
-    public function listDepartments(): ResponseInterface
-    {
-        $activeOnly = (string) ($this->request->getGet('active') ?? '') === '1';
-        return $this->ok($this->service->listDepartments($activeOnly));
-    }
-
-    public function createDepartment(): ResponseInterface
-    {
-        $payload = $this->request->getJSON(true) ?? [];
-        $rules = [
-            'name'        => 'required|max_length[100]',
-            'code'        => 'required|max_length[20]',
-            'description' => 'permit_empty|max_length[1000]',
-        ];
-        if (! $this->makeValidation($rules)->run($payload)) {
-            throw ApiException::validationFailure($this->collectErrors());
-        }
-        return $this->ok($this->service->createDepartment($payload), null, 201);
     }
 
     // ------------------------------------------------------------ helpers

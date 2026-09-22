@@ -97,28 +97,116 @@ final class PatientService extends BaseService
             ->orderBy('first_name', 'ASC')
             ->limit($limit);
 
-        return array_map(
+        $localDtos = array_map(
             static fn (array $r) => UserDto::fromRow($r)->toArray(),
             $builder->get()->getResultArray(),
         );
+
+        $knownNumbers = [];
+        foreach ($localDtos as $d) {
+            if (! empty($d['student_number'])) {
+                $knownNumbers[strtolower((string) $d['student_number'])] = true;
+            }
+        }
+
+        $remaining = $limit - count($localDtos);
+        if ($remaining > 0 && mb_strlen(trim($q)) >= 2) {
+            try {
+                $fuMis = \Config\Services::fuMisAuthService();
+                $misStudents = $fuMis->searchStudents($q, $limit);
+                $nextSyntheticId = -1;
+                foreach ($misStudents as $ms) {
+                    if ($remaining <= 0) {
+                        break;
+                    }
+                    $num = strtolower((string) ($ms['identifier'] ?? ''));
+                    if ($num === '' || isset($knownNumbers[$num])) {
+                        continue;
+                    }
+                    $knownNumbers[$num] = true;
+                    $remaining--;
+
+                    $row = [
+                        'id'                   => $nextSyntheticId--,
+                        'kind'                 => 'student',
+                        'first_name'           => $ms['first_name'] ?? '',
+                        'last_name'            => $ms['last_name'] ?? '',
+                        'middle_name'          => $ms['middle_name'] ?? null,
+                        'student_number'       => $ms['identifier'] ?? null,
+                        'course'               => $ms['course'] ?? null,
+                        'year_level'           => $ms['year_level'] ?? null,
+                        'section'              => $ms['section'] ?? null,
+                        'department'           => $ms['department'] ?? null,
+                        'date_of_birth'        => null,
+                        'gender'               => null,
+                        'address'              => null,
+                        'qr_code'              => null,
+                        'rfid_tag'             => null,
+                        'archived_at'          => null,
+                        'blood_type'           => null,
+                        'consecutive_no_shows' => 0,
+                        'created_at'           => '',
+                        'updated_at'           => '',
+                        'is_directory_record'  => true,
+                    ];
+                    $localDtos[] = UserDto::fromRow($row)->toArray();
+                }
+            } catch (\Throwable $e) {
+                log_message('warning', sprintf('searchStudents MIS fallback error: %s', $e->getMessage()));
+            }
+        }
+
+        return $localDtos;
     }
 
     /** Detail view — includes allergies + emergency contacts. */
-    public function getStudent(int $id): UserDto
+    public function getStudent(int|string $idOrIdentifier): UserDto
     {
         $this->policy->check('patientsRead');
 
-        $row = $this->db->table('users')
-            ->where('users.tenant_id', CurrentTenant::id())
-            ->select(self::USER_COLS)
-            ->where('id', $id)
-            ->where('kind', 'student')
-            ->get()->getRowArray();
+        $row = null;
+        if (is_numeric($idOrIdentifier) && (int) $idOrIdentifier > 0) {
+            $row = $this->db->table('users')
+                ->where('users.tenant_id', CurrentTenant::id())
+                ->select(self::USER_COLS)
+                ->where('id', (int) $idOrIdentifier)
+                ->where('kind', 'student')
+                ->get()->getRowArray();
+        }
+
+        if ($row === null) {
+            $row = $this->db->table('users')
+                ->where('users.tenant_id', CurrentTenant::id())
+                ->select(self::USER_COLS)
+                ->where('student_number', (string) $idOrIdentifier)
+                ->where('kind', 'student')
+                ->get()->getRowArray();
+        }
+
+        if ($row === null) {
+            try {
+                $fuMis = \Config\Services::fuMisAuthService();
+                $provisionedId = $fuMis->ensureStudentProvisioned((string) $idOrIdentifier);
+                if ($provisionedId !== null) {
+                    $row = $this->db->table('users')
+                        ->where('users.tenant_id', CurrentTenant::id())
+                        ->select(self::USER_COLS)
+                        ->where('id', $provisionedId)
+                        ->where('kind', 'student')
+                        ->get()->getRowArray();
+                }
+            } catch (\Throwable $e) {
+                log_message('warning', sprintf('getStudent provision failed: %s', $e->getMessage()));
+            }
+        }
+
         if ($row === null) {
             throw new ApiException('resource.not_found', 404, [
-                ['code' => 'resource.not_found', 'message' => "Student #{$id} not found."],
+                ['code' => 'resource.not_found', 'message' => "Student #{$idOrIdentifier} not found."],
             ]);
         }
+
+        $id = (int) $row['id'];
 
         $allergies = $this->db->table('patient_allergies')
             ->select('id, allergen, severity, reaction')
@@ -506,10 +594,25 @@ final class PatientService extends BaseService
     // ---------------------------------------------------------- employees
 
     /**
+     * @param ?string $teaching   Retained for API compatibility (the mobile
+     *                            client still sends it). NOT exposed in the
+     *                            web UI: the FU MIS employee payload carries
+     *                            no teaching flag at all, so this filter can
+     *                            only ever match locally-set values.
+     * @param ?string $department Exact-match on the MIS-owned `department`
+     *                            (MIS `department_name`) — one of the two
+     *                            categorical fields MIS actually supplies.
+     * @param ?string $position   Exact-match on the MIS-owned `position`.
      * @return array{data: array<int, array<string, mixed>>, next: ?string, count: int}
      */
-    public function listEmployees(?string $cursor, int $limit, bool $includeArchived = false, ?string $teaching = null): array
-    {
+    public function listEmployees(
+        ?string $cursor,
+        int $limit,
+        bool $includeArchived = false,
+        ?string $teaching = null,
+        ?string $department = null,
+        ?string $position = null,
+    ): array {
         $this->policy->check('patientsRead');
 
         $builder = $this->db->table('users')
@@ -535,6 +638,8 @@ final class PatientService extends BaseService
                 ->groupEnd();
         }
 
+        $this->applyEmployeeFacetFilters($builder, $department, $position);
+
         KeysetPaginator::apply($builder, $cursor, $limit);
 
         $rows  = $builder->get()->getResultArray();
@@ -544,6 +649,74 @@ final class PatientService extends BaseService
             'data'  => array_map(static fn (array $r) => UserDto::fromRow($r)->toArray(), $final['rows']),
             'next'  => $final['nextCursor'],
             'count' => $limit,
+        ];
+    }
+
+    /**
+     * Apply the employee facet filters (department / position) to a builder.
+     *
+     * Both are EXACT matches against the two categorical fields the FU MIS
+     * employee payload actually carries — `department_name` (stored locally
+     * as `users.department`) and `position`. The MIS record is only
+     * `employee_id, last_name, first_name, middle_name, position,
+     * department_code, department_name`; it supplies no teaching flag, no
+     * employment status and no hire date, which is why those are not
+     * filterable here.
+     *
+     * Blank/`all` values are treated as "no filter" so the UI sentinel never
+     * reaches SQL. Both predicates are equality-only — a facet can narrow the
+     * result set, never widen it.
+     */
+    private function applyEmployeeFacetFilters(
+        \CodeIgniter\Database\BaseBuilder $builder,
+        ?string $department,
+        ?string $position,
+    ): void {
+        if ($department !== null && $department !== '' && $department !== 'all') {
+            $builder->where('department', $department);
+        }
+        if ($position !== null && $position !== '' && $position !== 'all') {
+            $builder->where('position', $position);
+        }
+    }
+
+    /**
+     * Employee facet options — the distinct MIS-supplied `department` and
+     * `position` values present in the active tenant's live (non-archived)
+     * employee directory.
+     *
+     * Derived from the synced rows rather than a curated table so every
+     * option is guaranteed to return at least one employee. The legacy
+     * `clinic_departments` picker was dropped for exactly the opposite
+     * reason: its hand-entered rows never matched MIS values.
+     *
+     * @return array{departments: list<string>, positions: list<string>}
+     */
+    public function employeeFacets(): array
+    {
+        $this->policy->check('patientsRead');
+
+        // `col != ''` is NULL-safe here: in SQL a NULL comparison yields
+        // NULL (not TRUE), so NULL and empty-string rows are both excluded
+        // without needing an explicit IS NOT NULL branch.
+        $pick = function (string $column): array {
+            $rows = $this->db->table('users')
+                ->where('users.tenant_id', CurrentTenant::id())
+                ->where('kind', 'employee')
+                ->where('archived_at', null)
+                ->where($column . ' !=', '')
+                ->distinct()
+                ->select($column)
+                ->orderBy($column, 'ASC')
+                ->get()
+                ->getResultArray();
+
+            return array_values(array_map(static fn (array $r): string => (string) $r[$column], $rows));
+        };
+
+        return [
+            'departments' => $pick('department'),
+            'positions'   => $pick('position'),
         ];
     }
 
@@ -677,18 +850,48 @@ final class PatientService extends BaseService
         ]);
     }
 
-    public function getEmployee(int $id): UserDto
+    public function getEmployee(int|string $idOrIdentifier): UserDto
     {
         $this->policy->check('patientsRead');
-        $row = $this->db->table('users')
-            ->where('users.tenant_id', CurrentTenant::id())
-            ->select(self::USER_COLS)
-            ->where('id', $id)
-            ->where('kind', 'employee')
-            ->get()->getRowArray();
+        $row = null;
+        if (is_numeric($idOrIdentifier) && (int) $idOrIdentifier > 0) {
+            $row = $this->db->table('users')
+                ->where('users.tenant_id', CurrentTenant::id())
+                ->select(self::USER_COLS)
+                ->where('id', (int) $idOrIdentifier)
+                ->where('kind', 'employee')
+                ->get()->getRowArray();
+        }
+
+        if ($row === null) {
+            $row = $this->db->table('users')
+                ->where('users.tenant_id', CurrentTenant::id())
+                ->select(self::USER_COLS)
+                ->where('employee_number', (string) $idOrIdentifier)
+                ->where('kind', 'employee')
+                ->get()->getRowArray();
+        }
+
+        if ($row === null) {
+            try {
+                $fuMis = \Config\Services::fuMisAuthService();
+                $provisionedId = $fuMis->ensureEmployeeProvisioned((string) $idOrIdentifier);
+                if ($provisionedId !== null) {
+                    $row = $this->db->table('users')
+                        ->where('users.tenant_id', CurrentTenant::id())
+                        ->select(self::USER_COLS)
+                        ->where('id', $provisionedId)
+                        ->where('kind', 'employee')
+                        ->get()->getRowArray();
+                }
+            } catch (\Throwable $e) {
+                log_message('warning', sprintf('getEmployee provision failed: %s', $e->getMessage()));
+            }
+        }
+
         if ($row === null) {
             throw new ApiException('resource.not_found', 404, [
-                ['code' => 'resource.not_found', 'message' => "Employee #{$id} not found."],
+                ['code' => 'resource.not_found', 'message' => "Employee #{$idOrIdentifier} not found."],
             ]);
         }
         return UserDto::fromRow($row);
@@ -698,14 +901,27 @@ final class PatientService extends BaseService
      * Bounded LIKE search on number, names, department, and position —
      * matches the web placeholder ("Search number, name, department…").
      *
+     * The optional `department` / `position` facets narrow BOTH the local
+     * query and the MIS fallback merge, so a facet stays in force while the
+     * user is typing. Applying them only to the local half would silently
+     * drop them the moment a search ran — the defect that made the old
+     * teaching filter look broken.
+     *
      * @return array<int, array<string, mixed>>
      */
-    public function searchEmployees(string $q, int $limit = 20): array
-    {
+    public function searchEmployees(
+        string $q,
+        int $limit = 20,
+        ?string $department = null,
+        ?string $position = null,
+    ): array {
         $this->policy->check('patientsRead');
         $limit = max(1, min($limit, 50));
 
-        $rows = $this->db->table('users')
+        $deptFilter = ($department !== null && $department !== '' && $department !== 'all') ? $department : null;
+        $posFilter  = ($position !== null && $position !== '' && $position !== 'all') ? $position : null;
+
+        $builder = $this->db->table('users')
             ->where('users.tenant_id', CurrentTenant::id())
             ->select(self::USER_COLS)
             ->where('kind', 'employee')
@@ -717,12 +933,80 @@ final class PatientService extends BaseService
                 ->orLike('department', $q)
                 ->orLike('position', $q)
             ->groupEnd()
-            ->where('archived_at', null)
+            ->where('archived_at', null);
+
+        $this->applyEmployeeFacetFilters($builder, $deptFilter, $posFilter);
+
+        $rows = $builder
             ->orderBy('last_name', 'ASC')
             ->limit($limit)
             ->get()->getResultArray();
 
-        return array_map(static fn (array $r) => UserDto::fromRow($r)->toArray(), $rows);
+        $localDtos = array_map(static fn (array $r) => UserDto::fromRow($r)->toArray(), $rows);
+
+        $knownNumbers = [];
+        foreach ($localDtos as $d) {
+            if (! empty($d['employee_number'])) {
+                $knownNumbers[strtolower((string) $d['employee_number'])] = true;
+            }
+        }
+
+        $remaining = $limit - count($localDtos);
+        if ($remaining > 0 && mb_strlen(trim($q)) >= 2) {
+            try {
+                $fuMis = \Config\Services::fuMisAuthService();
+                $misEmployees = $fuMis->searchEmployees($q, $limit);
+                $nextSyntheticId = -1;
+                foreach ($misEmployees as $me) {
+                    if ($remaining <= 0) {
+                        break;
+                    }
+                    // Keep the facet in force for upstream-only rows too.
+                    if ($deptFilter !== null && (string) ($me['department'] ?? '') !== $deptFilter) {
+                        continue;
+                    }
+                    if ($posFilter !== null && (string) ($me['position'] ?? '') !== $posFilter) {
+                        continue;
+                    }
+                    $num = strtolower((string) ($me['identifier'] ?? ''));
+                    if ($num === '' || isset($knownNumbers[$num])) {
+                        continue;
+                    }
+                    $knownNumbers[$num] = true;
+                    $remaining--;
+
+                    $row = [
+                        'id'                      => $nextSyntheticId--,
+                        'kind'                    => 'employee',
+                        'first_name'              => $me['first_name'] ?? '',
+                        'last_name'               => $me['last_name'] ?? '',
+                        'middle_name'             => $me['middle_name'] ?? null,
+                        'employee_number'         => $me['identifier'] ?? null,
+                        'department'              => $me['department'] ?? null,
+                        'position'                => $me['position'] ?? null,
+                        'employment_status'       => $me['employment_status'] ?? 'active',
+                        'is_teaching'             => $me['is_teaching'] ?? null,
+                        'date_hired'              => null,
+                        'emergency_contact_name'  => null,
+                        'emergency_contact_phone' => null,
+                        'date_of_birth'           => null,
+                        'gender'                  => null,
+                        'address'                 => null,
+                        'qr_code'                 => null,
+                        'rfid_tag'                => null,
+                        'archived_at'             => null,
+                        'created_at'              => '',
+                        'updated_at'              => '',
+                        'is_directory_record'     => true,
+                    ];
+                    $localDtos[] = UserDto::fromRow($row)->toArray();
+                }
+            } catch (\Throwable $e) {
+                log_message('warning', sprintf('searchEmployees MIS fallback error: %s', $e->getMessage()));
+            }
+        }
+
+        return $localDtos;
     }
 
     /**
@@ -920,65 +1204,6 @@ final class PatientService extends BaseService
         });
     }
 
-    // ---------------------------------------------------------- departments
-
-    /**
-     * @return array<int, array<string, mixed>>
-     */
-    public function listDepartments(bool $activeOnly = false): array
-    {
-        $this->policy->check('patientsRead');
-
-        $builder = $this->db->table('clinic_departments')
-            ->where('clinic_departments.tenant_id', CurrentTenant::id())
-            ->select('id, name, code, description, is_active')
-            ->orderBy('name', 'ASC');
-        if ($activeOnly) {
-            $builder->where('is_active', 1);
-        }
-
-        return array_map(static fn (array $r): array => [
-            'id'          => (int) $r['id'],
-            'name'        => (string) $r['name'],
-            'code'        => (string) $r['code'],
-            'description' => $r['description'] !== null ? (string) $r['description'] : null,
-            'is_active'   => (bool) $r['is_active'],
-        ], $builder->get()->getResultArray());
-    }
-
-    /**
-     * @param array<string, mixed> $input
-     * @return array<string, mixed>
-     */
-    public function createDepartment(array $input): array
-    {
-        $this->policy->check('departmentsManage');
-        $userId = \App\Auth\CurrentUser::assert();
-
-        return $this->txn(function () use ($input, $userId): array {
-            $this->assertHandleUnique('clinic_departments', 'code', (string) $input['code'], null);
-            $this->assertHandleUnique('clinic_departments', 'name', (string) $input['name'], null);
-
-            $now = $this->utcNow();
-            $this->db->table('clinic_departments')->insert([
-                'tenant_id'   => CurrentTenant::id(),
-                'name'        => (string) $input['name'],
-                'code'        => (string) $input['code'],
-                'description' => $this->strOrNull($input, 'description'),
-                'is_active'   => 1,
-                'created_at'  => $now,
-                'updated_at'  => $now,
-            ]);
-            $id = (int) $this->db->insertID();
-
-            $this->audit->enqueue('clinic.department_created', 'clinic_departments', $id, $userId, [
-                'resource_code' => (string) $input['code'],
-            ]);
-
-            return ['id' => $id, 'name' => (string) $input['name'], 'code' => (string) $input['code'], 'is_active' => true];
-        });
-    }
-
     // ------------------------------------------------------------ helpers
 
     private function getUserRowDto(int $id): UserDto
@@ -997,11 +1222,10 @@ final class PatientService extends BaseService
     }
 
     /**
-     * Deliberately NOT tenant-scoped, despite `users`/`clinic_departments`
-     * carrying tenant_id: the schema enforces these identifiers with
-     * GLOBAL unique indexes (`uniq_users_student_number`, `uniq_users_
-     * employee_number`, `uniq_users_qr_code`, `uniq_users_rfid_tag`,
-     * `username`, `clinic_departments.code`, `clinic_departments.name`).
+     * Deliberately NOT tenant-scoped, despite `users` carrying tenant_id:
+     * the schema enforces these identifiers with GLOBAL unique indexes
+     * (`uniq_users_student_number`, `uniq_users_employee_number`,
+     * `uniq_users_qr_code`, `uniq_users_rfid_tag`, `username`).
      * A per-tenant check here would let a duplicate through PHP-side and
      * then die on the constraint as an unhandled 500 — the whole-table
      * check keeps the 409 clean and matches the database contract.

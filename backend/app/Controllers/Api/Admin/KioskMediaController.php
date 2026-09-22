@@ -7,6 +7,7 @@ namespace App\Controllers\Api\Admin;
 use App\Auth\CurrentUser;
 use App\Controllers\Api\ApiController;
 use App\Exceptions\ApiException;
+use App\Services\Kiosk\FfmpegRunner;
 use App\Services\Kiosk\KioskMediaService;
 use CodeIgniter\HTTP\ResponseInterface;
 use Config\Services;
@@ -17,7 +18,7 @@ final class KioskMediaController extends ApiController
 
     public function __construct(?KioskMediaService $service = null)
     {
-        $this->service = $service ?? new KioskMediaService(Services::auditOutbox());
+        $this->service = $service ?? new KioskMediaService(Services::auditOutbox(), new FfmpegRunner());
     }
 
     public function index(): ResponseInterface

@@ -20,7 +20,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { CopyButton } from '@/components/CopyButton';
-import { QueryErrorRow } from '@/components/QueryErrorState';
+import { TableStateRows } from '@/components/TableStates';
 import {
   Dialog,
   DialogContent,
@@ -730,7 +730,7 @@ export default function ReferralsPage() {
   const rows = useMemo(() => list.data?.data ?? [], [list.data]);
 
   return (
-    <main className="mx-auto max-w-7xl space-y-4 p-6">
+    <main className="space-y-4 p-6">
       <PageHeader
         title="Referrals"
         description="Referrals hand off care between Clinic and Counselling — each side keeps its own records."
@@ -774,7 +774,7 @@ export default function ReferralsPage() {
       />
 
       <section className="overflow-hidden rounded-xl border bg-card">
-        <Table>
+        <Table ariaLabel="Referrals between Clinic and Guidance">
           <TableHeader className="bg-muted/50">
             <TableRow>
               <TableHead className="px-3">#</TableHead>
@@ -789,23 +789,38 @@ export default function ReferralsPage() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {list.isLoading && (
-              <TableRow>
-                <TableCell colSpan={9} className="px-3 py-6 text-center text-muted-foreground">
-                  <Loader2 className="mx-auto size-4 animate-spin" />
-                </TableCell>
-              </TableRow>
-            )}
-            {!list.isLoading && rows.length === 0 && (
-              <TableRow>
-                <TableCell colSpan={9} className="px-3 py-6 text-center text-muted-foreground">
-                  No referrals.
-                </TableCell>
-              </TableRow>
-            )}
-            {list.isError && !list.isLoading && (
-              <QueryErrorRow colSpan={9} message="Failed to load referrals." onRetry={() => void list.refetch()} pending={list.isFetching} />
-            )}
+            <TableStateRows
+              colSpan={9}
+              isLoading={list.isLoading}
+              isError={list.isError}
+              isEmpty={rows.length === 0}
+              onRetry={() => void list.refetch()}
+              pending={list.isFetching}
+              errorMessage="Failed to load referrals."
+              loadingLabel="Loading referrals"
+              empty={{
+                title: 'No referrals yet.',
+                description: 'Referrals appear when either side hands off care to the other.',
+              }}
+              noResults={{
+                title: 'No referrals match this status.',
+                description: 'Choose a different status to see more.',
+                action: (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      setStatusFilter('all');
+                      setCursor(null);
+                      setHistory([null]);
+                    }}
+                  >
+                    Clear filter
+                  </Button>
+                ),
+              }}
+              hasFilters={statusFilter !== 'all'}
+            />
             {rows.map((r) => (
               <TableRow key={r.id}>
                 <TableCell className="px-3 font-mono text-xs">{r.id}</TableCell>

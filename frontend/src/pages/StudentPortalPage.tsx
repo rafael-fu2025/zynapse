@@ -9,10 +9,8 @@
 import {
   ArrowRight,
   Bell,
-  BookOpen,
   CalendarDays,
   CheckCircle2,
-  Droplet,
   GraduationCap,
   HeartHandshake,
   History,
@@ -27,6 +25,8 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { PageHeader } from '@/components/PageHeader';
+import { PortalCardArt } from '@/components/PortalCardArt';
+import { TableStateBlock } from '@/components/TableStates';
 import { QueryErrorState } from '@/components/QueryErrorState';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tabs, TabsContent } from '@/components/ui/tabs';
@@ -82,6 +82,7 @@ function ProfileSkeleton() {
 export default function StudentPortalPage() {
   const profile = useMyStudentProfile();
   const visits = useMyStudentClinicVisits();
+  const visitRows = visits.data ?? [];
   const notifications = useNotifications(5);
   const me = useMe();
   // ?tab= so a booked-appointment or history view survives a refresh
@@ -115,57 +116,53 @@ export default function StudentPortalPage() {
 
             <TabsContent value="overview" className="space-y-6 pt-4">
               {/* Profile & Clinic Digital Pass */}
-              <div className="grid gap-6 lg:grid-cols-3">
-                <Card className="lg:col-span-1">
-                  <CardHeader>
-                    <CardTitle className="flex items-center gap-2">
-                      <IdCard className="size-4" aria-hidden /> Student Profile
-                    </CardTitle>
-                    <CardDescription>Your registered student details.</CardDescription>
-                  </CardHeader>
-                  <CardContent className="space-y-4">
-                    <div>
-                      <p className="text-base font-semibold leading-tight text-foreground">
+              <div className="grid max-w-96 gap-6 xl:max-w-none xl:grid-cols-[minmax(0,24rem)_minmax(0,1fr)]">
+                <Card className="relative aspect-[1.586] w-full self-start overflow-hidden border-primary bg-primary text-white shadow-[0_1px_2px_rgba(0,0,0,0.06),0_18px_40px_-12px_rgba(0,0,0,0.28)] dark:border-border dark:bg-card dark:text-card-foreground">
+                  <PortalCardArt />
+                  <div className="relative flex h-full flex-col p-5">
+                    <p className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wider text-white/70 dark:text-muted-foreground">
+                      <IdCard className="size-3.5" aria-hidden /> Student Profile
+                    </p>
+                    <div className="mt-3 min-w-0">
+                      <p className="truncate text-base font-semibold leading-tight text-white dark:text-foreground">
                         {profile.data.first_name} {profile.data.middle_name !== null ? `${profile.data.middle_name} ` : ''}
                         {profile.data.last_name}
                       </p>
-                      <p className="mt-0.5 font-mono text-xs text-muted-foreground">
+                      <p className="mt-0.5 font-mono text-xs text-white/70 dark:text-muted-foreground">
                         ID: {profile.data.student_number}
                       </p>
                     </div>
 
-                    <dl className="grid grid-cols-[max-content_1fr] gap-x-3 gap-y-2 text-xs">
-                      <dt className="text-muted-foreground">Email</dt>
-                      <dd className="truncate text-foreground">
-                        {me.data?.email ?? <span className="text-muted-foreground">—</span>}
+                    <dl className="mt-auto grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1.5 text-xs">
+                      <dt className="text-white/60 dark:text-muted-foreground">Email</dt>
+                      <dd className="truncate text-white dark:text-foreground">
+                        {me.data?.email ?? <span className="text-white/60 dark:text-muted-foreground">N/A</span>}
                       </dd>
-                      <dt className="text-muted-foreground">Course</dt>
-                      <dd className="flex items-center gap-1.5 font-medium">
-                        <BookOpen className="size-3 text-muted-foreground" aria-hidden /> {profile.data.course ?? '—'}
-                      </dd>
-                      <dt className="text-muted-foreground">Year &amp; Section</dt>
+                      <dt className="text-white/60 dark:text-muted-foreground">Course</dt>
+                      <dd className="font-medium">{profile.data.course ?? <span className="text-white/60 dark:text-muted-foreground">N/A</span>}</dd>
+                      <dt className="text-white/60 dark:text-muted-foreground">Year level</dt>
                       <dd>
-                        {profile.data.year_level !== null
-                          ? `${profile.data.year_level}-${profile.data.section ?? '—'}`
-                          : '—'}
+                        {profile.data.year_level !== null ? (
+                          profile.data.year_level
+                        ) : (
+                          <span className="text-white/60 dark:text-muted-foreground">N/A</span>
+                        )}
                       </dd>
-                      <dt className="text-muted-foreground">Blood type</dt>
-                      <dd className="flex items-center gap-1.5">
-                        <Droplet className="size-3 text-muted-foreground" aria-hidden /> {profile.data.blood_type ?? '—'}
-                      </dd>
-                      <dt className="text-muted-foreground">No-shows</dt>
+                      <dt className="text-white/60 dark:text-muted-foreground">Blood type</dt>
+                      <dd>{profile.data.blood_type ?? <span className="text-white/60 dark:text-muted-foreground">N/A</span>}</dd>
+                      <dt className="text-white/60 dark:text-muted-foreground">No-shows</dt>
                       <dd>
                         {profile.data.consecutive_no_shows === 0 ? (
-                          <Badge variant="secondary">clean</Badge>
+                          <Badge variant="secondary">Clean</Badge>
                         ) : (
                           <Badge variant="destructive">{profile.data.consecutive_no_shows}</Badge>
                         )}
                       </dd>
                     </dl>
-                  </CardContent>
+                  </div>
                 </Card>
 
-                <Card className="lg:col-span-2">
+                <Card>
                   <CardHeader>
                     <CardTitle className="flex items-center gap-2">
                       <IdCard className="size-4" aria-hidden /> Clinic Check-in Pass
@@ -196,12 +193,19 @@ export default function StudentPortalPage() {
                           </p>
                         )}
                         <div className="pt-1">
-                          <Button asChild size="sm" variant="outline">
-                            <Link to="/change-password">
-                              Change password
-                              <ArrowRight className="size-3.5" />
-                            </Link>
-                          </Button>
+                          {me.data?.has_local_password === true ? (
+                            <Button asChild size="sm" variant="outline">
+                              <Link to="/change-password">
+                                Change password
+                                <ArrowRight className="size-3.5" />
+                              </Link>
+                            </Button>
+                          ) : (
+                            <p className="text-xs text-muted-foreground leading-relaxed">
+                              Your password is managed by the university — to reset it, email
+                              helpdesk@foundationu.com.
+                            </p>
+                          )}
                         </div>
                       </div>
                     </div>
@@ -226,14 +230,22 @@ export default function StudentPortalPage() {
               <CardDescription>Your most recent encounters, newest first.</CardDescription>
             </CardHeader>
             <CardContent>
-              {visits.isLoading && <Skeleton className="h-32" />}
-              {visits.data !== undefined && visits.data.length === 0 && (
-                <p className="py-6 text-center text-sm text-muted-foreground">
-                  You have no clinic visits on record.
-                </p>
-              )}
-              {visits.data !== undefined && visits.data.length > 0 && (
-                <Table>
+              <TableStateBlock
+                isLoading={visits.isLoading}
+                isError={visits.isError}
+                isEmpty={visitRows.length === 0}
+                onRetry={() => void visits.refetch()}
+                pending={visits.isFetching}
+                errorMessage="Failed to load your clinic visits."
+                loadingLabel="Loading your clinic visits"
+                skeletonRows={1}
+                empty={{
+                  title: 'You have no clinic visits on record.',
+                  description: 'Visits appear here after you are seen at the clinic.',
+                }}
+              />
+              {!visits.isLoading && !visits.isError && visitRows.length > 0 && (
+                <Table ariaLabel="My clinic visits">
                   <TableHeader>
                     <TableRow>
                       <TableHead className="px-3">Date</TableHead>
@@ -244,7 +256,7 @@ export default function StudentPortalPage() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {visits.data.map((v) => (
+                    {visitRows.map((v) => (
                       <TableRow key={v.id}>
                         <TableCell className="px-3 text-xs text-muted-foreground">
                           {fmtUtcToApp(v.started_at)}

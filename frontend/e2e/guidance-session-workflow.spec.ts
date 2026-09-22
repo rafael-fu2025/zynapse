@@ -29,7 +29,9 @@ test('Start Session uses the returned id and opens the exact active workspace', 
   await page.goto('/counselling?tab=queue');
   await page.getByRole('button', { name: 'Start Session' }).click();
   await expect(page).toHaveURL(/\/counselling\?session=127/);
-  await expect(page.getByText('Session #127')).toBeVisible();
+  // Scoped to the panel: both the breadcrumbs and the sessions list render
+  // this exact text, so a page-level getByText is a strict-mode coin flip.
+  await expect(page.getByLabel('Sessions & Notes').getByText('Session #127', { exact: true })).toBeVisible();
   await expect(page.getByText('Reyes, Maria')).toBeVisible();
   await expect(page.getByText(/G-004 started — Session #127 is now active/)).toBeVisible();
 });
@@ -39,9 +41,9 @@ test('deep link survives refresh, completion clears selection, and referral fiel
   await mockSessionApis(page);
   await page.route('**/api/v1/counselling/queue', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ success: true, data: [], errors: [], meta: null }) }));
   await page.goto('/counselling?session=127');
-  await expect(page.getByText('Session #127')).toBeVisible();
+  await expect(page.getByLabel('Sessions & Notes').getByText('Session #127', { exact: true })).toBeVisible();
   await page.reload();
-  await expect(page.getByText('Session #127')).toBeVisible();
+  await expect(page.getByLabel('Sessions & Notes').getByText('Session #127', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: /^Referral/ }).click();
   await page.getByRole('button', { name: 'Refer to Clinic' }).click();
   const dialog = page.getByRole('dialog', { name: 'Refer patient to Clinic' });

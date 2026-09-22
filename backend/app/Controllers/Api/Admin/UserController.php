@@ -101,6 +101,54 @@ final class UserController extends ApiController
         return $this->ok($out, null, 201);
     }
 
+    public function provision(): ResponseInterface
+    {
+        $this->authorize('rbac.manage');
+        $payload = $this->request->getJSON(true) ?? [];
+
+        $identifier = trim((string) ($payload['identifier'] ?? ''));
+        $kind = trim((string) ($payload['kind'] ?? ''));
+
+        if ($identifier === '' || ! in_array($kind, ['student', 'employee'], true)) {
+            throw ApiException::validationFailure([
+                ['code' => 'validation.field', 'message' => 'Valid identifier and kind (student/employee) are required.', 'field' => 'identifier'],
+            ]);
+        }
+
+        if (array_key_exists('groups', $payload) && ! is_array($payload['groups'])) {
+            throw ApiException::validationFailure([
+                ['code' => 'validation.field', 'message' => 'groups must be an array of group codes.', 'field' => 'groups'],
+            ]);
+        }
+
+        $groups = is_array($payload['groups'] ?? null)
+            ? array_values(array_unique(array_map(static fn ($group): string => trim((string) $group), $payload['groups'])))
+            : [];
+
+        return $this->ok($this->service->provisionDirectoryUser($identifier, $kind, $groups), null, 200);
+    }
+
+    public function syncDirectory(): ResponseInterface
+    {
+        $this->authorize('rbac.manage');
+        $payload = $this->request->getJSON(true) ?? [];
+
+        $kind = trim((string) ($payload['kind'] ?? 'all'));
+        if (! in_array($kind, ['all', 'student', 'employee'], true)) {
+            throw ApiException::validationFailure([
+                ['code' => 'validation.field', 'message' => 'kind must be all, student, or employee.', 'field' => 'kind'],
+            ]);
+        }
+
+        $dryRun = (bool) ($payload['dry_run'] ?? false);
+        $pageSize = filter_var($payload['page_size'] ?? 100, FILTER_VALIDATE_INT) ?: 100;
+        $maxPages = filter_var($payload['max_pages'] ?? 1000, FILTER_VALIDATE_INT) ?: 1000;
+
+        $summary = $this->service->syncDirectory($kind, $dryRun, $pageSize, $maxPages);
+
+        return $this->ok($summary, null, 200);
+    }
+
     public function setStatus(int $userId): ResponseInterface
     {
         $this->authorize('rbac.manage');

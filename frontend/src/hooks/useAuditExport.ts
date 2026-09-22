@@ -67,6 +67,7 @@ export function useAuditExport() {
 
 function parseFilename(value: string | undefined): string | null {
   if (value === undefined) return null;
-  const match = /filename="?([^"]+)"?/i.exec(value);
+  const filenamePattern = /filename="?([^"]+)"?/i;
+  const match = value.match(filenamePattern);
   return match?.[1] ?? null;
 }

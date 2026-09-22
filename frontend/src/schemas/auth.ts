@@ -48,6 +48,11 @@ export const sessionSchema = z.object({
   identifier: z.string().nullable().optional(),
   is_active: z.boolean(),
   force_reset: z.boolean().default(false),
+  // True only for accounts with a local email/password identity (admins,
+  // clinic-minted portal accounts). MIS-delegated accounts authenticate
+  // against the university API and manage their password via the FU
+  // helpdesk — the change-password UI is hidden for them.
+  has_local_password: z.boolean().default(false),
   person_kind: z.enum(['student', 'employee', 'contractor', 'alumni']).nullable().optional(),
   person_name: z.string().nullable().optional(),
   // Teaching flag for employee accounts — drives the "can I refer?"

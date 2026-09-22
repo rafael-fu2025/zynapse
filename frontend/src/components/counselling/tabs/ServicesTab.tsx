@@ -12,7 +12,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { ConfirmDialog, type ConfirmAction } from '@/components/ConfirmDialog';
-import { QueryErrorState } from '@/components/QueryErrorState';
+import { TableStateBlock } from '@/components/TableStates';
 import {
   Dialog,
   DialogContent,
@@ -30,7 +30,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { Skeleton } from '@/components/ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Textarea } from '@/components/ui/textarea';
 import {
@@ -187,22 +186,37 @@ export function ServicesTab() {
         </Button>
       </div>
 
-      {services.isError && (
-        <QueryErrorState message="Failed to load the service catalogue." onRetry={() => void services.refetch()} pending={services.isFetching} />
-      )}
+      <TableStateBlock
+        isLoading={services.isLoading}
+        isError={services.isError}
+        isEmpty={rows.length === 0}
+        onRetry={() => void services.refetch()}
+        pending={services.isFetching}
+        errorMessage="Failed to load the service catalogue."
+        loadingLabel="Loading services"
+        empty={{
+          title: 'No services in the catalogue.',
+          description: 'Services define what a patient can book and where the queue handoff goes.',
+          action: (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                setEditing(null);
+                setDialogOpen(true);
+              }}
+            >
+              <Plus aria-hidden /> New service
+            </Button>
+          ),
+        }}
+      />
 
-      {services.isLoading && (
-        <div role="status" aria-label="Loading services" className="space-y-3">
-          <Skeleton className="h-12 w-full" />
-          <Skeleton className="h-12 w-full" />
-        </div>
-      )}
-
-      {services.data !== undefined && rows.length > 0 && (
+      {!services.isLoading && !services.isError && rows.length > 0 && (
         <section aria-labelledby="svc-list-heading" className="overflow-hidden rounded-xl border bg-card">
           <h2 id="svc-list-heading" className="sr-only">Service catalogue</h2>
           <div className="overflow-x-auto">
-            <Table>
+            <Table ariaLabel="Guidance service catalogue">
               <TableHeader className="bg-muted/50">
                 <TableRow>
                   <TableHead className="px-3">Service</TableHead>

@@ -24,7 +24,7 @@ use CodeIgniter\Database\Migration;
  *
  * All steps idempotent: fresh installs (empty tables) and existing
  * deployments converge. Seeding the services for ALL existing tenants
- * (including the sandbox) happens here so the catalogue is never empty.
+ * happens here so the catalogue is never empty.
  */
 final class GuidanceContent extends Migration
 {

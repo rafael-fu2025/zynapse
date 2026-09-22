@@ -11,7 +11,7 @@
 import { Check, ShieldCheck } from 'lucide-react';
 import { useMemo } from 'react';
 import { Badge } from '@/components/ui/badge';
-import { QueryErrorState } from '@/components/QueryErrorState';
+import { TableStateBlock } from '@/components/TableStates';
 import { PageHeader } from '@/components/PageHeader';
 import {
   Table,
@@ -33,7 +33,7 @@ const MODULE_GROUPS: ReadonlyArray<{ id: string; label: string; prefixes: readon
   { id: 'portal', label: 'Portal', prefixes: ['portal.', 'notifications.', 'student.portal.', 'employee.portal.'] },
   { id: 'reports', label: 'Reports', prefixes: ['reports.'] },
   { id: 'audit', label: 'Audit', prefixes: ['audit.'] },
-  { id: 'platform', label: 'Platform', prefixes: ['rbac.', 'api_apps.'] },
+  { id: 'platform', label: 'Platform', prefixes: ['rbac.'] },
 ];
 
 function moduleFor(code: string): string {
@@ -73,7 +73,7 @@ function MatrixSection({
         <p className="text-xs text-muted-foreground">{codes.length} permission{codes.length === 1 ? '' : 's'}</p>
       </div>
       <div className="overflow-x-auto">
-        <Table>
+        <Table ariaLabel={`${label} permissions by role`}>
           <TableHeader className="bg-muted/30">
             <TableRow>
               <TableHead className="min-w-56 px-3">Permission code</TableHead>
@@ -114,9 +114,10 @@ function MatrixSection({
 export default function AdminRolesPage() {
   const roles = useAdminRoles();
   const grouped = useMemo(() => (roles.data !== undefined ? codesByModule(roles.data) : null), [roles.data]);
+  const roleRows = roles.data ?? [];
 
   return (
-    <main className="mx-auto min-w-0 max-w-7xl space-y-5 p-4 sm:p-6">
+    <main className="space-y-4 p-6">
       <PageHeader
         title="Roles"
         description="The authoritative role → permission catalog. Roles are code-defined and reviewed in git; this matrix is read-only by design."
@@ -127,16 +128,26 @@ export default function AdminRolesPage() {
         }
       />
 
-      {roles.isError && (
-        <QueryErrorState message="Failed to load the role catalog." onRetry={() => void roles.refetch()} pending={roles.isFetching} />
-      )}
+      <TableStateBlock
+        isLoading={roles.isLoading}
+        isError={roles.isError}
+        isEmpty={roleRows.length === 0}
+        onRetry={() => void roles.refetch()}
+        pending={roles.isFetching}
+        errorMessage="Failed to load the role catalog."
+        loadingLabel="Loading the role catalog"
+        empty={{
+          title: 'No roles in the catalog.',
+          description: 'Roles are code-defined and reviewed in git — run the RBAC seeder to populate them.',
+        }}
+      />
 
-      {roles.data !== undefined && grouped !== null && (
+      {!roles.isLoading && !roles.isError && roleRows.length > 0 && grouped !== null && (
         <>
           <section aria-labelledby="roles-summary-heading" className="overflow-hidden rounded-xl border bg-card">
             <h2 id="roles-summary-heading" className="sr-only">Role summary</h2>
             <div className="overflow-x-auto">
-              <Table>
+              <Table ariaLabel="Role summary with permission counts">
                 <TableHeader className="bg-muted/50">
                   <TableRow>
                     <TableHead className="px-3">Role</TableHead>
@@ -146,7 +157,7 @@ export default function AdminRolesPage() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {roles.data.map((role) => (
+                  {roleRows.map((role) => (
                     <TableRow key={role.code}>
                       <TableCell className="px-3 text-sm font-medium">{role.name}</TableCell>
                       <TableCell className="px-3 font-mono text-xs text-muted-foreground">{role.code}</TableCell>
@@ -174,7 +185,7 @@ export default function AdminRolesPage() {
           </p>
 
           {MODULE_GROUPS.map((group) => (
-            <MatrixSection key={group.id} label={group.label} codes={grouped.get(group.id) ?? []} roles={roles.data} />
+            <MatrixSection key={group.id} label={group.label} codes={grouped.get(group.id) ?? []} roles={roleRows} />
           ))}
         </>
       )}

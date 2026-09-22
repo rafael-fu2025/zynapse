@@ -31,6 +31,7 @@ final class KioskMediaService
 
     public function __construct(
         private readonly AuditOutboxService $audit,
+        private readonly FfmpegRunner $ffmpeg,
         ?BaseConnection $db = null,
         ?string $storageDirectory = null,
     ) {
@@ -255,21 +256,22 @@ final class KioskMediaService
 
     private function generateThumbnail(string $source, string $destination, string $kind): bool
     {
-        if (! is_file($source) || ! function_exists('proc_open')) return false;
+        if (!is_file($source)) {
+            return false;
+        }
+
         $this->ensureThumbnailDirectory();
-        $binary = (string) (getenv('FFMPEG_BINARY') ?: 'ffmpeg');
+        
         $background = $kind === 'photo' ? 'white' : 'black';
         $filter = "scale=640:360:force_original_aspect_ratio=decrease,pad=640:360:(ow-iw)/2:(oh-ih)/2:color={$background}";
-        $command = [$binary, '-hide_banner', '-loglevel', 'error', '-y'];
-        if ($kind === 'video') array_push($command, '-ss', '1');
-        array_push($command, '-i', $source, '-frames:v', '1', '-vf', $filter, '-q:v', '3', $destination);
-        $pipes = [];
-        $process = @proc_open($command, [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
-        if (! is_resource($process)) return false;
-        foreach ($pipes as $pipe) fclose($pipe);
-        $successful = proc_close($process) === 0 && is_file($destination) && filesize($destination) > 0;
-        if (! $successful) @unlink($destination);
-        if ($successful) @chmod($destination, 0644);
+        $seekSeconds = $kind === 'video' ? 1 : null;
+        
+        $successful = $this->ffmpeg->extractFrame($source, $destination, $filter, $seekSeconds);
+        
+        if ($successful) {
+            @chmod($destination, 0644);
+        }
+        
         return $successful;
     }
 

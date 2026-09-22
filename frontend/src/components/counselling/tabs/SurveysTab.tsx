@@ -11,7 +11,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { ConfirmDialog, type ConfirmAction } from '@/components/ConfirmDialog';
-import { QueryErrorState } from '@/components/QueryErrorState';
+import { TableStateBlock } from '@/components/TableStates';
 import {
   Dialog,
   DialogContent,
@@ -495,16 +495,23 @@ function ResponsesDialog({ survey, onClose }: { survey: Survey; onClose: () => v
           </DialogDescription>
         </DialogHeader>
         <AggregateSummary survey={survey} />
-        {responses.isLoading && <Skeleton className="h-24" />}
-        {responses.isError && (
-          <QueryErrorState message="Failed to load responses." onRetry={() => void responses.refetch()} pending={responses.isFetching} />
-        )}
-        {responses.data !== undefined && rows.length === 0 && (
-          <p className="py-4 text-center text-sm text-muted-foreground">No submissions yet.</p>
-        )}
-        {rows.length > 0 && (
+        <TableStateBlock
+          isLoading={responses.isLoading}
+          isError={responses.isError}
+          isEmpty={rows.length === 0}
+          onRetry={() => void responses.refetch()}
+          pending={responses.isFetching}
+          errorMessage="Failed to load responses."
+          loadingLabel="Loading responses"
+          skeletonRows={1}
+          empty={{
+            title: 'No submissions yet.',
+            description: 'Responses appear as students complete the survey.',
+          }}
+        />
+        {!responses.isLoading && !responses.isError && rows.length > 0 && (
           <div className="overflow-hidden rounded-lg border">
-            <Table>
+            <Table ariaLabel={`Responses to ${survey.title}`}>
               <TableHeader className="bg-muted/50">
                 <TableRow>
                   <TableHead className="px-3">Student</TableHead>
@@ -610,31 +617,37 @@ export function SurveysTab() {
         </Button>
       </div>
 
-      {surveys.isError && (
-        <QueryErrorState message="Failed to load surveys." onRetry={() => void surveys.refetch()} pending={surveys.isFetching} />
-      )}
+      <TableStateBlock
+        isLoading={surveys.isLoading}
+        isError={surveys.isError}
+        isEmpty={rows.length === 0}
+        onRetry={() => void surveys.refetch()}
+        pending={surveys.isFetching}
+        errorMessage="Failed to load surveys."
+        loadingLabel="Loading surveys"
+        empty={{
+          title: 'No surveys yet',
+          description: "Build the first evaluation or needs assessment — it replaces the office's Google Forms.",
+          action: (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                setEditingId(null);
+                setBuilderOpen(true);
+              }}
+            >
+              <Plus aria-hidden /> New survey
+            </Button>
+          ),
+        }}
+      />
 
-      {surveys.isLoading && (
-        <div role="status" aria-label="Loading surveys" className="space-y-3">
-          <Skeleton className="h-14 w-full" />
-          <Skeleton className="h-14 w-full" />
-        </div>
-      )}
-
-      {surveys.data !== undefined && rows.length === 0 && (
-        <section className="rounded-xl border bg-card p-8 text-center">
-          <p className="font-medium text-foreground">No surveys yet</p>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Build the first evaluation or needs assessment — it replaces the office's Google Forms.
-          </p>
-        </section>
-      )}
-
-      {surveys.data !== undefined && rows.length > 0 && (
+      {!surveys.isLoading && !surveys.isError && rows.length > 0 && (
         <section aria-labelledby="survey-list-heading" className="overflow-hidden rounded-xl border bg-card">
           <h2 id="survey-list-heading" className="sr-only">Surveys</h2>
           <div className="overflow-x-auto">
-            <Table>
+            <Table ariaLabel="Surveys and their response counts">
               <TableHeader className="bg-muted/50">
                 <TableRow>
                   <TableHead className="px-3">Survey</TableHead>

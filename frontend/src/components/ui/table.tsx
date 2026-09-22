@@ -1,15 +1,31 @@
 /**
  * Table — shadcn/ui (new-york). Semantic <table> markup preserved for
  * screen readers; styling via wrapper div for horizontal overflow.
+ *
+ * Two accessibility affordances are built in so callers cannot forget them:
+ *  - `ariaLabel` renders a visually hidden <caption>, giving the table an
+ *    accessible name (WCAG 1.3.1). Pass the same string as the section
+ *    heading. Do NOT also render a <TableCaption> — a table may only have
+ *    one caption.
+ *  - `TableHead` emits `scope="col"`, so every data cell is programmatically
+ *    associated with its column header.
  */
 import * as React from 'react';
 
 import { cn } from '@/lib/utils';
 
-const Table = React.forwardRef<HTMLTableElement, React.HTMLAttributes<HTMLTableElement>>(
-  ({ className, ...props }, ref) => (
+interface TableProps extends React.HTMLAttributes<HTMLTableElement> {
+  /** Accessible name, rendered as a visually hidden <caption>. */
+  ariaLabel?: string;
+}
+
+const Table = React.forwardRef<HTMLTableElement, TableProps>(
+  ({ className, ariaLabel, children, ...props }, ref) => (
     <div className="relative w-full overflow-auto">
-      <table ref={ref} className={cn('w-full caption-bottom text-sm', className)} {...props} />
+      <table ref={ref} className={cn('w-full caption-bottom text-sm', className)} {...props}>
+        {ariaLabel !== undefined && <caption className="sr-only">{ariaLabel}</caption>}
+        {children}
+      </table>
     </div>
   ),
 );
@@ -61,6 +77,10 @@ const TableHead = React.forwardRef<HTMLTableCellElement, React.ThHTMLAttributes<
   ({ className, ...props }, ref) => (
     <th
       ref={ref}
+      // `scope="col"` is emitted for every header cell: without it a screen
+      // reader cannot associate a data cell with its column. Callers may
+      // override with scope="row" for a header cell that labels its row.
+      scope="col"
       className={cn(
         // Header cells intentionally carry NO hover outline — only the
         // row gets the maroon highlight.

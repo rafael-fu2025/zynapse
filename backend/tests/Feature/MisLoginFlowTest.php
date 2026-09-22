@@ -45,12 +45,14 @@ final class MisLoginFlowTest extends FeatureTestCase
         // Force FUMIS_ENABLED=true for this suite.
         putenv('FUMIS_ENABLED=1');
         $_SERVER['FUMIS_ENABLED'] = '1';
+        $_ENV['FUMIS_ENABLED'] = '1';
     }
 
     protected function tearDown(): void
     {
         putenv('FUMIS_ENABLED=0');
         $_SERVER['FUMIS_ENABLED'] = '0';
+        unset($_ENV['FUMIS_ENABLED']);
         Services::resetSingle('fuMisTransport');
         Services::resetSingle('fuMisClient');
         Services::resetSingle('fuMisAuthService');
@@ -114,6 +116,10 @@ final class MisLoginFlowTest extends FeatureTestCase
         $meBody = $this->envelope($me);
         $this->assertSame('20261111', $meBody['data']['identifier']);
         $this->assertSame('student', $meBody['data']['person_kind']);
+        // The MIS API never returns an email — /auth/me derives the
+        // university address from the person name (display-only).
+        $this->assertSame('carlos.perez@foundationu.com', $meBody['data']['email']);
+        $this->assertFalse($meBody['data']['has_local_password']);
     }
 
     public function testEmployeeLoginFallsBackFromStudentNamespace(): void
@@ -158,6 +164,44 @@ final class MisLoginFlowTest extends FeatureTestCase
         $meBody = $this->envelope($me);
         $this->assertSame('20269099', $meBody['data']['identifier']);
         $this->assertTrue($meBody['data']['is_teaching']);
+        $this->assertSame('elena.reyes@foundationu.com', $meBody['data']['email']);
+        $this->assertFalse($meBody['data']['has_local_password']);
+    }
+
+    public function testAdminUserListFindsMisUserByNameAndShowsDerivedEmail(): void
+    {
+        // JIT-provision a student through the MIS flow.
+        $this->transport->studentResponse = [
+            'data' => [
+                'student_id' => '20262222',
+                'first_name' => 'Maria Clara',
+                'last_name'  => 'Dela Cruz',
+                'program'    => 'BSNursing',
+                'level'      => '2',
+            ],
+            'access_token'  => 'mis-at-2',
+            'refresh_token' => 'mis-rt-2',
+            'expires_at'    => '2026-09-16 08:00:00',
+        ];
+        $res = $this->withBodyFormat('json')->call(
+            'post',
+            'api/v1/auth/login',
+            ['identifier' => '20262222', 'password' => 'MisSecretPass1!'],
+        );
+        $res->assertStatus(200);
+
+        // Before the name-search extension, MIS users were unfindable:
+        // no email identity, username is the synthetic stu-XXXX.
+        $admin = $this->login(['clinic_admin']);
+        $list = $this->authed($admin['token'], 'get', 'api/v1/admin/users?q=Dela Cruz');
+        $list->assertStatus(200);
+        $rows = $this->envelope($list)['data'];
+        $match = array_values(array_filter(
+            $rows,
+            static fn (array $u): bool => ($u['username'] ?? null) === 'stu-20262222',
+        ));
+        $this->assertNotEmpty($match, 'MIS-provisioned user must be findable by surname.');
+        $this->assertSame('mariaclara.delacruz@foundationu.com', $match[0]['email']);
     }
 
     public function testWrongCredentialsInBothNamespacesReturns401(): void
@@ -209,7 +253,7 @@ final class MisLoginFlowTest extends FeatureTestCase
         $res = $this->withBodyFormat('json')->call(
             'post',
             'api/v1/auth/login',
-            ['email' => $email, 'password' => self::TEST_PASSWORD],
+            ['email' => $email, 'password' => $this->testPassword()],
         );
 
         $res->assertStatus(200);

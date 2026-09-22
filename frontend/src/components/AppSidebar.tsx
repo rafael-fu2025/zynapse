@@ -9,17 +9,14 @@
 import {
   BarChart3,
   Bell,
-  BookOpen,
   Boxes,
   CalendarClock,
   ContactRound,
   Factory,
-  FlaskConical,
   HeartPulse,
   IdCard,
   LayoutDashboard,
   MessagesSquare,
-  Plug,
   Recycle,
   ScanLine,
   ScrollText,
@@ -171,16 +168,6 @@ const NAV_SECTIONS: ReadonlyArray<{ title: string; items: ReadonlyArray<NavItem>
       { label: 'Users', href: '/admin/users', icon: Users, permission: 'rbac.manage' },
       { label: 'Roles', href: '/admin/roles', icon: ShieldCheck, permission: 'rbac.read' },
       { label: 'Kiosk Settings', href: '/admin/kiosk-settings', icon: Settings, permission: 'kiosk.content.manage' },
-    ],
-  },
-  {
-    // Developer portal (2026-09, D7): external API apps, docs, sandbox.
-    // Superadmin-only via the api_apps.* codes.
-    title: 'Developer',
-    items: [
-      { label: 'API Apps', href: '/developer', icon: Plug, permission: 'api_apps.manage' },
-      { label: 'API Docs', href: '/developer/docs', icon: BookOpen, permission: 'api_apps.read' },
-      { label: 'Sandbox', href: '/developer/sandbox', icon: FlaskConical, permission: 'api_apps.manage' },
     ],
   },
 ];

@@ -14,6 +14,7 @@ use App\Exceptions\ApiException;
 use App\Exceptions\FuMisInvalidCredentialsException;
 use App\Services\Audit\AuditOutboxService;
 use App\Services\FuMis\FuMisAuthService;
+use App\Services\UniversityEmail;
 use CodeIgniter\HTTP\ResponseInterface;
 use Config\FuMis;
 use Config\Services;
@@ -293,6 +294,19 @@ final class AuthController extends ApiController
             ],
         );
 
+        // Grace-window hit: the rotation already happened in a racing tab;
+        // the client already holds the valid replacement cookie. Issue a
+        // fresh access token but do NOT overwrite the cookie.
+        if (! empty($result['grace'])) {
+            $state = $this->accountState->forUser($userId);
+            $access = $this->jwt->sign($userId, (int) ($state['token_epoch'] ?? 0));
+            return $this->ok([
+                'access_token' => $access,
+                'token_type'   => 'Bearer',
+                'expires_in'   => (int) (getenv('JWT_ACCESS_TTL_SECONDS') ?: 900),
+            ]);
+        }
+
         return $this->finalizeAuth($userId, $result['mint']);
     }
 
@@ -357,10 +371,25 @@ final class AuthController extends ApiController
 
         return $this->ok([
             'id'          => (int)    $user->id,
-            'email'       => (string) $user->email,
+            // MIS-provisioned users carry no email identity (the MIS API
+            // never returns one) — derive the university address from the
+            // person name so every surface (UserMenu, portals, mobile)
+            // shows the real @foundationu.com handle. Display-only: it
+            // never opens the email+password login path.
+            'email'       => $user->email !== null && $user->email !== ''
+                ? (string) $user->email
+                : (UniversityEmail::derive(
+                    $userRow['person_first_name'] ?? null,
+                    $userRow['person_last_name'] ?? null,
+                ) ?? ''),
             'username'    => (string) $user->username,
             'identifier'  => $identifier !== null ? (string) $identifier : null,
             'is_active'   => (bool)   $user->active,
+            // True only for accounts with a local email_password identity
+            // (admins, clinic-minted portal accounts). MIS-provisioned
+            // users authenticate against the university API and manage
+            // their password through the FU helpdesk.
+            'has_local_password' => (bool) ($user->has_local_password ?? false),
             'force_reset' => (bool)   ($user->force_reset ?? false),
             'person_kind' => isset($userRow['person_kind']) && $userRow['person_kind'] !== null ? (string) $userRow['person_kind'] : null,
             'person_name' => $personName,
@@ -391,7 +420,21 @@ final class AuthController extends ApiController
             ->where('type', 'email_password')
             ->get()->getRowArray();
 
-        if ($identity === null || ! password_verify((string) $payload['current_password'], (string) $identity['secret2'])) {
+        if ($identity === null) {
+            // MIS-provisioned users have no local password to rotate —
+            // the university API owns their credentials. Say so
+            // explicitly instead of a misleading "wrong password" 401.
+            $this->audit->enqueue(
+                'auth.password_change_failed',
+                'auth_sessions',
+                $userId,
+                $userId,
+                ['auth_method' => 'fumis', 'outcome' => 'failure', 'reason' => 'no_local_identity', ...$this->provenance()],
+            );
+            throw new ApiException(\App\Exceptions\ApiErrorCode::AUTH_PASSWORD_MIS_MANAGED, 403);
+        }
+
+        if (! password_verify((string) $payload['current_password'], (string) $identity['secret2'])) {
             $this->audit->enqueue(
                 'auth.password_change_failed',
                 'auth_sessions',

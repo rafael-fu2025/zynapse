@@ -28,7 +28,11 @@ use CodeIgniter\Database\Seeder;
  */
 final class DevUserSeeder extends Seeder
 {
-    private const PASSWORD = 'DevPassw0rd!';
+    private static function devPassword(): string
+    {
+        $pw = getenv('SYNAPSE_DEV_PASSWORD');
+        return ($pw !== false && $pw !== '') ? $pw : 'DevPassw0rd!';
+    }
 
     /** @var array<string, array{username: string, groups: list<string>}> */
     private const ACCOUNTS = [
@@ -107,7 +111,7 @@ final class DevUserSeeder extends Seeder
             'user_id'    => $userId,
             'type'       => 'email_password',
             'secret'     => $email,
-            'secret2'    => password_hash(self::PASSWORD, PASSWORD_DEFAULT),
+            'secret2'    => password_hash(self::devPassword(), PASSWORD_DEFAULT),
             'created_at' => $now,
             'updated_at' => $now,
         ]);

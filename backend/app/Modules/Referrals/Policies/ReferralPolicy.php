@@ -17,8 +17,8 @@ use App\Modules\Shared\BasePolicy;
  *   - referrals.close        → close
  *   - referrals.issue_qr     → issue QR token
  *
- * No record-level ownership. Issuers can acknowledge / review their
- * own referrals without a separate permission today; that's a future
+ * @noRecordCheck — No record-level ownership. Issuers can acknowledge / review
+ * their own referrals without a separate permission today; that's a future
  * product decision. The default `canOnRecord() === true` is in effect.
  */
 final class ReferralPolicy extends BasePolicy

@@ -113,7 +113,7 @@ jobs:
             e2e/portal-appointments.spec.ts \
             e2e/queue-display-media.spec.ts
 
-      # The remaining 7 specs (21 tests) are gated behind SYNAPSE_E2E=1 and
+      # The remaining 7 specs (13 tests) are gated behind SYNAPSE_E2E=1 and
       # need a live PHP backend + shared dev account; they run locally, not
       # here. See Phase 0.4 of the remediation roadmap.
 

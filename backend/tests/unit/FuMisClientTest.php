@@ -99,6 +99,43 @@ final class FuMisClientTest extends TestCase
         );
     }
 
+    public function testTokenEndpointsAcceptNestedDataEnvelope(): void
+    {
+        // The live API wraps the payload: {status, message, data:{…tokens…}}.
+        $double = new RecordingTransport([
+            'status' => 'success', 'message' => 'Success', 'data' => ['refresh_token' => 'rt-nested'],
+        ]);
+        $client = new FuMisClient($this->config, $double);
+
+        $generated = $client->generateToken();
+        $this->assertSame('rt-nested', $generated['refresh_token']);
+
+        $double->queue([
+            'status' => 'success', 'message' => 'Success', 'data' => [
+                'access_token' => 'at-nested',
+                'refresh_token' => 'rt-nested-2',
+                'expires_at' => '2026-09-18 12:00:00',
+            ],
+        ]);
+
+        $refreshed = $client->refreshToken('rt-nested');
+        $this->assertSame('at-nested', $refreshed['access_token']);
+        $this->assertSame('rt-nested-2', $refreshed['refresh_token']);
+        $this->assertSame('2026-09-18 12:00:00', $refreshed['expires_at']);
+    }
+
+    public function testNestedEnvelopeMissingFieldsStillFailLoudly(): void
+    {
+        $double = new RecordingTransport([
+            'status' => 'success', 'message' => 'Success', 'data' => ['refresh_token' => 'rt-only'],
+        ]);
+        $client = new FuMisClient($this->config, $double);
+
+        $this->expectException(FuMisException::class);
+        $this->expectExceptionMessage('fumis.missing_access_token');
+        $client->refreshToken('rt-only');
+    }
+
     public function testMissingTokenFieldsAreContractFailures(): void
     {
         $double = new RecordingTransport(['access_token' => 'at']); // no refresh_token

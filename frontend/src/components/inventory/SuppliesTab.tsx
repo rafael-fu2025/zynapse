@@ -16,7 +16,7 @@ import {
 import { useEffect, useState } from 'react';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { MobileCardList, MobileCard, MobileCardField, MobileCardActions } from '@/components/MobileCardList';
-import { QueryErrorRow } from '@/components/QueryErrorState';
+import { TableStateRows } from '@/components/TableStates';
 import { SearchBox, highlightMatch } from '@/components/ui/SearchBox';
 import { Button } from '@/components/ui/button';
 import { Dialog } from '@/components/ui/dialog';
@@ -157,12 +157,13 @@ export function SuppliesTab() {
 
   return (
     <div className="space-y-4">
-      <section className="flex flex-wrap items-center justify-between gap-3 rounded-xl border bg-card p-3">
+      <section className="flex flex-wrap items-end justify-between gap-3 rounded-xl border bg-card p-3">
         <SearchBox
           value={qDraft}
           onValueChange={setQ}
           placeholder="Search by SKU or name"
           inputId="supplies-search"
+          label="Search"
           ariaLabel="Search supplies by SKU or name"
           isFetching={list.isFetching && list.data !== undefined}
           className="w-full sm:w-64 lg:w-96"
@@ -195,7 +196,7 @@ export function SuppliesTab() {
       </section>
 
       <section className="hidden overflow-hidden rounded-xl border bg-card md:block">
-        <Table>
+        <Table ariaLabel="Supply items with stock levels">
           <TableHeader className="bg-muted/50">
             <TableRow>
               <TableHead className="px-3">SKU</TableHead>
@@ -208,23 +209,37 @@ export function SuppliesTab() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {list.isLoading && (
-              <TableRow>
-                <TableCell colSpan={7} className="px-3 py-6 text-center text-muted-foreground">
-                  <Loader2 className="mx-auto size-4 animate-spin" />
-                </TableCell>
-              </TableRow>
-            )}
-            {!list.isLoading && rows.length === 0 && (
-              <TableRow>
-                <TableCell colSpan={7} className="px-3 py-6 text-center text-muted-foreground">
-                  {q !== '' ? `No items match "${q}".` : 'No items.'}
-                </TableCell>
-              </TableRow>
-            )}
-            {list.isError && !list.isLoading && (
-              <QueryErrorRow colSpan={7} message="Failed to load supplies." onRetry={() => void list.refetch()} pending={list.isFetching} />
-            )}
+            <TableStateRows
+              colSpan={7}
+              isLoading={list.isLoading}
+              isError={list.isError}
+              isEmpty={rows.length === 0}
+              onRetry={() => void list.refetch()}
+              pending={list.isFetching}
+              errorMessage="Failed to load supplies."
+              loadingLabel="Loading supplies"
+              empty={{
+                title: 'No supplies in the catalog.',
+                description: 'Add an item to start tracking signed stock movements.',
+              }}
+              noResults={{
+                title: q !== '' ? `No items match "${q}".` : 'No items need reordering.',
+                description: 'Adjust or clear the filters to see more.',
+                action: (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      setQ('');
+                      setLowStockOnly('');
+                    }}
+                  >
+                    Clear filters
+                  </Button>
+                ),
+              }}
+              hasFilters={q !== '' || lowStockOnly}
+            />
             {rows.map((it, idx) => (
               <TableRow key={it.id} {...supplyRowNav.getRowProps(idx)}>
                 <TableCell className="px-3 font-mono text-xs">{highlightMatch(it.sku, q)}</TableCell>

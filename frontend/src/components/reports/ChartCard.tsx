@@ -1,11 +1,11 @@
 /**
- * ChartCard — shared panel chrome for the Recharts visualizations in
+ * ChartCard — shared panel chrome for the Chart.js visualizations in
  * the reports module.
  *
  * Provides the bordered-card look used across the report (matching
- * `TrendChart` / `ReportDataTable`), a maroon-anchored categorical
- * palette, a loading skeleton, and a styled tooltip body so every
- * chart stays visually consistent and accessible.
+ * the chart patterns in `charts.tsx` / `ReportDataTable`), a maroon-anchored
+ * categorical palette, and a loading skeleton so every chart stays
+ * visually consistent.
  */
 import type { ReactNode } from 'react';
 import { Skeleton } from '@/components/ui/skeleton';

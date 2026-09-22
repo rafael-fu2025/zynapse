@@ -106,7 +106,7 @@ final class Routes implements BaseRoutes
             $r->get('students/search',                       'PatientController::searchStudents');
             $r->get('patients/lookup',                       'PatientController::lookupForKiosk');
             $r->post('students',                             'PatientController::createStudent');
-            $r->get('students/(:num)',                       'PatientController::showStudent/$1');
+            $r->get('students/(:segment)',                   'PatientController::showStudent/$1');
             $r->post('students/(:num)',                      'PatientController::updateStudent/$1');
             $r->post('students/(:num)/archive',              'PatientController::setStudentArchived/$1');
             $r->post('students/(:num)/allergies',            'PatientController::addAllergy/$1');
@@ -117,13 +117,15 @@ final class Routes implements BaseRoutes
             $r->post('students/(:num)/contacts/(:num)/delete', 'PatientController::deleteContact/$1/$2');
             $r->get('employees',                             'PatientController::listEmployees');
             $r->get('employees/search',                      'PatientController::searchEmployees');
+            // Facet options for the Employees tab filters. MUST stay above
+            // `employees/(:segment)`, which would otherwise swallow it as a
+            // showEmployee lookup for the id "facets".
+            $r->get('employees/facets',                      'PatientController::employeeFacets');
             $r->post('employees/sync-hr',                    'PatientController::syncHrEmployees');
             $r->post('employees',                            'PatientController::createEmployee');
-            $r->get('employees/(:num)',                      'PatientController::showEmployee/$1');
+            $r->get('employees/(:segment)',                  'PatientController::showEmployee/$1');
             $r->post('employees/(:num)',                     'PatientController::updateEmployee/$1');
             $r->post('employees/(:num)/archive',             'PatientController::setEmployeeArchived/$1');
-            $r->get('departments',                           'PatientController::listDepartments');
-            $r->post('departments',                          'PatientController::createDepartment');
 
             // Staff schedules (Phase P5b — recycled from synapse_ag).
             $r->get('staff-schedules',                       'StaffScheduleController::list');

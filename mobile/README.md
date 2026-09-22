@@ -60,7 +60,7 @@ lib/
 
 ## Setup
 
-Prerequisites: Flutter SDK (≥ 3.6, tested on 3.44); the backend on `http://localhost:8090` ([`../backend/README.md`](../backend/README.md)); a demo account — `admin@synapse.dev` / `DevPassw0rd!` (students: `firstname.lastname@foundationu.edu.ph`), full matrix in [`../CREDENTIALS.md`](../CREDENTIALS.md).
+Prerequisites: Flutter SDK (≥ 3.6, tested on 3.44); the backend on `http://localhost:8090` ([`../backend/README.md`](../backend/README.md)); a dev account — `admin@synapse.dev` / `DevPassw0rd!` (real students/employees sign in with their university ID number via the MIS integration), full reference in [`../CREDENTIALS.md`](../CREDENTIALS.md).
 
 ```powershell
 cd mobile

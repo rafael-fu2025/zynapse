@@ -4,15 +4,14 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { z } from 'zod';
 import { toast } from 'sonner';
-import { apiClient } from '@/api/client';
+import { apiClient, getNextCursor } from '@/api/client';
 import type { ApiEnvelopeError } from '@/api/envelope';
 import {
   addAllergySchema,
   addContactSchema,
-  createDepartmentSchema,
   createEmployeeSchema,
   createStudentSchema,
-  departmentSchema,
+  employeeFacetsSchema,
   employeeSchema,
   portalAccountSchema,
   studentSchema,
@@ -20,10 +19,8 @@ import {
   updateStudentSchema,
   type AddAllergyInput,
   type AddContactInput,
-  type CreateDepartmentInput,
   type CreateEmployeeInput,
   type CreateStudentInput,
-  type Department,
   type Employee,
   type PortalAccount,
   type Student,
@@ -41,6 +38,65 @@ interface EmployeePage {
   next: string | null;
 }
 
+/** UI sentinel meaning "no facet filter". */
+export const FACET_ALL = 'all';
+
+/**
+ * Query string for the employee list.
+ *
+ * Pure so it can be tested directly: the `'all'` sentinel must never reach
+ * the wire (the backend treats a blank value as "no filter", but sending the
+ * literal string `all` would filter on a department named "all"), and the
+ * first page must omit `cursor` rather than send an empty one.
+ */
+export function employeeListParams(input: {
+  cursor: string | null;
+  limit: number;
+  includeArchived: boolean;
+  teaching?: string;
+  department?: string;
+  position?: string;
+}): URLSearchParams {
+  const params = new URLSearchParams();
+
+  if (input.cursor !== null && input.cursor !== '') params.set('cursor', input.cursor);
+  params.set('limit', String(input.limit));
+  if (input.includeArchived) params.set('include_archived', '1');
+
+  if (input.teaching !== undefined && input.teaching !== FACET_ALL) {
+    params.set('teaching', input.teaching);
+  }
+  if (input.department !== undefined && input.department !== FACET_ALL) {
+    params.set('department', input.department);
+  }
+  if (input.position !== undefined && input.position !== FACET_ALL) {
+    params.set('position', input.position);
+  }
+
+  return params;
+}
+
+/**
+ * Query string for the employee search. The active facets ride along so a
+ * filter is not silently dropped while the user types.
+ */
+export function employeeSearchParams(input: {
+  q: string;
+  department?: string;
+  position?: string;
+}): URLSearchParams {
+  const params = new URLSearchParams({ q: input.q });
+
+  if (input.department !== undefined && input.department !== FACET_ALL) {
+    params.set('department', input.department);
+  }
+  if (input.position !== undefined && input.position !== FACET_ALL) {
+    params.set('position', input.position);
+  }
+
+  return params;
+}
+
 export function useStudents(cursor: string | null, limit = 25, includeArchived = false) {
   return useQuery<StudentPage, ApiEnvelopeError>({
     queryKey: ['patients', 'students', { cursor, limit, includeArchived }],
@@ -49,11 +105,14 @@ export function useStudents(cursor: string | null, limit = 25, includeArchived =
       if (cursor !== null) params.set('cursor', cursor);
       params.set('limit', String(limit));
       if (includeArchived) params.set('include_archived', '1');
-      const res = await apiClient.get<{ data: unknown[]; next: string | null }>(
+      const res = await apiClient.get<unknown[]>(
         `/clinic/students?${params.toString()}`,
       );
       const data = z.array(studentSchema).parse(res.data);
-      return { data, next: res.data?.next ?? null };
+      // Pagination lives on `synapseMeta` after the response normalizer
+      // unwraps the envelope, so `res.data.next` is always undefined and
+      // left the Next button permanently disabled.
+      return { data, next: getNextCursor(res) };
     },
   });
 }
@@ -79,12 +138,12 @@ export function useStudentSearch(
   });
 }
 
-export function useStudent(id: number | null) {
+export function useStudent(idOrIdentifier: number | string | null) {
   return useQuery<Student, ApiEnvelopeError>({
-    queryKey: ['patients', 'students', 'detail', id],
-    enabled: id !== null,
+    queryKey: ['patients', 'students', 'detail', idOrIdentifier],
+    enabled: idOrIdentifier !== null && idOrIdentifier !== '',
     queryFn: async () => {
-      const res = await apiClient.get<unknown>(`/clinic/students/${id}`);
+      const res = await apiClient.get<unknown>(`/clinic/students/${encodeURIComponent(String(idOrIdentifier))}`);
       return studentSchema.parse(res.data);
     },
   });
@@ -293,41 +352,82 @@ export function useDeleteContact() {
   });
 }
 
+/**
+ * Employee list with the MIS-backed facet filters.
+ *
+ * `department` and `position` are the only two categorical fields the FU
+ * MIS employee payload actually carries (`department_name` + `position`),
+ * so they are the only facet filters the UI offers. The legacy `teaching`
+ * argument is retained because the mobile client still sends it, but the
+ * web UI no longer surfaces it — MIS supplies no teaching flag.
+ *
+ * `'all'` is the UI sentinel and is never sent on the wire.
+ */
 export function useEmployees(
   cursor: string | null,
   limit = 25,
   includeArchived = false,
   teaching: 'all' | 'teaching' | 'non_teaching' = 'all',
+  department = 'all',
+  position = 'all',
 ) {
   return useQuery<EmployeePage, ApiEnvelopeError>({
-    queryKey: ['patients', 'employees', { cursor, limit, includeArchived, teaching }],
+    queryKey: [
+      'patients', 'employees',
+      { cursor, limit, includeArchived, teaching, department, position },
+    ],
     queryFn: async () => {
-      const params = new URLSearchParams();
-      if (cursor !== null) params.set('cursor', cursor);
-      params.set('limit', String(limit));
-      if (includeArchived) params.set('include_archived', '1');
-      if (teaching !== 'all') params.set('teaching', teaching);
-      const res = await apiClient.get<{ data: unknown[]; next: string | null }>(
+      const params = employeeListParams({
+        cursor,
+        limit,
+        includeArchived,
+        teaching,
+        department,
+        position,
+      });
+      const res = await apiClient.get<unknown[]>(
         `/clinic/employees?${params.toString()}`,
       );
       const data = z.array(employeeSchema).parse(res.data);
-      return { data, next: res.data?.next ?? null };
+      // See useStudents — the cursor comes from `synapseMeta`, not `data`.
+      return { data, next: getNextCursor(res) };
     },
+  });
+}
+
+/**
+ * Facet options for the Employees tab filters — distinct MIS-supplied
+ * department / position values present in the live directory. Served from
+ * the synced rows so every option is guaranteed to match at least one
+ * employee (unlike the dropped `clinic_departments` picker, whose
+ * hand-entered rows never lined up with MIS values).
+ */
+export function useEmployeeFacets() {
+  return useQuery<{ departments: string[]; positions: string[] }, ApiEnvelopeError>({
+    queryKey: ['patients', 'employees', 'facets'],
+    queryFn: async () => {
+      const res = await apiClient.get<unknown>('/clinic/employees/facets');
+      return employeeFacetsSchema.parse(res.data);
+    },
+    // Facets change only when the directory is re-synced.
+    staleTime: 5 * 60 * 1000,
   });
 }
 
 /**
  * Live employee search (>= 2 chars). Mirrors the legacy
  * `EmployeeController::search` flow — backend matches against number,
- * first, last, middle, department, and position.
+ * first, last, middle, department, and position. The facet filters stay in
+ * force during search so narrowing does not silently reset while typing.
  */
-export function useEmployeeSearch(q: string) {
+export function useEmployeeSearch(q: string, department = 'all', position = 'all') {
   return useQuery<Employee[], ApiEnvelopeError>({
-    queryKey: ['patients', 'employees', 'search', q],
+    queryKey: ['patients', 'employees', 'search', q, { department, position }],
     enabled: q.trim().length >= 2,
     queryFn: async () => {
+      const params = employeeSearchParams({ q: q.trim(), department, position });
       const res = await apiClient.get<unknown[]>(
-        `/clinic/employees/search?q=${encodeURIComponent(q.trim())}`,
+        `/clinic/employees/search?${params.toString()}`,
       );
       return z.array(employeeSchema).parse(res.data);
     },
@@ -338,12 +438,12 @@ export function useEmployeeSearch(q: string) {
  * Single-employee detail (used by the Employees tab View dialog).
  * Mirrors `useStudent` for the students tab.
  */
-export function useEmployee(id: number | null) {
+export function useEmployee(idOrIdentifier: number | string | null) {
   return useQuery<Employee, ApiEnvelopeError>({
-    queryKey: ['patients', 'employees', 'detail', id],
-    enabled: id !== null,
+    queryKey: ['patients', 'employees', 'detail', idOrIdentifier],
+    enabled: idOrIdentifier !== null && idOrIdentifier !== '',
     queryFn: async () => {
-      const res = await apiClient.get<unknown>(`/clinic/employees/${id}`);
+      const res = await apiClient.get<unknown>(`/clinic/employees/${encodeURIComponent(String(idOrIdentifier))}`);
       return employeeSchema.parse(res.data);
     },
   });
@@ -405,34 +505,6 @@ export function useSetEmployeeArchived() {
     },
     onError: (err) => {
       toast.error(err.errors[0]?.message ?? 'Failed to change archive state.');
-    },
-  });
-}
-
-export function useDepartments(activeOnly = false) {
-  return useQuery<Department[], ApiEnvelopeError>({
-    queryKey: ['patients', 'departments', { activeOnly }],
-    queryFn: async () => {
-      const res = await apiClient.get<unknown[]>(`/clinic/departments${activeOnly ? '?active=1' : ''}`);
-      return z.array(departmentSchema).parse(res.data);
-    },
-  });
-}
-
-export function useCreateDepartment() {
-  const qc = useQueryClient();
-  return useMutation<{ id: number }, ApiEnvelopeError, CreateDepartmentInput>({
-    mutationFn: async (input) => {
-      const valid = createDepartmentSchema.parse(input);
-      const res = await apiClient.post<{ id: number }>('/clinic/departments', valid);
-      return z.object({ id: z.number().int().positive() }).parse(res.data);
-    },
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ['patients', 'departments'] });
-      toast.success('Department created.');
-    },
-    onError: (err) => {
-      toast.error(err.errors[0]?.message ?? 'Failed to create department.');
     },
   });
 }

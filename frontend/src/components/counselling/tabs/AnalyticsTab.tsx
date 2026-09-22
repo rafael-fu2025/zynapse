@@ -7,7 +7,7 @@ import {
 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { QueryErrorRow } from '@/components/QueryErrorState';
+import { TableStateRows } from '@/components/TableStates';
 import {
   Table,
   TableBody,
@@ -96,7 +96,7 @@ export function AnalyticsTab() {
       </div>
 
       <section className="overflow-hidden rounded-xl border bg-card">
-        <Table>
+        <Table ariaLabel="Scheduling analytics by counsellor, day and slot">
           <TableHeader className="bg-muted/50">
             <TableRow>
               <TableHead className="px-3">Counsellor</TableHead>
@@ -109,29 +109,29 @@ export function AnalyticsTab() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {analytics.isLoading && (
-              <TableRow>
-                <TableCell colSpan={7} className="px-3 py-8 text-center text-muted-foreground">
-                  <Loader2 className="mx-auto size-5 animate-spin" />
-                </TableCell>
-              </TableRow>
-            )}
-            {!analytics.isLoading && (analytics.data?.length ?? 0) === 0 && (
-              <TableRow>
-                <TableCell colSpan={7} className="px-3 py-12 text-center text-muted-foreground">
-                  <p className="font-medium">No analytics computed yet.</p>
-                  <p className="mt-1 text-xs">Recompute to calculate slot statistics and overbooking recommendations from appointment history.</p>
-                  {canMutate && (
-                    <Button className="mt-3" size="sm" variant="outline" onClick={() => recompute.mutate()} disabled={recompute.isPending}>
-                      <LineChart className="size-3.5" /> Run initial computation
-                    </Button>
-                  )}
-                </TableCell>
-              </TableRow>
-            )}
-            {analytics.isError && !analytics.isLoading && (
-              <QueryErrorRow colSpan={7} message="Failed to load analytics." onRetry={() => void analytics.refetch()} pending={analytics.isFetching} />
-            )}
+            <TableStateRows
+              colSpan={7}
+              isLoading={analytics.isLoading}
+              isError={analytics.isError}
+              isEmpty={(analytics.data?.length ?? 0) === 0}
+              onRetry={() => void analytics.refetch()}
+              pending={analytics.isFetching}
+              errorMessage="Failed to load analytics."
+              loadingLabel="Loading analytics"
+              empty={{
+                title: 'No analytics computed yet.',
+                description: 'Recompute to calculate slot statistics and overbooking recommendations from appointment history.',
+                ...(canMutate
+                  ? {
+                      action: (
+                        <Button size="sm" variant="outline" onClick={() => recompute.mutate()} disabled={recompute.isPending}>
+                          <LineChart className="size-3.5" /> Run initial computation
+                        </Button>
+                      ),
+                    }
+                  : {}),
+              }}
+            />
             {sorted.map((s: SlotAnalytics) => (
               <TableRow key={s.id}>
                 <TableCell className="px-3 font-mono text-xs">#{s.counsellor_user_id}</TableCell>

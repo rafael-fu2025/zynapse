@@ -5,7 +5,7 @@
  * is linked.
  */
 import { CirclePower, Moon, Sun } from 'lucide-react';
-import { useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { useLogout, useMe } from '@/hooks/useAuth';
@@ -31,11 +31,89 @@ function kindLabel(kind: 'student' | 'employee' | 'contractor' | 'alumni' | null
   return 'No patient link';
 }
 
+/** Cumulative wheel delta (px) that counts as a real scroll, not trackpad jitter. */
+const SCROLL_DISMISS_THRESHOLD_PX = 4;
+
+/**
+ * Grace window (ms) after an in-menu wheel/touch gesture. The menu has no
+ * internal scroll area yet, so a wheel over it scrolls the PAGE — without
+ * this, the resulting scroll event would dismiss the very menu the user is
+ * pointing at (and would self-close the moment the menu gains a scroller).
+ */
+const INSIDE_MENU_SCROLL_GRACE_MS = 200;
+
 export function UserMenu() {
   const me = useMe();
   const logout = useLogout();
   const { theme, toggleTheme } = useTheme();
   const [confirmSignOut, setConfirmSignOut] = useState(false);
+  const [open, setOpen] = useState(false);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const wheelDeltaRef = useRef(0);
+  const inMenuGestureAtRef = useRef(0);
+
+  /**
+   * The ONE dismissal path. Radix routes outside-click and Escape through
+   * `onOpenChange`, and the scroll listeners below call this directly — so
+   * every dismiss flips the state, closes `aria-expanded` (Radix derives it
+   * from `open`) and returns focus to the trigger when the menu held it.
+   */
+  const closeMenu = useCallback((): void => {
+    setOpen(false);
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && menuRef.current?.contains(active)) {
+      triggerRef.current?.focus();
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    wheelDeltaRef.current = 0;
+    inMenuGestureAtRef.current = 0;
+
+    const isInsideMenu = (target: EventTarget | null): boolean =>
+      target instanceof Node && (menuRef.current?.contains(target) ?? false);
+
+    // `scroll` does NOT bubble, so the listener is registered on window in
+    // the CAPTURE phase — that catches nested scrollers (tables, chart
+    // panes) that a bubble-phase window listener would miss. A scroll event
+    // means the offset already moved, so it dismisses on the first event.
+    const onScroll = (event: Event): void => {
+      if (isInsideMenu(event.target)) return;
+      if (performance.now() - inMenuGestureAtRef.current < INSIDE_MENU_SCROLL_GRACE_MS) return;
+      closeMenu();
+    };
+    // wheel/touchmove fire BEFORE any scroll event; accumulate the wheel
+    // delta so trackpad momentum jitter (a few px) doesn't dismiss, while a
+    // deliberate nudge (>= SCROLL_DISMISS_THRESHOLD_PX) does.
+    const onWheel = (event: WheelEvent): void => {
+      if (isInsideMenu(event.target)) {
+        inMenuGestureAtRef.current = performance.now();
+        return;
+      }
+      wheelDeltaRef.current += Math.abs(event.deltaX) + Math.abs(event.deltaY);
+      if (wheelDeltaRef.current >= SCROLL_DISMISS_THRESHOLD_PX) closeMenu();
+    };
+    // A touch drag is an intentional gesture — no threshold.
+    const onTouchMove = (event: TouchEvent): void => {
+      if (isInsideMenu(event.target)) {
+        inMenuGestureAtRef.current = performance.now();
+        return;
+      }
+      closeMenu();
+    };
+
+    window.addEventListener('scroll', onScroll, { capture: true, passive: true });
+    window.addEventListener('wheel', onWheel, { passive: true });
+    window.addEventListener('touchmove', onTouchMove, { passive: true });
+
+    return () => {
+      window.removeEventListener('scroll', onScroll, { capture: true });
+      window.removeEventListener('wheel', onWheel);
+      window.removeEventListener('touchmove', onTouchMove);
+    };
+  }, [closeMenu, open]);
 
   const linkedName = me.data?.person_name ?? me.data?.email ?? me.data?.username ?? null;
   const identity = linkedName ?? me.data?.email ?? me.data?.username ?? null;
@@ -45,9 +123,10 @@ export function UserMenu() {
   const displayHandle = me.data?.person_name ?? me.data?.email ?? me.data?.identifier ?? '';
 
   return (
-    <Popover>
+    <Popover open={open} onOpenChange={(next) => (next ? setOpen(true) : closeMenu())}>
       <PopoverTrigger asChild>
         <button
+          ref={triggerRef}
           type="button"
           aria-label="Open user menu"
           className="flex items-center justify-center rounded-full bg-primary text-primary-foreground transition-colors hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50
@@ -65,7 +144,7 @@ export function UserMenu() {
           </span>
         </button>
       </PopoverTrigger>
-      <PopoverContent align="end" sideOffset={8} className="w-56 p-1">
+      <PopoverContent ref={menuRef} align="end" sideOffset={8} className="w-56 p-1">
         <div className="px-2 py-1.5">
           {me.data?.person_name ? (
             <>

@@ -14,12 +14,20 @@ use CodeIgniter\Test\TestResponse;
  * The rotation chain this file pins down (see RefreshTokenService):
  *   login            → family minted, cookie `synapse_rt` set
  *   refresh #1 (old) → 'rotated': new pair minted, old hash marked replaced
- *   refresh #2 (old) → 'replayed': REPLAY DETECTED, whole family revoked
+ *   refresh #2 (old) → within GRACE_WINDOW_SECONDS: treated as a tab race,
+ *                      the SAME family is returned and the replacement stays
+ *                      live — two concurrent tabs must not destroy each other
+ *   refresh #2 (old) → outside the grace window: 'replayed', whole family
+ *                      revoked and the user's token epoch advanced
  *   refresh #3 (new) → also rejected — the family revocation killed it
  *
  * That last step is the invariant the replay-detection design exists to
  * guarantee, and it is only observable end-to-end: the unit suite never
  * boots the kernel.
+ *
+ * NOTE: the grace-window path and the genuine-replay path are covered by two
+ * separate tests. An earlier single test replayed the old token immediately and
+ * asserted 401; it predated the grace window and had been failing since.
  */
 final class AuthenticationFlowTest extends FeatureTestCase
 {
@@ -53,7 +61,7 @@ final class AuthenticationFlowTest extends FeatureTestCase
         $result = $this->withBodyFormat('json')->call(
             'post',
             'api/v1/auth/login',
-            ['email' => $email, 'password' => self::TEST_PASSWORD],
+            ['email' => $email, 'password' => $this->testPassword()],
         );
 
         $result->assertStatus(200);
@@ -147,7 +155,42 @@ final class AuthenticationFlowTest extends FeatureTestCase
         $this->assertErrorCode('auth.refresh_invalid_or_replayed', $result);
     }
 
-    public function testRefreshRotatesAndDetectsReplayRevokingTheWholeFamily(): void
+    /**
+     * A replay arriving within GRACE_WINDOW_SECONDS of the rotation is treated
+     * as a cross-tab race rather than a replay. Two browser tabs refreshing
+     * concurrently present the same token; without a grace window the second
+     * would revoke the family and destroy the first tab's session.
+     *
+     * So the old token is exchanged for the SAME family and the replacement
+     * minted by the first refresh is left live.
+     */
+    public function testReplayWithinGraceWindowIsTreatedAsARace(): void
+    {
+        $session = $this->loginFull();
+        $oldRefresh = $session['refresh'];
+
+        $rotated = $this->refreshWith($oldRefresh);
+        $rotated->assertStatus(200);
+        $newRefresh = $this->refreshCookieValue($rotated);
+        $this->assertNotSame($oldRefresh, $newRefresh, 'Rotation must issue a fresh refresh token.');
+
+        // Present the OLD token again immediately — inside the grace window.
+        $race = $this->refreshWith($oldRefresh);
+        $race->assertStatus(200);
+
+        // The family survived: the replacement from step 1 is still usable.
+        $after = $this->refreshWith($newRefresh);
+        $after->assertStatus(200);
+    }
+
+    /**
+     * The invariant the replay-detection design exists to guarantee. Once the
+     * grace window has elapsed, presenting an already-rotated token is a
+     * genuine replay: the whole family is revoked AND the user's token epoch
+     * advances, so every outstanding access token dies immediately rather than
+     * at expiry.
+     */
+    public function testGenuineReplayAfterGraceWindowRevokesTheWholeFamily(): void
     {
         $session = $this->loginFull();
         $oldRefresh = $session['refresh'];
@@ -162,18 +205,29 @@ final class AuthenticationFlowTest extends FeatureTestCase
         $this->assertNotSame('', $newRefresh, 'Rotation must set a new refresh cookie.');
         $this->assertNotSame($oldRefresh, $newRefresh, 'Rotation must issue a fresh refresh token, not re-issue the old one.');
 
-        // 2. Replaying the OLD token: replay detected, family revoked.
+        // 2. Backdate the rotation so the next use of the old token falls
+        //    OUTSIDE the grace window and is unambiguously a replay. Backdating
+        //    is used rather than sleeping, so the test stays fast and does not
+        //    depend on wall-clock timing.
+        $grace = 5; // RefreshTokenService::GRACE_WINDOW_SECONDS
+        \Config\Database::connect()
+            ->table('auth_refresh_tokens')
+            ->where('user_id', $session['userId'])
+            ->where('replaced_by_hash IS NOT NULL', null, false)
+            ->update(['revoked_at' => date('Y-m-d H:i:s', time() - $grace - 5)]);
+
+        // 3. Replaying the OLD token: replay detected, family revoked.
         $replay = $this->refreshWith($oldRefresh);
         $replay->assertStatus(401);
         $this->assertErrorCode('auth.refresh_invalid_or_replayed', $replay);
 
-        // 3. The replayed use must have killed the whole family — the NEW
+        // 4. The replayed use must have killed the whole family — the NEW
         //    token minted in step 1 is also dead now.
         $afterReplay = $this->refreshWith($newRefresh);
         $afterReplay->assertStatus(401);
         $this->assertErrorCode('auth.refresh_invalid_or_replayed', $afterReplay);
 
-        // 4. The replayed use also killed the rotated access token: replay
+        // 5. The replayed use also killed the rotated access token: replay
         //    revocation advances the user's token epoch, so every bearer
         //    token issued before the replay dies immediately (not at exp).
         $me = $this->authed($newToken, 'get', 'api/v1/auth/me');
@@ -231,8 +285,8 @@ final class AuthenticationFlowTest extends FeatureTestCase
 
         // Client A changes its password.
         $change = $this->authed($clientA['token'], 'post', 'api/v1/auth/change-password', [
-            'current_password' => self::TEST_PASSWORD,
-            'new_password'     => self::TEST_PASSWORD . 'X',
+            'current_password' => $this->testPassword(),
+            'new_password'     => $this->testPassword() . 'X',
         ]);
         $change->assertStatus(200);
         $changeBody = $this->envelope($change);
@@ -255,5 +309,67 @@ final class AuthenticationFlowTest extends FeatureTestCase
         $refreshB = $this->refreshWith($clientB['refresh']);
         $refreshB->assertStatus(401);
         $this->assertErrorCode('auth.refresh_invalid_or_replayed', $refreshB);
+    }
+
+    /**
+     * MIS-provisioned shape: a users row with a student_number and NO
+     * email_password identity (exactly what FuMisAuthService JIT-creates).
+     * Minting a token directly keeps the test off the campus-only MIS API.
+     */
+    private function misProvisionedUser(string $studentNumber): int
+    {
+        $db  = db_connect();
+        $now = date('Y-m-d H:i:s');
+        // Unique per run — the feature bootstrap recreates the schema
+        // only when missing, so fixed usernames AND student numbers
+        // collide across runs (both carry unique keys).
+        $unique = bin2hex(random_bytes(4));
+
+        $db->table('users')->insert([
+            'username'       => 'stu-' . $studentNumber . '-' . $unique,
+            'student_number' => $studentNumber . '-' . $unique,
+            'kind'           => 'student',
+            'status'         => 'active',
+            'active'         => 1,
+            'created_at'     => $now,
+            'updated_at'     => $now,
+        ]);
+
+        return (int) $db->insertID();
+    }
+
+    private function mintToken(int $userId): string
+    {
+        return \Config\Services::jwt()->sign($userId, 0);
+    }
+
+    public function testMeExposesHasLocalPasswordForBothAccountKinds(): void
+    {
+        // Local account (email_password identity) → true.
+        $session = $this->loginFull();
+        $me = $this->authed($session['token'], 'get', 'api/v1/auth/me');
+        $me->assertStatus(200);
+        $meBody = $this->envelope($me);
+        $this->assertTrue($meBody['data']['has_local_password'] ?? null, 'Local accounts must report has_local_password=true.');
+
+        // MIS-provisioned account (no identity) → false.
+        $token = $this->mintToken($this->misProvisionedUser('MIS-9001'));
+        $meMis = $this->authed($token, 'get', 'api/v1/auth/me');
+        $meMis->assertStatus(200);
+        $meMisBody = $this->envelope($meMis);
+        $this->assertFalse($meMisBody['data']['has_local_password'] ?? null, 'MIS-provisioned accounts must report has_local_password=false.');
+    }
+
+    public function testChangePasswordRejectsMisProvisionedUserWithDedicatedError(): void
+    {
+        $userId = $this->misProvisionedUser('MIS-9002');
+        $token  = $this->mintToken($userId);
+
+        $change = $this->authed($token, 'post', 'api/v1/auth/change-password', [
+            'current_password' => 'whatever-pass',
+            'new_password'     => 'a-brand-new-password',
+        ]);
+        $change->assertStatus(403);
+        $this->assertErrorCode('auth.password_managed_by_university', $change);
     }
 }

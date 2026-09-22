@@ -11,6 +11,8 @@ import {
   facilitiesReportSchema,
   generatedReportPageSchema,
   generatedReportSchema,
+  inventoryForecastSchema,
+  inventoryPurchasesSchema,
   inventoryReportSchema,
   referralReportSchema,
   reportConfigPageSchema,
@@ -22,6 +24,8 @@ import {
   type FacilitiesReport,
   type GeneratedReport,
   type GeneratedReportPage,
+  type InventoryForecast,
+  type InventoryPurchases,
   type InventoryReport,
   type ReferralReport,
   type ReportConfig,
@@ -96,6 +100,32 @@ export function useInventoryReport(start: string, end: string, enabled = true) {
   });
 }
 
+export function useInventoryForecast(enabled = true) {
+  return useQuery<InventoryForecast, ApiEnvelopeError>({
+    queryKey: ['reports', 'inventory-forecast'],
+    enabled,
+    staleTime: 5 * 60_000,
+    placeholderData: keepPreviousData,
+    queryFn: async () => {
+      const res = await apiClient.get<unknown>('/reports/inventory/forecast?within_days=90');
+      return inventoryForecastSchema.parse(res.data);
+    },
+  });
+}
+
+export function useInventoryPurchases(start: string, end: string, enabled = true) {
+  return useQuery<InventoryPurchases, ApiEnvelopeError>({
+    queryKey: ['reports', 'inventory-purchases', { start, end }],
+    enabled,
+    staleTime: REPORT_STALE_MS,
+    placeholderData: keepPreviousData,
+    queryFn: async () => {
+      const res = await apiClient.get<unknown>('/reports/inventory/purchases?' + rangeParams(start, end));
+      return inventoryPurchasesSchema.parse(res.data);
+    },
+  });
+}
+
 export function useReferralReport(start: string, end: string, enabled = true) {
   return useQuery<ReferralReport, ApiEnvelopeError>({
     queryKey: ['reports', 'referrals', { start, end }],
@@ -150,7 +180,8 @@ async function parseBlobError(error: unknown): Promise<Error> {
 }
 
 function saveBlob(blob: Blob, disposition: string | undefined, fallback: string): { filename: string; size: number } {
-  const match = disposition !== undefined ? /filename="?([^"]+)"?/i.exec(disposition) : null;
+  const filenamePattern = /filename="?([^"]+)"?/i;
+  const match = disposition !== undefined ? disposition.match(filenamePattern) : null;
   const filename = match?.[1] ?? fallback;
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement('a');

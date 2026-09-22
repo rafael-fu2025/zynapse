@@ -20,6 +20,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { ConfirmDialog, type ConfirmAction } from '@/components/ConfirmDialog';
 import { CopyButton } from '@/components/CopyButton';
 import { QueryErrorState } from '@/components/QueryErrorState';
+import { TableStateBlock } from '@/components/TableStates';
 import { SearchBox, highlightMatch } from '@/components/ui/SearchBox';
 import { PageHeader } from '@/components/PageHeader';
 import {
@@ -46,7 +47,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { Skeleton } from '@/components/ui/skeleton';
 import {
   Table,
   TableBody,
@@ -61,6 +61,7 @@ import {
   useAdminRoles,
   useAdminUsers,
   useCreateUser,
+  useProvisionDirectoryUser,
   useResetUserPassword,
   useSetUserActive,
   useSetUserGroups,
@@ -72,6 +73,7 @@ import {
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { useCan } from '@/hooks/useCan';
 import { useAuthStore } from '@/store/auth';
+import { resolveRoleSaveRoute } from '@/utils/adminUserRouting';
 import { fmtUtcToApp } from '@/utils/date';
 
 interface TemporaryCredential {
@@ -283,9 +285,17 @@ function EditRolesDialog({
   onClose: () => void;
 }) {
   const update = useSetUserGroups();
+  const provision = useProvisionDirectoryUser();
   const canManagePrivileged = useCan('rbac.privileged.manage');
   const [selected, setSelected] = useState<string[]>(user.groups);
   const [privilegedAcknowledged, setPrivilegedAcknowledged] = useState(false);
+  // Directory entries have no local row and carry a synthetic negative id;
+  // they save through the identifier-based provision endpoint. Real
+  // accounts keep the deliberate full-replacement route.
+  const route = useMemo(() => resolveRoleSaveRoute(user), [user]);
+  const isDirectory = route.mode === 'provision';
+  const pending = update.isPending || provision.isPending;
+  const errorMessage = (update.error ?? provision.error)?.errors[0]?.message;
   const privilegedByCode = useMemo(
     () => new Map(roles.map((role) => [role.code, role.privileged === true])),
     [roles],
@@ -301,21 +311,42 @@ function EditRolesDialog({
     ? user.groups.find((code) => isPrivileged(code))
     : undefined;
   const noRoles = selected.length === 0;
+  const identity = user.email ?? user.username ?? `user #${user.id}`;
 
   function toggle(code: string, checked: boolean) {
     setSelected((current) => checked ? [...current, code] : current.filter((item) => item !== code));
     if (isPrivileged(code)) setPrivilegedAcknowledged(false);
   }
 
+  function save() {
+    if (route.mode === 'provision') {
+      provision.mutate(
+        { identifier: route.identifier, kind: route.kind, groups: selected },
+        { onSuccess: onClose },
+      );
+      return;
+    }
+    if (route.mode === 'replace') {
+      update.mutate({ id: route.id, groups: selected }, { onSuccess: onClose });
+    }
+  }
+
   return (
-    <Dialog open onOpenChange={(open) => ! open && ! update.isPending && onClose()}>
+    <Dialog open onOpenChange={(open) => ! open && ! pending && onClose()}>
       <DialogContent lockDismiss className="max-h-[90dvh] overflow-y-auto sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>Edit roles</DialogTitle>
           <DialogDescription>
-            Update access for {user.email ?? user.username ?? `user #${user.id}`}. Changes take effect on the next authorized request.
+            {isDirectory
+              ? `Choose the roles to add for ${identity}. Saving provisions this university directory entry and adds the selected roles on top of any access it already holds.`
+              : `Update access for ${identity}. Changes take effect on the next authorized request.`}
           </DialogDescription>
         </DialogHeader>
+        {isDirectory && (
+          <p className="rounded-lg border border-sky-300/70 bg-sky-50/60 p-3 text-xs text-sky-800 dark:border-sky-800 dark:bg-sky-950/30 dark:text-sky-200">
+            Saving is additive and preserves existing roles. To revoke a role, save here first, then edit the now-local account.
+          </p>
+        )}
         <RoleChecklist
           roles={roles}
           selected={selected}
@@ -323,6 +354,9 @@ function EditRolesDialog({
           canManagePrivileged={canManagePrivileged}
           protectedCode={protectedCode}
         />
+        {route.mode === 'invalid' && (
+          <p role="alert" className="text-sm text-destructive">{route.reason}</p>
+        )}
         {noRoles && (
           <p role="alert" className="text-sm text-destructive">Select at least one role.</p>
         )}
@@ -340,13 +374,19 @@ function EditRolesDialog({
             </div>
           </div>
         )}
+        {errorMessage !== undefined && (
+          <p role="alert" className="text-sm text-destructive">{errorMessage}</p>
+        )}
         <DialogFooter>
-          <Button variant="outline" onClick={onClose} disabled={update.isPending}>Cancel</Button>
+          <Button variant="outline" onClick={onClose} disabled={pending}>Cancel</Button>
           <Button
-            onClick={() => update.mutate({ id: user.id, groups: selected }, { onSuccess: onClose })}
-            disabled={update.isPending || noRoles || (privilegedChanged && ! privilegedAcknowledged)}
+            onClick={save}
+            disabled={pending || noRoles || route.mode === 'invalid' || (privilegedChanged && ! privilegedAcknowledged)}
           >
-            <UserCog aria-hidden /> {update.isPending ? 'Saving…' : 'Save roles'}
+            <UserCog aria-hidden />
+            {pending
+              ? (isDirectory ? 'Provisioning…' : 'Saving…')
+              : (isDirectory ? 'Provision & save roles' : 'Save roles')}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -355,6 +395,14 @@ function EditRolesDialog({
 }
 
 function SecuritySummary({ user }: { user: AdminUser }) {
+  if (user.is_directory_record) {
+    return (
+      <div className="space-y-1 text-xs text-muted-foreground">
+        <p>University directory entry</p>
+        <p>Not yet provisioned locally</p>
+      </div>
+    );
+  }
   return (
     <div className="space-y-1 text-xs">
       <p><span className="text-muted-foreground">Created:</span> {fmtUtcToApp(user.created_at)}</p>
@@ -387,6 +435,7 @@ function UserActions({
 }) {
   const identity = user.email ?? user.username ?? `user #${user.id}`;
   const isCurrentUser = user.id === myId;
+  const isDirectory = user.is_directory_record === true;
   return (
     <div className="flex justify-end">
       <DropdownMenu>
@@ -397,38 +446,32 @@ function UserActions({
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-52">
           <DropdownMenuItem className="min-h-11" onSelect={onEditRoles}>
-            <UserCog aria-hidden /> Edit roles
+            <UserCog aria-hidden /> {isDirectory ? 'Provision & edit roles' : 'Edit roles'}
           </DropdownMenuItem>
-          <DropdownMenuItem className="min-h-11" disabled={resetPending} onSelect={onReset}>
-            <KeyRound aria-hidden /> {resetPending ? 'Resetting password…' : 'Reset password'}
-          </DropdownMenuItem>
-          <DropdownMenuSeparator />
-          <DropdownMenuItem
-            className="min-h-11"
-            disabled={statusPending || isCurrentUser}
-            onSelect={onStatus}
-          >
-            {user.active ? <UserX aria-hidden /> : <UserCheck aria-hidden />}
-            {statusPending
-              ? 'Updating status…'
-              : isCurrentUser
-                ? 'Deactivate (current account)'
-                : user.active
-                  ? 'Deactivate account'
-                  : 'Activate account'}
-          </DropdownMenuItem>
+          {!isDirectory && (
+            <>
+              <DropdownMenuItem className="min-h-11" disabled={resetPending} onSelect={onReset}>
+                <KeyRound aria-hidden /> {resetPending ? 'Resetting password…' : 'Reset password'}
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                className="min-h-11"
+                disabled={statusPending || isCurrentUser}
+                onSelect={onStatus}
+              >
+                {user.active ? <UserX aria-hidden /> : <UserCheck aria-hidden />}
+                {statusPending
+                  ? 'Updating status…'
+                  : isCurrentUser
+                    ? 'Deactivate (current account)'
+                    : user.active
+                      ? 'Deactivate account'
+                      : 'Activate account'}
+              </DropdownMenuItem>
+            </>
+          )}
         </DropdownMenuContent>
       </DropdownMenu>
-    </div>
-  );
-}
-
-function LoadingState() {
-  return (
-    <div role="status" aria-label="Loading users" className="space-y-3 p-4">
-      <Skeleton className="h-20 w-full" />
-      <Skeleton className="h-20 w-full" />
-      <Skeleton className="h-20 w-full" />
     </div>
   );
 }
@@ -460,6 +503,13 @@ export default function AdminUsersPage() {
   const resetPassword = useResetUserPassword();
   const myId = useAuthStore((state) => state.userId);
   const rows = list.data?.data ?? [];
+
+  // Directory rows open the role dialog WITHOUT any mutation: the person
+  // is only provisioned when the admin explicitly saves (see
+  // EditRolesDialog / resolveRoleSaveRoute).
+  function handleEditRoles(user: AdminUser) {
+    setEditRolesUser(user);
+  }
 
   // Keep the input in sync when the URL is changed externally
   // (browser back/forward, the "Clear filters" button, deep links).
@@ -551,7 +601,7 @@ export default function AdminUsersPage() {
   const hasFilters = filters.search !== '' || filters.status !== 'all' || filters.group !== 'all';
 
   return (
-    <main className="mx-auto min-w-0 max-w-7xl space-y-5 p-4 sm:p-6">
+    <main className="space-y-4 p-6">
       <PageHeader
         title="Users"
         description="Manage account access, roles, and credential recovery. Accounts are disabled rather than deleted."
@@ -611,32 +661,36 @@ export default function AdminUsersPage() {
 
       <section aria-labelledby="users-list-heading" className="overflow-hidden rounded-xl border bg-card">
         <h2 id="users-list-heading" className="sr-only">User accounts</h2>
-        {list.isLoading && <LoadingState />}
-        {list.isError && ! list.isLoading && (
-          <div className="p-4">
-            <QueryErrorState message="Failed to load users." onRetry={() => void list.refetch()} pending={list.isFetching} />
-          </div>
-        )}
-        {! list.isLoading && ! list.isError && rows.length === 0 && (
-          <div className="p-8 text-center">
-            <p className="font-medium text-foreground">{hasFilters ? 'No users match these filters' : 'No user accounts yet'}</p>
-            <p className="mt-1 text-sm text-muted-foreground">
-              {hasFilters ? 'Adjust or clear the search and filters.' : 'Create the first account and assign at least one role.'}
-            </p>
-            {hasFilters && (
-              <Button
-                className="mt-4"
-                variant="outline"
-                onClick={() => {
-                  setSearchDraft('');
-                  setSearchParams({}, { replace: true });
-                }}
-              >
-                Clear filters
-              </Button>
-            )}
-          </div>
-        )}
+        <TableStateBlock
+          isLoading={list.isLoading}
+          isError={list.isError}
+          isEmpty={rows.length === 0}
+          onRetry={() => void list.refetch()}
+          pending={list.isFetching}
+          errorMessage="Failed to load users."
+          loadingLabel="Loading users"
+          empty={{
+            title: hasFilters ? 'No users match these filters' : 'No user accounts yet',
+            description: hasFilters
+              ? 'Adjust or clear the search and filters.'
+              : 'Create the first account and assign at least one role.',
+            ...(hasFilters
+              ? {
+                  action: (
+                    <Button
+                      variant="outline"
+                      onClick={() => {
+                        setSearchDraft('');
+                        setSearchParams({}, { replace: true });
+                      }}
+                    >
+                      Clear filters
+                    </Button>
+                  ),
+                }
+              : {}),
+          }}
+        />
 
         {! list.isLoading && ! list.isError && rows.length > 0 && (
           <>
@@ -652,10 +706,20 @@ export default function AdminUsersPage() {
                         {highlightMatch(user.username ?? 'No username', filters.search)} · ID {user.id}
                       </p>
                     </div>
-                    {user.active ? <Badge variant="success">Active</Badge> : <Badge variant="destructive">Disabled</Badge>}
+                    {user.is_directory_record ? (
+                      <Badge variant="outline" className="border-sky-300 bg-sky-50 text-sky-700 dark:border-sky-800 dark:bg-sky-950/40 dark:text-sky-300">
+                        MIS Directory
+                      </Badge>
+                    ) : user.active ? (
+                      <Badge variant="success">Active</Badge>
+                    ) : (
+                      <Badge variant="destructive">Disabled</Badge>
+                    )}
                   </div>
                   <div className="flex flex-wrap gap-1.5" aria-label="Assigned roles">
-                    {user.groups.map((code) => <Badge key={code} variant="secondary">{roleName(roleOptions, code)}</Badge>)}
+                    {user.groups.length === 0
+                      ? <Badge variant="outline">No role</Badge>
+                      : user.groups.map((code) => <Badge key={code} variant="secondary">{roleName(roleOptions, code)}</Badge>)}
                   </div>
                   <SecuritySummary user={user} />
                   <UserActions
@@ -663,7 +727,7 @@ export default function AdminUsersPage() {
                     myId={myId}
                     resetPending={resetPassword.isPending && resetPassword.variables === user.id}
                     statusPending={setActive.isPending && setActive.variables?.id === user.id}
-                    onEditRoles={() => setEditRolesUser(user)}
+                    onEditRoles={() => handleEditRoles(user)}
                     onReset={() => requestReset(user)}
                     onStatus={() => requestStatusChange(user)}
                   />
@@ -688,7 +752,14 @@ export default function AdminUsersPage() {
                   {rows.map((user) => (
                     <TableRow key={user.id}>
                       <TableCell className="max-w-52 px-3">
-                        <p className="truncate text-sm font-medium">{highlightMatch(user.email ?? 'No email', filters.search)}</p>
+                        <div className="flex items-center gap-1.5">
+                          <p className="truncate text-sm font-medium">{highlightMatch(user.email ?? 'No email', filters.search)}</p>
+                          {user.is_directory_record && (
+                            <Badge variant="outline" className="border-sky-300 bg-sky-50 px-1 py-0 text-[9px] font-normal leading-tight text-sky-700 dark:border-sky-800 dark:bg-sky-950/40 dark:text-sky-300">
+                              Directory
+                            </Badge>
+                          )}
+                        </div>
                         <p className="truncate text-xs text-muted-foreground">
                           {highlightMatch(user.username ?? 'No username', filters.search)} · ID {user.id}
                         </p>
@@ -707,12 +778,22 @@ export default function AdminUsersPage() {
                       </TableCell>
                       <TableCell className="max-w-64 px-3">
                         <div className="flex flex-wrap gap-1">
-                          {user.groups.map((code) => <Badge key={code} variant="secondary">{roleName(roleOptions, code)}</Badge>)}
+                          {user.groups.length === 0
+                            ? <Badge variant="outline">No role</Badge>
+                            : user.groups.map((code) => <Badge key={code} variant="secondary">{roleName(roleOptions, code)}</Badge>)}
                         </div>
                       </TableCell>
                       <TableCell className="px-3"><SecuritySummary user={user} /></TableCell>
                       <TableCell className="px-3">
-                        {user.active ? <Badge variant="success">Active</Badge> : <Badge variant="destructive">Disabled</Badge>}
+                        {user.is_directory_record ? (
+                          <Badge variant="outline" className="border-sky-300 bg-sky-50 text-sky-700 dark:border-sky-800 dark:bg-sky-950/40 dark:text-sky-300">
+                            MIS Directory
+                          </Badge>
+                        ) : user.active ? (
+                          <Badge variant="success">Active</Badge>
+                        ) : (
+                          <Badge variant="destructive">Disabled</Badge>
+                        )}
                       </TableCell>
                       <TableCell className="px-3 text-right">
                         <UserActions
@@ -720,7 +801,7 @@ export default function AdminUsersPage() {
                           myId={myId}
                           resetPending={resetPassword.isPending && resetPassword.variables === user.id}
                           statusPending={setActive.isPending && setActive.variables?.id === user.id}
-                          onEditRoles={() => setEditRolesUser(user)}
+                          onEditRoles={() => handleEditRoles(user)}
                           onReset={() => requestReset(user)}
                           onStatus={() => requestStatusChange(user)}
                         />

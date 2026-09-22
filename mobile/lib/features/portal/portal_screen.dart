@@ -189,14 +189,25 @@ class _PortalScreenState extends State<PortalScreen>
                   ),
           ),
           const SizedBox(height: 12),
-          OutlinedButton.icon(
-            onPressed: _changePassword,
-            icon: const Icon(HugeIcons.strokeRoundedLock),
-            label: const Text('Change password'),
-            style: OutlinedButton.styleFrom(
-              padding: const EdgeInsets.symmetric(vertical: 14),
+          if (context.read<AuthController>().session?.hasLocalPassword ?? false)
+            OutlinedButton.icon(
+              onPressed: _changePassword,
+              icon: const Icon(HugeIcons.strokeRoundedLock),
+              label: const Text('Change password'),
+              style: OutlinedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(vertical: 14),
+              ),
+            )
+          else
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 8),
+              child: Text(
+                'Your password is managed by the university — to reset it, '
+                'email helpdesk@foundationu.com.',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: Colors.black54, fontSize: 12),
+              ),
             ),
-          ),
           if (!_isStudent) ...[
             const SizedBox(height: 12),
             // Teaching-only quick action — mirrors the web employee

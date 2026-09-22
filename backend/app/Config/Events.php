@@ -77,6 +77,8 @@ Events::on('post_system', static function (): void {
         // pile up forever and the header bell stays empty. Cooldown-
         // gated (10s) so it is not a write per request.
         \Config\Services::notificationAutoDrain()->maybeDrain();
+        // Opportunistic batch sync for student/employee directories (cooldown-gated, default 24h).
+        \Config\Services::misAutoSync()->maybeRun();
     }
 });
 

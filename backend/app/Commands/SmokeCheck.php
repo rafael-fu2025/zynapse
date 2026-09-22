@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Commands;
 
+use App\Services\Audit\AuditDrainService;
 use CodeIgniter\CLI\BaseCommand;
 use CodeIgniter\CLI\CLI;
 use CodeIgniter\Database\Config as DatabaseConfig;
@@ -21,6 +22,7 @@ use CodeIgniter\Database\Config as DatabaseConfig;
  *   - JWT_SECRET is non-empty.
  *   - COUNSELLING_KEY length is 64 hex chars.
  *   - Audit outbox + audit events tables writable.
+ *   - No poison rows stuck in audit or notification outboxes.
  *
  * Exit code 0 = healthy, 1 = any failure.
  */
@@ -108,6 +110,38 @@ final class SmokeCheck extends BaseCommand
         } catch (\Throwable $t) {
             $failures[] = 'audit_outbox not writable: ' . $t->getMessage();
             CLI::write('✘ audit_outbox not writable', 'red');
+        }
+
+        // 6. Poison rows — outbox rows that have hit MAX_ATTEMPTS and will
+        // never be drained. Their existence means audit or notification
+        // data is silently stuck.
+        $maxAttempts = AuditDrainService::MAX_ATTEMPTS;
+
+        $auditPoison = (int) $db->table(SYNAPSE_AUDIT_OUTBOX)
+            ->where('processed_at IS NULL')
+            ->where('attempt_count >=', $maxAttempts)
+            ->countAllResults();
+        if ($auditPoison === 0) {
+            CLI::write('✔ audit_outbox: no poison rows', 'green');
+        } else {
+            $failures[] = "audit_outbox has {$auditPoison} poison row(s) at attempt_count >= {$maxAttempts}";
+            CLI::write("✘ audit_outbox: {$auditPoison} poison row(s) stuck", 'red');
+        }
+
+        try {
+            $notifyPoison = (int) $db->table('notification_outbox')
+                ->where('processed_at IS NULL')
+                ->where('attempt_count >=', $maxAttempts)
+                ->countAllResults();
+            if ($notifyPoison === 0) {
+                CLI::write('✔ notification_outbox: no poison rows', 'green');
+            } else {
+                $failures[] = "notification_outbox has {$notifyPoison} poison row(s) at attempt_count >= {$maxAttempts}";
+                CLI::write("✘ notification_outbox: {$notifyPoison} poison row(s) stuck", 'red');
+            }
+        } catch (\Throwable) {
+            // notification_outbox may not exist in minimal test schemas.
+            CLI::write('⚠ notification_outbox: table not found (skipped)', 'yellow');
         }
 
         return $this->finish($failures);

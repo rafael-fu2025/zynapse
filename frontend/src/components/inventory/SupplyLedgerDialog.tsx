@@ -28,7 +28,15 @@ export function SupplyLedgerDialog({ item, onClose }: { item: InventoryItem; onC
         <DialogTitle className="flex items-center gap-2"><ScrollText className="size-4" /> Transactions — {item.name}</DialogTitle>
       </DialogHeader>
       <p className="text-xs text-muted-foreground">Every stock movement, oldest first. Stock after is the on-hand quantity following each transaction.</p>
-      <LedgerBody rows={rows} isLoading={moves.isLoading} isError={moves.isError} emptyLabel="No movements yet." />
+      <LedgerBody
+        rows={rows}
+        isLoading={moves.isLoading}
+        isError={moves.isError}
+        onRetry={() => void moves.refetch()}
+        pending={moves.isFetching}
+        emptyLabel="No movements yet."
+        ariaLabel={`Stock movements for ${item.name}`}
+      />
       <DialogFooter><Button variant="outline" onClick={onClose}>Close</Button></DialogFooter>
     </DialogContent>
   );

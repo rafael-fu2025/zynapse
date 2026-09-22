@@ -171,6 +171,33 @@ export const inventoryReportSchema = z.object({
 });
 export type InventoryReport = z.infer<typeof inventoryReportSchema>;
 
+/** GET /reports/inventory/forecast — at-risk medicines within the horizon. */
+export const inventoryForecastSchema = z.object({
+  generated_at: z.string(),
+  within_days: z.number().int(),
+  items: z.array(z.object({
+    generic_name: z.string(),
+    brand_name: z.string().nullable(),
+    unit: z.string(),
+    total_stock: z.coerce.number().int(),
+    reorder_threshold: z.number().int(),
+    predicted_daily_usage: z.number(),
+    stockout_date: z.string(),
+    reorder_date: z.string(),
+  })),
+});
+export type InventoryForecast = z.infer<typeof inventoryForecastSchema>;
+
+/** GET /reports/inventory/purchases — reorder activity in range. */
+export const inventoryPurchasesSchema = z.object({
+  range: reportRangeSchema,
+  total_purchases: z.number().int(),
+  total_units: z.number().int(),
+  by_status: z.array(z.object({ status: z.string(), cnt: z.number().int(), qty: z.coerce.number().int() })),
+  daily_trend: z.array(z.object({ day: z.string(), cnt: z.number().int() })),
+});
+export type InventoryPurchases = z.infer<typeof inventoryPurchasesSchema>;
+
 export const referralReportSchema = z.object({
   range: reportRangeSchema,
   total_referrals: z.number().int(),

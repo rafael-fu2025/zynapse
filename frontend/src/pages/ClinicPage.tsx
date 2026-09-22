@@ -46,7 +46,7 @@ import { Button } from '@/components/ui/button';
 import { ComboboxField } from '@/components/ComboboxField';
 import type { TaxonomyEntry } from '@/data/taxonomy';
 import { ConfirmDialog, type ConfirmAction } from '@/components/ConfirmDialog';
-import { QueryErrorRow } from '@/components/QueryErrorState';
+import { TableStateRows } from '@/components/TableStates';
 import { SessionProgressTracker, type SessionProgressStep } from '@/components/SessionProgressTracker';
 import { MobileCardList, MobileCard, MobileCardField, MobileCardActions } from '@/components/MobileCardList';
 import { PatientIdCell } from '@/components/PatientIdCell';
@@ -156,7 +156,8 @@ const TREATMENT_LABEL: Record<TreatmentType, string> = {
 /** Friendly station label: `Kiosk-01` → `Kiosk 1`; passes others through. */
 function stationLabel(station: string | null | undefined): string {
   if (station === null || station === undefined || station === '') return '';
-  const m = /^Kiosk[-_]?0*(\d+)$/i.exec(station);
+  const kioskPattern = /^Kiosk[-_]?0*(\d+)$/i;
+  const m = station.match(kioskPattern);
   return m !== null ? `Kiosk ${m[1]}` : station;
 }
 
@@ -649,8 +650,12 @@ function ClinicEncounterWorkspace({
     { id: 'complete', label: 'Complete', state: encounter.status === 'closed' ? 'complete' : 'available', summary: encounter.closed_at !== null ? fmtUtcToApp(encounter.closed_at) : 'Finish encounter' },
   ];
 
+  // `overflow-x-hidden` is deliberate: `overflow-y-auto` alone makes the
+  // computed `overflow-x` `auto` as well, so any child that is even a pixel
+  // too wide turns the whole workspace sideways. The rail and the detail
+  // panes are fluid, so nothing legitimate overflows.
   return (
-    <DialogContent size="2xl" className="max-h-[85vh] overflow-y-auto">
+    <DialogContent size="2xl" className="max-h-[85vh] overflow-x-hidden overflow-y-auto">
       <DialogHeader className="flex flex-row items-start justify-between gap-2 text-left">
         <div>
           <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Active Clinic encounter</p>
@@ -694,9 +699,24 @@ interface QueueTabProps {
   onOpenEncounter: (encounterId: number) => void;
 }
 
-function QueueTab({ onOpenEncounter }: QueueTabProps) {
+/**
+ * CallNextButton — lives in the page header (row-1 actions) while the
+ * queue tab is active. Split out of QueueTab so the header renders it
+ * above the TabSections sidebar.
+ */
+function CallNextButton() {
   const queue = useQueueToday();
   const callNext = useCallNext();
+  const hasWaiting = (queue.data ?? []).some((q) => q.status === 'waiting');
+  return (
+    <Button size="sm" disabled={callNext.isPending || !hasWaiting} onClick={() => callNext.mutate()}>
+      {callNext.isPending ? <Loader2 className="animate-spin" /> : <Megaphone />} Call next
+    </Button>
+  );
+}
+
+function QueueTab({ onOpenEncounter }: QueueTabProps) {
+  const queue = useQueueToday();
   const transition = useQueueTransition();
   const noShow = useEncounterNoShow();
   const [confirm, setConfirm] = useState<ConfirmAction | null>(null);
@@ -706,7 +726,6 @@ function QueueTab({ onOpenEncounter }: QueueTabProps) {
   // and invalidate the sort memo below. Stabilise `rows` first, then
   // derive the sorted view from the stable reference.
   const rows = useMemo(() => queue.data ?? [], [queue.data]);
-  const hasWaiting = rows.some((q) => q.status === 'waiting');
 
   // Surface active entries first so the operator's eye lands on the
   // work that matters: in-session → called → waiting → done/skipped.
@@ -737,18 +756,8 @@ function QueueTab({ onOpenEncounter }: QueueTabProps) {
 
   return (
     <div className="space-y-4">
-      <section className="flex flex-wrap items-center justify-between gap-3 rounded-xl border bg-card p-3">
-        <p className="text-xs text-muted-foreground">
-          Today's walk-in queue + open encounters. Auto-checked-in appointments and walk-ins both land here. The
-          public board at <span className="font-mono">/queue-display</span> shows positions and first names only.
-        </p>
-        <Button disabled={callNext.isPending || !hasWaiting} onClick={() => callNext.mutate()}>
-          {callNext.isPending ? <Loader2 className="animate-spin" /> : <Megaphone />} Call next
-        </Button>
-      </section>
-
       <section className="hidden overflow-hidden rounded-xl border bg-card md:block">
-        <Table>
+        <Table ariaLabel="Today's clinic queue">
           <TableHeader className="bg-muted/50">
             <TableRow>
               <TableHead className="px-3">Pos</TableHead>
@@ -759,23 +768,20 @@ function QueueTab({ onOpenEncounter }: QueueTabProps) {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {queue.isLoading && (
-              <TableRow>
-                <TableCell colSpan={5} className="px-3 py-6 text-center text-muted-foreground">
-                  <Loader2 className="mx-auto size-4 animate-spin" />
-                </TableCell>
-              </TableRow>
-            )}
-            {!queue.isLoading && rows.length === 0 && (
-              <TableRow>
-                <TableCell colSpan={5} className="px-3 py-6 text-center text-muted-foreground">
-                  Queue is empty.
-                </TableCell>
-              </TableRow>
-            )}
-            {queue.isError && !queue.isLoading && (
-              <QueryErrorRow colSpan={5} message="Failed to load the queue." onRetry={() => void queue.refetch()} pending={queue.isFetching} />
-            )}
+            <TableStateRows
+              colSpan={5}
+              isLoading={queue.isLoading}
+              isError={queue.isError}
+              isEmpty={rows.length === 0}
+              onRetry={() => void queue.refetch()}
+              pending={queue.isFetching}
+              errorMessage="Failed to load the queue."
+              loadingLabel="Loading the queue"
+              empty={{
+                title: 'Queue is empty.',
+                description: 'Checked-in patients and open encounters appear here.',
+              }}
+            />
             {sortedRows.map((q) => {
               const canNoShow = q.encounter_status === 'open';
               return (
@@ -969,6 +975,7 @@ function StaffSchedulesTab({
   onOpenAddShiftChange: (open: boolean) => void;
 }) {
   const schedules = useStaffSchedules(showArchived);
+  const schedulesRows = schedules.data ?? [];
   const update = useUpdateStaffSchedule();
   const archive = useArchiveStaffSchedule();
   const unarchive = useUnarchiveStaffSchedule();
@@ -979,7 +986,7 @@ function StaffSchedulesTab({
   return (
     <div className="space-y-4">
       <section className="hidden overflow-hidden rounded-xl border bg-card md:block">
-        <Table>
+        <Table ariaLabel="Clinic staff schedules">
           <TableHeader className="bg-muted/50">
             <TableRow>
               <TableHead className="px-3">User</TableHead>
@@ -990,23 +997,22 @@ function StaffSchedulesTab({
             </TableRow>
           </TableHeader>
           <TableBody>
-            {schedules.isLoading && (
-              <TableRow>
-                <TableCell colSpan={5} className="px-3 py-6 text-center text-muted-foreground">
-                  <Loader2 className="mx-auto size-4 animate-spin" />
-                </TableCell>
-              </TableRow>
-            )}
-            {!schedules.isLoading && (schedules.data?.length ?? 0) === 0 && (
-              <TableRow>
-                <TableCell colSpan={5} className="px-3 py-6 text-center text-muted-foreground">
-                  No staff shifts yet.
-                </TableCell>
-              </TableRow>
-            )}
-            {schedules.isError && !schedules.isLoading && (
-              <QueryErrorRow colSpan={5} message="Failed to load staff schedules." onRetry={() => void schedules.refetch()} pending={schedules.isFetching} />
-            )}
+            <TableStateRows
+              colSpan={5}
+              isLoading={schedules.isLoading}
+              isError={schedules.isError}
+              isEmpty={schedulesRows.length === 0}
+              onRetry={() => void schedules.refetch()}
+              pending={schedules.isFetching}
+              errorMessage="Failed to load staff schedules."
+              loadingLabel="Loading staff schedules"
+              empty={{
+                title: showArchived ? 'No staff shifts match this filter.' : 'No staff shifts yet.',
+                description: showArchived
+                  ? 'Archived shifts are included — clear the filter to see active ones.'
+                  : 'Add a shift to publish clinic cover for the week.',
+              }}
+            />
             {schedules.data?.map((s) => (
               <TableRow key={s.id}>
                 <TableCell className="px-3">
@@ -1443,21 +1449,24 @@ export default function ClinicPage() {
           title="Clinic"
           description="Encounters are the anchor for clinic actions — isolated from counselling."
           actions={
-            tab === 'staff' && (
-              <div className="flex items-center gap-2">
-                <Button size="sm" onClick={() => setOpenAddShift(true)}>
-                  <Plus /> Add shift
-                </Button>
-                <Button
-                  size="sm"
-                  variant={showArchived ? 'secondary' : 'outline'}
-                  aria-pressed={showArchived}
-                  onClick={() => setShowArchived((v) => !v)}
-                >
-                  <Archive /> {showArchived ? 'Hide archived' : 'Show archived'}
-                </Button>
-              </div>
-            )
+            <>
+              {tab === 'queue' && <CallNextButton />}
+              {tab === 'staff' && (
+                <div className="flex items-center gap-2">
+                  <Button size="sm" onClick={() => setOpenAddShift(true)}>
+                    <Plus /> Add shift
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant={showArchived ? 'secondary' : 'outline'}
+                    aria-pressed={showArchived}
+                    onClick={() => setShowArchived((v) => !v)}
+                  >
+                    <Archive /> {showArchived ? 'Hide archived' : 'Show archived'}
+                  </Button>
+                </div>
+              )}
+            </>
           }
         />
 
@@ -1535,7 +1544,8 @@ interface EncounterTableProps {
   focusId?: number | null;
   isLoading: boolean;
   isError?: boolean;
-  onRetry?: () => void;
+  /** Required: the error state always offers a way to recover. */
+  onRetry: () => void;
   retrying?: boolean;
   page: number;
   canPrev: boolean;
@@ -1550,7 +1560,7 @@ function EncounterTable(props: EncounterTableProps) {
   return (
     <>
       <section className="hidden overflow-hidden rounded-xl border bg-card md:block">
-        <Table>
+        <Table ariaLabel="Closed clinic encounters">
           <TableHeader className="bg-muted/50">
             <TableRow>
               <TableHead className="px-3">#</TableHead>
@@ -1562,23 +1572,20 @@ function EncounterTable(props: EncounterTableProps) {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {props.isLoading && (
-              <TableRow>
-                <TableCell colSpan={6} className="px-3 py-6 text-center text-muted-foreground">
-                  <Loader2 className="mx-auto size-4 animate-spin" />
-                </TableCell>
-              </TableRow>
-            )}
-            {props.isError === true && !props.isLoading && props.onRetry !== undefined && (
-              <QueryErrorRow colSpan={6} message="Failed to load encounters." onRetry={props.onRetry} pending={props.retrying === true} />
-            )}
-            {showEmpty && (
-              <TableRow>
-                <TableCell colSpan={6} className="px-3 py-6 text-center text-muted-foreground">
-                  No encounters.
-                </TableCell>
-              </TableRow>
-            )}
+            <TableStateRows
+              colSpan={6}
+              isLoading={props.isLoading}
+              isError={props.isError === true}
+              isEmpty={props.rows.length === 0}
+              onRetry={props.onRetry}
+              pending={props.retrying === true}
+              errorMessage="Failed to load encounters."
+              loadingLabel="Loading encounters"
+              empty={{
+                title: 'No closed encounters.',
+                description: 'Encounters appear here once they are completed or referred.',
+              }}
+            />
             {props.rows.map((e) => {
               const prio = e.triage_priority as TriagePriority | undefined;
               return (
@@ -1628,7 +1635,7 @@ function EncounterTable(props: EncounterTableProps) {
           <Loader2 className="mx-auto size-4 animate-spin" />
         </p>
       )}
-      {props.isError === true && !props.isLoading && props.onRetry !== undefined && (
+      {props.isError === true && !props.isLoading && (
         <div className="rounded-xl border border-destructive/30 bg-destructive/5 p-4 text-center text-sm text-destructive md:hidden">
           <p>Failed to load encounters.</p>
           <Button variant="outline" size="sm" className="mt-2" onClick={props.onRetry} disabled={props.retrying === true}>Retry</Button>

@@ -154,7 +154,7 @@ final class AuditEventController extends ApiController
             ], is_array($payload) ? $payload : null);
         }
 
-        $writer->close();
+        $writer->flush();
         return $this->response;
     }
 

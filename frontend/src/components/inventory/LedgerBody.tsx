@@ -1,4 +1,4 @@
-import { Loader2 } from 'lucide-react';
+import { TableStateRows } from '@/components/TableStates';
 import {
   Table,
   TableBody,
@@ -19,16 +19,23 @@ export function LedgerBody({
   rows,
   isLoading,
   isError,
+  onRetry,
+  pending = false,
   emptyLabel,
+  ariaLabel,
 }: {
   rows: Array<{ id: number; label: string; by: string | null; qty_in: number | null; qty_out: number | null; balance_after: number | null; note: string | null; created_at: string }>;
   isLoading: boolean;
   isError: boolean;
+  /** Required: a failed ledger read must offer a way to recover. */
+  onRetry: () => void;
+  pending?: boolean;
   emptyLabel: string;
+  ariaLabel: string;
 }) {
   return (
     <div className="max-h-96 overflow-auto rounded-md border">
-      <Table>
+      <Table ariaLabel={ariaLabel}>
         <TableHeader className="sticky top-0 bg-muted/70">
           <TableRow>
             <TableHead className="px-3">Date</TableHead>
@@ -39,15 +46,17 @@ export function LedgerBody({
           </TableRow>
         </TableHeader>
         <TableBody>
-          {isLoading && (
-            <TableRow><TableCell colSpan={5} className="px-3 py-6 text-center text-muted-foreground"><Loader2 className="mx-auto size-4 animate-spin" /></TableCell></TableRow>
-          )}
-          {isError && !isLoading && (
-            <TableRow><TableCell colSpan={5} className="px-3 py-6 text-center text-destructive">Failed to load the transactions.</TableCell></TableRow>
-          )}
-          {!isLoading && !isError && rows.length === 0 && (
-            <TableRow><TableCell colSpan={5} className="px-3 py-6 text-center text-muted-foreground">{emptyLabel}</TableCell></TableRow>
-          )}
+          <TableStateRows
+            colSpan={5}
+            isLoading={isLoading}
+            isError={isError}
+            isEmpty={rows.length === 0}
+            onRetry={onRetry}
+            pending={pending}
+            errorMessage="Failed to load the transactions."
+            loadingLabel="Loading transactions"
+            empty={{ title: emptyLabel }}
+          />
           {rows.map((r) => (
             <TableRow key={r.id}>
               <TableCell className="px-3 text-xs text-muted-foreground">{fmtUtcToApp(r.created_at)}</TableCell>

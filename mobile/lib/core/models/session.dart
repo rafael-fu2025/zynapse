@@ -7,6 +7,7 @@ class Session {
     required this.username,
     required this.isActive,
     required this.forceReset,
+    required this.hasLocalPassword,
     this.identifier,
     this.personKind,
     this.personName,
@@ -20,6 +21,7 @@ class Session {
         username: (json['username'] ?? '') as String,
         isActive: json['is_active'] as bool? ?? true,
         forceReset: json['force_reset'] as bool? ?? false,
+        hasLocalPassword: json['has_local_password'] as bool? ?? false,
         identifier: (json['identifier'] as String?)?.trim() == ''
             ? null
             : json['identifier'] as String?,
@@ -35,6 +37,11 @@ class Session {
   final String username;
   final bool isActive;
   final bool forceReset;
+
+  /// True only for accounts with a local email/password identity (admins,
+  /// clinic-minted portal accounts). MIS-delegated accounts manage their
+  /// password through the university helpdesk.
+  final bool hasLocalPassword;
 
   /// University ID number (student_number or employee_number) — the
   /// login identifier for MIS-delegated accounts; null for admins.

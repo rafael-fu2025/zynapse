@@ -7,7 +7,7 @@ import { Inbox, UserCheck } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { QueryErrorState } from '@/components/QueryErrorState';
+import { TableStateBlock } from '@/components/TableStates';
 import { Label } from '@/components/ui/label';
 import { PageToolbar } from '@/components/PageHeader';
 import {
@@ -25,7 +25,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { Skeleton } from '@/components/ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Textarea } from '@/components/ui/textarea';
 import {
@@ -151,33 +150,27 @@ export function FollowupsTab() {
         </div>
       </PageToolbar>
 
-      {followups.isError && (
-        <QueryErrorState message="Failed to load the follow-up caseload." onRetry={() => void followups.refetch()} pending={followups.isFetching} />
-      )}
+      <TableStateBlock
+        isLoading={followups.isLoading}
+        isError={followups.isError}
+        isEmpty={rows.length === 0}
+        onRetry={() => void followups.refetch()}
+        pending={followups.isFetching}
+        errorMessage="Failed to load the follow-up caseload."
+        loadingLabel="Loading follow-ups"
+        empty={{
+          icon: <Inbox className="size-8" />,
+          title: 'No follow-ups in this view',
+          description:
+            'Follow-ups appear when a routine interview scores at or below the well-being threshold, or a student asks for counselor contact.',
+        }}
+      />
 
-      {followups.isLoading && (
-        <div role="status" aria-label="Loading follow-ups" className="space-y-3">
-          <Skeleton className="h-14 w-full" />
-          <Skeleton className="h-14 w-full" />
-        </div>
-      )}
-
-      {followups.data !== undefined && rows.length === 0 && (
-        <section className="rounded-xl border bg-card p-8 text-center">
-          <Inbox className="mx-auto mb-3 size-8 text-muted-foreground" aria-hidden />
-          <p className="font-medium text-foreground">No follow-ups in this view</p>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Follow-ups appear when a routine interview scores at or below the well-being threshold, or a student asks
-            for counselor contact.
-          </p>
-        </section>
-      )}
-
-      {followups.data !== undefined && rows.length > 0 && (
+      {!followups.isLoading && !followups.isError && rows.length > 0 && (
         <section aria-labelledby="followup-list-heading" className="overflow-hidden rounded-xl border bg-card">
           <h2 id="followup-list-heading" className="sr-only">Follow-up caseload</h2>
           <div className="overflow-x-auto">
-            <Table>
+            <Table ariaLabel="Follow-up caseload">
               <TableHeader className="bg-muted/50">
                 <TableRow>
                   <TableHead className="px-3">Student</TableHead>

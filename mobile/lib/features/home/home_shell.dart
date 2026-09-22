@@ -325,6 +325,10 @@ class _IdentityChip extends StatelessWidget {
 
   /// Opens the identity menu (change password / sign out).
   Future<void> _openMenu(BuildContext context) async {
+    // MIS-delegated accounts hold no Synapse password — their password is
+    // managed by the university helpdesk, so the menu item is hidden.
+    final hasLocalPassword =
+        context.read<AuthController>().session?.hasLocalPassword ?? false;
     final action = await showModalBottomSheet<String>(
       context: context,
       backgroundColor: Colors.white,
@@ -345,11 +349,12 @@ class _IdentityChip extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 6),
-            ListTile(
-              leading: const Icon(HugeIcons.strokeRoundedLock),
-              title: const Text('Change password'),
-              onTap: () => Navigator.pop(ctx, 'password'),
-            ),
+            if (hasLocalPassword)
+              ListTile(
+                leading: const Icon(HugeIcons.strokeRoundedLock),
+                title: const Text('Change password'),
+                onTap: () => Navigator.pop(ctx, 'password'),
+              ),
             ListTile(
               leading: const Icon(HugeIcons.strokeRoundedLogout01),
               title: const Text('Sign out'),

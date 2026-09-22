@@ -88,6 +88,14 @@ class Services extends CoreServices
         return new FuMisAuthService(new FuMis(), static::fuMisClient(), new FuMisProfileMapper());
     }
 
+    public static function misAutoSync(bool $getShared = true): \App\Services\FuMis\MisAutoSyncService
+    {
+        if ($getShared) {
+            return static::getSharedInstance('misAutoSync');
+        }
+        return new \App\Services\FuMis\MisAutoSyncService(new FuMis());
+    }
+
     public static function auditOutbox(bool $getShared = true): AuditOutboxService
     {
         if ($getShared) {

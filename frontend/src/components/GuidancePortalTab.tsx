@@ -2,12 +2,10 @@
  * GuidancePortalTab — student-facing guidance feed (parity plan Phase
  * A/B): the clearance requirements checklist, targeted announcements
  * with action links, open surveys/interviews, and the CMO service
- * catalogue. Bookable services deep-link into the existing portal
- * appointment/queue flows.
+ * catalogue.
  */
-import { AlertCircle, CalendarPlus, ClipboardList, ExternalLink, Megaphone } from 'lucide-react';
+import { AlertCircle, ClipboardList, ExternalLink, Megaphone } from 'lucide-react';
 import { useState } from 'react';
-import { Link } from 'react-router-dom';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -130,7 +128,7 @@ export function GuidancePortalTab() {
         <CardHeader>
           <CardTitle>Guidance services</CardTitle>
           <CardDescription>
-            What the Guidance Office offers — CHED CMO 9 s.2013 catalogue. Bookable services link straight into scheduling.
+            What the Guidance Office offers — CHED CMO 9 s.2013 catalogue.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -144,13 +142,6 @@ export function GuidancePortalTab() {
                 <li key={s.id} className="rounded-lg border bg-background p-4">
                   <p className="text-sm font-medium text-foreground">{s.name}</p>
                   {s.description !== null && <p className="mt-1 text-xs text-muted-foreground">{s.description}</p>}
-                  {s.queue_destination === 'counselling' && (
-                    <Button asChild size="sm" variant="outline" className="mt-2.5">
-                      <Link to="/appointments">
-                        <CalendarPlus className="size-3.5" aria-hidden /> Book appointment
-                      </Link>
-                    </Button>
-                  )}
                 </li>
               ))}
             </ul>

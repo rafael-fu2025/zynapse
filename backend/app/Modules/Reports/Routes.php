@@ -13,6 +13,8 @@ final class Routes implements BaseRoutes
     {
         $routes->group('api/v1/reports', ['namespace' => 'Modules\\Reports\\Controllers', 'filter' => 'api_auth'], static function (RouteCollection $r): void {
             $r->get('summary',               'ReportController::summary');
+            $r->get('inventory/forecast',    'ReportController::inventoryForecast');
+            $r->get('inventory/purchases',   'ReportController::inventoryPurchases');
             $r->get('export/(:segment)',     'ReportController::export/$1');
             $r->post('narratives/(:segment)', 'ReportController::narrative/$1');
 

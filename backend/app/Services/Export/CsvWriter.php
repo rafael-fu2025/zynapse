@@ -11,9 +11,9 @@ use CodeIgniter\HTTP\ResponseInterface;
 /**
  * CsvWriter — streaming CSV response helper.
  *
- * Owns the `php://output` handle, sets the canonical headers, and
+ * Owns a SplTempFileObject buffer, sets the canonical headers, and
  * provides a single-row API. Callers write a header row, then row-by-row,
- * then `close()` (or rely on the destructor for the cleanup path).
+ * then `flush()` to emit the response body.
  *
  * Redaction:
  *   - Sensitive payload keys are replaced with `<redacted>` recursively
@@ -28,8 +28,7 @@ final class CsvWriter
      */
     public const REDACT_KEYS = AuditPayload::REDACT_KEYS;
 
-    /** @var resource|null */
-    private $handle = null;
+    private \SplTempFileObject $buffer;
 
     public function __construct(
         private readonly ResponseInterface $response,
@@ -42,11 +41,7 @@ final class CsvWriter
         $this->response->setHeader('Cache-Control', 'no-store');
         $this->response->setHeader('X-Content-Type-Options', 'nosniff');
 
-        $handle = fopen('php://output', 'w');
-        if ($handle === false) {
-            throw ApiException::conflict('export.unavailable', 'Unable to open CSV output stream.');
-        }
-        $this->handle = $handle;
+        $this->buffer = new \SplTempFileObject();
     }
 
     /**
@@ -56,8 +51,7 @@ final class CsvWriter
      */
     public function writeHeader(array $columns): void
     {
-        $this->ensureOpen();
-        fputcsv($this->handle, $columns);
+        $this->buffer->fputcsv($columns);
     }
 
     /**
@@ -73,8 +67,7 @@ final class CsvWriter
      */
     public function writeRow(array $values): void
     {
-        $this->ensureOpen();
-        fputcsv($this->handle, array_map(static fn ($v) => self::escapeFormulaCell($v), $values));
+        $this->buffer->fputcsv(array_map(static fn ($v) => self::escapeFormulaCell($v), $values));
     }
 
     /**
@@ -122,23 +115,26 @@ final class CsvWriter
         return AuditPayload::redact($payload);
     }
 
+    /**
+     * Flush the buffered CSV to the response body.
+     */
+    public function flush(): void
+    {
+        $this->buffer->rewind();
+        $body = '';
+        while (! $this->buffer->eof()) {
+            $body .= $this->buffer->fgets();
+        }
+        $this->response->setBody($body);
+    }
+
     public function close(): void
     {
-        if ($this->handle !== null) {
-            fclose($this->handle);
-            $this->handle = null;
-        }
+        // SplTempFileObject cleanup is automatic; nothing to do.
     }
 
     public function __destruct()
     {
         $this->close();
-    }
-
-    private function ensureOpen(): void
-    {
-        if ($this->handle === null) {
-            throw new \RuntimeException('CsvWriter is already closed.');
-        }
     }
 }

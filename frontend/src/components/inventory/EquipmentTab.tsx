@@ -12,7 +12,7 @@ import {
 import { useState } from 'react';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { MobileCardList, MobileCard, MobileCardField, MobileCardActions } from '@/components/MobileCardList';
-import { QueryErrorRow } from '@/components/QueryErrorState';
+import { TableStateRows } from '@/components/TableStates';
 import { SearchBox, highlightMatch } from '@/components/ui/SearchBox';
 import { Button } from '@/components/ui/button';
 import { Dialog } from '@/components/ui/dialog';
@@ -120,13 +120,14 @@ export function EquipmentTab() {
 
   return (
     <div className="space-y-4">
-      <section className="flex flex-wrap items-center justify-between gap-3 rounded-xl border bg-card p-3">
-        <div className="flex flex-1 flex-wrap items-center gap-3">
+      <section className="flex flex-wrap items-end justify-between gap-3 rounded-xl border bg-card p-3">
+        <div className="flex flex-1 flex-wrap items-end gap-3">
           <SearchBox
             value={qDraft}
             onValueChange={setQ}
             placeholder="Search by name, category, or location"
             inputId="equipment-search"
+            label="Search"
             ariaLabel="Search equipment by name, category, or location"
             isFetching={list.isFetching && list.data !== undefined}
             className="w-full sm:w-72 lg:w-96"
@@ -152,7 +153,7 @@ export function EquipmentTab() {
       </section>
 
       <section className="hidden overflow-hidden rounded-xl border bg-card md:block">
-        <Table>
+        <Table ariaLabel="Equipment items with location and unit counts">
           <TableHeader className="bg-muted/50">
             <TableRow>
               <TableHead className="px-3">Name</TableHead>
@@ -164,23 +165,30 @@ export function EquipmentTab() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {list.isLoading && (
-              <TableRow>
-                <TableCell colSpan={6} className="px-3 py-6 text-center text-muted-foreground">
-                  <Loader2 className="mx-auto size-4 animate-spin" />
-                </TableCell>
-              </TableRow>
-            )}
-            {!list.isLoading && rows.length === 0 && (
-              <TableRow>
-                <TableCell colSpan={6} className="px-3 py-6 text-center text-muted-foreground">
-                  {q !== '' ? `No equipment matches "${q}".` : 'No equipment.'}
-                </TableCell>
-              </TableRow>
-            )}
-            {list.isError && !list.isLoading && (
-              <QueryErrorRow colSpan={6} message="Failed to load equipment." onRetry={() => void list.refetch()} pending={list.isFetching} />
-            )}
+            <TableStateRows
+              colSpan={6}
+              isLoading={list.isLoading}
+              isError={list.isError}
+              isEmpty={rows.length === 0}
+              onRetry={() => void list.refetch()}
+              pending={list.isFetching}
+              errorMessage="Failed to load equipment."
+              loadingLabel="Loading equipment"
+              empty={{
+                title: 'No equipment in the catalog.',
+                description: 'Add equipment to track its units, location, and status.',
+              }}
+              noResults={{
+                title: `No equipment matches "${q}".`,
+                description: 'Try a different name, category, or location.',
+                action: (
+                  <Button variant="outline" size="sm" onClick={() => setQ('')}>
+                    Clear search
+                  </Button>
+                ),
+              }}
+              hasFilters={q !== ''}
+            />
             {rows.map((it, idx) => (
               <TableRow key={it.id} {...equipmentRowNav.getRowProps(idx)}>
                 <TableCell className="px-3">

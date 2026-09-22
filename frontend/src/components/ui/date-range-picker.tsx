@@ -17,9 +17,22 @@ import { Button } from '@/components/ui/button';
 import { Calendar } from '@/components/ui/calendar';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { cn } from '@/lib/utils';
+import { wholeMonthSpanLabel } from '@/utils/date';
 
 const FMT = 'yyyy-MM-dd';
 const HUMAN = 'LLL dd, y';
+
+/** Short month names (Jan…Dec) for the month-span selects. */
+const MONTH_OPTIONS = Array.from({ length: 12 }, (_, index) => format(new Date(2000, index, 1), 'LLL'));
+
+/**
+ * The month-span row renders native selects — the same control
+ * react-day-picker uses for its caption dropdowns. Radix selects inside a
+ * Radix popover fight over outside-click dismissal (see TimePicker's
+ * docblock), and these never need a portal.
+ */
+const SPAN_SELECT_CLASS =
+  'h-7 rounded-md border border-input bg-transparent px-1.5 text-xs text-foreground shadow-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 [color-scheme:light] dark:[color-scheme:dark]';
 
 export interface DateRangeValue {
   start: string;
@@ -75,6 +88,25 @@ export function DateRangePicker({
   const startYear = fromYear ?? now.getFullYear() - 5;
   const endYear = toYear ?? now.getFullYear() + 10;
 
+  // Month-span controls: seeded from the active range so they always
+  // describe what is on screen; changing one re-materialises a whole-month
+  // range (an end month before the start month rolls into the next year —
+  // e.g. Nov 2026 → Feb 2027 — never truncated to a single year).
+  const spanAnchor = from ?? to ?? now;
+  const spanStartMonth = spanAnchor.getMonth() + 1;
+  const spanEndMonth = (to ?? spanAnchor).getMonth() + 1;
+  const spanYear = spanAnchor.getFullYear();
+  const yearOptions = Array.from({ length: endYear - startYear + 1 }, (_, index) => startYear + index);
+
+  function commitMonthSpan(nextStartMonth: number, nextEndMonth: number, nextYear: number): void {
+    const startDate = new Date(nextYear, nextStartMonth - 1, 1);
+    const resolvedEndYear = nextEndMonth < nextStartMonth ? nextYear + 1 : nextYear;
+    // Day 0 of the following month = the last day of the end month, so
+    // 28/29/30/31-day months all land exactly on their calendar end.
+    const endDate = new Date(resolvedEndYear, nextEndMonth, 0);
+    onChange({ start: formatYmd(startDate), end: formatYmd(endDate) });
+  }
+
   // Build the rdp selected value; the defaultMonth follows `from`,
   // otherwise today.
   const selected: DateRange | undefined =
@@ -103,7 +135,8 @@ export function DateRangePicker({
           {from !== undefined ? (
             to !== undefined ? (
               <span className="min-w-0 truncate">
-                {format(from, HUMAN)} to {format(to, HUMAN)}
+                {wholeMonthSpanLabel(formatYmd(from), formatYmd(to))
+                  ?? `${format(from, HUMAN)} to ${format(to, HUMAN)}`}
               </span>
             ) : (
               <span className="min-w-0 truncate">{format(from, HUMAN)}</span>
@@ -141,10 +174,47 @@ export function DateRangePicker({
             }
           }}
         />
+        {/* Month span: whole-month ranges (Aug → Dec, incl. year rollover).
+            Stays open across both picks so start and end can be set in one
+            visit; the trigger label echoes the span back. */}
+        <div className="flex flex-wrap items-center gap-1.5 border-t px-3 py-2">
+          <span className="text-xs font-medium text-muted-foreground">Month span</span>
+          <select
+            aria-label="Start month"
+            className={SPAN_SELECT_CLASS}
+            value={String(spanStartMonth)}
+            onChange={(event) => commitMonthSpan(Number(event.target.value), spanEndMonth, spanYear)}
+          >
+            {MONTH_OPTIONS.map((label, index) => (
+              <option key={label} value={index + 1}>{label}</option>
+            ))}
+          </select>
+          <span className="text-xs text-muted-foreground">–</span>
+          <select
+            aria-label="End month"
+            className={SPAN_SELECT_CLASS}
+            value={String(spanEndMonth)}
+            onChange={(event) => commitMonthSpan(spanStartMonth, Number(event.target.value), spanYear)}
+          >
+            {MONTH_OPTIONS.map((label, index) => (
+              <option key={label} value={index + 1}>{label}</option>
+            ))}
+          </select>
+          <select
+            aria-label="Span year"
+            className={SPAN_SELECT_CLASS}
+            value={String(spanYear)}
+            onChange={(event) => commitMonthSpan(spanStartMonth, spanEndMonth, Number(event.target.value))}
+          >
+            {yearOptions.map((year) => (
+              <option key={year} value={year}>{year}</option>
+            ))}
+          </select>
+        </div>
         {/* Preset row: common reporting windows. */}
         <div className="flex flex-wrap items-center gap-1.5 border-t px-3 py-2">
           <PresetButton
-            label="Last 7 days"
+            label="Last 7 Days"
             onClick={() => {
               const e = startOfDay(now);
               const f = addDays(e, -6);
@@ -153,7 +223,7 @@ export function DateRangePicker({
             }}
           />
           <PresetButton
-            label="Last 30 days"
+            label="Last 30 Days"
             onClick={() => {
               const e = startOfDay(now);
               const f = addDays(e, -29);
@@ -162,7 +232,7 @@ export function DateRangePicker({
             }}
           />
           <PresetButton
-            label="This month"
+            label="This Month"
             onClick={() => {
               const f = new Date(now.getFullYear(), now.getMonth(), 1);
               const e = startOfDay(now);
@@ -171,7 +241,7 @@ export function DateRangePicker({
             }}
           />
           <PresetButton
-            label="Year to date"
+            label="Year to Date"
             onClick={() => {
               const f = new Date(now.getFullYear(), 0, 1);
               const e = startOfDay(now);

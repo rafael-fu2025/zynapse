@@ -213,7 +213,7 @@ export default function DashboardPage() {
 
   if (isClinicRole) {
     return (
-      <main className="mx-auto max-w-7xl space-y-6 p-4 md:p-6">
+      <main className="space-y-6 p-4 md:p-6">
         <PageHeader
           title="Dashboard"
           description={
@@ -230,7 +230,7 @@ export default function DashboardPage() {
   const visible = MODULES.filter((m) => hasPermission({ permissions: perms } as never, m.code));
 
   return (
-    <main className="mx-auto max-w-6xl space-y-6 p-4 md:p-6">
+    <main className="space-y-6 p-4 md:p-6">
       <PageHeader
         title="Dashboard"
         description={

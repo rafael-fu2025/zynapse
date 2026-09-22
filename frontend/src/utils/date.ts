@@ -3,7 +3,7 @@
  *
  * Centralized so we never accidentally render UTC directly.
  */
-import { formatDistanceToNow, parseISO } from 'date-fns';
+import { format, formatDistanceToNow, isValid, parseISO } from 'date-fns';
 import { formatInTimeZone, fromZonedTime } from 'date-fns-tz';
 import { useAuthStore } from '@/store/auth';
 
@@ -89,4 +89,24 @@ export function utcSqlToAppParts(isoUtc: string): { date: string; time: string }
     date: formatInTimeZone(instant, tz, 'yyyy-MM-dd'),
     time: formatInTimeZone(instant, tz, 'HH:mm'),
   };
+}
+
+/**
+ * `Aug 2026 – Dec 2026` when a range covers whole calendar months — the
+ * span the report date picker shows for month-span selections. Returns
+ * `null` for day-precision ranges so the caller falls back to the
+ * explicit `from to to` rendering. A single whole month reads `Sep 2026`.
+ * Calendar-only (YMD strings), so no timezone is involved.
+ */
+export function wholeMonthSpanLabel(startYmd: string, endYmd: string): string | null {
+  const start = parseISO(startYmd);
+  const end = parseISO(endYmd);
+  if (!isValid(start) || !isValid(end) || start.getDate() !== 1) return null;
+
+  const lastDayOfEndMonth = new Date(end.getFullYear(), end.getMonth() + 1, 0).getDate();
+  if (end.getDate() !== lastDayOfEndMonth) return null;
+
+  const startLabel = format(start, 'LLL yyyy');
+  const endLabel = format(end, 'LLL yyyy');
+  return startLabel === endLabel ? startLabel : `${startLabel} – ${endLabel}`;
 }

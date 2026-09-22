@@ -27,7 +27,7 @@ import {
   MobileCardField,
   MobileCardList,
 } from '@/components/MobileCardList';
-import { QueryErrorRow } from '@/components/QueryErrorState';
+import { TableStateRows } from '@/components/TableStates';
 import { Badge } from '@/components/ui/badge';
 import { PageHeader } from '@/components/PageHeader';
 import { Button } from '@/components/ui/button';
@@ -124,6 +124,7 @@ export default function AuditPage() {
 
   const limit = 50;
   const events = useAuditEvents(cursor, limit, applied);
+  const eventsRows = events.data?.data ?? [];
   const facets = useAuditFacets();
   const detail = useAuditEvent(selectedId);
   const verification = useVerifyAuditChain();
@@ -259,7 +260,7 @@ export default function AuditPage() {
   const activeCount = FILTER_KEYS.filter((key) => applied[key] !== undefined).length;
 
   return (
-    <main className="mx-auto max-w-[1500px] space-y-5 p-4 sm:p-6">
+    <main className="space-y-4 p-6">
       <PageHeader
         title={
           <span className="flex items-center gap-2">
@@ -419,7 +420,7 @@ export default function AuditPage() {
           </div>
 
           <div className="hidden overflow-hidden border bg-card md:block">
-            <Table>
+            <Table ariaLabel="Audit event stream, newest first">
               <TableHeader className="bg-muted/50">
                 {table.getHeaderGroups().map((group) => (
                   <TableRow key={group.id}>
@@ -432,23 +433,32 @@ export default function AuditPage() {
                 ))}
               </TableHeader>
               <TableBody>
-                {events.isLoading && (
-                  <TableRow>
-                    <TableCell colSpan={columns.length} className="h-28 text-center text-muted-foreground">
-                      <Loader2 className="mx-auto mb-2 size-4 animate-spin" /> Loading evidence
-                    </TableCell>
-                  </TableRow>
-                )}
-                {events.isError && !events.isLoading && (
-                  <QueryErrorRow colSpan={columns.length} message="Failed to load audit evidence." onRetry={() => void events.refetch()} pending={events.isFetching} />
-                )}
-                {!events.isLoading && !events.isError && table.getRowModel().rows.length === 0 && (
-                  <TableRow>
-                    <TableCell colSpan={columns.length} className="h-28 text-center text-muted-foreground">
-                      <FileSearch className="mx-auto mb-2 size-5" /> No events match these filters.
-                    </TableCell>
-                  </TableRow>
-                )}
+                <TableStateRows
+                  colSpan={columns.length}
+                  isLoading={events.isLoading}
+                  isError={events.isError}
+                  isEmpty={table.getRowModel().rows.length === 0}
+                  onRetry={() => void events.refetch()}
+                  pending={events.isFetching}
+                  errorMessage="Failed to load audit evidence."
+                  loadingLabel="Loading evidence"
+                  empty={{
+                    icon: <FileSearch className="size-5" />,
+                    title: 'No audit events yet.',
+                    description: 'Administrative actions are recorded here as they happen.',
+                  }}
+                  noResults={{
+                    icon: <FileSearch className="size-5" />,
+                    title: 'No events match these filters.',
+                    description: 'Adjust or clear the filters to widen the search.',
+                    action: (
+                      <Button variant="outline" size="sm" onClick={clearFilters}>
+                        Clear filters
+                      </Button>
+                    ),
+                  }}
+                  hasFilters={activeCount > 0}
+                />
                 {table.getRowModel().rows.map((row) => (
                   <TableRow key={row.id} data-state={selectedId === row.original.id ? 'selected' : undefined}>
                     {row.getVisibleCells().map((cell) => (
@@ -462,9 +472,17 @@ export default function AuditPage() {
             </Table>
           </div>
 
-          {!events.isLoading && !events.isError && (
+          {/* Mobile has no table, so it needs its own empty branch — without
+              this a zero-row result rendered a bare, unexplained list. */}
+          {!events.isLoading && !events.isError && eventsRows.length === 0 && (
+            <p className="rounded-xl border border-dashed p-6 text-center text-sm text-muted-foreground md:hidden">
+              {activeCount > 0 ? 'No events match these filters.' : 'No audit events yet.'}
+            </p>
+          )}
+
+          {!events.isLoading && !events.isError && eventsRows.length > 0 && (
             <MobileCardList>
-              {(events.data?.data ?? []).map((event) => (
+              {eventsRows.map((event) => (
                 <MobileCard key={event.id} aria-label={`Audit event ${String(event.id)}`}>
                   <MobileCardField label="Occurred"><span className="text-xs">{fmtUtcToApp(event.occurred_at ?? event.committed_at)}</span></MobileCardField>
                   <MobileCardField label="Action"><Badge variant="info">{event.action_code}</Badge></MobileCardField>

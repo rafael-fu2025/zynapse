@@ -39,7 +39,7 @@ export type EmergencyContact = z.infer<typeof contactSchema>;
  * are nullable and only one side is populated based on `kind`.
  */
 export const personSchema = z.object({
-  id: z.number().int().positive(),
+  id: z.number().int(),
   kind: z.enum(['student', 'employee', 'contractor', 'alumni']).nullable(),
   first_name: z.string(),
   last_name: z.string(),
@@ -52,6 +52,7 @@ export const personSchema = z.object({
   archived: z.boolean(),
   created_at: z.string(),
   updated_at: z.string().optional(),
+  is_directory_record: z.boolean().optional(),
 
   // Student-specific
   student_number: z.string().nullable(),
@@ -82,6 +83,17 @@ export const studentSchema = personSchema;
 export type Student = Person;
 export const employeeSchema = personSchema;
 export type Employee = Person;
+
+/**
+ * Facet options for the Employees tab filters. `departments` mirrors the
+ * MIS `department_name` values and `positions` the MIS `position` values
+ * present in the live directory — the two categorical fields MIS supplies.
+ */
+export const employeeFacetsSchema = z.object({
+  departments: z.array(z.string()),
+  positions: z.array(z.string()),
+});
+export type EmployeeFacets = z.infer<typeof employeeFacetsSchema>;
 
 export const createStudentSchema = z.object({
   student_number: z.string().min(1, 'Required').max(50),
@@ -142,14 +154,6 @@ export const updateEmployeeSchema = z.object({
 });
 export type UpdateEmployeeInput = z.infer<typeof updateEmployeeSchema>;
 
-export const departmentSchema = z.object({
-  id: z.number().int().positive(),
-  name: z.string(),
-  code: z.string(),
-  is_active: z.boolean(),
-});
-export type Department = z.infer<typeof departmentSchema>;
-
 export const allergyCreateSchema = z.object({
   allergen: z.string().min(1, 'Required').max(200),
   severity: z.enum(['mild', 'moderate', 'severe']),
@@ -167,13 +171,11 @@ export type ContactCreateInput = z.infer<typeof contactCreateSchema>;
 
 // Phase 4 cleanup: aliases for the legacy add* schema names so
 // usePatients/PatientsPage continue to compile. The canonical names
-// are allergyCreateSchema / contactCreateSchema / departmentSchema.
+// are allergyCreateSchema / contactCreateSchema.
 export const addAllergySchema = allergyCreateSchema;
 export type AddAllergyInput = AllergyCreateInput;
 export const addContactSchema = contactCreateSchema;
 export type AddContactInput = ContactCreateInput;
-export const createDepartmentSchema = departmentSchema.pick({ name: true, code: true });
-export type CreateDepartmentInput = { name: string; code: string };
 
 export const studentsListQuerySchema = z.object({
   q: z.string().optional(),

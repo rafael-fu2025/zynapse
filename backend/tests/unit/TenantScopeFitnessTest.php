@@ -43,7 +43,6 @@ final class TenantScopeFitnessTest extends TestCase
     private const TENANT_TABLES = [
         'clinic_appointments',
         'clinic_checkins',
-        'clinic_departments',
         'clinic_encounters',
         'clinic_equipment',
         'clinic_equipment_status_log',

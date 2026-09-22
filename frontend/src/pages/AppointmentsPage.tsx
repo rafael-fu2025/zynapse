@@ -49,10 +49,10 @@ import { Link } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import { AppointmentQrDialog } from '@/components/AppointmentQrDialog';
 import { Badge } from '@/components/ui/badge';
-import { PageHeader } from '@/components/PageHeader';
+import { PageHeader, PageToolbar } from '@/components/PageHeader';
 import { Button } from '@/components/ui/button';
 import { ConfirmDialog, type ConfirmAction } from '@/components/ConfirmDialog';
-import { QueryErrorRow } from '@/components/QueryErrorState';
+import { TableStateRows } from '@/components/TableStates';
 import { MobileCardList, MobileCard, MobileCardField, MobileCardActions } from '@/components/MobileCardList';
 import { PatientIdCell } from '@/components/PatientIdCell';
 import { DatePicker } from '@/components/ui/date-picker';
@@ -744,52 +744,51 @@ export default function AppointmentsPage() {
               )}
             </Dialog>
           }
-          toolbar={
-            /* Live-search toolbar — same layout as the Patients page: a
-               bordered card with the magnifier icon INSIDE the input on the
-               left and the filters on the right. Typing >= 2 chars searches
-               as you type (debounced); clearing restores the paged list. */
-            <div className="flex flex-wrap items-end justify-between gap-3">
-              <div className="w-full space-y-1 sm:w-80 lg:flex-1 lg:max-w-md">
-                <Label htmlFor="appt-search" className="text-xs">Search</Label>
-                <div className="relative">
-                  <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-                  <Input
-                    id="appt-search"
-                    aria-label="Search appointments"
-                    placeholder="Search number, name, ID, provider, date"
-                    className="pl-9 placeholder:truncate"
-                    value={searchDraft}
-                    onChange={(e) => setSearch(e.target.value)}
-                  />
-                </div>
-              </div>
-              {/* items-end keeps the Status select aligned with the
-                  search field row. */}
-              <div className="space-y-1">
-                <Label id="appt-status-label" className="text-xs">Status</Label>
-                <Select
-                  value={statusFilter}
-                  onValueChange={(v) => { setStatusFilter(v); setCursor(null); setHistory([null]); }}
-                >
-                  <SelectTrigger aria-labelledby="appt-status-label" className="w-44">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {STATUS_OPTIONS.map((o) => (
-                      <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-          }
         />
 
         <TabSections tabs={tabs} ariaLabel="Appointment filters">
         <TabsContent value={tab} className="space-y-3">
+          {/* Live-search toolbar — same layout as the Patients page: a
+              bordered card with the magnifier icon INSIDE the input on the
+              left and the filters on the right. It lives inside TabsContent
+              so it sits beside the TabSections secondary sidebar. Typing
+              >= 2 chars searches as you type (debounced); clearing restores
+              the paged list. */}
+          <PageToolbar>
+            <div className="w-full space-y-1 sm:w-80 lg:flex-1 lg:max-w-md">
+              <Label htmlFor="appt-search" className="text-xs">Search</Label>
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  id="appt-search"
+                  aria-label="Search appointments"
+                  placeholder="Search number, name, ID, provider, date"
+                  className="pl-9 placeholder:truncate"
+                  value={searchDraft}
+                  onChange={(e) => setSearch(e.target.value)}
+                />
+              </div>
+            </div>
+            <div className="space-y-1">
+              <Label id="appt-status-label" className="text-xs">Status</Label>
+              <Select
+                value={statusFilter}
+                onValueChange={(v) => { setStatusFilter(v); setCursor(null); setHistory([null]); }}
+              >
+                <SelectTrigger aria-labelledby="appt-status-label" className="w-44">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {STATUS_OPTIONS.map((o) => (
+                    <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </PageToolbar>
+
           <section className="hidden overflow-hidden rounded-xl border bg-card md:block">
-            <Table>
+            <Table ariaLabel="Clinic appointments">
               <TableHeader className="bg-muted/50">
                 <TableRow>
                   <TableHead className="px-3">#</TableHead>
@@ -802,23 +801,25 @@ export default function AppointmentsPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {loading && (
-                  <TableRow>
-                    <TableCell colSpan={7} className="px-3 py-6 text-center text-muted-foreground">
-                      <Loader2 className="mx-auto size-4 animate-spin" />
-                    </TableCell>
-                  </TableRow>
-                )}
-                {!loading && !errored && visibleRows.length === 0 && (
-                  <TableRow>
-                    <TableCell colSpan={7} className="px-3 py-6 text-center text-muted-foreground">
-                      {searching ? 'No matches.' : 'No appointments in this view.'}
-                    </TableCell>
-                  </TableRow>
-                )}
-                {errored && !loading && (
-                  <QueryErrorRow colSpan={7} message="Failed to load appointments." onRetry={retry} pending={searching ? searchQuery.isFetching : list.isFetching} />
-                )}
+                <TableStateRows
+                  colSpan={7}
+                  isLoading={loading}
+                  isError={errored}
+                  isEmpty={visibleRows.length === 0}
+                  onRetry={retry}
+                  pending={searching ? searchQuery.isFetching : list.isFetching}
+                  errorMessage="Failed to load appointments."
+                  loadingLabel="Loading appointments"
+                  empty={{
+                    title: 'No appointments in this view.',
+                    description: 'Book an appointment or switch to a different tab.',
+                  }}
+                  noResults={{
+                    title: searching ? 'No matches.' : 'No appointments in this tab.',
+                    description: 'Try a different search term, status, or tab.',
+                  }}
+                  hasFilters={searching || tab !== 'all'}
+                />
                 {visibleRows.map((a) => (
                   <AppointmentRow
                     key={a.id}

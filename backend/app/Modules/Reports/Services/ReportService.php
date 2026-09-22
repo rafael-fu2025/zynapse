@@ -6,6 +6,7 @@ namespace Modules\Reports\Services;
 
 use App\Exceptions\ApiException;
 use App\Modules\Shared\BaseService;
+use App\Services\Analytics\InventoryForecaster;
 use App\Services\CurrentTenant;
 use DateTimeImmutable;
 use DateTimeZone;
@@ -141,11 +142,11 @@ final class ReportService extends BaseService
             ->select(
                 "CASE
                     WHEN LOWER(chief_complaint) REGEXP 'cough|cold|flu|asthma|breath|throat' THEN 'Respiratory'
-                    WHEN LOWER(chief_complaint) REGEXP 'pain|injur|wound|sprain|fracture' THEN 'Pain or injury'
+                    WHEN LOWER(chief_complaint) REGEXP 'pain|injur|wound|sprain|fracture' THEN 'Pain or Injury'
                     WHEN LOWER(chief_complaint) REGEXP 'stomach|abdom|nausea|vomit|diarr' THEN 'Digestive'
-                    WHEN LOWER(chief_complaint) REGEXP 'fever|infection' THEN 'Fever or infection'
-                    WHEN LOWER(chief_complaint) REGEXP 'check.?up|clearance|routine' THEN 'Routine care'
-                    ELSE 'Other recorded concern'
+                    WHEN LOWER(chief_complaint) REGEXP 'fever|infection' THEN 'Fever or Infection'
+                    WHEN LOWER(chief_complaint) REGEXP 'check.?up|clearance|routine' THEN 'Routine Care'
+                    ELSE 'Other Recorded Concern'
                  END AS category, COUNT(*) AS cnt",
                 false,
             )
@@ -181,7 +182,12 @@ final class ReportService extends BaseService
             ->select("COALESCE(u.kind, CASE WHEN e.guest_name IS NOT NULL AND e.guest_name <> '' THEN 'guest' ELSE 'unknown' END) AS kind, COUNT(*) AS cnt", false)
             ->join('users u', 'u.id = e.patient_user_id', 'left')
             ->where('e.archived_at', null)
-            ->groupBy('kind')->orderBy('cnt', 'DESC')->get()->getResultArray();
+            // Group by the full expression, not the `kind` alias: `kind` also
+            // names users.kind, so `GROUP BY kind` resolved to the joined
+            // column and silently merged guest rows (NULL user) into an
+            // arbitrary bucket, labelling the group from a random member.
+            ->groupBy("COALESCE(u.kind, CASE WHEN e.guest_name IS NOT NULL AND e.guest_name <> '' THEN 'guest' ELSE 'unknown' END)", false)
+            ->orderBy('cnt', 'DESC')->get()->getResultArray();
 
         $uniquePatients = (int) ($this->timestampBuilder('clinic_encounters', 'created_at', $bounds)
             ->select('COUNT(DISTINCT patient_user_id) AS n', false)
@@ -197,11 +203,11 @@ final class ReportService extends BaseService
             'range' => $range,
             'total_encounters' => $total,
             'status_breakdown' => $this->intify($statusBreakdown),
-            'daily_trend' => $this->intify($dailyTrend),
+            'daily_trend' => $this->intify($this->fillDailyBuckets($range, $dailyTrend)),
             'complaint_categories' => $this->intify($complaintCategories),
             'checkin_outcomes' => $this->intify($checkinOutcomes),
             'referral_flows' => $this->intify($referralFlows),
-            'monthly_visits' => $this->intify($monthlyVisits),
+            'monthly_visits' => $this->intify($this->fillMonthlyBuckets($range, $monthlyVisits)),
             'most_common_medications' => $this->intify($mostCommonMedications),
             'patient_type_breakdown' => $this->intify($patientType),
             'unique_patients' => $uniquePatients,
@@ -368,6 +374,113 @@ final class ReportService extends BaseService
                 'items' => $this->intify($equipmentItems),
                 'needs_replacement' => $needsReplacement,
             ],
+        ];
+    }
+
+    /**
+     * Inventory forecast aggregate: which medicines will run out within the
+     * horizon. Batch-aggregated (one grouped query for the 30-day dispensed
+     * totals, then per-medicine forecast math in PHP via InventoryForecaster)
+     * so an N-medicine catalog costs 3 queries, not N.
+     *
+     * @param int<1, 365> $withinDays
+     * @return array<string, mixed>
+     */
+    public function inventoryForecast(int $withinDays = 90): array
+    {
+        $today = new DateTimeImmutable('today', new DateTimeZone(ReportRange::APP_TIMEZONE));
+        $horizonDate = $today->modify("+{$withinDays} days")->format('Y-m-d');
+        $thirtyDaysAgo = $today->modify('-30 days')->format('Y-m-d');
+
+        // Current stock per medicine (active batches only).
+        $stockRows = $this->db->table('clinic_medicines m')
+            ->where('m.tenant_id', CurrentTenant::id())
+            ->select('m.id, m.generic_name, m.brand_name, m.unit, m.reorder_threshold, COALESCE(SUM(b.quantity_remaining), 0) AS total_stock', false)
+            ->join('clinic_medicine_batches b', "b.medicine_id = m.id AND b.status = 'active'", 'left', false)
+            ->where('m.archived_at', null)
+            ->groupBy('m.id')
+            ->get()->getResultArray();
+
+        // Dispensed totals over the trailing 30 days — the moving-average
+        // window the forecaster expects. Manila-day bucketing on the write
+        // side is not needed here: we only need the sum, and the UTC
+        // inclusive bounds approximate the window within a day.
+        $usageRows = $this->db->table('clinic_medicine_transactions t')
+            ->where('t.tenant_id', CurrentTenant::id())
+            ->select('t.medicine_id, SUM(t.quantity) AS qty', false)
+            ->where('t.type', 'dispensed')
+            ->where('DATE(DATE_ADD(t.created_at, INTERVAL 8 HOUR)) >=', $thirtyDaysAgo)
+            ->groupBy('t.medicine_id')
+            ->get()->getResultArray();
+        $usageByMedicine = [];
+        foreach ($usageRows as $r) {
+            $usageByMedicine[(int) $r['medicine_id']] = (int) $r['qty'];
+        }
+
+        $forecaster = new InventoryForecaster();
+        $items = [];
+        foreach ($stockRows as $row) {
+            $forecast = $forecaster->forecast(
+                (int) $row['total_stock'],
+                (int) $row['reorder_threshold'],
+                $usageByMedicine[(int) $row['id']] ?? 0,
+                null, // category seasonality is per-forecast-dialog; the
+                      // aggregate skips it for stability across the catalog.
+                $today,
+            );
+            $stockoutDate = (string) $forecast['predicted_stockout_date'];
+            if ($stockoutDate > $horizonDate) {
+                continue;
+            }
+            $items[] = [
+                'generic_name'         => $row['generic_name'],
+                'brand_name'           => $row['brand_name'],
+                'unit'                 => $row['unit'],
+                'total_stock'          => (int) $row['total_stock'],
+                'reorder_threshold'    => (int) $row['reorder_threshold'],
+                'predicted_daily_usage' => (float) $forecast['predicted_daily_usage'],
+                'stockout_date'        => $stockoutDate,
+                'reorder_date'         => (string) $forecast['predicted_reorder_date'],
+            ];
+        }
+
+        usort($items, static fn (array $a, array $b): int => strcmp($a['stockout_date'], $b['stockout_date']));
+
+        return [
+            'generated_at' => $this->utcNow(),
+            'within_days'  => $withinDays,
+            'items'        => $items,
+        ];
+    }
+
+    /**
+     * Purchase (reorder) activity for the range: how much stock the clinic
+     * bought, at which pipeline stage, and the request cadence.
+     *
+     * @param array{start: string, end: string} $range
+     * @return array<string, mixed>
+     */
+    public function inventoryPurchases(array $range): array
+    {
+        $bounds = $this->ranges->timestampBounds($range);
+
+        $byStatus = $this->timestampBuilder('clinic_reorder_requests', 'created_at', $bounds)
+            ->select('status, COUNT(*) AS cnt, COALESCE(SUM(requested_quantity), 0) AS qty', false)
+            ->groupBy('status')->orderBy('cnt', 'DESC')->get()->getResultArray();
+
+        $dailyTrend = $this->timestampBuilder('clinic_reorder_requests', 'created_at', $bounds)
+            ->select('DATE(DATE_ADD(created_at, INTERVAL 8 HOUR)) AS day, COUNT(*) AS cnt', false)
+            ->groupBy('day')->orderBy('day', 'ASC')->get()->getResultArray();
+
+        $totalPurchases = array_sum(array_map(static fn (array $r): int => (int) $r['cnt'], $byStatus));
+        $totalUnits = array_sum(array_map(static fn (array $r): int => (int) $r['qty'], $byStatus));
+
+        return [
+            'range' => $range,
+            'total_purchases' => $totalPurchases,
+            'total_units' => $totalUnits,
+            'by_status' => $this->intify($byStatus),
+            'daily_trend' => $this->intify($dailyTrend),
         ];
     }
 
@@ -709,6 +822,66 @@ final class ReportService extends BaseService
             return $current === 0 ? 0.0 : null;
         }
         return round((($current - $previous) / $previous) * 100, 1);
+    }
+
+    /**
+     * Zero-fill monthly buckets so the bar chart renders one bar per
+     * calendar month in range — months without encounters become real 0s
+     * instead of missing rows. Manila calendar months, driven entirely by
+     * the [start, end] range (no fixed window).
+     *
+     * @param array{start: string, end: string} $range
+     * @param array<int, array<string, mixed>> $rows
+     * @return array<int, array{month: string, cnt: int}>
+     */
+    private function fillMonthlyBuckets(array $range, array $rows): array
+    {
+        $tz = new DateTimeZone(ReportRange::APP_TIMEZONE);
+        $cursor = (new DateTimeImmutable($range['start'], $tz))->modify('first day of this month');
+        $last = (new DateTimeImmutable($range['end'], $tz))->modify('first day of this month');
+
+        $seen = [];
+        foreach ($rows as $row) {
+            $seen[(string) $row['month']] = (int) $row['cnt'];
+        }
+
+        $filled = [];
+        while ($cursor <= $last) {
+            $month = $cursor->format('Y-m');
+            $filled[] = ['month' => $month, 'cnt' => $seen[$month] ?? 0];
+            $cursor = $cursor->modify('+1 month');
+        }
+
+        return $filled;
+    }
+
+    /**
+     * Zero-fill daily buckets so the trend line spans every Manila day in
+     * range — days without encounters become 0-points instead of gaps.
+     *
+     * @param array{start: string, end: string} $range
+     * @param array<int, array<string, mixed>> $rows
+     * @return array<int, array{day: string, cnt: int}>
+     */
+    private function fillDailyBuckets(array $range, array $rows): array
+    {
+        $tz = new DateTimeZone(ReportRange::APP_TIMEZONE);
+        $cursor = new DateTimeImmutable($range['start'], $tz);
+        $last = new DateTimeImmutable($range['end'], $tz);
+
+        $seen = [];
+        foreach ($rows as $row) {
+            $seen[(string) $row['day']] = (int) $row['cnt'];
+        }
+
+        $filled = [];
+        while ($cursor <= $last) {
+            $day = $cursor->format('Y-m-d');
+            $filled[] = ['day' => $day, 'cnt' => $seen[$day] ?? 0];
+            $cursor = $cursor->modify('+1 day');
+        }
+
+        return $filled;
     }
 
     /** @param array<int, array<string, mixed>> $rows @return array<int, array<string, mixed>> */

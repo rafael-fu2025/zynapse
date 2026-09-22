@@ -32,7 +32,7 @@ export function DateTimeField({
   disabled = false,
   'aria-invalid': ariaInvalid,
 }: DateTimeFieldProps) {
-  const match = DATETIME_RE.exec(value ?? '');
+  const match = (value ?? '').match(DATETIME_RE);
   const [draftDate, setDraftDate] = useState('');
   const [draftTime, setDraftTime] = useState('');
 

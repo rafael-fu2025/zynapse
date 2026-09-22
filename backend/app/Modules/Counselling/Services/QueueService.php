@@ -16,7 +16,14 @@ use DateTimeZone;
 use Modules\Counselling\Policies\CounsellingPolicy;
 use Modules\Counselling\DTOs\SessionDto;
 
-/** Independent FIFO queue owned by the existing Counselling module. */
+/**
+ * QueueService — independent FIFO queue owned by the Counselling module.
+ *
+ * NOTE: Clinic has its own independent QueueService at
+ * {@see \Modules\Clinic\Services\QueueService}. The two are deliberately
+ * separate (different tables, transitions, and access control) — they
+ * share the class name by convention only.
+ */
 final class QueueService extends BaseService
 {
     private const TRANSITIONS = [

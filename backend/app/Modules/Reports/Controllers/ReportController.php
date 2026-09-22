@@ -53,6 +53,33 @@ final class ReportController extends ApiController
         return $this->ok($data);
     }
 
+    /** Inventory stockout forecast aggregate (trailing 30-day usage model). */
+    public function inventoryForecast(): ResponseInterface
+    {
+        $this->authorize('reports.read');
+
+        $withinDays = $this->request->getGet('within_days');
+        $within = 90;
+        if (is_string($withinDays)) {
+            $within = (int) $withinDays;
+        }
+        if ($within < 1 || $within > 365) {
+            throw ApiException::validationFailure([
+                ['code' => 'validation.field', 'message' => 'within_days must be between 1 and 365.', 'field' => 'within_days'],
+            ]);
+        }
+
+        return $this->ok($this->service->inventoryForecast($within));
+    }
+
+    /** Purchase (reorder) activity for the selected range. */
+    public function inventoryPurchases(): ResponseInterface
+    {
+        $this->authorize('reports.read');
+
+        return $this->ok($this->service->inventoryPurchases($this->rangeFromQuery()));
+    }
+
     /** Persist a deterministic narrative through an explicit write action. */
     public function narrative(string $module): ResponseInterface
     {
@@ -96,7 +123,7 @@ final class ReportController extends ApiController
         foreach ($rows as $row) {
             $writer->writeRow($row);
         }
-        $writer->close();
+        $writer->flush();
 
         return $this->response;
     }

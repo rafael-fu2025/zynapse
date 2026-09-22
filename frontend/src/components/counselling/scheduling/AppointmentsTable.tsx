@@ -6,7 +6,6 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
-  Loader2,
   UserX,
   X,
 } from 'lucide-react';
@@ -22,7 +21,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { Input } from '@/components/ui/input';
-import { QueryErrorRow } from '@/components/QueryErrorState';
+import { TableStateRows } from '@/components/TableStates';
 import {
   Select,
   SelectContent,
@@ -135,7 +134,7 @@ export function AppointmentsTable({
         </div>
       </header>
 
-      <Table>
+      <Table ariaLabel="Counselling appointments">
         <TableHeader className="bg-muted/50">
           <TableRow>
             <TableHead className="px-3">#</TableHead>
@@ -147,23 +146,37 @@ export function AppointmentsTable({
           </TableRow>
         </TableHeader>
         <TableBody>
-          {appointments.isLoading && (
-            <TableRow>
-              <TableCell colSpan={6} className="px-3 py-6 text-center text-muted-foreground">
-                <Loader2 className="mx-auto size-4 animate-spin" />
-              </TableCell>
-            </TableRow>
-          )}
-          {!appointments.isLoading && (appointments.data?.data.length ?? 0) === 0 && (
-            <TableRow>
-              <TableCell colSpan={6} className="px-3 py-6 text-center text-muted-foreground">
-                No appointments found.
-              </TableCell>
-            </TableRow>
-          )}
-          {appointments.isError && !appointments.isLoading && (
-            <QueryErrorRow colSpan={6} message="Failed to load appointments." onRetry={() => void appointments.refetch()} pending={appointments.isFetching} />
-          )}
+          <TableStateRows
+            colSpan={6}
+            isLoading={appointments.isLoading}
+            isError={appointments.isError}
+            isEmpty={(appointments.data?.data.length ?? 0) === 0}
+            onRetry={() => void appointments.refetch()}
+            pending={appointments.isFetching}
+            errorMessage="Failed to load appointments."
+            loadingLabel="Loading appointments"
+            empty={{
+              title: 'No appointments booked.',
+              description: 'Bookings must fall inside an availability window.',
+            }}
+            noResults={{
+              title: 'No appointments match these filters.',
+              description: 'Try a different date or status.',
+              action: (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    onDateChange('');
+                    onStatusChange('all');
+                  }}
+                >
+                  Clear filters
+                </Button>
+              ),
+            }}
+            hasFilters={date !== '' || status !== 'all'}
+          />
           {appointments.data?.data.map((a) => {
             const active = a.status === 'scheduled' || a.status === 'confirmed';
             return (

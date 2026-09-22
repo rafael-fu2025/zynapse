@@ -1326,16 +1326,6 @@ class ApiService {
     return UserProfile.fromJson(_unwrapObject(res));
   }
 
-  /// `GET /clinic/departments` — employee department options.
-  Future<List<String>> departments() async {
-    final res = await _dio.get<Map<String, dynamic>>('/clinic/departments');
-    return _unwrapList(res)
-        .whereType<Map<String, dynamic>>()
-        .map((e) => (e['name'] ?? '').toString())
-        .where((s) => s.isNotEmpty)
-        .toList();
-  }
-
   // ---------------------------------------------------------------------
   // Medicines CRUD (clinic.inventory.write)
   // ---------------------------------------------------------------------

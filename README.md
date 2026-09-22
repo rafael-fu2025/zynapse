@@ -14,7 +14,7 @@ SYNAPSE is a university health-services platform in three parts: a stateless RES
 
 | Path | What it is |
 |---|---|
-| [`backend/`](backend/README.md) | CodeIgniter 4 REST API — the source of truth. 5 domain modules over a shared kernel, JWT auth, RBAC, audit hash chain, 85 migrations. |
+| [`backend/`](backend/README.md) | CodeIgniter 4 REST API — the source of truth. 5 domain modules over a shared kernel, JWT auth, RBAC, audit hash chain, 96 migrations. |
 | [`frontend/`](frontend/README.md) | React 18 + Vite SPA — staff and student portal, web kiosk check-in, public lobby queue display. Strict TypeScript, Zod-validated responses. |
 | [`mobile/`](mobile/README.md) | Flutter client — every module except kiosk check-in, with PDF report export and the same hardened token flow as the browser. |
 | [`docs/`](docs/) | Compliance & operations: external-API data-sharing terms (RA 10173) and the RBAC/key-rotation runbook. |
@@ -56,7 +56,7 @@ npm run dev                                              # http://localhost:5173
 
 Generate each backend secret with `openssl rand -hex 32`: `JWT_SECRET`, `REFERRAL_HMAC_KEY`, `COUNSELLING_KEY` (keep `COUNSELLING_KEY_VERSION=1`). Set `CORS_ALLOWED_ORIGINS` to your frontend origin (`http://localhost:5173`).
 
-Login with the dev admin account (see [`CREDENTIALS.md`](CREDENTIALS.md)). For the full demo dataset — patients, appointments, counselling, referrals, inventory, BMG units — additionally run the seeders listed in [`backend/README.md`](backend/README.md#database--seeders). Mobile setup lives in [`mobile/README.md`](mobile/README.md).
+Login with the dev admin account (see [`CREDENTIALS.md`](CREDENTIALS.md)). Mobile setup lives in [`mobile/README.md`](mobile/README.md).
 
 ## Repository layout
 
@@ -65,10 +65,10 @@ zynapse/
 ├── backend/                       # CodeIgniter 4 REST API
 │   ├── app/
 │   │   ├── Auth/                  # JwtService, refresh rotation, throttling, account state
-│   │   ├── Commands/              # 9 spark workers: audit drain/verify, reports, queues…
+│   │   ├── Commands/              # 12 spark workers: audit drain/verify, reports, queues…
 │   │   ├── Config/                # root Routes.php, Filters, Constants
 │   │   ├── Controllers/Api/       # Auth, Rbac, Admin, Audit, Dashboard, Notify, Kiosk
-│   │   ├── Database/              # 85 migrations, 10 seeders
+│   │   ├── Database/              # 96 migrations, 5 seeders
 │   │   ├── Filters/               # api_auth, rate limit, exception envelope, CORS
 │   │   ├── Modules/               # Clinic · Counselling · Facilities · Referrals · Reports
 │   │   │                          #   each with Controllers/ Services/ DTOs/ Policies/ Routes.php
@@ -163,7 +163,7 @@ CI ([`ci.yml`](.github/workflows/ci.yml)) runs every suite except live e2e on ea
 3. `npm run build`; serve `frontend/dist` behind a proxy that forwards `/api/v1` to the PHP backend (Apache/PHP-FPM with OPcache — the single-threaded `spark serve` is dev-only and the measured bottleneck on Windows).
 4. Re-run the PermissionsAndGroupsSeeder after the 2026-09 RBAC migration and mint the Platform Owner: `php spark synapse:promote-superadmin <email> --confirm`. Old `admin` memberships carry over to `clinic_admin`; staff sign in again to refresh their permission set. See [`docs/OPERATIONS.md`](docs/OPERATIONS.md).
 5. Install the cron workers above and wire their failures to alerting.
-6. Do **not** seed `DevUserSeeder` or any demo seeder in production (this includes `SandboxTenantSeeder` — a production sandbox tenant starts empty by design).
+6. Do **not** seed `DevUserSeeder` or any demo seeder in production.
 
 ## Troubleshooting
 

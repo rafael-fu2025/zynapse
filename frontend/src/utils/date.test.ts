@@ -4,6 +4,7 @@ import {
   fmtShort,
   fmtUtcToApp,
   utcSqlToAppParts,
+  wholeMonthSpanLabel,
 } from './date';
 
 /**
@@ -64,5 +65,29 @@ describe('appDateTimeToUtcSql / utcSqlToAppParts', () => {
     // 00:00 UTC the same day.
     expect(appDateTimeToUtcSql('2026-08-01', '08:00')).toBe('2026-08-01 00:00:00');
     expect(MANILA_OFFSET_HOURS).toBe(8); // guard the assumption this file makes
+  });
+});
+
+describe('wholeMonthSpanLabel', () => {
+  it('renders a whole-month span as the month range label', () => {
+    expect(wholeMonthSpanLabel('2026-08-01', '2026-12-31')).toBe('Aug 2026 – Dec 2026');
+  });
+
+  it('renders a single whole month without a dash', () => {
+    expect(wholeMonthSpanLabel('2026-09-01', '2026-09-30')).toBe('Sep 2026');
+  });
+
+  it('handles a 28-day February and a leap February', () => {
+    expect(wholeMonthSpanLabel('2027-02-01', '2027-02-28')).toBe('Feb 2027');
+    expect(wholeMonthSpanLabel('2028-02-01', '2028-02-29')).toBe('Feb 2028');
+  });
+
+  it('spans a year boundary (academic-year style range)', () => {
+    expect(wholeMonthSpanLabel('2026-11-01', '2027-02-28')).toBe('Nov 2026 – Feb 2027');
+  });
+
+  it('returns null for day-precision ranges', () => {
+    expect(wholeMonthSpanLabel('2026-08-19', '2026-09-17')).toBeNull();
+    expect(wholeMonthSpanLabel('2026-08-01', '2026-12-30')).toBeNull();
   });
 });

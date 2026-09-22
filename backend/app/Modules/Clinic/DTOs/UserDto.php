@@ -68,6 +68,7 @@ final class UserDto extends BaseDTO
             'emergency_contact_name'  => $this->nullableString($row['emergency_contact_name'] ?? null),
             'emergency_contact_phone' => $this->nullableString($row['emergency_contact_phone'] ?? null),
             'is_teaching'        => isset($row['is_teaching']) ? (bool) $row['is_teaching'] : null,
+            'is_directory_record' => (bool) ($row['is_directory_record'] ?? false),
         ];
 
         if ($this->allergies !== []) {

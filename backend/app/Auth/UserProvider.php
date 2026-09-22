@@ -51,6 +51,9 @@ final class UserProvider
 
     /**
      * Look up an active user by id. Password hash is NOT exposed here.
+     * `email` / `force_reset` are null when the user has no
+     * `email_password` identity (MIS-provisioned users) — `has_local_password`
+     * makes that distinction explicit for /auth/me.
      */
     public function findById(int $userId): ?object
     {
@@ -66,8 +69,9 @@ final class UserProvider
 
     private function cast(object $row): object
     {
-        $row->id     = (int) $row->id;
-        $row->active = (bool) $row->active;
+        $row->id                = (int) $row->id;
+        $row->active            = (bool) $row->active;
+        $row->has_local_password = $row->email !== null;
         return $row;
     }
 }

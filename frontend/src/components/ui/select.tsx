@@ -70,7 +70,15 @@ const SelectContent = React.forwardRef<
     <SelectPrimitive.Content
       ref={ref}
       className={cn(
-        'relative z-50 max-h-[--radix-select-content-available-height] min-w-[8rem] overflow-y-auto overflow-x-hidden rounded-md border bg-popover text-popover-foreground shadow-md data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2',
+        // Radix publishes the space left in the viewport as
+        // `--radix-select-content-available-height` on this element. It MUST
+        // be read through `var()`: the bare `max-h-[--x]` shorthand compiles
+        // to `max-height: --x`, which is invalid CSS the browser discards —
+        // leaving the panel unbounded (a 245-option list measured 7,850px
+        // tall and ran 7,283px past the viewport). `min()` then caps it at a
+        // sensible ceiling so a long list never dominates a tall screen,
+        // while still shrinking to fit short viewports.
+        'relative z-50 flex max-h-[min(var(--radix-select-content-available-height),var(--select-content-max-height,20rem))] flex-col min-w-[8rem] overflow-hidden rounded-md border bg-popover text-popover-foreground shadow-md data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2',
         position === 'popper' &&
           'data-[side=bottom]:translate-y-1 data-[side=left]:-translate-x-1 data-[side=right]:translate-x-1 data-[side=top]:-translate-y-1',
         className,
@@ -81,9 +89,15 @@ const SelectContent = React.forwardRef<
       <SelectScrollUpButton />
       <SelectPrimitive.Viewport
         className={cn(
-          'p-1',
-          position === 'popper' &&
-            'h-[var(--radix-select-trigger-height)] w-full min-w-[var(--radix-select-trigger-width)]',
+          // The VIEWPORT is the scroll container, not the content — that
+          // keeps the scroll buttons outside the scrolled area and pinned to
+          // the panel edges. `flex-initial min-h-0` lets it shrink under the
+          // parent's max-height without stretching a short list to fill it.
+          // A `height` here would clamp the list to the trigger height
+          // (`--radix-select-trigger-height` is not set by Radix on this
+          // element, so it silently resolved to `auto` and defeated the cap).
+          'min-h-0 flex-initial overflow-y-auto overflow-x-hidden p-1',
+          position === 'popper' && 'w-full min-w-[var(--radix-select-trigger-width)]',
         )}
       >
         {children}

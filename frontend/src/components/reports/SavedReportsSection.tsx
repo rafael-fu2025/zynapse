@@ -174,7 +174,7 @@ export function SavedReportsSection({ start, end, canConfigure, canExport }: Pro
   return (
     <section className="space-y-4" aria-labelledby="saved-reports-heading">
       <div>
-        <h2 id="saved-reports-heading" className="text-lg font-semibold text-foreground">Saved and generated reports</h2>
+        <h2 id="saved-reports-heading" className="text-lg font-semibold text-foreground">Saved and Generated Reports</h2>
         <p className="text-sm text-muted-foreground">Saved configurations use fixed dates. Generated files are retained for 30 days.</p>
       </div>
 
@@ -190,7 +190,7 @@ export function SavedReportsSection({ start, end, canConfigure, canExport }: Pro
               }}>
                 <SelectTrigger className="h-8 w-[145px]" aria-label="Filter configurations by module"><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="all">All modules</SelectItem>
+                  <SelectItem value="all">All Modules</SelectItem>
                   {REPORT_MODULES.map((item) => <SelectItem key={item} value={item}>{moduleLabel(item)}</SelectItem>)}
                 </SelectContent>
               </Select>
@@ -203,7 +203,7 @@ export function SavedReportsSection({ start, end, canConfigure, canExport }: Pro
                   setConfigPage(1);
                 }}
               >
-                <Archive /> {showArchived ? 'Hide archived' : 'Show archived'}
+                <Archive /> {showArchived ? 'Hide Archived' : 'Show Archived'}
               </Button>
             </div>
           </div>
@@ -217,14 +217,14 @@ export function SavedReportsSection({ start, end, canConfigure, canExport }: Pro
               }}
             >
               <div className="space-y-1 sm:col-span-2">
-                <p className="text-sm font-medium">{editingId === null ? 'Save this view' : 'Edit configuration'}</p>
+                <p className="text-sm font-medium">{editingId === null ? 'Save This View' : 'Edit Configuration'}</p>
                 <p className="text-xs text-muted-foreground">The exact range is stored so the report can be reproduced.</p>
               </div>
-              <div className="space-y-1">
+              <div className="space-y-1.5">
                 <Label htmlFor="report-config-name">Name</Label>
                 <Input id="report-config-name" value={name} maxLength={120} onChange={(event) => setName(event.target.value)} />
               </div>
-              <div className="space-y-1">
+              <div className="space-y-1.5">
                 <Label id="report-config-module-label">Module</Label>
                 <Select value={module} onValueChange={(value) => {
                   const parsed = reportModuleSchema.safeParse(value);
@@ -236,8 +236,8 @@ export function SavedReportsSection({ start, end, canConfigure, canExport }: Pro
                   </SelectContent>
                 </Select>
               </div>
-              <div className="space-y-1 sm:col-span-2">
-                <Label htmlFor="report-config-range">Fixed date range</Label>
+              <div className="space-y-1.5 sm:col-span-2">
+                <Label htmlFor="report-config-range">Fixed Date Range</Label>
                 <DateRangePicker
                   id="report-config-range"
                   start={configStart}
@@ -250,7 +250,7 @@ export function SavedReportsSection({ start, end, canConfigure, canExport }: Pro
               </div>
               <label className="flex min-h-10 items-center gap-2 text-sm">
                 <input type="checkbox" className="size-4" checked={summarize} onChange={(event) => setSummarize(event.target.checked)} />
-                Include narrative
+                Include Narrative
               </label>
               <div className="flex flex-wrap justify-end gap-2">
                 {editingId !== null && (
@@ -258,7 +258,7 @@ export function SavedReportsSection({ start, end, canConfigure, canExport }: Pro
                 )}
                 <Button type="submit" size="sm" disabled={configPending}>
                   {configPending ? <Loader2 className="animate-spin" /> : editingId === null ? <Plus /> : <Save />}
-                  {editingId === null ? 'Save' : 'Save changes'}
+                  {editingId === null ? 'Save' : 'Save Changes'}
                 </Button>
               </div>
             </form>
@@ -342,7 +342,7 @@ export function SavedReportsSection({ start, end, canConfigure, canExport }: Pro
 
         <section className="min-w-0 overflow-hidden rounded-xl border bg-card" aria-labelledby="generated-heading">
           <div className="flex flex-wrap items-center justify-between gap-2 border-b px-4 py-3">
-            <h3 id="generated-heading" className="text-sm font-semibold">Generated history</h3>
+            <h3 id="generated-heading" className="text-sm font-semibold">Generated History</h3>
             <div className="flex flex-wrap items-center justify-end gap-2">
               <Select value={generatedModule} onValueChange={(value) => {
                 const parsed = reportModuleSchema.safeParse(value);
@@ -351,7 +351,7 @@ export function SavedReportsSection({ start, end, canConfigure, canExport }: Pro
               }}>
                 <SelectTrigger className="h-8 w-[130px]" aria-label="Filter generated reports by module"><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="all">All modules</SelectItem>
+                  <SelectItem value="all">All Modules</SelectItem>
                   {REPORT_MODULES.map((item) => <SelectItem key={item} value={item}>{moduleLabel(item)}</SelectItem>)}
                 </SelectContent>
               </Select>
@@ -364,7 +364,7 @@ export function SavedReportsSection({ start, end, canConfigure, canExport }: Pro
               }}>
                 <SelectTrigger className="h-8 w-[125px]" aria-label="Filter generated reports by status"><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="all">All statuses</SelectItem>
+                  <SelectItem value="all">All Statuses</SelectItem>
                   <SelectItem value="queued">Queued</SelectItem>
                   <SelectItem value="processing">Processing</SelectItem>
                   <SelectItem value="completed">Completed</SelectItem>
@@ -402,6 +402,8 @@ export function SavedReportsSection({ start, end, canConfigure, canExport }: Pro
                         <p className="mt-1 text-xs text-muted-foreground">{range.start} to {range.end} · requested {fmtUtcToApp(item.generated_at)}</p>
                         <p className="text-xs text-muted-foreground">
                           {item.row_count === null ? 'Row count pending' : item.row_count + ' aggregate rows'}
+                          {item.started_at !== null ? ' · ran ' + fmtUtcToApp(item.started_at) : ''}
+                          {item.completed_at !== null ? ' → ' + fmtUtcToApp(item.completed_at) : ''}
                           {item.expires_at !== null ? ' · retained until ' + fmtUtcToApp(item.expires_at) : ''}
                         </p>
                       </div>

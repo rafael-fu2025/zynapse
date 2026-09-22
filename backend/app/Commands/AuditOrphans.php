@@ -34,21 +34,52 @@ final class AuditOrphans extends BaseCommand
             return 1;
         }
 
-        $args = ['--help' => false];
+        // Build argv array for the script
+        $argv = [$script];
         if (isset($params['out']) && $params['out'] !== '') {
-            $args['--out'] = (string) $params['out'];
+            $argv[] = '--out=' . $params['out'];
         }
         if (isset($params['silent'])) {
-            $args['--silent'] = true;
-        }
-        $cmd = 'php ' . escapeshellarg($script);
-        foreach ($args as $k => $v) {
-            if ($v === false) continue;
-            $cmd .= ' ' . escapeshellarg($k . ($v === true ? '' : '=' . $v));
+            $argv[] = '--silent';
         }
 
-        CLI::write('Running: ' . $cmd, 'yellow');
-        passthru($cmd, $rc);
-        return $rc === 0 ? 0 : 1;
+        // Save current argv and replace with our constructed one
+        $originalArgv = $_SERVER['argv'] ?? null;
+        $_SERVER['argv'] = $argv;
+        $_SERVER['argc'] = count($argv);
+
+        CLI::write('Running audit-orphans script...', 'yellow');
+        
+        // Capture output
+        ob_start();
+        try {
+            $returnValue = require $script;
+            $output = ob_get_clean();
+            
+            // Write captured output
+            if ($output !== false && $output !== '') {
+                CLI::write($output);
+            }
+            
+            // Restore original argv
+            if ($originalArgv !== null) {
+                $_SERVER['argv'] = $originalArgv;
+                $_SERVER['argc'] = count($originalArgv);
+            }
+            
+            // Handle return value: if script returns int, use it; otherwise success
+            return is_int($returnValue) ? $returnValue : 0;
+        } catch (\Throwable $e) {
+            ob_end_clean();
+            
+            // Restore original argv
+            if ($originalArgv !== null) {
+                $_SERVER['argv'] = $originalArgv;
+                $_SERVER['argc'] = count($originalArgv);
+            }
+            
+            CLI::error('Script failed: ' . $e->getMessage());
+            return 1;
+        }
     }
 }

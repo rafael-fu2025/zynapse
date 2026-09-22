@@ -29,6 +29,11 @@ final class CurlTransport implements HttpTransport
         ?array $body = null,
         int $timeoutSeconds = 10,
     ): array {
+        // Offline test invariant: fail before DNS, sockets or credential use.
+        // Feature tests must inject HttpTransport doubles, never the live MIS.
+        if (defined('ENVIRONMENT') && ENVIRONMENT === 'testing') {
+            throw new FuMisException('fumis.live_transport_disabled_in_tests', 0);
+        }
         $this->assertSafeUrl($url);
 
         $options = [

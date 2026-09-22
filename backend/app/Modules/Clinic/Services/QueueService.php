@@ -17,8 +17,13 @@ use Modules\Clinic\Policies\ClinicPolicy;
 use Throwable;
 
 /**
- * QueueService — walk-in queue (Phase 14, recycled from synapse_ag
+ * QueueService — clinic walk-in queue (Phase 14, recycled from synapse_ag
  * ConsultationController queue actions).
+ *
+ * NOTE: Counselling has its own independent QueueService at
+ * {@see \Modules\Counselling\Services\QueueService}. The two are
+ * deliberately separate (different tables, transitions, and access
+ * control) — they share the class name by convention only.
  *
  * Rules ported from the legacy module:
  *   - Positions are stable 1-based per day, assigned under a row lock

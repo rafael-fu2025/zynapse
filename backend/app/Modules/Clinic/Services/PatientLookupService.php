@@ -33,6 +33,20 @@ final class PatientLookupService
     public function findByIdentifier(string $identifier): array
     {
         $row = $this->resolveFromUsersByIdentifier($identifier);
+        if ($row === null && trim($identifier) !== '') {
+            try {
+                $fuMis = Services::fuMisAuthService();
+                $userId = $fuMis->ensureStudentProvisioned($identifier);
+                if ($userId === null) {
+                    $userId = $fuMis->ensureEmployeeProvisioned($identifier);
+                }
+                if ($userId !== null) {
+                    $row = $this->resolveFromUsersByIdentifier($identifier);
+                }
+            } catch (\Throwable $e) {
+                log_message('warning', sprintf('PatientLookupService MIS resolution failed: %s', $e->getMessage()));
+            }
+        }
         return $row !== null ? [$row['kind'], $row] : [null, null];
     }
 
@@ -48,6 +62,20 @@ final class PatientLookupService
     {
         $column = $this->columnForMethod($method);
         $row    = $this->resolveFromUsers($identifier, $column);
+        if ($row === null && $column === null && trim($identifier) !== '') {
+            try {
+                $fuMis = Services::fuMisAuthService();
+                $userId = $fuMis->ensureStudentProvisioned($identifier);
+                if ($userId === null) {
+                    $userId = $fuMis->ensureEmployeeProvisioned($identifier);
+                }
+                if ($userId !== null) {
+                    $row = $this->resolveFromUsers($identifier, $column);
+                }
+            } catch (\Throwable $e) {
+                log_message('warning', sprintf('PatientLookupService MIS checkin resolution failed: %s', $e->getMessage()));
+            }
+        }
         return $row !== null ? [$row['kind'], $row] : [null, null];
     }
 

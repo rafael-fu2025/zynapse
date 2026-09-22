@@ -105,10 +105,13 @@ function Table({ title, headers, rows }: { title: string; headers: string[]; row
     <div style={{ marginBottom: 18 }}>
       <h4 style={{ fontSize: 13, fontWeight: 700, color: INK, margin: '0 0 8px' }}>{title}</h4>
       <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
+        {/* Accessible name for the DOM copy. `sr-only` keeps it out of the
+            captured PDF, which renders from computed styles. */}
+        <caption className="sr-only">{title}</caption>
         <thead>
           <tr>
             {headers.map((h) => (
-              <th key={h} style={{ textAlign: 'left', borderBottom: '1px solid ' + LINE, padding: '4px 6px', color: MUTED, fontWeight: 600 }}>{h}</th>
+              <th key={h} scope="col" style={{ textAlign: 'left', borderBottom: '1px solid ' + LINE, padding: '4px 6px', color: MUTED, fontWeight: 600 }}>{h}</th>
             ))}
           </tr>
         </thead>
@@ -148,7 +151,7 @@ export default function ReportPdfView({
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid ' + MAROON, paddingBottom: 12, marginBottom: 16 }}>
         <div>
           <div style={{ fontSize: 22, fontWeight: 800, color: MAROON, letterSpacing: 1 }}>SYNAPSE</div>
-          <div style={{ fontSize: 12, color: MUTED }}>Reports &amp; analytics</div>
+          <div style={{ fontSize: 12, color: MUTED }}>Reports &amp; Analytics</div>
         </div>
         <div style={{ textAlign: 'right' }}>
           <div style={{ fontSize: 15, fontWeight: 700, color: INK }}>{moduleLabel(module)}</div>
@@ -186,17 +189,17 @@ function ClinicReportView({ data }: { data: ClinicReport }) {
         <Kpi label="Avg visits / patient" value={data.avg_visits_per_patient.toFixed(2)} />
         <Kpi label="Avg per day" value={data.avg_per_day.toFixed(2)} />
       </div>
-      <TrendChart title="Monthly visits" unit="visits" points={(data.monthly_visits ?? []).map((p) => ({ label: p.month, value: p.cnt }))} />
-      <TrendChart title="Daily trend" unit="encounters" points={data.daily_trend.map((p) => ({ label: p.day, value: p.cnt }))} />
+      <TrendChart title="Monthly Visits" unit="visits" points={(data.monthly_visits ?? []).map((p) => ({ label: p.month, value: p.cnt }))} />
+      <TrendChart title="Daily Trend" unit="encounters" points={data.daily_trend.map((p) => ({ label: p.day, value: p.cnt }))} />
       <Breakdown title="Status" data={data.status_breakdown.map((p) => ({ label: p.status, value: p.cnt }))} />
-      <Breakdown title="Patient type" data={data.patient_type_breakdown.map((p) => ({ label: p.kind, value: p.cnt }))} />
-      <Breakdown title="Complaint categories" data={data.complaint_categories.map((p) => ({ label: p.category, value: p.cnt }))} />
+      <Breakdown title="Patient Type" data={data.patient_type_breakdown.map((p) => ({ label: p.kind, value: p.cnt }))} />
+      <Breakdown title="Complaint Categories" data={data.complaint_categories.map((p) => ({ label: p.category, value: p.cnt }))} />
       <Table
-        title="Most used medications"
+        title="Most Used Medications"
         headers={['Medicine', 'Quantity']}
         rows={(data.most_common_medications ?? []).map((m) => [m.generic_name + (m.brand_name !== null ? ' (' + m.brand_name + ')' : ''), m.qty + ' ' + m.unit])}
       />
-      <Breakdown title="Kiosk check-in outcomes" data={data.checkin_outcomes.map((p) => ({ label: p.outcome, value: p.cnt }))} />
+      <Breakdown title="Kiosk Check-In Outcomes" data={data.checkin_outcomes.map((p) => ({ label: p.outcome, value: p.cnt }))} />
     </>
   );
 }
@@ -209,7 +212,7 @@ function CounsellingReportView({ data }: { data: CounsellingReport }) {
         <Kpi label="Sessions opened" value={data.sessions_opened.toLocaleString()} />
         <Kpi label="No-show rate" value={data.no_show_rate + '%'} detail={data.no_show_count.toLocaleString() + ' no-shows'} />
       </div>
-      <TrendChart title="Appointment trend" unit="appointments" points={data.daily_trend.map((p) => ({ label: p.day, value: p.cnt }))} />
+      <TrendChart title="Appointment Trend" unit="appointments" points={data.daily_trend.map((p) => ({ label: p.day, value: p.cnt }))} />
       <Breakdown title="Status" data={data.status_breakdown.map((p) => ({ label: p.status, value: p.cnt }))} />
       <Breakdown title="Type" data={data.type_breakdown.map((p) => ({ label: p.type, value: p.cnt }))} />
     </>
@@ -224,15 +227,15 @@ function InventoryReportView({ data }: { data: InventoryReport }) {
         <Kpi label="Dispensed" value={data.total_dispensed.toLocaleString() + ' units'} detail="in range" />
         <Kpi label="Low stock" value={data.low_stock.length.toLocaleString()} />
       </div>
-      <TrendChart title="Dispensing trend" unit="units" points={data.dispensing_trend.map((p) => ({ label: p.day, value: p.qty }))} />
+      <TrendChart title="Dispensing Trend" unit="units" points={data.dispensing_trend.map((p) => ({ label: p.day, value: p.qty }))} />
       <Table
-        title="Top dispensed medicines"
+        title="Top Dispensed Medicines"
         headers={['Medicine', 'Quantity']}
         rows={data.top_dispensed.map((m) => [m.generic_name + (m.brand_name !== null ? ' (' + m.brand_name + ')' : ''), m.qty + ' ' + m.unit])}
       />
       <Table
-        title="Low stock now"
-        headers={['Medicine', 'On hand', 'Threshold']}
+        title="Low Stock Now"
+        headers={['Medicine', 'On Hand', 'Threshold']}
         rows={data.low_stock.map((m) => [m.generic_name, m.total_stock + ' ' + m.unit, m.reorder_threshold])}
       />
       <Table
@@ -241,7 +244,7 @@ function InventoryReportView({ data }: { data: InventoryReport }) {
         rows={data.expired.map((m) => [m.generic_name, m.batch_number, m.quantity_remaining + ' ' + m.unit, m.expiration_date])}
       />
       <Table
-        title="Expiring in the next 90 days"
+        title="Expiring in the Next 90 Days"
         headers={['Medicine', 'Batch', 'Remaining', 'Expires']}
         rows={data.expiring.map((m) => [m.generic_name, m.batch_number, m.quantity_remaining + ' ' + m.unit, m.expiration_date])}
       />
@@ -251,8 +254,8 @@ function InventoryReportView({ data }: { data: InventoryReport }) {
         <Kpi label="For replacement" value={data.equipment.status_summary.for_replacement.toLocaleString()} detail={data.equipment.total_items.toLocaleString() + ' equipment items'} />
       </div>
       <Table
-        title="Equipment for replacement"
-        headers={['Equipment', 'Location', 'Units', 'Flagged since']}
+        title="Equipment for Replacement"
+        headers={['Equipment', 'Location', 'Units', 'Flagged Since']}
         rows={data.equipment.needs_replacement.map((e) => [e.name, e.location ?? '—', String(e.units), e.oldest_flagged ?? '—'])}
       />
     </>
@@ -267,7 +270,7 @@ function ReferralReportView({ data }: { data: ReferralReport }) {
         <Kpi label="Closed" value={data.closed_count.toLocaleString()} />
         <Kpi label="Closure rate" value={data.closed_rate + '%'} />
       </div>
-      <TrendChart title="Referral trend" unit="referrals" points={data.daily_trend.map((p) => ({ label: p.day, value: p.cnt }))} />
+      <TrendChart title="Referral Trend" unit="referrals" points={data.daily_trend.map((p) => ({ label: p.day, value: p.cnt }))} />
       <Breakdown title="Status" data={data.status_breakdown.map((p) => ({ label: p.status, value: p.cnt }))} />
       <Breakdown title="Direction" data={data.flow_breakdown.map((p) => ({ label: p.source_module + ' → ' + p.target_module, value: p.cnt }))} />
     </>
@@ -282,9 +285,9 @@ function FacilitiesReportView({ data }: { data: FacilitiesReport }) {
         <Kpi label="Completed" value={data.completed_batches.toLocaleString()} />
         <Kpi label="Yield" value={data.yield_rate + '%'} detail={data.input_kg.toLocaleString() + ' kg in · ' + data.output_kg.toLocaleString() + ' kg out'} />
       </div>
-      <TrendChart title="Batch-start trend" unit="batches" points={data.daily_trend.map((p) => ({ label: p.day, value: p.cnt }))} />
+      <TrendChart title="Batch-Start Trend" unit="batches" points={data.daily_trend.map((p) => ({ label: p.day, value: p.cnt }))} />
       <Breakdown title="Status" data={data.status_breakdown.map((p) => ({ label: p.status, value: p.cnt }))} />
-      <Breakdown title="Waste categories" data={data.category_breakdown.map((p) => ({ label: p.category, value: p.cnt }))} />
+      <Breakdown title="Waste Categories" data={data.category_breakdown.map((p) => ({ label: p.category, value: p.cnt }))} />
     </>
   );
 }

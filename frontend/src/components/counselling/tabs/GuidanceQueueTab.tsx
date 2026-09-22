@@ -1,5 +1,6 @@
 import { Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
+import { TableStateRows } from '@/components/TableStates';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -25,6 +26,7 @@ interface GuidanceQueueTabProps {
 
 export function GuidanceQueueTab({ onOpenSession }: GuidanceQueueTabProps) {
   const queue = useGuidanceQueueToday();
+  const queueRows = queue.data ?? [];
   const callNext = useGuidanceCallNext();
   const transition = useGuidanceQueueTransition();
   const repair = useGuidanceRepairSession();
@@ -53,43 +55,33 @@ export function GuidanceQueueTab({ onOpenSession }: GuidanceQueueTabProps) {
         )}
       </div>
 
-      {queue.isError ? (
-        <div role="alert" className="rounded-lg border border-destructive/40 p-4 text-destructive">
-          Failed to load the Guidance queue.{' '}
-          <Button size="sm" variant="outline" onClick={() => void queue.refetch()} disabled={queue.isFetching}>
-            Retry
-          </Button>
-        </div>
-      ) : (
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Queue</TableHead>
-              <TableHead>Patient</TableHead>
-              <TableHead>Purpose</TableHead>
-              <TableHead>Status</TableHead>
-              <TableHead>Called</TableHead>
-              <TableHead className="text-right">Actions</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {queue.isLoading && (
-              <TableRow>
-                <TableCell colSpan={6} className="py-8 text-center text-muted-foreground">
-                  <Loader2 className="mr-2 inline size-4 animate-spin" />
-                  Loading queue…
-                </TableCell>
-              </TableRow>
-            )}
-            {!queue.isLoading && (queue.data?.length ?? 0) === 0 && (
-              <TableRow>
-                <TableCell colSpan={6} className="py-12 text-center text-muted-foreground">
-                  <p className="font-medium">No Guidance check-ins today.</p>
-                  <p className="mt-1 text-xs">Patients who check in at the kiosk or have due appointments will appear here.</p>
-                </TableCell>
-              </TableRow>
-            )}
-            {queue.data?.map((entry) => (
+      <Table ariaLabel="Today's Guidance queue">
+        <TableHeader>
+          <TableRow>
+            <TableHead>Queue</TableHead>
+            <TableHead>Patient</TableHead>
+            <TableHead>Purpose</TableHead>
+            <TableHead>Status</TableHead>
+            <TableHead>Called</TableHead>
+            <TableHead className="text-right">Actions</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          <TableStateRows
+            colSpan={6}
+            isLoading={queue.isLoading}
+            isError={queue.isError}
+            isEmpty={queueRows.length === 0}
+            onRetry={() => void queue.refetch()}
+            pending={queue.isFetching}
+            errorMessage="Failed to load the Guidance queue."
+            loadingLabel="Loading queue"
+            empty={{
+              title: 'No Guidance check-ins today.',
+              description: 'Patients who check in at the kiosk or have due appointments will appear here.',
+            }}
+          />
+          {queueRows.map((entry) => (
               <TableRow key={entry.id}>
                 <TableCell className="font-mono font-semibold text-primary">
                   {entry.queue_number ?? `G-${String(entry.position).padStart(3, '0')}`}
@@ -196,9 +188,8 @@ export function GuidanceQueueTab({ onOpenSession }: GuidanceQueueTabProps) {
                 </TableCell>
               </TableRow>
             ))}
-          </TableBody>
-        </Table>
-      )}
+        </TableBody>
+      </Table>
     </section>
   );
 }

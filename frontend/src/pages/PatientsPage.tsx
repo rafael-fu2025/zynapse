@@ -36,7 +36,7 @@ import { PageHeader, PageToolbar } from '@/components/PageHeader';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { ConfirmDialog, type ConfirmAction } from '@/components/ConfirmDialog';
-import { QueryErrorRow } from '@/components/QueryErrorState';
+import { TableStateRows } from '@/components/TableStates';
 import { MobileCardList, MobileCard, MobileCardField, MobileCardActions } from '@/components/MobileCardList';
 import { useUrlFilter } from '@/hooks/useUrlFilter';
 import { useCan } from '@/hooks/useCan';
@@ -77,13 +77,12 @@ import { TabSections, type TabSection } from '@/components/TabSections';
 import {
   useAddAllergy,
   useAddContact,
-  useCreateDepartment,
   useCreateEmployee,
   useCreateStudent,
   useDeleteAllergy,
   useDeleteContact,
-  useDepartments,
   useEmployee,
+  useEmployeeFacets,
   useEmployeeSearch,
   useEmployees,
   useSetEmployeeArchived,
@@ -98,13 +97,11 @@ import {
 import {
   addAllergySchema,
   addContactSchema,
-  createDepartmentSchema,
   createEmployeeSchema,
   createStudentSchema,
   updateEmployeeSchema,
   type AddAllergyInput,
   type AddContactInput,
-  type CreateDepartmentInput,
   type CreateEmployeeInput,
   type CreateStudentInput,
   type Employee,
@@ -330,7 +327,7 @@ function CreateStudentDialog({ onClose }: { onClose: () => void }) {
  * context only — the student record itself is view-only, so registry
  * fields have no edit UI anywhere (2026-09 product decision).
  */
-function ManageMedicalRecordDialog({ studentId, onClose }: { studentId: number; onClose: () => void }) {
+function ManageMedicalRecordDialog({ studentId, onClose }: { studentId: number | string; onClose: () => void }) {
   const detail = useStudent(studentId);
   const addAllergy = useAddAllergy();
   const addContact = useAddContact();
@@ -352,6 +349,7 @@ function ManageMedicalRecordDialog({ studentId, onClose }: { studentId: number; 
   });
 
   const s = detail.data;
+  const activeStudentId = s?.id ?? (typeof studentId === 'number' && studentId > 0 ? studentId : 0);
   const severity = allergyForm.watch('severity');
   const isPrimary = contactForm.watch('is_primary');
 
@@ -375,31 +373,33 @@ function ManageMedicalRecordDialog({ studentId, onClose }: { studentId: number; 
   }
 
   const submitAllergy = allergyForm.handleSubmit((values) => {
+    if (activeStudentId <= 0) return;
     const onDone = () => {
       setEditing(null);
       allergyForm.reset({ allergen: '', severity: 'mild', reaction: '' });
     };
     if (editing?.type === 'allergy') {
       updateAllergy.mutate(
-        { studentId, allergyId: editing.id, input: values },
+        { studentId: activeStudentId, allergyId: editing.id, input: values },
         { onSuccess: onDone },
       );
     } else {
-      addAllergy.mutate({ studentId, input: values }, { onSuccess: onDone });
+      addAllergy.mutate({ studentId: activeStudentId, input: values }, { onSuccess: onDone });
     }
   });
   const submitContact = contactForm.handleSubmit((values) => {
+    if (activeStudentId <= 0) return;
     const onDone = () => {
       setEditing(null);
       contactForm.reset({ contact_name: '', relationship: '', phone: '', is_primary: false });
     };
     if (editing?.type === 'contact') {
       updateContact.mutate(
-        { studentId, contactId: editing.id, input: values },
+        { studentId: activeStudentId, contactId: editing.id, input: values },
         { onSuccess: onDone },
       );
     } else {
-      addContact.mutate({ studentId, input: values }, { onSuccess: onDone });
+      addContact.mutate({ studentId: activeStudentId, input: values }, { onSuccess: onDone });
     }
   });
 
@@ -443,8 +443,8 @@ function ManageMedicalRecordDialog({ studentId, onClose }: { studentId: number; 
                       size="sm"
                       className="size-7 p-0 text-destructive"
                       aria-label={`Remove allergy ${a.allergen}`}
-                      disabled={deleteAllergy.isPending}
-                      onClick={() => deleteAllergy.mutate({ studentId, allergyId: a.id })}
+                      disabled={deleteAllergy.isPending || activeStudentId <= 0}
+                      onClick={() => deleteAllergy.mutate({ studentId: activeStudentId, allergyId: a.id })}
                     >
                       <Trash2 className="size-3.5" />
                     </Button>
@@ -508,8 +508,8 @@ function ManageMedicalRecordDialog({ studentId, onClose }: { studentId: number; 
                       size="sm"
                       className="size-7 p-0 text-destructive"
                       aria-label={`Remove contact ${c.contact_name}`}
-                      disabled={deleteContact.isPending}
-                      onClick={() => deleteContact.mutate({ studentId, contactId: c.id })}
+                      disabled={deleteContact.isPending || activeStudentId <= 0}
+                      onClick={() => deleteContact.mutate({ studentId: activeStudentId, contactId: c.id })}
                     >
                       <Trash2 className="size-3.5" />
                     </Button>
@@ -570,7 +570,7 @@ function ManageMedicalRecordDialog({ studentId, onClose }: { studentId: number; 
  * ManageMedicalRecordDialog so the menu's "View" and "Manage" actions
  * match what they can actually do.
  */
-function StudentDetailDialog({ studentId, onClose }: { studentId: number; onClose: () => void }) {
+function StudentDetailDialog({ studentId, onClose }: { studentId: number | string; onClose: () => void }) {
   const detail = useStudent(studentId);
   const s = detail.data;
 
@@ -640,14 +640,12 @@ function StudentDetailDialog({ studentId, onClose }: { studentId: number; onClos
 
 function CreateEmployeeDialog({ onClose }: { onClose: () => void }) {
   const create = useCreateEmployee();
-  const departments = useDepartments(true);
   const [createdAccount, setCreatedAccount] = useState<{ identifier: string; account: PortalAccount } | null>(null);
-  const { register, handleSubmit, formState: { errors }, reset, setValue, watch } =
+  const { register, handleSubmit, formState: { errors }, reset } =
     useForm<CreateEmployeeInput>({
       resolver: zodResolver(createEmployeeSchema),
       defaultValues: { employment_status: 'active' },
     });
-  const department = watch('department');
 
   const onSubmit = handleSubmit((values) => {
     create.mutate(values, {
@@ -695,24 +693,13 @@ function CreateEmployeeDialog({ onClose }: { onClose: () => void }) {
           )}
         </div>
         <div className="space-y-1.5">
-          <Label id="create-emp-dept-label">Department</Label>
+          <Label htmlFor="create-emp-dept">Department</Label>
           {/*
-            Departments come from the clinic_departments registry (active
-            rows only) — same source as the edit dialog, so a typo can't
-            mint a phantom department. New entries are added from the
-            Departments panel below the employee table.
+            Free text: the employee `department` field is owned by the FU
+            MIS integration and is overwritten on login and on HR sync, so
+            a locally curated picker could not stay consistent with it.
           */}
-          <Select
-            {...(department !== undefined && department !== '' ? { value: department } : {})}
-            onValueChange={(v) => setValue('department', v, { shouldValidate: true })}
-          >
-            <SelectTrigger aria-labelledby="create-emp-dept-label"><SelectValue placeholder="Select…" /></SelectTrigger>
-            <SelectContent>
-              {(departments.data ?? []).map((d) => (
-                <SelectItem key={d.id} value={d.name}>{d.name}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <Input id="create-emp-dept" {...register('department')} />
         </div>
         <div className="space-y-1.5">
           <Label htmlFor="position">Position</Label>
@@ -759,7 +746,6 @@ function CreateEmployeeDialog({ onClose }: { onClose: () => void }) {
 
 function EditEmployeeDialog({ employee, onClose }: { employee: Employee; onClose: () => void }) {
   const update = useUpdateEmployee();
-  const departments = useDepartments(true);
   const { register, handleSubmit, reset, setValue, watch } =
     useForm<UpdateEmployeeInput>({
       resolver: zodResolver(updateEmployeeSchema),
@@ -782,7 +768,6 @@ function EditEmployeeDialog({ employee, onClose }: { employee: Employee; onClose
       },
     });
   const status = watch('employment_status');
-  const department = watch('department');
   const isTeaching = watch('is_teaching');
   const gender = watch('gender');
 
@@ -808,18 +793,8 @@ function EditEmployeeDialog({ employee, onClose }: { employee: Employee; onClose
         </div>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <div className="space-y-1.5">
-            <Label id="emp-dept-label">Department</Label>
-            <Select
-              {...(department !== undefined && department !== '' ? { value: department } : {})}
-              onValueChange={(v) => setValue('department', v, { shouldValidate: true })}
-            >
-              <SelectTrigger aria-labelledby="emp-dept-label"><SelectValue placeholder="Select…" /></SelectTrigger>
-              <SelectContent>
-                {(departments.data ?? []).map((d) => (
-                  <SelectItem key={d.id} value={d.name}>{d.name}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <Label htmlFor="emp-dept">Department</Label>
+            <Input id="emp-dept" {...register('department')} />
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="emp-position">Position</Label>
@@ -908,7 +883,7 @@ function EditEmployeeDialog({ employee, onClose }: { employee: Employee; onClose
  * carries the emergency contact + date-hired fields, so the dialog
  * can show them without an extra round trip.
  */
-function EmployeeDetailDialog({ employeeId, onClose }: { employeeId: number; onClose: () => void }) {
+function EmployeeDetailDialog({ employeeId, onClose }: { employeeId: number | string; onClose: () => void }) {
   const detail = useEmployee(employeeId);
   const e = detail.data;
 
@@ -985,50 +960,6 @@ function EmployeeDetailDialog({ employeeId, onClose }: { employeeId: number; onC
   );
 }
 
-function DepartmentsPanel() {
-  const departments = useDepartments();
-  const create = useCreateDepartment();
-  // Creating departments is a separate permission (`clinic.departments.
-  // manage`) — read-only roles still see the list, but not a form that
-  // can only 403 (2026-09 audit).
-  const canManage = useCan('clinic.departments.manage');
-  const { register, handleSubmit, formState: { errors }, reset } =
-    useForm<CreateDepartmentInput>({ resolver: zodResolver(createDepartmentSchema) });
-  const onSubmit = handleSubmit((values) => create.mutate(values, { onSuccess: () => reset() }));
-
-  return (
-    <section className="overflow-hidden rounded-xl border bg-card">
-      <header className="border-b px-3 py-2 text-sm font-semibold text-foreground">Departments</header>
-      {canManage && (
-        <form noValidate onSubmit={(e) => void onSubmit(e)} className="flex flex-wrap items-end gap-2 border-b p-3">
-          <div className="space-y-1">
-            <Label htmlFor="dept-name" className="text-xs">Name</Label>
-            <Input id="dept-name" className="h-8 w-44" aria-invalid={errors.name !== undefined} {...register('name')} />
-          </div>
-          <div className="space-y-1">
-            <Label htmlFor="dept-code" className="text-xs">Code</Label>
-            <Input id="dept-code" className="h-8 w-28" aria-invalid={errors.code !== undefined} {...register('code')} />
-          </div>
-          <Button type="submit" size="sm" disabled={create.isPending}>
-            {create.isPending ? <Loader2 className="animate-spin" /> : <Plus />} Add
-          </Button>
-        </form>
-      )}
-      <ul className="max-h-40 divide-y overflow-auto text-sm">
-        {(departments.data ?? []).map((d) => (
-          <li key={d.id} className="flex items-center justify-between px-3 py-1.5">
-            <span>{d.name} <span className="font-mono text-xs text-muted-foreground">({d.code})</span></span>
-            <Badge variant={d.is_active ? 'success' : 'secondary'}>{d.is_active ? 'active' : 'inactive'}</Badge>
-          </li>
-        ))}
-        {(departments.data?.length ?? 0) === 0 && (
-          <li className="px-3 py-3 text-center text-muted-foreground">No departments yet.</li>
-        )}
-      </ul>
-    </section>
-  );
-}
-
 export default function PatientsPage() {
   const [cursor, setCursor] = useState<string | null>(null);
   const [history, setHistory] = useState<Array<string | null>>([null]);
@@ -1038,31 +969,39 @@ export default function PatientsPage() {
   // Registry writes need their own permission (counsellors hold read
   // only) — hide what the backend would 403 (2026-09 audit).
   const canWrite = useCan('clinic.patients.write');
-  // Filters live in the URL (PRODUCT principle 5): ?q=, ?archived=1 and
-  // ?teaching= survive a refresh and can be shared as links. Each tab
-  // keeps its own search key so switching tabs re-seeds from the URL.
+  // Filters live in the URL (PRODUCT principle 5): ?q=, ?archived=1,
+  // ?emp_q=, ?emp_archived=, ?emp_department= and ?emp_position= survive a
+  // refresh and can be shared as links. Each tab keeps its own search key
+  // so switching tabs re-seeds from the URL.
   const [query, setQuery, queryDraft] = useUrlFilter('q', { debounceMs: 300 });
   const [empQuery, setEmpQuery, empQueryDraft] = useUrlFilter('emp_q', { debounceMs: 300 });
   const [openCreate, setOpenCreate] = useState(false);
   const [openCreateEmp, setOpenCreateEmp] = useState(false);
-  const [detailId, setDetailId] = useState<number | null>(null);
-  const [empDetailId, setEmpDetailId] = useState<number | null>(null);
-  const [manageId, setManageId] = useState<number | null>(null);
+  const [detailId, setDetailId] = useState<number | string | null>(null);
+  const [empDetailId, setEmpDetailId] = useState<number | string | null>(null);
+  const [manageId, setManageId] = useState<number | string | null>(null);
   const [editEmp, setEditEmp] = useState<Employee | null>(null);
   const [confirm, setConfirm] = useState<ConfirmAction | null>(null);
   const [showArchived, setShowArchived] = useUrlFilter('archived', { default: '' });
   const [showArchivedEmp, setShowArchivedEmp] = useUrlFilter('emp_archived', { default: '' });
-  // Teaching / non-teaching triage (audit fix) — only teaching
-  // employees (faculty) can refer students to counselling.
-  const [empTeaching, setEmpTeaching] = useUrlFilter('teaching', { default: 'all' });
+  // Employees tab facets. Department and Position are the only two
+  // categorical fields the FU MIS employee payload actually supplies
+  // (`department_name` and `position`), so they are the only facets the
+  // tab offers. The former teaching/non-teaching Type select was removed:
+  // MIS returns no teaching flag for any employee, so "Teaching (faculty)"
+  // could never match a synced row — it always returned zero results while
+  // "Non-teaching" returned everyone.
+  const [empDepartment, setEmpDepartment] = useUrlFilter('emp_department', { default: 'all' });
+  const [empPosition, setEmpPosition] = useUrlFilter('emp_position', { default: 'all' });
   const archiveEmp = useSetEmployeeArchived();
 
   const searching = query.trim().length >= 2;
   const empSearching = empQuery.trim().length >= 2;
   const list = useStudents(cursor, 25, showArchived === '1');
   const search = useStudentSearch(query);
-  const employees = useEmployees(empCursor, 25, showArchivedEmp === '1', empTeaching as 'all' | 'teaching' | 'non_teaching');
-  const empSearch = useEmployeeSearch(empQuery);
+  const employees = useEmployees(empCursor, 25, showArchivedEmp === '1', 'all', empDepartment, empPosition);
+  const empFacets = useEmployeeFacets();
+  const empSearch = useEmployeeSearch(empQuery, empDepartment, empPosition);
   const setArchived = useSetStudentArchived();
 
   function nextPage() {
@@ -1107,15 +1046,15 @@ export default function PatientsPage() {
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-48">
-        <DropdownMenuItem className="min-h-11" onSelect={() => setDetailId(student.id)}>
+        <DropdownMenuItem className="min-h-11" onSelect={() => setDetailId(student.id <= 0 && student.student_number ? student.student_number : student.id)}>
           <Eye /> View record
         </DropdownMenuItem>
         {canWrite && (
-          <DropdownMenuItem className="min-h-11" onSelect={() => setManageId(student.id)}>
+          <DropdownMenuItem className="min-h-11" onSelect={() => setManageId(student.id <= 0 && student.student_number ? student.student_number : student.id)}>
             <HeartPulse /> Manage medical record
           </DropdownMenuItem>
         )}
-        {canWrite && (
+        {canWrite && !student.is_directory_record && (
           <>
             <DropdownMenuSeparator />
             <DropdownMenuItem
@@ -1156,15 +1095,15 @@ export default function PatientsPage() {
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-48">
-        <DropdownMenuItem className="min-h-11" onSelect={() => setEmpDetailId(employee.id)}>
+        <DropdownMenuItem className="min-h-11" onSelect={() => setEmpDetailId(employee.id <= 0 && employee.employee_number ? employee.employee_number : employee.id)}>
           <Eye /> View employee record
         </DropdownMenuItem>
-        {canWrite && (
+        {canWrite && !employee.is_directory_record && (
           <DropdownMenuItem className="min-h-11" onSelect={() => setEditEmp(employee)}>
             <Pencil /> Edit employee record
           </DropdownMenuItem>
         )}
-        {canWrite && (
+        {canWrite && !employee.is_directory_record && (
           <>
             <DropdownMenuSeparator />
             <DropdownMenuItem
@@ -1229,29 +1168,36 @@ export default function PatientsPage() {
         <TabSections tabs={PATIENT_TABS} ariaLabel="Patient registry sections">
         <TabsContent value="students" className="space-y-4">
           <PageToolbar>
-            <div className="relative w-full sm:w-80 lg:flex-1 lg:max-w-md">
-              <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                aria-label="Search students"
-                placeholder="Search number or name (min 2 chars)"
-                className="pl-9 placeholder:truncate"
-                value={queryDraft}
-                onChange={(e) => setQuery(e.target.value)}
-              />
+            <div className="w-full space-y-1 sm:w-80 lg:flex-1 lg:max-w-md">
+              <Label htmlFor="student-search" className="text-xs">Search</Label>
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  id="student-search"
+                  aria-label="Search students"
+                  placeholder="Search number or name (min 2 chars)"
+                  className="pl-9 placeholder:truncate"
+                  value={queryDraft}
+                  onChange={(e) => setQuery(e.target.value)}
+                />
+              </div>
             </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <Button
-                variant={showArchived === '1' ? 'secondary' : 'outline'}
-                aria-pressed={showArchived === '1'}
-                onClick={() => { setShowArchived(showArchived === '1' ? '' : '1'); setCursor(null); setHistory([null]); }}
-              >
-                <Archive /> {showArchived === '1' ? 'Hide archived' : 'Show archived'}
-              </Button>
+            <div className="space-y-1">
+              <Label className="text-xs">Status</Label>
+              <div>
+                <Button
+                  variant={showArchived === '1' ? 'secondary' : 'outline'}
+                  aria-pressed={showArchived === '1'}
+                  onClick={() => { setShowArchived(showArchived === '1' ? '' : '1'); setCursor(null); setHistory([null]); }}
+                >
+                  <Archive /> {showArchived === '1' ? 'Hide archived' : 'Show archived'}
+                </Button>
+              </div>
             </div>
           </PageToolbar>
 
           <section className="hidden overflow-hidden rounded-xl border bg-card md:block">
-            <Table>
+            <Table ariaLabel="Student registry">
               <TableHeader className="bg-muted/50">
                 <TableRow>
                   <TableHead className="px-3">Number</TableHead>
@@ -1264,23 +1210,25 @@ export default function PatientsPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {loading && (
-                  <TableRow>
-                    <TableCell colSpan={7} className="px-3 py-6 text-center text-muted-foreground">
-                      <Loader2 className="mx-auto size-4 animate-spin" />
-                    </TableCell>
-                  </TableRow>
-                )}
-                {!loading && rows.length === 0 && (
-                  <TableRow>
-                    <TableCell colSpan={7} className="px-3 py-6 text-center text-muted-foreground">
-                      {searching ? 'No matches.' : 'No students registered.'}
-                    </TableCell>
-                  </TableRow>
-                )}
-                {errored && !loading && (
-                  <QueryErrorRow colSpan={7} message="Failed to load students." onRetry={retry} pending={retrying} />
-                )}
+                <TableStateRows
+                  colSpan={7}
+                  isLoading={loading}
+                  isError={errored}
+                  isEmpty={rows.length === 0}
+                  onRetry={retry}
+                  pending={retrying}
+                  errorMessage="Failed to load students."
+                  loadingLabel="Loading students"
+                  empty={{
+                    title: 'No students registered.',
+                    description: 'Students appear after their first university-ID login or an HR/MIS sync.',
+                  }}
+                  noResults={{
+                    title: 'No students match this search.',
+                    description: 'Try a different student number or name.',
+                  }}
+                  hasFilters={searching}
+                />
                 {rows.map((s) => (
                   <TableRow key={s.id}>
                     <TableCell className="px-3 font-mono text-xs">{s.student_number}</TableCell>
@@ -1295,7 +1243,15 @@ export default function PatientsPage() {
                         : <span className="text-xs">{s.consecutive_no_shows}</span>}
                     </TableCell>
                     <TableCell className="px-3">
-                      {s.archived ? <Badge variant="secondary">Archived</Badge> : <Badge variant="success">Active</Badge>}
+                      {s.is_directory_record ? (
+                        <Badge variant="outline" className="border-sky-300 bg-sky-50 text-sky-700 dark:border-sky-800 dark:bg-sky-950/40 dark:text-sky-300">
+                          MIS Directory
+                        </Badge>
+                      ) : s.archived ? (
+                        <Badge variant="secondary">Archived</Badge>
+                      ) : (
+                        <Badge variant="success">Active</Badge>
+                      )}
                     </TableCell>
                     <TableCell className="px-3 text-right">
                       {studentActions(s)}
@@ -1328,7 +1284,15 @@ export default function PatientsPage() {
               <MobileCard key={s.id} aria-label={`Student ${s.student_number}`}>
                 <div className="mb-1 flex items-center justify-between gap-2">
                   <span className="text-sm font-medium text-foreground">{s.last_name}, {s.first_name}</span>
-                  {s.archived ? <Badge variant="secondary">Archived</Badge> : <Badge variant="success">Active</Badge>}
+                  {s.is_directory_record ? (
+                    <Badge variant="outline" className="border-sky-300 bg-sky-50 text-sky-700 dark:border-sky-800 dark:bg-sky-950/40 dark:text-sky-300">
+                      MIS Directory
+                    </Badge>
+                  ) : s.archived ? (
+                    <Badge variant="secondary">Archived</Badge>
+                  ) : (
+                    <Badge variant="success">Active</Badge>
+                  )}
                 </div>
                 <MobileCardField label="Number"><span className="font-mono text-xs">{s.student_number}</span></MobileCardField>
                 <MobileCardField label="Course / Yr"><span className="text-xs">{s.course ?? '—'}{s.year_level !== null ? ` · Y${s.year_level}` : ''}</span></MobileCardField>
@@ -1365,42 +1329,78 @@ export default function PatientsPage() {
 
         <TabsContent value="employees" className="space-y-4">
           <PageToolbar>
-            <div className="relative w-full sm:w-80 lg:flex-1 lg:max-w-md">
-              <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                aria-label="Search employees"
-                placeholder="Search number, name, department (min 2 chars)"
-                className="pl-9 placeholder:truncate"
-                value={empQueryDraft}
-                onChange={(e) => setEmpQuery(e.target.value)}
-              />
+            <div className="w-full space-y-1 sm:w-80 lg:flex-1 lg:max-w-md">
+              <Label htmlFor="employee-search" className="text-xs">Search</Label>
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  id="employee-search"
+                  aria-label="Search employees"
+                  placeholder="Search number, name, department (min 2 chars)"
+                  className="pl-9 placeholder:truncate"
+                  value={empQueryDraft}
+                  onChange={(e) => setEmpQuery(e.target.value)}
+                />
+              </div>
             </div>
-            <div className="flex flex-wrap items-center gap-2">
+            <div className="space-y-1">
+              <Label id="emp-department-label" className="text-xs">Department</Label>
               <Select
-                value={empTeaching}
-                onValueChange={(v) => { setEmpTeaching(v); setEmpCursor(null); setEmpHistory([null]); }}
+                value={empDepartment}
+                onValueChange={(v) => { setEmpDepartment(v); setEmpCursor(null); setEmpHistory([null]); }}
               >
-                <SelectTrigger aria-label="Filter by teaching type" className="h-10 w-44 md:h-9">
+                <SelectTrigger
+                  aria-labelledby="emp-department-label"
+                  className="w-52"
+                  disabled={empFacets.isLoading || (empFacets.data?.departments.length ?? 0) === 0}
+                >
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="all">All employees</SelectItem>
-                  <SelectItem value="teaching">Teaching (faculty)</SelectItem>
-                  <SelectItem value="non_teaching">Non-teaching</SelectItem>
+                  <SelectItem value="all">All departments</SelectItem>
+                  {(empFacets.data?.departments ?? []).map((d) => (
+                    <SelectItem key={d} value={d}>{d}</SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
-              <Button
-                variant={showArchivedEmp === '1' ? 'secondary' : 'outline'}
-                aria-pressed={showArchivedEmp === '1'}
-                onClick={() => { setShowArchivedEmp(showArchivedEmp === '1' ? '' : '1'); setEmpCursor(null); setEmpHistory([null]); }}
+            </div>
+            <div className="space-y-1">
+              <Label id="emp-position-label" className="text-xs">Position</Label>
+              <Select
+                value={empPosition}
+                onValueChange={(v) => { setEmpPosition(v); setEmpCursor(null); setEmpHistory([null]); }}
               >
-                <Archive /> {showArchivedEmp === '1' ? 'Hide archived' : 'Show archived'}
-              </Button>
+                <SelectTrigger
+                  aria-labelledby="emp-position-label"
+                  className="w-52"
+                  disabled={empFacets.isLoading || (empFacets.data?.positions.length ?? 0) === 0}
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All positions</SelectItem>
+                  {(empFacets.data?.positions ?? []).map((p) => (
+                    <SelectItem key={p} value={p}>{p}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">Status</Label>
+              <div>
+                <Button
+                  variant={showArchivedEmp === '1' ? 'secondary' : 'outline'}
+                  aria-pressed={showArchivedEmp === '1'}
+                  onClick={() => { setShowArchivedEmp(showArchivedEmp === '1' ? '' : '1'); setEmpCursor(null); setEmpHistory([null]); }}
+                >
+                  <Archive /> {showArchivedEmp === '1' ? 'Hide archived' : 'Show archived'}
+                </Button>
+              </div>
             </div>
           </PageToolbar>
 
           <section className="hidden overflow-hidden rounded-xl border bg-card md:block">
-            <Table>
+            <Table ariaLabel="Employee registry">
               <TableHeader className="bg-muted/50">
                 <TableRow>
                   <TableHead className="px-3">Number</TableHead>
@@ -1416,35 +1416,28 @@ export default function PatientsPage() {
                   const empLoading = empSearching ? empSearch.isLoading : employees.isLoading;
                   const empRows: Employee[] = empSearching ? (empSearch.data ?? []) : (employees.data?.data ?? []);
                   const empErrored = empSearching ? empSearch.isError : employees.isError;
-                  if (empLoading) {
-                    return (
-                      <TableRow>
-                        <TableCell colSpan={6} className="px-3 py-6 text-center text-muted-foreground">
-                          <Loader2 className="mx-auto size-4 animate-spin" />
-                        </TableCell>
-                      </TableRow>
-                    );
-                  }
-                  if (empErrored) {
-                    return (
-                      <QueryErrorRow
+                  return (
+                    <>
+                      <TableStateRows
                         colSpan={6}
-                        message="Failed to load employees."
+                        isLoading={empLoading}
+                        isError={empErrored}
+                        isEmpty={empRows.length === 0}
                         onRetry={() => void (empSearching ? empSearch.refetch() : employees.refetch())}
                         pending={empSearching ? empSearch.isFetching : employees.isFetching}
+                        errorMessage="Failed to load employees."
+                        loadingLabel="Loading employees"
+                        empty={{
+                          title: 'No employees registered.',
+                          description: 'Employees appear after an MIS directory sync (synapse:mis-sync) or their first university-ID login.',
+                        }}
+                        noResults={{
+                          title: 'No employees match these filters.',
+                          description: 'Try a different employee number, name, department, or position.',
+                        }}
+                        hasFilters={empSearching || empDepartment !== 'all' || empPosition !== 'all'}
                       />
-                    );
-                  }
-                  if (empRows.length === 0) {
-                    return (
-                      <TableRow>
-                        <TableCell colSpan={6} className="px-3 py-6 text-center text-muted-foreground">
-                          {empSearching ? 'No matches.' : 'No employees registered.'}
-                        </TableCell>
-                      </TableRow>
-                    );
-                  }
-                  return empRows.map((e) => (
+                      {empRows.map((e) => (
                     <TableRow key={e.id}>
                       <TableCell className="px-3 font-mono text-xs">{e.employee_number}</TableCell>
                       <TableCell className="px-3">{e.last_name}, {e.first_name}</TableCell>
@@ -1452,18 +1445,28 @@ export default function PatientsPage() {
                       <TableCell className="px-3 text-xs">{e.position ?? '—'}</TableCell>
                       <TableCell className="px-3">
                         <div className="flex flex-wrap items-center gap-1">
-                          <Badge variant={e.employment_status === 'active' ? 'success' : e.employment_status === 'on_leave' ? 'warning' : 'secondary'}>
-                            {employmentStatusLabel(e.employment_status)}
-                          </Badge>
-                          <TeachingBadge isTeaching={e.is_teaching} />
-                          {e.archived && <Badge variant="secondary">Archived</Badge>}
+                          {e.is_directory_record ? (
+                            <Badge variant="outline" className="border-sky-300 bg-sky-50 text-sky-700 dark:border-sky-800 dark:bg-sky-950/40 dark:text-sky-300">
+                              MIS Directory
+                            </Badge>
+                          ) : (
+                            <>
+                              <Badge variant={e.employment_status === 'active' ? 'success' : e.employment_status === 'on_leave' ? 'warning' : 'secondary'}>
+                                {employmentStatusLabel(e.employment_status)}
+                              </Badge>
+                              <TeachingBadge isTeaching={e.is_teaching} />
+                              {e.archived && <Badge variant="secondary">Archived</Badge>}
+                            </>
+                          )}
                         </div>
                       </TableCell>
                       <TableCell className="px-3 text-right">
                         {employeeActions(e)}
                       </TableCell>
                     </TableRow>
-                  ));
+                  ))}
+                    </>
+                  );
                 })()}
               </TableBody>
             </Table>
@@ -1489,7 +1492,9 @@ export default function PatientsPage() {
                 )}
                 {!empLoading && !empErrored && empRows.length === 0 && (
                   <p className="rounded-xl border border-dashed p-6 text-center text-sm text-muted-foreground">
-                    {empSearching ? 'No matches.' : 'No employees registered.'}
+                    {(empSearching || empDepartment !== 'all' || empPosition !== 'all')
+                      ? 'No employees match these filters.'
+                      : 'No employees registered.'}
                   </p>
                 )}
                 <MobileCardList>
@@ -1497,12 +1502,18 @@ export default function PatientsPage() {
                     <MobileCard key={e.id} aria-label={`Employee ${e.employee_number}`}>
                       <div className="mb-1 flex items-center justify-between gap-2">
                         <span className="text-sm font-medium text-foreground">{e.last_name}, {e.first_name}</span>
-                        <Badge variant={e.employment_status === 'active' ? 'success' : e.employment_status === 'on_leave' ? 'warning' : 'secondary'}>
-                          {employmentStatusLabel(e.employment_status)}
-                        </Badge>
+                        {e.is_directory_record ? (
+                          <Badge variant="outline" className="border-sky-300 bg-sky-50 text-sky-700 dark:border-sky-800 dark:bg-sky-950/40 dark:text-sky-300">
+                            MIS Directory
+                          </Badge>
+                        ) : (
+                          <Badge variant={e.employment_status === 'active' ? 'success' : e.employment_status === 'on_leave' ? 'warning' : 'secondary'}>
+                            {employmentStatusLabel(e.employment_status)}
+                          </Badge>
+                        )}
                       </div>
                       <div className="mb-1 flex flex-wrap gap-1.5">
-                        <TeachingBadge isTeaching={e.is_teaching} />
+                        {!e.is_directory_record && <TeachingBadge isTeaching={e.is_teaching} />}
                         {e.archived && <Badge variant="secondary">Archived</Badge>}
                       </div>
                       <MobileCardField label="Number"><span className="font-mono text-xs">{e.employee_number}</span></MobileCardField>
@@ -1534,8 +1545,6 @@ export default function PatientsPage() {
               </div>
             </nav>
           )}
-
-          <DepartmentsPanel />
         </TabsContent>
         </TabSections>
       </Tabs>

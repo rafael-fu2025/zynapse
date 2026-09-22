@@ -18,15 +18,16 @@ use DateTimeZone;
 final class ReportRange
 {
     public const APP_TIMEZONE = 'Asia/Manila';
-    public const DEFAULT_DAYS = 30;
     public const MAX_DAYS = 366;
 
     /**
-     * Academic Year (Foundation University): August 1 through July 31 of the following calendar year.
-     * Panel revision, August 2026: charts + report presets now align to AY so staff
-     * can identify peak encounter months across the academic year instead of the
-     * standard calendar year. yearStart is the calendar year of the August 1 that
-     * opens the AY (e.g. 2025 opens AY 2025-2026).
+     * Academic Year (Foundation University): August 1 through July 31 of the
+     * following calendar year. The reports panel is fully range-driven — every
+     * call takes an explicit [start, end]. The AY only shapes the DEFAULT
+     * window used when a caller sends no dates (academic year to date), so
+     * staff land on the current academic year rather than a fixed 30-day
+     * slice. yearStart is the calendar year of the August 1 that opens the
+     * AY (e.g. 2025 opens AY 2025-2026).
      */
     public const ACADEMIC_YEAR_START_MONTH = 8;
     public const ACADEMIC_YEAR_END_MONTH = 7;
@@ -40,13 +41,7 @@ final class ReportRange
         $end = $this->blankToNull($end);
 
         if ($start === null && $end === null) {
-            $endDate = new DateTimeImmutable('today', new DateTimeZone(self::APP_TIMEZONE));
-            $startDate = $endDate->modify('-' . (self::DEFAULT_DAYS - 1) . ' days');
-
-            return [
-                'start' => $startDate->format('Y-m-d'),
-                'end' => $endDate->format('Y-m-d'),
-            ];
+            return $this->academicYearToDate();
         }
 
         if ($start === null || $end === null) {
@@ -102,6 +97,26 @@ final class ReportRange
         return [
             'start' => $previousEnd->modify('-' . ($days - 1) . ' days')->format('Y-m-d'),
             'end' => $previousEnd->format('Y-m-d'),
+        ];
+    }
+
+    /**
+     * Default reporting window — the current academic year to date
+     * (Aug 1 Manila through today). Callers that pass explicit dates are
+     * never affected: every aggregate accepts an arbitrary [start, end].
+     *
+     * @return array{start: string, end: string}
+     */
+    private function academicYearToDate(): array
+    {
+        $today = new DateTimeImmutable('today', new DateTimeZone(self::APP_TIMEZONE));
+        $year = (int) $today->format('n') >= self::ACADEMIC_YEAR_START_MONTH
+            ? (int) $today->format('Y')
+            : (int) $today->format('Y') - 1;
+
+        return [
+            'start' => sprintf('%04d-%02d-01', $year, self::ACADEMIC_YEAR_START_MONTH),
+            'end' => $today->format('Y-m-d'),
         ];
     }
 

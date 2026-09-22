@@ -6,6 +6,7 @@ namespace App\Services\Audit;
 
 use CodeIgniter\Database\BaseConnection;
 use Config\Database;
+use Config\Services;
 use DateTimeImmutable;
 use DateTimeZone;
 
@@ -43,6 +44,14 @@ final class AuditDrainService
         $maxBatches = max(1, $maxBatches);
 
         $db = Database::connect();
+        $skipLocked = self::skipLockedSupported($db);
+        if (! $skipLocked) {
+            Services::logger()->warning(
+                'AuditDrainService: SKIP LOCKED not supported on this DB version — '
+                . 'falling back to plain FOR UPDATE. Parallel workers will serialize. '
+                . 'Upgrade to MariaDB 10.6+ or MySQL 8+ for concurrent drain.'
+            );
+        }
         $drained = 0;
         $failed  = 0;
 
@@ -56,7 +65,7 @@ final class AuditDrainService
                     . ' WHERE processed_at IS NULL AND attempt_count < ?'
                     . ' ORDER BY id ASC'
                     . ' LIMIT ' . $batch
-                    . ' FOR UPDATE' . (self::skipLockedSupported($db) ? ' SKIP LOCKED' : ''),
+                    . ' FOR UPDATE' . ($skipLocked ? ' SKIP LOCKED' : ''),
                     [self::MAX_ATTEMPTS],
                 )->getResultArray();
 

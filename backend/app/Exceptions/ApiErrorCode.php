@@ -33,6 +33,7 @@ final class ApiErrorCode
     public const AUTH_ACCOUNT_DISABLED          = 'auth.account_disabled';
     public const AUTH_PASSWORD_CHANGE_REQUIRED  = 'auth.password_change_required';
     public const AUTH_MIS_UNAVAILABLE           = 'auth.mis_unavailable';
+    public const AUTH_PASSWORD_MIS_MANAGED      = 'auth.password_managed_by_university';
 
     public const RBAC_FORBIDDEN                 = 'rbac.forbidden';
     public const RBAC_PERMISSION_DENIED         = 'rbac.permission_denied';

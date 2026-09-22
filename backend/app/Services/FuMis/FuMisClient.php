@@ -9,7 +9,7 @@ use Config\FuMis;
 /**
  * FuMisClient — typed wrapper for the university MIS API.
  *
- * Endpoint map (docs: zynapseV2/synapse_v2_docs/MIS-API-DOCUMENTATION/markdown/):
+ * Endpoint map (Foundation University MIS API):
  *   POST /api/v1/students/login      {student_id, password}
  *   POST /api/v1/employees/login     {employee_id, password}
  *   GET  /api/v1/students/{student}  + type/search/department/program/level/limit/page
@@ -66,12 +66,28 @@ final class FuMisClient
     }
 
     /**
+     * @return array<string, mixed>
+     */
+    public function getStudent(string $accessToken, string $studentId): array
+    {
+        return $this->get('/api/v1/students/' . rawurlencode($studentId), [], $accessToken);
+    }
+
+    /**
      * @param array<string, string|int> $query
      * @return array<string, mixed>
      */
     public function listEmployees(string $accessToken, array $query = []): array
     {
         return $this->get('/api/v1/employees', $query, $accessToken);
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function getEmployee(string $accessToken, string $employeeId): array
+    {
+        return $this->get('/api/v1/employees/' . rawurlencode($employeeId), [], $accessToken);
     }
 
     /**
@@ -84,11 +100,13 @@ final class FuMisClient
     {
         $result = $this->post('/api/tokens/generate', null);
 
-        if (! is_string($result['refresh_token'] ?? null) || $result['refresh_token'] === '') {
+        $refreshToken = $this->tokenField($result, 'refresh_token');
+
+        if ($refreshToken === null) {
             throw new FuMisException('fumis.missing_refresh_token', 200);
         }
 
-        return $result;
+        return ['refresh_token' => $refreshToken];
     }
 
     /**
@@ -102,13 +120,42 @@ final class FuMisClient
             'Authorization' => 'Bearer ' . $refreshToken,
         ]);
 
+        $pair = [];
+
         foreach (['access_token', 'refresh_token', 'expires_at'] as $field) {
-            if (! is_string($result[$field] ?? null) || $result[$field] === '') {
+            $value = $this->tokenField($result, $field);
+
+            if ($value === null) {
                 throw new FuMisException('fumis.missing_' . $field, 200);
+            }
+
+            $pair[$field] = $value;
+        }
+
+        return $pair;
+    }
+
+    /**
+     * The live token endpoints wrap their payload as
+     * {status, message, data:{…tokens…}}; the documented contract puts
+     * the fields at the top level. Accept both — top level first, so a
+     * deployment that answers flat is read exactly as before.
+     *
+     * @param array<string, mixed> $result
+     */
+    private function tokenField(array $result, string $field): ?string
+    {
+        $nested = is_array($result['data'] ?? null) ? $result['data'] : [];
+
+        foreach ([$result, $nested] as $source) {
+            $value = $source[$field] ?? null;
+
+            if (is_string($value) && $value !== '') {
+                return $value;
             }
         }
 
-        return $result;
+        return null;
     }
 
     /**

@@ -15,17 +15,14 @@
 import {
   ArrowRightLeft,
   BarChart3,
-  BookOpen,
   CalendarClock,
   Factory,
-  FlaskConical,
   HeartHandshake,
   Home,
   KeyRound,
   LayoutDashboard,
   LogOut,
   Pill,
-  Plug,
   Search,
   Shield,
   ShieldCheck,
@@ -39,7 +36,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { KeyboardEvent, ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '@/store/auth';
-import { useLogout } from '@/hooks/useAuth';
+import { useLogout, useMe } from '@/hooks/useAuth';
 import { useStudentSearch } from '@/hooks/usePatients';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
@@ -65,6 +62,11 @@ interface CommandDef {
    * that code; an array is any-of. Omit = visible to all.
    */
   permission?: string | string[];
+  /**
+   * Hide from MIS-delegated accounts (no local password identity) —
+   * their password is managed by the university helpdesk.
+   */
+  requiresLocalPassword?: boolean;
   /**
    * Optional route to prefetch on intent (hover / arrow-key
    * highlight). When set, the chunk is warmed before the user
@@ -188,36 +190,6 @@ const COMMANDS: ReadonlyArray<CommandDef> = [
     run: ({ navigate }) => void navigate('/admin/roles'),
   },
   {
-    id: 'go-developer',
-    label: 'API apps',
-    category: 'Navigate',
-    keywords: ['developer', 'api', 'keys', 'apps', 'integrations'],
-    icon: <Plug className="size-4" />,
-    permission: 'api_apps.manage',
-    prefetch: '/developer',
-    run: ({ navigate }) => void navigate('/developer'),
-  },
-  {
-    id: 'go-developer-docs',
-    label: 'API docs',
-    category: 'Navigate',
-    keywords: ['developer', 'api', 'docs', 'reference', 'endpoints'],
-    icon: <BookOpen className="size-4" />,
-    permission: 'api_apps.read',
-    prefetch: '/developer/docs',
-    run: ({ navigate }) => void navigate('/developer/docs'),
-  },
-  {
-    id: 'go-developer-sandbox',
-    label: 'API sandbox',
-    category: 'Navigate',
-    keywords: ['developer', 'api', 'sandbox', 'explorer', 'test'],
-    icon: <FlaskConical className="size-4" />,
-    permission: 'api_apps.manage',
-    prefetch: '/developer/sandbox',
-    run: ({ navigate }) => void navigate('/developer/sandbox'),
-  },
-  {
     id: 'go-patients',
     label: 'Patients',
     category: 'Navigate',
@@ -264,6 +236,7 @@ const COMMANDS: ReadonlyArray<CommandDef> = [
     keywords: ['rotate', 'credentials', 'reset'],
     icon: <KeyRound className="size-4" />,
     prefetch: '/change-password',
+    requiresLocalPassword: true,
     run: ({ navigate }) => void navigate('/change-password'),
   },
   {
@@ -333,6 +306,10 @@ export function CommandPalette() {
   }, [open]);
 
   const perms = useAuthStore((s) => s.permissions ?? []);
+  // MIS-delegated accounts have no Synapse password — password commands
+  // don't apply to them.
+  const me = useMe();
+  const hasLocalPassword = me.data?.has_local_password === true;
   const hasPerm = useCallback((p: string | string[] | undefined): boolean => {
     if (p === undefined) return true;
     if (perms.includes('*')) return true;
@@ -365,6 +342,9 @@ export function CommandPalette() {
       if (!hasPerm(c.permission)) {
         return false;
       }
+      if (c.requiresLocalPassword && !hasLocalPassword) {
+        return false;
+      }
       return matches(c, q);
     });
     const out: Record<CommandCategory, CommandDef[]> = {
@@ -372,7 +352,7 @@ export function CommandPalette() {
       Account: visible.filter((c) => c.category === 'Account'),
     };
     return out;
-  }, [query, hasPerm, matchingStudents]);
+  }, [query, hasPerm, hasLocalPassword, matchingStudents]);
 
   const flat = CATEGORY_ORDER.flatMap((cat) => groups[cat]);
 

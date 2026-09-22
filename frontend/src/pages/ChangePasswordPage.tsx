@@ -4,6 +4,9 @@
  * Reached voluntarily or forced: when `/auth/me` reports
  * `force_reset: true` (admin-issued temporary password), the Layout
  * redirects every route here until the password is rotated.
+ *
+ * MIS-delegated accounts never hold a local password — for them the
+ * form is replaced by a pointer to the university helpdesk.
  */
 import { zodResolver } from '@hookform/resolvers/zod';
 import { KeyRound, Loader2, TriangleAlert } from 'lucide-react';
@@ -27,6 +30,29 @@ export default function ChangePasswordPage() {
   } = useForm<ChangePasswordInput>({ resolver: zodResolver(changePasswordSchema) });
 
   const onSubmit = handleSubmit((values) => change.mutate(values));
+
+  if (me.data !== undefined && me.data.has_local_password !== true) {
+    return (
+      <main className="mx-auto max-w-md space-y-4 p-6">
+        <PageHeader
+          title={
+            <span className="flex items-center gap-2">
+              <KeyRound className="size-5" /> Change password
+            </span>
+          }
+        />
+        <Card>
+          <CardContent className="space-y-2 pt-6 text-sm text-muted-foreground">
+            <p>Your account signs in with your university ID, so Synapse does not store a password for you.</p>
+            <p>
+              Your password is managed by the university. To change or reset it, email
+              <span className="font-medium text-foreground"> helpdesk@foundationu.com</span>.
+            </p>
+          </CardContent>
+        </Card>
+      </main>
+    );
+  }
 
   return (
     <main className="mx-auto max-w-md space-y-4 p-6">

@@ -94,10 +94,9 @@ class AuthGroups extends ShieldAuthGroups
         // Clinic unit administrator — explicit matrix, NO wildcard.
         // Full clinic + referrals lifecycle, kiosk content, user
         // provisioning for non-privileged roles, saved-report authoring.
-        // NOT: audit.*, api_apps.*, rbac.privileged.manage,
+        // NOT: audit.*, rbac.privileged.manage,
         // counselling.*, facilities.*. (`clinic.encounters.soft_delete`
-        // and `clinic.departments.manage` are deliberately NOT in this
-        // matrix — they stay superadmin-only.)
+        // is deliberately NOT in this matrix — it stays superadmin-only.)
         'clinic_admin' => [
             'clinic.encounters.create',
             'clinic.encounters.read',
@@ -184,7 +183,7 @@ class AuthGroups extends ShieldAuthGroups
         // (including the records.read_any oversight break-glass and
         // soft_delete), read-only clinic patient directory, referral
         // lifecycle, non-privileged user provisioning.
-        // NOT: clinic.* write codes, facilities.*, api_apps.*,
+        // NOT: clinic.* write codes, facilities.*,
         // rbac.privileged.manage.
         'guidance_admin' => [
             'counselling.records.create',

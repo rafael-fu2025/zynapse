@@ -126,13 +126,11 @@ final class RbacRoleCatalogTest extends TestCase
             $this->assertContains('rbac.manage', $gp[$admin], "{$admin} must provision non-privileged users");
             $this->assertContains('rbac.read', $gp[$admin], "{$admin} must read the role catalog");
             $this->assertNotContains('rbac.privileged.manage', $gp[$admin], 'rbac.privileged.manage is superadmin-only');
-            $this->assertNotContains('api_apps.manage', $gp[$admin], 'api_apps.* is superadmin-only');
-            $this->assertNotContains('api_apps.read', $gp[$admin], 'api_apps.* is superadmin-only');
         }
 
-        // The three platform codes are held by NO group explicitly —
-        // superadmin satisfies them via the wildcard.
-        foreach (['rbac.privileged.manage', 'api_apps.manage', 'api_apps.read'] as $code) {
+        // The platform code is held by NO group explicitly —
+        // superadmin satisfies it via the wildcard.
+        foreach (['rbac.privileged.manage'] as $code) {
             foreach ($gp as $group => $codes) {
                 $this->assertNotContains(
                     $code,

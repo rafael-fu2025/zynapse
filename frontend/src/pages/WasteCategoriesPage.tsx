@@ -143,13 +143,13 @@ function WasteCategoryRow({ cat }: { cat: WasteCategory }) {
         <span className="shrink-0 font-mono text-xs text-muted-foreground">({cat.code})</span>
         {!cat.is_active && <Badge variant="secondary" className="shrink-0">archived</Badge>}
         <span className="ml-auto shrink-0 text-xs text-muted-foreground">
-          {cat.expected_yield_pct !== null ? `${cat.expected_yield_pct}% yield` : '—'}
+          {cat.expected_yield_pct !== null ? `${cat.expected_yield_pct}% Yield` : '—'}
           {' · '}
           {cat.expected_days !== null
-            ? `${cat.expected_days} expected days${cat.sample_count > 0
-                ? ` · avg ${cat.historical_avg_days ?? 0}d from ${cat.sample_count} trial${cat.sample_count === 1 ? '' : 's'}`
+            ? `${cat.expected_days} Expected Days${cat.sample_count > 0
+                ? ` · Avg ${cat.historical_avg_days ?? 0}d From ${cat.sample_count} Trial${cat.sample_count === 1 ? '' : 's'}`
                 : ''}`
-            : 'no expected days'}
+            : 'No Expected Days'}
         </span>
       </div>
       <div className="flex shrink-0 items-center gap-1">
@@ -252,7 +252,7 @@ export default function WasteCategoriesPage() {
   }
 
   return (
-    <main className="mx-auto max-w-7xl space-y-4 p-6">
+    <main className="space-y-4 p-6">
       <PageHeader
         title={
           <span className="flex items-center gap-2">
@@ -346,9 +346,11 @@ export default function WasteCategoriesPage() {
  * chronic under- or over-performance. Read-only.
  */
 function DeviationReport() {
-  const { data, isLoading } = useWasteCategoryDeviation();
+  const { data, isLoading, isError, refetch, isFetching } = useWasteCategoryDeviation();
   const rows = (data ?? []).filter((r) => r.batch_count > 0);
-  if (!isLoading && rows.length === 0) return null;
+  // Hide the card entirely when there is nothing to say — but never when the
+  // read failed, or the failure would be invisible.
+  if (!isLoading && !isError && rows.length === 0) return null;
   return (
     <Card>
       <CardHeader className="pb-3">
@@ -358,24 +360,33 @@ function DeviationReport() {
       </CardHeader>
       <CardContent>
         {isLoading && (
-          <div className="flex items-center justify-center py-4 text-muted-foreground">
+          <div className="flex items-center justify-center py-4 text-muted-foreground" role="status" aria-label="Loading yield deviations">
             <Loader2 className="size-4 animate-spin" />
           </div>
         )}
-        {!isLoading && rows.length === 0 && (
+        {isError && !isLoading && (
+          <div role="alert" className="flex flex-col items-center gap-2 text-destructive">
+            <p className="text-sm">Failed to load yield deviations.</p>
+            <Button size="sm" variant="outline" onClick={() => void refetch()} disabled={isFetching}>
+              Retry
+            </Button>
+          </div>
+        )}
+        {!isLoading && !isError && rows.length === 0 && (
           <p className="text-sm text-muted-foreground">No finished/released batches yet — deviations appear once batches complete.</p>
         )}
-        {!isLoading && rows.length > 0 && (
+        {!isLoading && !isError && rows.length > 0 && (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
+              <caption className="sr-only">Yield and duration deviation by waste category</caption>
               <thead>
                 <tr className="border-b text-left text-xs text-muted-foreground">
-                  <th className="py-1.5 pr-3 font-medium">Category</th>
-                  <th className="py-1.5 pr-3 font-medium">Batches</th>
-                  <th className="py-1.5 pr-3 font-medium">Yield (actual / exp)</th>
-                  <th className="py-1.5 pr-3 font-medium">Δ yield</th>
-                  <th className="py-1.5 font-medium">Duration (actual / exp)</th>
-                  <th className="py-1.5 pl-3 font-medium">Δ days</th>
+                  <th scope="col" className="py-1.5 pr-3 font-medium">Category</th>
+                  <th scope="col" className="py-1.5 pr-3 font-medium">Batches</th>
+                  <th scope="col" className="py-1.5 pr-3 font-medium">Yield (actual / exp)</th>
+                  <th scope="col" className="py-1.5 pr-3 font-medium">Δ yield</th>
+                  <th scope="col" className="py-1.5 font-medium">Duration (actual / exp)</th>
+                  <th scope="col" className="py-1.5 pl-3 font-medium">Δ days</th>
                 </tr>
               </thead>
               <tbody>

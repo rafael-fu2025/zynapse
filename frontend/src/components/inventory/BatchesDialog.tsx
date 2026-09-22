@@ -1,5 +1,6 @@
-import { CalendarX2, Loader2, ShieldAlert } from 'lucide-react';
+import { CalendarX2, ShieldAlert } from 'lucide-react';
 import { useState } from 'react';
+import { TableStateBlock } from '@/components/TableStates';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -26,6 +27,7 @@ import { WriteOffBatchDialog } from './WriteOffBatchDialog';
 export function BatchesDialog({ medicineId, onClose }: { medicineId: number; onClose: () => void }) {
   const detail = useMedicine(medicineId);
   const m = detail.data;
+  const batchRows = m?.batches ?? [];
   const [writeOff, setWriteOff] = useState<{ batch: MedicineBatch; reason: 'expire' | 'recall' } | null>(null);
 
   return (
@@ -36,10 +38,22 @@ export function BatchesDialog({ medicineId, onClose }: { medicineId: number; onC
         </DialogTitle>
       </DialogHeader>
 
-      {detail.isLoading && <Loader2 className="mx-auto size-5 animate-spin text-muted-foreground" />}
+      <TableStateBlock
+        isLoading={detail.isLoading}
+        isError={detail.isError}
+        isEmpty={m === undefined || batchRows.length === 0}
+        onRetry={() => void detail.refetch()}
+        pending={detail.isFetching}
+        errorMessage="Failed to load this medicine's batches."
+        loadingLabel="Loading batches"
+        empty={{
+          title: 'No batches received yet.',
+          description: 'Receive stock to create the first batch and start tracking expiry.',
+        }}
+      />
 
-      {m !== undefined && (
-        <Table>
+      {!detail.isLoading && !detail.isError && m !== undefined && batchRows.length > 0 && (
+        <Table ariaLabel={`Batches for ${m.generic_name}`}>
           <TableHeader>
             <TableRow>
               <TableHead>Lot</TableHead>
@@ -51,14 +65,7 @@ export function BatchesDialog({ medicineId, onClose }: { medicineId: number; onC
             </TableRow>
           </TableHeader>
           <TableBody>
-            {(m.batches ?? []).length === 0 && (
-              <TableRow>
-                <TableCell colSpan={6} className="py-6 text-center text-muted-foreground">
-                  No batches received yet.
-                </TableCell>
-              </TableRow>
-            )}
-            {(m.batches ?? []).map((b) => {
+            {batchRows.map((b) => {
               const days = daysUntil(b.expiration_date);
               const writable = b.status === 'active' && b.quantity_remaining > 0;
               return (

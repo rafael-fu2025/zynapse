@@ -50,7 +50,7 @@ final class BmgWorkflowTest extends FeatureTestCase
         if ($this->tokenValue === '') {
             $res = $this->withBodyFormat('json')->call('post', 'api/v1/auth/login', [
                 'email'    => $this->bmgAdmin['email'],
-                'password' => self::TEST_PASSWORD,
+                'password' => $this->testPassword(),
             ]);
             $res->assertStatus(200);
             $token = $this->envelope($res)['data']['access_token'] ?? null;

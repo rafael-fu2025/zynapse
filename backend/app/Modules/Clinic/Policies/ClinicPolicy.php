@@ -48,7 +48,6 @@ final class ClinicPolicy extends BasePolicy
                 ? 'kiosk.checkin.submit'
                 : 'clinic.patients.read',
             'patientsWrite'     => 'clinic.patients.write',
-            'departmentsManage' => 'clinic.departments.manage',
             'schedulesManage'   => 'clinic.schedules.manage',
             'reordersRead'      => 'clinic.reorders.read',
             'reordersManage'    => 'clinic.reorders.manage',

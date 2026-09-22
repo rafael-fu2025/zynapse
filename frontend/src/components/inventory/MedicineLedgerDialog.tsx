@@ -29,7 +29,15 @@ export function MedicineLedgerDialog({ medicine, onClose }: { medicine: Medicine
         <DialogTitle className="flex items-center gap-2"><ScrollText className="size-4" /> Transactions — {medicine.generic_name}</DialogTitle>
       </DialogHeader>
       <p className="text-xs text-muted-foreground">Every stock movement, oldest first. Stock after is the on-hand quantity following each transaction.</p>
-      <LedgerBody rows={rows} isLoading={txns.isLoading} isError={txns.isError} emptyLabel="No transactions yet." />
+      <LedgerBody
+        rows={rows}
+        isLoading={txns.isLoading}
+        isError={txns.isError}
+        onRetry={() => void txns.refetch()}
+        pending={txns.isFetching}
+        emptyLabel="No transactions yet."
+        ariaLabel={`Stock transactions for ${medicine.generic_name}`}
+      />
       <DialogFooter><Button variant="outline" onClick={onClose}>Close</Button></DialogFooter>
     </DialogContent>
   );

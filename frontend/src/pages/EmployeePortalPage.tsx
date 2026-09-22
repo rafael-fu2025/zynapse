@@ -11,7 +11,6 @@
  */
 import {
   ArrowRight,
-  Building2,
   CheckCircle2,
   IdCard,
   Mail,
@@ -25,6 +24,8 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { PageHeader } from '@/components/PageHeader';
+import { PortalCardArt } from '@/components/PortalCardArt';
+import { TableStateBlock } from '@/components/TableStates';
 import { QueryErrorState } from '@/components/QueryErrorState';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { YourQueueCard } from '@/components/YourQueueCard';
@@ -67,6 +68,7 @@ function ProfileSkeleton() {
 export default function EmployeePortalPage() {
   const profile = useMyEmployeeProfile();
   const visits = useMyClinicVisits();
+  const visitRows = visits.data ?? [];
   const notifications = useNotifications(5);
   const me = useMe();
 
@@ -94,51 +96,47 @@ export default function EmployeePortalPage() {
       {profile.data !== undefined && (
         <>
           {/* Profile & Clinic Digital Pass */}
-          <div className="grid gap-6 lg:grid-cols-3">
-            <Card className="lg:col-span-1">
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <IdCard className="size-4" aria-hidden /> Employee Profile
-                </CardTitle>
-                <CardDescription>Your registered staff details.</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div>
-                  <p className="text-base font-semibold leading-tight text-foreground">
+          <div className="grid max-w-96 gap-6 xl:max-w-none xl:grid-cols-[minmax(0,24rem)_minmax(0,1fr)]">
+            <Card className="relative aspect-[1.586] w-full self-start overflow-hidden border-primary bg-primary text-white shadow-[0_1px_2px_rgba(0,0,0,0.06),0_18px_40px_-12px_rgba(0,0,0,0.28)] dark:border-border dark:bg-card dark:text-card-foreground">
+              <PortalCardArt />
+              <div className="relative flex h-full flex-col p-5">
+                <p className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wider text-white/70 dark:text-muted-foreground">
+                  <IdCard className="size-3.5" aria-hidden /> Employee Profile
+                </p>
+                <div className="mt-3 min-w-0">
+                  <p className="truncate text-base font-semibold leading-tight text-white dark:text-foreground">
                     {profile.data.first_name} {profile.data.middle_name !== null ? `${profile.data.middle_name} ` : ''}
                     {profile.data.last_name}
                   </p>
-                  <p className="mt-0.5 font-mono text-xs text-muted-foreground">
+                  <p className="mt-0.5 font-mono text-xs text-white/70 dark:text-muted-foreground">
                     ID: {profile.data.employee_number}
                   </p>
                 </div>
 
-                <dl className="grid grid-cols-[max-content_1fr] gap-x-3 gap-y-2 text-xs">
-                  <dt className="text-muted-foreground">Email</dt>
-                  <dd className="truncate text-foreground">
-                    {me.data?.email ?? <span className="text-muted-foreground">—</span>}
+                <dl className="mt-auto grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1.5 text-xs">
+                  <dt className="text-white/60 dark:text-muted-foreground">Email</dt>
+                  <dd className="truncate text-white dark:text-foreground">
+                    {me.data?.email ?? <span className="text-white/60 dark:text-muted-foreground">N/A</span>}
                   </dd>
-                  <dt className="text-muted-foreground">Department</dt>
-                  <dd className="flex items-center gap-1.5 font-medium">
-                    <Building2 className="size-3 text-muted-foreground" aria-hidden /> {profile.data.department ?? '—'}
-                  </dd>
-                  <dt className="text-muted-foreground">Position</dt>
-                  <dd>{profile.data.position ?? '—'}</dd>
-                  <dt className="text-muted-foreground">Status</dt>
+                  <dt className="text-white/60 dark:text-muted-foreground">Department</dt>
+                  <dd className="truncate font-medium">{profile.data.department ?? <span className="text-white/60 dark:text-muted-foreground">N/A</span>}</dd>
+                  <dt className="text-white/60 dark:text-muted-foreground">Position</dt>
+                  <dd className="truncate">{profile.data.position ?? <span className="text-white/60 dark:text-muted-foreground">N/A</span>}</dd>
+                  <dt className="text-white/60 dark:text-muted-foreground">Status</dt>
                   <dd className="capitalize">{(profile.data.employment_status ?? 'active').replace('_', ' ')}</dd>
-                  <dt className="text-muted-foreground">Type</dt>
+                  <dt className="text-white/60 dark:text-muted-foreground">Type</dt>
                   <dd>
                     {profile.data.is_teaching ? (
-                      <Badge variant="default">teaching</Badge>
+                      <Badge variant="outline">Teaching</Badge>
                     ) : (
-                      <Badge variant="secondary">non-teaching</Badge>
+                      <Badge variant="secondary">Non-teaching</Badge>
                     )}
                   </dd>
                 </dl>
-              </CardContent>
+              </div>
             </Card>
 
-            <Card className="lg:col-span-2">
+            <Card>
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                   <Stethoscope className="size-4" aria-hidden /> Clinic Check-in Pass
@@ -169,18 +167,26 @@ export default function EmployeePortalPage() {
                       </p>
                     )}
                     <div className="flex flex-wrap items-center justify-center gap-2 pt-1 sm:justify-start">
-                      <Button asChild size="sm" variant="outline">
-                        <Link to="/change-password">
-                          Change password
-                          <ArrowRight className="size-3.5" />
-                        </Link>
-                      </Button>
+                      {me.data?.has_local_password === true && (
+                        <Button asChild size="sm" variant="outline">
+                          <Link to="/change-password">
+                            Change password
+                            <ArrowRight className="size-3.5" />
+                          </Link>
+                        </Button>
+                      )}
                       {profile.data.is_teaching && (
                         <Button asChild size="sm" variant="outline">
                           <Link to="/referrals">Refer a student to counselling</Link>
                         </Button>
                       )}
                     </div>
+                    {me.data?.has_local_password !== true && (
+                      <p className="text-xs text-muted-foreground leading-relaxed">
+                        Your password is managed by the university — to reset it, email
+                        helpdesk@foundationu.com.
+                      </p>
+                    )}
                   </div>
                 </div>
               </CardContent>
@@ -194,14 +200,22 @@ export default function EmployeePortalPage() {
               <CardDescription>Your most recent encounters, newest first.</CardDescription>
             </CardHeader>
             <CardContent>
-              {visits.isLoading && <Skeleton className="h-32" />}
-              {visits.data !== undefined && visits.data.length === 0 && (
-                <p className="py-6 text-center text-sm text-muted-foreground">
-                  You have no clinic visits on record.
-                </p>
-              )}
-              {visits.data !== undefined && visits.data.length > 0 && (
-                <Table>
+              <TableStateBlock
+                isLoading={visits.isLoading}
+                isError={visits.isError}
+                isEmpty={visitRows.length === 0}
+                onRetry={() => void visits.refetch()}
+                pending={visits.isFetching}
+                errorMessage="Failed to load your clinic visits."
+                loadingLabel="Loading your clinic visits"
+                skeletonRows={1}
+                empty={{
+                  title: 'You have no clinic visits on record.',
+                  description: 'Visits appear here after you are seen at the clinic.',
+                }}
+              />
+              {!visits.isLoading && !visits.isError && visitRows.length > 0 && (
+                <Table ariaLabel="My clinic visits">
                   <TableHeader>
                     <TableRow>
                       <TableHead className="px-3">Date</TableHead>
@@ -212,7 +226,7 @@ export default function EmployeePortalPage() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {visits.data.map((v) => (
+                    {visitRows.map((v) => (
                       <TableRow key={v.id}>
                         <TableCell className="px-3 text-xs text-muted-foreground">
                           {fmtUtcToApp(v.started_at)}
@@ -309,9 +323,16 @@ export default function EmployeePortalPage() {
               <Mail className="size-3" aria-hidden />
               Need to update your contact details? See the HR team — the portal is read-only by design.
             </p>
-            <Button asChild size="sm" variant="ghost">
-              <Link to="/change-password">Change password</Link>
-            </Button>
+            {me.data?.has_local_password === true ? (
+              <Button asChild size="sm" variant="ghost">
+                <Link to="/change-password">Change password</Link>
+              </Button>
+            ) : (
+              <p className="flex items-center gap-1.5">
+                <Mail className="size-3" aria-hidden />
+                Password resets: helpdesk@foundationu.com
+              </p>
+            )}
           </footer>
         </>
       )}

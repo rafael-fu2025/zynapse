@@ -19,7 +19,7 @@ use CodeIgniter\Config\BaseConfig;
  *   true  (production)  → student/employee-number logins are delegated
  *       to the MIS API (full delegation, JIT provisioning).
  *
- * Docs: zynapseV2/synapse_v2_docs/MIS-API-DOCUMENTATION/markdown/.
+ * Docs: Foundation University MIS API documentation (campus-internal).
  */
 class FuMis extends BaseConfig
 {
@@ -38,6 +38,18 @@ class FuMis extends BaseConfig
     /** How long a cached MIS token pair may serve lookups before refresh. */
     public int $tokenCacheSeconds = 600;
 
+    /** Automated batch sync toggle (campus-network background / scheduler cadence). */
+    public bool $autoSyncEnabled = false;
+
+    /** Minimum interval between background batch sync sweeps (default 24h). */
+    public int $autoSyncCooldownSeconds = 86400;
+
+    /** Batch pagination size for automated sync (1-100). */
+    public int $autoSyncBatchSize = 100;
+
+    /** Max pages per namespace safety bound for automated sync. */
+    public int $autoSyncMaxPages = 1000;
+
     public function __construct()
     {
         parent::__construct();
@@ -53,10 +65,14 @@ class FuMis extends BaseConfig
             return ($val !== false && $val !== '') ? $val : $default;
         };
 
-        $this->baseUrl           = (string) $env('FUMIS_BASE_URL', $this->baseUrl);
-        $this->apiKey            = (string) $env('FUMIS_API_KEY', $this->apiKey);
-        $this->enabled           = filter_var($env('FUMIS_ENABLED', $this->enabled ? '1' : '0'), FILTER_VALIDATE_BOOL);
-        $this->timeoutSeconds    = max(2, (int) $env('FUMIS_TIMEOUT_SECONDS', $this->timeoutSeconds));
-        $this->tokenCacheSeconds = max(60, (int) $env('FUMIS_TOKEN_CACHE_SECONDS', $this->tokenCacheSeconds));
+        $this->baseUrl                 = (string) $env('FUMIS_BASE_URL', $this->baseUrl);
+        $this->apiKey                  = (string) $env('FUMIS_API_KEY', $this->apiKey);
+        $this->enabled                 = filter_var($env('FUMIS_ENABLED', $this->enabled ? '1' : '0'), FILTER_VALIDATE_BOOL);
+        $this->timeoutSeconds          = max(2, (int) $env('FUMIS_TIMEOUT_SECONDS', $this->timeoutSeconds));
+        $this->tokenCacheSeconds       = max(60, (int) $env('FUMIS_TOKEN_CACHE_SECONDS', $this->tokenCacheSeconds));
+        $this->autoSyncEnabled         = filter_var($env('FUMIS_AUTO_SYNC_ENABLED', $this->autoSyncEnabled ? '1' : '0'), FILTER_VALIDATE_BOOL);
+        $this->autoSyncCooldownSeconds = max(60, (int) $env('FUMIS_AUTO_SYNC_COOLDOWN_SECONDS', $this->autoSyncCooldownSeconds));
+        $this->autoSyncBatchSize       = max(1, min(100, (int) $env('FUMIS_AUTO_SYNC_BATCH_SIZE', $this->autoSyncBatchSize)));
+        $this->autoSyncMaxPages        = max(1, min(10000, (int) $env('FUMIS_AUTO_SYNC_MAX_PAGES', $this->autoSyncMaxPages)));
     }
 }

@@ -59,11 +59,11 @@ abstract class FeatureTestCase extends CIUnitTestCase
      */
     protected $seed = 'App\Database\Seeds\PermissionsAndGroupsSeeder';
 
-    /**
-     * Password used for every account this suite creates. Not a shared
-     * fixture credential — each test makes its own throwaway user.
-     */
-    protected const TEST_PASSWORD = 'FeatureTestPassw0rd!';
+    protected function testPassword(): string
+    {
+        $pw = getenv('SYNAPSE_TEST_PASSWORD');
+        return ($pw !== false && $pw !== '') ? $pw : 'FeatureTestPassw0rd!';
+    }
 
     protected function setUp(): void
     {
@@ -189,7 +189,7 @@ abstract class FeatureTestCase extends CIUnitTestCase
             'user_id'     => $userId,
             'type'        => 'email_password',
             'secret'      => $email,
-            'secret2'     => password_hash(self::TEST_PASSWORD, PASSWORD_DEFAULT),
+            'secret2'     => password_hash($this->testPassword(), PASSWORD_DEFAULT),
             'force_reset' => $forceReset ? 1 : 0,
             'created_at'  => $now,
             'updated_at'  => $now,
@@ -210,7 +210,7 @@ abstract class FeatureTestCase extends CIUnitTestCase
             ]);
         }
 
-        return ['id' => $userId, 'email' => $email, 'password' => self::TEST_PASSWORD];
+        return ['id' => $userId, 'email' => $email, 'password' => $this->testPassword()];
     }
 
     /**

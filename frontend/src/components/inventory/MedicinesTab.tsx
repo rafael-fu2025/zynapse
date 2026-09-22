@@ -16,7 +16,7 @@ import {
 import { useState } from 'react';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { MobileCardList, MobileCard, MobileCardField, MobileCardActions } from '@/components/MobileCardList';
-import { QueryErrorRow } from '@/components/QueryErrorState';
+import { TableStateRows } from '@/components/TableStates';
 import { SearchBox, highlightMatch } from '@/components/ui/SearchBox';
 import { Button } from '@/components/ui/button';
 import { Dialog } from '@/components/ui/dialog';
@@ -178,12 +178,13 @@ export function MedicinesTab() {
 
   return (
     <div className="space-y-4">
-      <section className="flex flex-wrap items-center justify-between gap-3 rounded-xl border bg-card p-3">
+      <section className="flex flex-wrap items-end justify-between gap-3 rounded-xl border bg-card p-3">
         <SearchBox
           value={qDraft}
           onValueChange={setQ}
           placeholder="Search by name, brand, or category"
           inputId="medicines-search"
+          label="Search"
           ariaLabel="Search medicines by name, brand, or category"
           isFetching={list.isFetching && list.data !== undefined}
           className="w-full sm:w-64 lg:w-96"
@@ -206,7 +207,7 @@ export function MedicinesTab() {
       </section>
 
       <section className="hidden overflow-hidden rounded-xl border bg-card md:block">
-        <Table>
+        <Table ariaLabel="Medicines catalog with stock and expiry">
           <TableHeader className="bg-muted/50">
             <TableRow>
               <TableHead className="px-3">Medicine</TableHead>
@@ -218,23 +219,30 @@ export function MedicinesTab() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {list.isLoading && (
-              <TableRow>
-                <TableCell colSpan={6} className="px-3 py-6 text-center text-muted-foreground">
-                  <Loader2 className="mx-auto size-4 animate-spin" />
-                </TableCell>
-              </TableRow>
-            )}
-            {!list.isLoading && rows.length === 0 && (
-              <TableRow>
-                <TableCell colSpan={6} className="px-3 py-6 text-center text-muted-foreground">
-                  {q !== '' ? `No medicines match "${q}".` : 'No medicines in the catalog.'}
-                </TableCell>
-              </TableRow>
-            )}
-            {list.isError && !list.isLoading && (
-              <QueryErrorRow colSpan={6} message="Failed to load medicines." onRetry={() => void list.refetch()} pending={list.isFetching} />
-            )}
+            <TableStateRows
+              colSpan={6}
+              isLoading={list.isLoading}
+              isError={list.isError}
+              isEmpty={rows.length === 0}
+              onRetry={() => void list.refetch()}
+              pending={list.isFetching}
+              errorMessage="Failed to load medicines."
+              loadingLabel="Loading medicines"
+              empty={{
+                title: 'No medicines in the catalog.',
+                description: 'Add a medicine to start tracking batches, expiry, and stock.',
+              }}
+              noResults={{
+                title: `No medicines match "${q}".`,
+                description: 'Try a different name, brand, or category.',
+                action: (
+                  <Button variant="outline" size="sm" onClick={() => setQ('')}>
+                    Clear search
+                  </Button>
+                ),
+              }}
+              hasFilters={q !== ''}
+            />
             {rows.map((m, idx) => {
               const days = m.earliest_expiry !== null ? daysUntil(m.earliest_expiry) : null;
               return (

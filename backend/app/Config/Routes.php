@@ -52,9 +52,6 @@ Modules\Counselling\Routes::register($routes);
 Modules\Facilities\Routes::register($routes);
 Modules\Referrals\Routes::register($routes);
 Modules\Reports\Routes::register($routes);
-// External surface — API-key authenticated data API (`api_key_auth`)
-// plus the superadmin developer portal (`api_auth`); see Modules\External.
-Modules\External\Routes::register($routes);
 
 // Public media content uses an unguessable UUID and contains no gallery
 // metadata. Management remains authenticated under /admin below.
@@ -80,6 +77,8 @@ $routes->group('api/v1/audit', ['namespace' => 'App\Controllers\Api\Audit', 'fil
 $routes->group('api/v1/admin', ['namespace' => 'App\Controllers\Api\Admin', 'filter' => 'api_auth'], static function (RouteCollection $r): void {
     $r->get('users',                       'UserController::index');
     $r->post('users',                      'UserController::create');
+    $r->post('users/provision',            'UserController::provision');
+    $r->post('users/sync-directory',       'UserController::syncDirectory');
     $r->post('users/(:num)/status',        'UserController::setStatus/$1');
     $r->post('users/(:num)/groups',        'UserController::setGroups/$1');
     $r->post('users/(:num)/reset-password','UserController::resetPassword/$1');

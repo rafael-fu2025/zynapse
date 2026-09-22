@@ -27,13 +27,18 @@ final class ReportRangeTest extends TestCase
         ], $this->ranges->timestampBounds($range));
     }
 
-    public function testDefaultRangeContainsExactlyThirtyInclusiveCalendarDays(): void
+    public function testDefaultRangeIsTheAcademicYearToDate(): void
     {
+        // No fixed window is baked in: an unparameterised report opens on
+        // the current academic year (Aug 1 Manila) through today.
         $range = $this->ranges->resolve(null, null);
-        $start = new \DateTimeImmutable($range['start']);
-        $end = new \DateTimeImmutable($range['end']);
+        $today = new \DateTimeImmutable('today', new \DateTimeZone(ReportRange::APP_TIMEZONE));
+        $year = (int) $today->format('n') >= ReportRange::ACADEMIC_YEAR_START_MONTH
+            ? (int) $today->format('Y')
+            : (int) $today->format('Y') - 1;
 
-        $this->assertSame(29, (int) $start->diff($end)->format('%a'));
+        $this->assertSame(sprintf('%04d-%02d-01', $year, ReportRange::ACADEMIC_YEAR_START_MONTH), $range['start']);
+        $this->assertSame($today->format('Y-m-d'), $range['end']);
     }
 
     public function testLeapDayIsAcceptedAsARealCalendarDate(): void

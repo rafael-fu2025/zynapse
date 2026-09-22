@@ -5,30 +5,16 @@
  * dashboard, so clinic staff see the analytics immediately on login.
  *
  * Content mirrors the clinic-statistics poster: patient-care KPIs, a
- * monthly visits bar chart, three distribution pies (status, complaint
+ * monthly visits bar chart, three distribution doughnuts (status, complaint
  * categories, patient type), the daily trend, the most-used medications
  * ranking and the monthly summary table. Pure presentational — the
  * caller owns the report query and passes data + loading/error state.
  */
 import { format, parseISO } from 'date-fns';
 import { useMemo } from 'react';
-import {
-  Bar,
-  BarChart,
-  CartesianGrid,
-  Cell,
-  Legend,
-  Pie,
-  PieChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from 'recharts';
 import { QueryErrorState } from '@/components/QueryErrorState';
-import { ChartCard, chartColor } from '@/components/reports/ChartCard';
+import { BreakdownBarChart, StatusDoughnutChart, TrendLineChart } from '@/components/reports/charts';
 import { ReportDataTable, type ReportTableRow } from '@/components/reports/ReportDataTable';
-import { TrendChart } from '@/components/reports/TrendChart';
 import { Skeleton } from '@/components/ui/skeleton';
 import { titleCase } from '@/lib/utils';
 import type { ClinicReport } from '@/schemas/reports';
@@ -112,21 +98,30 @@ export function ClinicAnalyticsView({
   onRetry: () => void;
 }) {
   const monthlyVisits = useMemo(
-    () => (report?.monthly_visits ?? []).map((item) => ({ ...item, label: monthLabel(item.month) })),
+    () => (report?.monthly_visits ?? []).map((item) => ({ label: monthLabel(item.month), value: item.cnt })),
     [report],
   );
   const statusData = useMemo(
-    () => (report?.status_breakdown ?? []).map((item) => ({ name: titleCase(item.status), value: item.cnt })),
+    () => (report?.status_breakdown ?? []).map((item) => ({ label: titleCase(item.status), value: item.cnt })),
     [report],
   );
   const complaintData = useMemo(
-    () => (report?.complaint_categories ?? []).map((item) => ({ name: item.category, value: item.cnt })),
+    () => (report?.complaint_categories ?? []).map((item) => ({ label: item.category, value: item.cnt })),
     [report],
   );
   const patientTypeData = useMemo(
-    () => (report?.patient_type_breakdown ?? []).map((item) => ({ name: titleCase(item.kind), value: item.cnt })),
+    () => (report?.patient_type_breakdown ?? []).map((item) => ({ label: titleCase(item.kind), value: item.cnt })),
     [report],
   );
+  const dailyTrend = useMemo(
+    () => (report?.daily_trend ?? []).map((point) => ({ day: point.day, value: point.cnt })),
+    [report],
+  );
+  const total = report?.total_encounters ?? 0;
+  // Range with zero encounters: an explicit notice above the panels, which
+  // still render their real zeros (donut centres read 0 / Encounters) —
+  // never a blank or a stale previous range's numbers.
+  const isEmpty = !isLoading && report !== undefined && total === 0;
 
   if (isError && report === undefined) {
     return <QueryErrorState message="Failed to load clinic analytics." onRetry={onRetry} pending={isFetching} />;
@@ -134,90 +129,48 @@ export function ClinicAnalyticsView({
 
   return (
     <div className="space-y-4">
-      <p className="text-sm text-muted-foreground">{report?.total_encounters.toLocaleString() ?? 'Loading'} encounters in the selected range.</p>
-
       {/* Patient-care KPI strip. */}
       <dl className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <ClinicKpi label="Total visits" value={(report?.total_encounters ?? 0).toLocaleString()} detail="Encounters in range" />
-        <ClinicKpi label="Unique patients" value={(report?.unique_patients ?? 0).toLocaleString()} detail="Distinct patients seen" />
-        <ClinicKpi label="Avg visits / patient" value={(report?.avg_visits_per_patient ?? 0).toFixed(1)} detail="Encounters per patient" />
-        <ClinicKpi label="Avg visits / day" value={(report?.avg_per_day ?? 0).toFixed(1)} detail="Across the selected range" />
+        <ClinicKpi label="Total Visits" value={total.toLocaleString()} detail="Encounters in range" />
+        <ClinicKpi label="Unique Patients" value={(report?.unique_patients ?? 0).toLocaleString()} detail="Distinct patients seen" />
+        <ClinicKpi label="Avg Visits / Patient" value={(report?.avg_visits_per_patient ?? 0).toFixed(1)} detail="Encounters per patient" />
+        <ClinicKpi label="Avg Visits / Day" value={(report?.avg_per_day ?? 0).toFixed(1)} detail="Across the selected range" />
       </dl>
 
-      {/* Charts: monthly bar (full width) + three pies. */}
+      {isEmpty && (
+        <p className="rounded-xl border bg-card px-4 py-3 text-center text-sm text-muted-foreground">
+          No encounters in this range.
+        </p>
+      )}
+
+      {/* Monthly visits — full-width hero bar. */}
+      <BreakdownBarChart title="Monthly Visits" subtitle="Encounters by month (Asia/Manila)" items={monthlyVisits} unit="visits" loading={isLoading} height={260} />
+
+      {/* Distribution doughnuts. */}
       <div className="grid min-w-0 gap-4 md:grid-cols-3">
-        <ChartCard title="Monthly visits" subtitle="Encounters by month (Asia/Manila)" className="md:col-span-3" loading={isLoading} height={260}>
-          <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={monthlyVisits} margin={{ top: 4, right: 8, left: -16, bottom: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
-              <XAxis dataKey="label" tickLine={false} axisLine={false} tick={{ fontSize: 12 }} />
-              <YAxis allowDecimals={false} tickLine={false} axisLine={false} tick={{ fontSize: 12 }} />
-              <Tooltip
-                cursor={{ fill: 'var(--accent)', opacity: 0.35 }}
-                contentStyle={{ backgroundColor: 'var(--popover)', border: '1px solid var(--border)', borderRadius: 8, fontSize: 12 }}
-                labelStyle={{ fontWeight: 600 }}
-                itemStyle={{ color: 'var(--muted-foreground)' }}
-              />
-              <Bar dataKey="cnt" name="Visits" fill="var(--color-primary)" radius={[4, 4, 0, 0]} maxBarSize={48} />
-            </BarChart>
-          </ResponsiveContainer>
-        </ChartCard>
-
-        <ChartCard title="Encounter status" subtitle="Share by status" loading={isLoading} height={250}>
-          <ResponsiveContainer width="100%" height="100%">
-            <PieChart>
-              <Pie data={statusData} dataKey="value" nameKey="name" innerRadius="52%" outerRadius="80%" paddingAngle={2} isAnimationActive={false}>
-                {statusData.map((entry, index) => <Cell key={entry.name} fill={chartColor(index)} />)}
-              </Pie>
-              <Tooltip contentStyle={{ backgroundColor: 'var(--popover)', border: '1px solid var(--border)', borderRadius: 8, fontSize: 12 }} itemStyle={{ color: 'var(--muted-foreground)' }} />
-              <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 12 }} />
-            </PieChart>
-          </ResponsiveContainer>
-        </ChartCard>
-
-        <ChartCard title="Complaint categories" subtitle="Privacy-safe groups" loading={isLoading} height={250}>
-          <ResponsiveContainer width="100%" height="100%">
-            <PieChart>
-              <Pie data={complaintData} dataKey="value" nameKey="name" innerRadius="52%" outerRadius="80%" paddingAngle={2} isAnimationActive={false}>
-                {complaintData.map((entry, index) => <Cell key={entry.name} fill={chartColor(index)} />)}
-              </Pie>
-              <Tooltip contentStyle={{ backgroundColor: 'var(--popover)', border: '1px solid var(--border)', borderRadius: 8, fontSize: 12 }} itemStyle={{ color: 'var(--muted-foreground)' }} />
-              <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 12 }} />
-            </PieChart>
-          </ResponsiveContainer>
-        </ChartCard>
-
-        <ChartCard title="Patient type" subtitle="Students / employees / guests" loading={isLoading} height={250}>
-          <ResponsiveContainer width="100%" height="100%">
-            <PieChart>
-              <Pie data={patientTypeData} dataKey="value" nameKey="name" innerRadius="52%" outerRadius="80%" paddingAngle={2} isAnimationActive={false}>
-                {patientTypeData.map((entry, index) => <Cell key={entry.name} fill={chartColor(index)} />)}
-              </Pie>
-              <Tooltip contentStyle={{ backgroundColor: 'var(--popover)', border: '1px solid var(--border)', borderRadius: 8, fontSize: 12 }} itemStyle={{ color: 'var(--muted-foreground)' }} />
-              <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 12 }} />
-            </PieChart>
-          </ResponsiveContainer>
-        </ChartCard>
+        <StatusDoughnutChart title="Encounter Status" subtitle="Share by status" items={statusData} centerValue={total.toLocaleString()} centerLabel="Encounters" loading={isLoading} height={250} />
+        <StatusDoughnutChart title="Complaint Categories" subtitle="Privacy-safe groups" items={complaintData} centerValue={total.toLocaleString()} centerLabel="Encounters" loading={isLoading} height={250} />
+        <StatusDoughnutChart title="Patient Type" subtitle="Students / employees / guests" items={patientTypeData} centerValue={total.toLocaleString()} centerLabel="Encounters" loading={isLoading} height={250} />
       </div>
 
       {/* Daily detail. */}
-      <TrendChart title="Daily encounter trend" unit="encounters" loading={isLoading} points={(report?.daily_trend ?? []).map((point) => ({ day: point.day, value: point.cnt }))} />
+      <TrendLineChart title="Daily Encounter Trend" unit="encounters" loading={isLoading} points={dailyTrend} />
 
       {/* Tables: most-used meds + monthly + existing breakdowns. */}
       <div className="grid min-w-0 gap-4 md:grid-cols-2">
         <section className="min-w-0 rounded-xl border bg-card p-4">
-          <h3 className="text-sm font-semibold text-foreground">Most used medications</h3>
+          <h3 className="text-sm font-semibold text-foreground">Most Used Medications</h3>
           <p className="mt-0.5 text-xs text-muted-foreground">Top 10 by units dispensed</p>
           <div className="mt-3">
             <MedicationRankList items={report?.most_common_medications ?? []} loading={isLoading} />
           </div>
         </section>
 
-        <ReportDataTable title="Monthly summary" columns={['Month', 'Visits']} loading={isLoading} rows={rows((report?.monthly_visits ?? []).map((item) => [monthLabel(item.month), item.cnt]), 'clinic-monthly')} />
+        <ReportDataTable title="Monthly Summary" columns={['Month', 'Visits']} loading={isLoading} rows={rows((report?.monthly_visits ?? []).map((item) => [monthLabel(item.month), item.cnt]), 'clinic-monthly')} />
 
-        <ReportDataTable title="Kiosk outcomes" columns={['Outcome', 'Count']} loading={isLoading} rows={rows((report?.checkin_outcomes ?? []).map((item) => [titleCase(item.outcome), item.cnt]), 'clinic-checkin')} />
+        <ReportDataTable title="Kiosk Outcomes" columns={['Outcome', 'Count']} loading={isLoading} rows={rows((report?.checkin_outcomes ?? []).map((item) => [titleCase(item.outcome), item.cnt]), 'clinic-checkin')} />
 
-        <ReportDataTable title="Referral flows" columns={['Source', 'Target', 'Status', 'Count']} loading={isLoading} rows={rows((report?.referral_flows ?? []).map((item) => [titleCase(item.source_module), titleCase(item.target_module), titleCase(item.status), item.cnt]), 'clinic-referral')} />
+        <ReportDataTable title="Referral Flows" columns={['Source', 'Target', 'Status', 'Count']} loading={isLoading} rows={rows((report?.referral_flows ?? []).map((item) => [titleCase(item.source_module), titleCase(item.target_module), titleCase(item.status), item.cnt]), 'clinic-referral')} />
       </div>
     </div>
   );

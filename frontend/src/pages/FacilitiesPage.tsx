@@ -17,6 +17,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { ConfirmDialog, type ConfirmAction } from '@/components/ConfirmDialog';
 import { MobileCardList, MobileCard, MobileCardField, MobileCardActions } from '@/components/MobileCardList';
+import { TableStateRows } from '@/components/TableStates';
 import {
   Dialog,
   DialogContent,
@@ -1426,6 +1427,7 @@ function BatchHistoryDialog({ unitId, onClose }: { unitId: number | null; onClos
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const status = statusFilter === 'all' ? null : statusFilter;
   const batches = useBatchHistory(unitId, status, cursor, 25);
+  const batchRows = batches.data?.data ?? [];
 
   function nextPage() {
     if (batches.data?.next !== null && batches.data?.next !== undefined) {
@@ -1462,7 +1464,7 @@ function BatchHistoryDialog({ unitId, onClose }: { unitId: number | null; onClos
         <span className="text-xs text-muted-foreground">Page {history.length}</span>
       </div>
       <div className="max-h-[60vh] overflow-auto rounded-md border">
-        <Table>
+        <Table ariaLabel="Batch history">
           <TableHeader className="bg-muted/50 sticky top-0">
             <TableRow>
               <TableHead className="px-3">Ref</TableHead>
@@ -1476,13 +1478,31 @@ function BatchHistoryDialog({ unitId, onClose }: { unitId: number | null; onClos
             </TableRow>
           </TableHeader>
           <TableBody>
-            {batches.isLoading && (
-              <TableRow><TableCell colSpan={8} className="px-3 py-6 text-center"><Loader2 className="mx-auto size-4 animate-spin" /></TableCell></TableRow>
-            )}
-            {!batches.isLoading && (batches.data?.data.length ?? 0) === 0 && (
-              <TableRow><TableCell colSpan={8} className="px-3 py-6 text-center text-muted-foreground">No batches in history.</TableCell></TableRow>
-            )}
-            {batches.data?.data.map((b) => (
+            <TableStateRows
+              colSpan={8}
+              isLoading={batches.isLoading}
+              isError={batches.isError}
+              isEmpty={batchRows.length === 0}
+              onRetry={() => void batches.refetch()}
+              pending={batches.isFetching}
+              errorMessage="Failed to load batch history."
+              loadingLabel="Loading batch history"
+              empty={{
+                title: 'No batches in history.',
+                description: 'Batches appear here once a drum starts one.',
+              }}
+              noResults={{
+                title: 'No batches match this status.',
+                description: 'Choose a different status to see more.',
+                action: (
+                  <Button variant="outline" size="sm" onClick={() => setStatusFilter('all')}>
+                    Clear filter
+                  </Button>
+                ),
+              }}
+              hasFilters={status !== 'all'}
+            />
+            {batchRows.map((b) => (
               <TableRow key={b.id}>
                 <TableCell className="px-3 font-mono text-xs">{b.reference_code}</TableCell>
                 <TableCell className="px-3 font-mono text-xs">{b.unit_code}</TableCell>
@@ -1543,6 +1563,7 @@ export default function FacilitiesPage() {
   const [history, setHistory] = useState<Array<string | null>>([null]);
   const [showArchived, setShowArchived] = useState(false);
   const units = useBmgUnits(cursor, 50, showArchived);
+  const unitRows = units.data?.data ?? [];
   const finish = useFinishBatch();
   const cancel = useCancelBatch();
   const unarchiveUnit = useUnarchiveUnit();
@@ -1670,7 +1691,7 @@ export default function FacilitiesPage() {
   };
 
   return (
-    <main className="mx-auto max-w-7xl space-y-4 p-6">
+    <main className="space-y-4 p-6">
       <PageHeader
         title="Facilities — BMG"
         description="Drums move Idle → Processing → Awaiting output → Idle (or Cancelled), and can be placed in Maintenance."
@@ -1711,7 +1732,7 @@ export default function FacilitiesPage() {
       <ProcessingDrumsCard />
 
       <section className="hidden overflow-hidden rounded-xl border bg-card md:block">
-        <Table>
+        <Table ariaLabel="Composting drums with status and utilization">
           <TableHeader className="bg-muted/50">
             <TableRow>
               <TableHead className="px-3">Code</TableHead>
@@ -1725,20 +1746,20 @@ export default function FacilitiesPage() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {units.isLoading && (
-              <TableRow>
-                <TableCell colSpan={8} className="px-3 py-6 text-center text-muted-foreground">
-                  <Loader2 className="mx-auto size-4 animate-spin" />
-                </TableCell>
-              </TableRow>
-            )}
-            {!units.isLoading && (units.data?.data.length ?? 0) === 0 && (
-              <TableRow>
-                <TableCell colSpan={8} className="px-3 py-6 text-center text-muted-foreground">
-                  No drums yet. Create one to start composting.
-                </TableCell>
-              </TableRow>
-            )}
+            <TableStateRows
+              colSpan={8}
+              isLoading={units.isLoading}
+              isError={units.isError}
+              isEmpty={unitRows.length === 0}
+              onRetry={() => void units.refetch()}
+              pending={units.isFetching}
+              errorMessage="Failed to load drums."
+              loadingLabel="Loading drums"
+              empty={{
+                title: 'No drums yet.',
+                description: 'Create one to start composting.',
+              }}
+            />
             {units.data?.data.map((u) => {
               const activeBatch = u.active_batch_id ?? null;
               return (
@@ -1797,7 +1818,15 @@ export default function FacilitiesPage() {
           <Loader2 className="mx-auto size-4 animate-spin" />
         </p>
       )}
-      {!units.isLoading && (units.data?.data.length ?? 0) === 0 && (
+      {units.isError && !units.isLoading && (
+        <div role="alert" className="rounded-xl border border-destructive/40 bg-card p-4 text-center text-sm text-destructive md:hidden">
+          <p>Failed to load drums.</p>
+          <Button variant="outline" size="sm" className="mt-2" onClick={() => void units.refetch()} disabled={units.isFetching}>
+            Retry
+          </Button>
+        </div>
+      )}
+      {!units.isLoading && !units.isError && (units.data?.data.length ?? 0) === 0 && (
         <p className="rounded-xl border border-dashed p-6 text-center text-sm text-muted-foreground md:hidden">
           No drums yet. Create one to start composting.
         </p>

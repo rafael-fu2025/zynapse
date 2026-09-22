@@ -23,9 +23,27 @@ use RuntimeException;
  *      same family, write the new hash, return the new plaintext.
  *
  * On login: mint a fresh family_id.
+ *
+ * Grace window (2026-09-16): cross-tab races (two tabs racing to
+ * refresh the same cookie within seconds) are benign, not replays.
+ * When a revoked token was replaced < GRACE_WINDOW_SECONDS ago and
+ * its replacement is still live, the service returns the replacement
+ * instead of revoking the family. Beyond the window, replay semantics
+ * are enforced as before.
  */
 final class RefreshTokenService
 {
+    /**
+     * Grace window for cross-tab races. If a revoked token was replaced
+     * less than this many seconds ago AND its replacement is still live,
+     * the duplicate is treated as a benign race rather than a replay
+     * attack. Beyond this window, full replay semantics apply.
+     *
+     * 5 seconds is generous (Web Locks reduce most races to <100ms) but
+     * short enough that a genuine replay hours/days later is still caught.
+     */
+    private const GRACE_WINDOW_SECONDS = 5;
+
     private readonly JwtService $jwt;
     private BaseConnection $db;
 
@@ -117,11 +135,48 @@ final class RefreshTokenService
             $now = date('Y-m-d H:i:s');
 
             if ($row['revoked_at'] !== null) {
-                // Replay — kill the entire family, and advance the user's
-                // token epoch so replay-detection also kills outstanding
-                // access tokens (a replayed refresh token means the family
-                // is compromised; the access tokens issued under it are
-                // presumed stolen too).
+                // The token has been revoked — but is this a genuine replay
+                // or a benign cross-tab race?
+                //
+                // Grace window: if the revocation happened < GRACE_WINDOW_SECONDS
+                // ago AND the row has a `replaced_by_hash` (i.e. it was rotated,
+                // not explicitly revoked by logout), AND the replacement token is
+                // still live, return the replacement. This prevents two browser
+                // tabs from accidentally nuking each other's session.
+                if (
+                    $row['replaced_by_hash'] !== null
+                    && (time() - strtotime((string) $row['revoked_at'])) < self::GRACE_WINDOW_SECONDS
+                ) {
+                    $replacement = $this->db->query(
+                        'SELECT * FROM `auth_refresh_tokens` WHERE `token_hash` = ? AND `revoked_at` IS NULL LIMIT 1',
+                        [$row['replaced_by_hash']],
+                    )->getRowArray();
+
+                    if ($replacement !== null && strtotime((string) $replacement['expires_at']) > time()) {
+                        // The replacement is still live — this is a race, not a replay.
+                        // Return the replacement token's family so the caller can
+                        // issue a new access token. We do NOT issue yet another
+                        // refresh token — the replacement is still valid.
+                        $this->db->transRollback();
+                        return [
+                            'status'    => 'rotated',
+                            'mint'      => [
+                                'plain'      => '', // empty — the caller already has the cookie
+                                'hash'       => (string) $replacement['token_hash'],
+                                'family_id'  => (string) $replacement['family_id'],
+                                'expires_at' => (string) $replacement['expires_at'],
+                            ],
+                            'family_id' => (string) $replacement['family_id'],
+                            'user_id'   => (int) $replacement['user_id'],
+                            'grace'     => true,
+                        ];
+                    }
+                }
+
+                // Outside the grace window or replacement is gone/expired:
+                // genuine replay. Kill the entire family, and advance the
+                // user's token epoch so outstanding access tokens are also
+                // invalidated.
                 $this->db->table('auth_refresh_tokens')
                     ->where('family_id', $row['family_id'])
                     ->where('revoked_at', null)

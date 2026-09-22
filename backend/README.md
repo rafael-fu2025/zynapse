@@ -17,12 +17,12 @@ Concurrency is uniform: every mutation runs in `txn()` with `selectForUpdate()` 
 app/
 ├── Auth/                    JwtService, RefreshTokenService (rotation chain),
 │                            LoginThrottleService, AccountStateService, CurrentUser
-├── Commands/                9 spark workers (see below)
+├── Commands/                12 spark workers (see below)
 ├── Config/                  root Routes.php, Filters, Constants
 ├── Controllers/Api/         Auth · Rbac · Admin · Audit · Dashboard · Notify · Kiosk
 ├── Database/
-│   ├── Migrations/          85 timestamped migrations (2026-01 → 2026-08)
-│   └── Seeds/               10 seeders — PermissionsAndGroupsSeeder is load-bearing
+│   ├── Migrations/          96 timestamped migrations (2026-01 → 2026-09)
+│   └── Seeds/               5 seeders — PermissionsAndGroupsSeeder is load-bearing
 ├── Filters/                 ApiAuthFilter, rate limit, exception envelope, CORS, logging
 ├── Modules/                 Clinic · Counselling · Facilities · Referrals · Reports
 │   └── Shared/              BaseService, BasePolicy, BaseRoutes, BaseDTO
@@ -51,7 +51,7 @@ php spark synapse:smoke
 php spark serve --port 8090
 ```
 
-`DevUserSeeder` creates `admin@synapse.dev` / `DevPassw0rd!` (username `synapse-admin`, full admin group) and **refuses to run when `ENVIRONMENT=production`**. Always seed `PermissionsAndGroupsSeeder` first — it creates the groups and permission codes everything else depends on, and it's also the feature-suite seed. The demo seeders (`PatientRegistrySeeder`, `SeedDemoUsersSeeder`, `AppointmentsSeeder`, `CounsellingSeeder`, `ReferralsSeeder`, `InventoryItemsSeeder`, `FacilitiesSeeder`, `ClinicAnalyticsSeeder`) build the full demo dataset; the account matrix is in [`../CREDENTIALS.md`](../CREDENTIALS.md).
+`DevUserSeeder` creates `admin@synapse.dev` / `DevPassw0rd!` (username `synapse-admin`) and **refuses to run when `ENVIRONMENT=production`**. Always seed `PermissionsAndGroupsSeeder` first — it creates the groups and permission codes everything else depends on, and it's also the feature-suite seed. The remaining data seeders are reference/catalog data: `FacilitiesSeeder` (BMG waste categories + drums) and `InventoryItemsSeeder` (clinic inventory + equipment). The demo student/employee dataset was removed 2026-09-16 — real accounts JIT-provision from the university MIS on first ID-number login (see [`../CREDENTIALS.md`](../CREDENTIALS.md)), and older dev databases can purge leftover demo rows with `php spark synapse:purge-demo`.
 
 ## Environment
 

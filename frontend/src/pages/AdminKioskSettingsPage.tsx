@@ -1,7 +1,9 @@
-import { ArrowDown, ArrowUp, Eye, Image, Megaphone, Monitor, Play, RotateCcw, Save, Trash2, Video, Volume2 } from 'lucide-react';
+import { format } from 'date-fns';
+import { ArrowDown, ArrowUp, Eye, Image, Megaphone, Monitor, Play, RotateCcw, Save, Trash2, Video, Volume2, X } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import { fetchKioskSettings, updateKioskSettings } from '@/api/kioskSettings';
+import { DatePickerAndTimePicker } from '@/components/shadcn-studio/date-picker';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { PageHeader } from '@/components/PageHeader';
 import { TabSections, type TabSection } from '@/components/TabSections';
@@ -50,12 +52,29 @@ function NumberField({ id, label, value, min, max, step = 1, onChange }: { id: s
   return <div className="space-y-1.5"><Label htmlFor={id}>{label}</Label><Input id={id} type="number" min={min} max={max} step={step} value={value} onChange={(event) => onChange(Number(event.target.value))} /></div>;
 }
 
+/** Stored windows are ISO-UTC (normalizeKioskSettings) or a local draft `YYYY-MM-DDTHH:mm`; show the LOCAL wall clock either way. */
+function toPickerValue(value: string | undefined): string {
+  if (value === undefined) return '';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? '' : format(date, "yyyy-MM-dd'T'HH:mm");
+}
+
+function ActiveWindowField({ id, label, value, onChange }: { id: string; label: string; value: string | undefined; onChange: (value: string | undefined) => void }) {
+  return <div className="space-y-1.5">
+    <div className="flex items-center justify-between">
+      <Label htmlFor={id}>{label}</Label>
+      {value !== undefined && <button type="button" aria-label={`Clear ${label.replace(' (optional)', '').toLowerCase()}`} className="rounded p-1 text-muted-foreground hover:bg-muted/50 hover:text-foreground" onClick={() => onChange(undefined)}><X className="size-3.5" aria-hidden /></button>}
+    </div>
+    <DatePickerAndTimePicker id={id} value={toPickerValue(value)} onChange={(next) => onChange(next || undefined)} />
+  </div>;
+}
+
 function ItemEditor({ item, onChange }: { item: MediaPlaylistItem; onChange: (item: MediaPlaylistItem) => void }) {
   const patch = (updates: Partial<MediaPlaylistItem>) => onChange({ ...item, ...updates } as MediaPlaylistItem);
   return <div className="space-y-4 rounded-xl border bg-muted/10 p-4">
     <div className="grid gap-3 sm:grid-cols-2"><div className="space-y-1.5"><Label htmlFor="media-label">Internal label</Label><Input id="media-label" maxLength={100} value={item.label} onChange={(event) => patch({ label: event.target.value })} /></div>{item.type !== 'video' && <NumberField id="media-duration" label="Duration (seconds)" value={(item.durationMs ?? 10_000) / 1_000} min={2} max={120} onChange={(value) => patch({ durationMs: value * 1_000 })} />}</div>
     <Switch id="media-enabled" label="Enabled" checked={item.enabled} onChange={(enabled) => patch({ enabled })} />
-    <div className="grid gap-3 sm:grid-cols-2"><div className="space-y-1.5"><Label htmlFor="media-from">Active from (optional)</Label><Input id="media-from" type="datetime-local" value={item.activeFrom?.slice(0, 16) ?? ''} onChange={(event) => patch({ activeFrom: event.target.value || undefined })} /></div><div className="space-y-1.5"><Label htmlFor="media-until">Active until (optional)</Label><Input id="media-until" type="datetime-local" value={item.activeUntil?.slice(0, 16) ?? ''} onChange={(event) => patch({ activeUntil: event.target.value || undefined })} /></div></div>
+    <div className="grid gap-3 sm:grid-cols-2"><ActiveWindowField id="media-from" label="Active from (optional)" value={item.activeFrom} onChange={(activeFrom) => patch({ activeFrom })} /><ActiveWindowField id="media-until" label="Active until (optional)" value={item.activeUntil} onChange={(activeUntil) => patch({ activeUntil })} /></div>
     <div className="space-y-1.5"><Label htmlFor="media-caption">Caption (optional)</Label><Input id="media-caption" maxLength={240} value={item.caption ?? ''} onChange={(event) => patch({ caption: event.target.value || undefined })} /></div>
     {item.type === 'announcement' && <>
       <div className="space-y-1.5"><Label htmlFor="announcement-title">Title</Label><Input id="announcement-title" maxLength={120} value={item.title} onChange={(event) => patch({ title: event.target.value })} /></div>
@@ -150,7 +169,7 @@ export default function AdminKioskSettingsPage() {
   async function save() { const normalized = normalizeKioskSettings(settings); const nextErrors = validateKioskSettings(normalized); setErrors(nextErrors); if (nextErrors.length > 0) { toast.error('Fix playlist validation errors before saving.'); return; } setRemotePending(true); try { const snapshot = await updateKioskSettings(normalized, revision); const result = saveKioskSettings(snapshot.settings); if (!result.ok) throw new Error(result.errors[0] ?? 'Local cache is unavailable.'); setRevision(snapshot.revision); setSettings(snapshot.settings); setSaved(snapshot.settings); toast.success('Kiosk settings saved for every device.'); } catch (error) { toast.error(error instanceof Error ? error.message : 'Could not save kiosk settings.'); } finally { setRemotePending(false); } }
   function resetPlaylist() { setSettings((current) => ({ ...current, playlist: structuredClone(DEFAULT_KIOSK_SETTINGS.playlist) })); setSelectedId(null); setErrors([]); setConfirmReset(false); toast.info('Playlist reset. Save to apply this change.'); }
 
-  return <main className="mx-auto min-w-0 max-w-6xl space-y-5 p-4 sm:p-6">
+  return <main className="space-y-4 p-6">
     {errors.length > 0 && <div role="alert" className="rounded-lg border border-destructive/50 bg-destructive/5 p-3 text-sm text-destructive"><p className="font-semibold">Settings need attention</p><ul className="list-disc pl-5">{errors.map((error) => <li key={error}>{error}</li>)}</ul></div>}
     <Tabs value={tab} onValueChange={setTab} className="space-y-5">
       <PageHeader
