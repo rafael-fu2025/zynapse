@@ -11,11 +11,14 @@ import {
   Bell,
   Boxes,
   CalendarClock,
+  ClipboardList,
   ContactRound,
   Factory,
+  HeartHandshake,
   HeartPulse,
   IdCard,
   LayoutDashboard,
+  Megaphone,
   MessagesSquare,
   Recycle,
   ScanLine,
@@ -124,6 +127,16 @@ const NAV_SECTIONS: ReadonlyArray<{ title: string; items: ReadonlyArray<NavItem>
           return n > 0 ? { count: n } : null;
         },
       },
+      // The four content surfaces moved here from the Counselling page's tab
+      // strip (2026-09-24). Flat sibling rows, following the Facilities →
+      // Waste Category precedent rather than nesting: the longest-prefix
+      // active check then lights the child row and not `/counselling`.
+      // Each is gated on its own backend-enforced code, not the module-wide
+      // `counselling.records.read` the Counselling row carries.
+      { label: 'Surveys', href: '/counselling/surveys', icon: ClipboardList, permission: 'counselling.surveys.manage' },
+      { label: 'Announcements', href: '/counselling/announcements', icon: Megaphone, permission: 'counselling.announcements.manage' },
+      { label: 'Analytics', href: '/counselling/analytics', icon: BarChart3, permission: 'counselling.schedule.read' },
+      { label: 'Services', href: '/counselling/services', icon: HeartHandshake, permission: 'counselling.services.manage' },
     ],
   },
   {

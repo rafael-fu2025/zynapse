@@ -26,6 +26,8 @@ const AuditPage = lazyWithRetry(() => import('@/pages/AuditPage'));
 const AdminUsersPage = lazyWithRetry(() => import('@/pages/AdminUsersPage'));
 const AdminRolesPage = lazyWithRetry(() => import('@/pages/AdminRolesPage'));
 const AdminKioskSettingsPage = lazyWithRetry(() => import('@/pages/AdminKioskSettingsPage'));
+const AnalyticsPage = lazyWithRetry(() => import('@/pages/AnalyticsPage'));
+const AnnouncementsPage = lazyWithRetry(() => import('@/pages/AnnouncementsPage'));
 const AppointmentsPage = lazyWithRetry(() => import('@/pages/AppointmentsPage'));
 const ChangePasswordPage = lazyWithRetry(() => import('@/pages/ChangePasswordPage'));
 const EmployeePortalPage = lazyWithRetry(() => import('@/pages/EmployeePortalPage'));
@@ -46,6 +48,8 @@ const PatientsPage = lazyWithRetry(() => import('@/pages/PatientsPage'));
 const QueueDisplayPage = lazyWithRetry(() => import('@/pages/QueueDisplayPage'));
 const ReferralsPage = lazyWithRetry(() => import('@/pages/ReferralsPage'));
 const ReportsPage = lazyWithRetry(() => import('@/pages/ReportsPage'));
+const ServicesPage = lazyWithRetry(() => import('@/pages/ServicesPage'));
+const SurveysPage = lazyWithRetry(() => import('@/pages/SurveysPage'));
 
 function PageFallback() {
   return (
@@ -261,6 +265,45 @@ const router = createBrowserRouter([
         element: (
           <ProtectedRoute anyOf={['counselling.records.read']}>
             <CounsellingPage />
+          </ProtectedRoute>
+        ),
+      },
+      /**
+       * The four guidance content surfaces (2026-09-24). They were sections
+       * inside `/counselling` until the sidebar took them over, so each now
+       * carries its own route and the permission its backend actually
+       * enforces — which is the surface's own code, not the module-wide
+       * `counselling.records.read` that the counselling route requires.
+       */
+      {
+        path: '/counselling/surveys',
+        element: (
+          <ProtectedRoute anyOf={['counselling.surveys.manage']}>
+            <SurveysPage />
+          </ProtectedRoute>
+        ),
+      },
+      {
+        path: '/counselling/announcements',
+        element: (
+          <ProtectedRoute anyOf={['counselling.announcements.manage']}>
+            <AnnouncementsPage />
+          </ProtectedRoute>
+        ),
+      },
+      {
+        path: '/counselling/analytics',
+        element: (
+          <ProtectedRoute anyOf={['counselling.schedule.read']}>
+            <AnalyticsPage />
+          </ProtectedRoute>
+        ),
+      },
+      {
+        path: '/counselling/services',
+        element: (
+          <ProtectedRoute anyOf={['counselling.services.manage']}>
+            <ServicesPage />
           </ProtectedRoute>
         ),
       },

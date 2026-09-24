@@ -6,15 +6,23 @@
  * Section order was reworked on 2026-09-23 so the two daily-working surfaces
  * lead: Queue (the day board — upcoming / today / archived) and Appointments
  * (the booking book, promoted out of Scheduling, which had buried it behind
- * a second sub-tab). Configuration and content follow:
+ * a second sub-tab). What remains is the working set:
  *   - Queue: the day board. Upcoming, today's live sessions (appointments
  *     plus kiosk check-ins), and archived/completed.
  *   - Appointments: the booking book — book and confirm. It deliberately
  *     offers **no** route into a session.
  *   - Follow-ups: WHO-5 aftercare loop, with the follow-up appointment list.
  *   - Scheduling: availability windows (list/calendar).
- *   - Surveys / Announcements: guidance content management.
- *   - Analytics / Services: reporting and the CMO catalogue.
+ *
+ * **The four content surfaces moved to the sidebar** (2026-09-24). Surveys,
+ * Announcements, Analytics and Services used to be sections here; they are now
+ * their own routes (`/counselling/<surface>`) with their own rows under
+ * Guidance Center, so this page holds only the surfaces the desk works in
+ * daily. Two consequences worth knowing: the strip no longer groups (a single
+ * heading over every remaining section would say nothing), and the four old
+ * `?tab=` values now redirect to their new routes for the sake of stale
+ * bookmarks. No surface was rewritten to move it — the components are the same
+ * ones, rendered by a page instead of a tab.
  *
  * **Sessions & Notes is gone** (2026-09-23, later the same day). It was a
  * master-detail list of every session in the tenant, which duplicated the
@@ -33,43 +41,25 @@
  * rule that governs a row click). When no row matches, the Queue renders the
  * session in a panel above the board rather than dead-ending the link.
  *
- * **Sections are grouped** (2026-09-23, third revision) into Sessions &
- * Bookings, Communication, and Insights & Services — see the tab array below
- * for why that reordered Analytics.
- *
- * Every section carries a red notification dot when it has pending work — a
- * counted dot where a backlog can be tallied, a bare dot where the signal is
- * not a number. Sections with no pending-work concept (Analytics, and the
- * three content tabs) show none.
+ * Every remaining section carries a red notification dot when it has pending
+ * work — a counted dot where a backlog can be tallied, a bare dot where the
+ * signal is not a number.
  *
  * Subcomponents, dialogs, and workspace live under `src/components/counselling/`.
  */
-import {
-  BarChart3,
-  BellRing,
-  CalendarCheck,
-  CalendarDays,
-  ClipboardList,
-  HeartHandshake,
-  ListOrdered,
-  Megaphone,
-} from 'lucide-react';
+import { BellRing, CalendarCheck, CalendarDays, ListOrdered } from 'lucide-react';
 import { useEffect } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { Navigate, useSearchParams } from 'react-router-dom';
 import { NotificationDot } from '@/components/NotificationDot';
 import { PageHeader } from '@/components/PageHeader';
 import { TabSections, type TabSection } from '@/components/TabSections';
 import { Tabs, TabsContent } from '@/components/ui/tabs';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import {
-  AnnouncementsTab,
   AppointmentsTab,
   FollowupsTab,
   GuidanceQueueTab,
   SchedulingTab,
-  AnalyticsTab,
-  ServicesTab,
-  SurveysTab,
 } from '@/components/counselling/tabs';
 import { useGuidanceFollowups } from '@/hooks/useGuidanceFollowups';
 import { useGuidanceQueueToday } from '@/hooks/useQueue';
@@ -80,12 +70,18 @@ import { hasPermission, useAuthStore } from '@/store/auth';
 const QUEUE_OPEN_STATUSES = ['waiting', 'called', 'in_session'];
 
 /**
- * Nav group labels. Held as constants so the ordering contract and the
- * labels cannot drift apart across the tab array below.
+ * `?tab=` values that used to select one of the four content surfaces which now
+ * have their own routes and sidebar rows (2026-09-24). Nothing links to these
+ * any more; the map is for bookmarks and for links pasted before the move.
+ * Without it an old link would silently land on the default section, because an
+ * unrecognised tab value falls back rather than erroring.
  */
-const GROUP_BOOKINGS = 'Sessions & Bookings';
-const GROUP_COMMUNICATION = 'Communication';
-const GROUP_INSIGHTS = 'Insights & Services';
+const MOVED_TABS: Readonly<Record<string, string>> = {
+  surveys: '/counselling/surveys',
+  announcements: '/counselling/announcements',
+  analytics: '/counselling/analytics',
+  services: '/counselling/services',
+};
 
 export default function CounsellingPage() {
   const [params, setParams] = useSearchParams();
@@ -96,21 +92,13 @@ export default function CounsellingPage() {
       hasPermission(state, 'counselling.schedule.manage') ||
       hasPermission(state, 'counselling.schedule.team_manage'),
   );
-  const canManageAnnouncements = useAuthStore((state) => hasPermission(state, 'counselling.announcements.manage'));
-  const canManageServices = useAuthStore((state) => hasPermission(state, 'counselling.services.manage'));
-  const canManageSurveys = useAuthStore((state) => hasPermission(state, 'counselling.surveys.manage'));
   const canSeeFollowups = useAuthStore((state) => hasPermission(state, 'counselling.responses.read_any'));
 
-  // Membership and order both follow the grouped nav above.
   const allowedTabs = [
     ...(canReadQueue ? ['queue'] : []),
     'appointments',
     ...(canSeeFollowups ? ['followups'] : []),
     'scheduling',
-    ...(canManageSurveys ? ['surveys'] : []),
-    ...(canManageAnnouncements ? ['announcements'] : []),
-    'analytics',
-    ...(canManageServices ? ['services'] : []),
   ];
 
   // The landing surface is stated explicitly rather than taken from nav
@@ -139,6 +127,10 @@ export default function CounsellingPage() {
   const requestedTab = params.get('tab') ?? (selectedId !== null ? 'queue' : (legacyTab ?? defaultTab));
   const tab = allowedTabs.includes(requestedTab) ? requestedTab : defaultTab;
 
+  // An old `?tab=surveys`-style link redirects to the surface's own route
+  // rather than silently landing on the default section.
+  const movedTo = MOVED_TABS[requestedTab] ?? null;
+
   const queue = useGuidanceQueueToday(canReadQueue);
   const openQueue = queue.data?.filter((entry) => QUEUE_OPEN_STATUSES.includes(entry.status)).length ?? 0;
   // Lifted unfiltered caseload for the tab dot — mirrors the sidebar
@@ -156,29 +148,25 @@ export default function CounsellingPage() {
   // "notified" about; it has no numeric backlog of its own.
   const needsAvailability = canMutateSchedule && availability.data !== undefined && availability.data.length === 0;
 
-  // Section nav — permission-filtered, grouped, order matches the sidebar.
-  // Indicators mirror the sidebar counters so the module number is traceable
-  // to the tab it belongs to; each is a red dot (see NotificationDot).
+  // Section nav — permission-filtered, order matches the sidebar. Indicators
+  // mirror the sidebar counters so the module number is traceable to the tab it
+  // belongs to; each is a red dot (see NotificationDot).
   //
-  // **Three groups (2026-09-23).** Eight flat sections became three named
-  // clusters, which *required a reorder*: grouping is by consecutive run, so
-  // Analytics had to move down beside Services. The resulting order is the
-  // one the grouping implies — the four booking surfaces, then the two
-  // outward-facing content surfaces, then reporting and the catalogue.
-  // `defaultTab` is unaffected: both candidate landings sit in group 1.
+  // Flat since 2026-09-24: this strip used to hold three named clusters, and the
+  // four content surfaces that made up two of them now live in the sidebar. One
+  // group over every remaining section would say nothing, so no `group` is
+  // passed and `TabSections` renders the plain strip the other pages use.
   const tabs: readonly TabSection[] = [
     ...(canReadQueue ? [{
       value: 'queue',
       label: 'Queue',
       icon: ListOrdered,
-      group: GROUP_BOOKINGS,
       notify: <NotificationDot count={openQueue} label={`${openQueue} Guidance patients in play today`} />,
     }] : []),
     {
       value: 'appointments',
       label: 'Appointments',
       icon: CalendarCheck,
-      group: GROUP_BOOKINGS,
       notify: (
         <NotificationDot count={todayCount} label={`${todayCount} Guidance appointments today`} />
       ),
@@ -187,40 +175,22 @@ export default function CounsellingPage() {
       value: 'followups',
       label: 'Follow-ups',
       icon: BellRing,
-      group: GROUP_BOOKINGS,
       notify: <NotificationDot count={openFollowups} label={`${openFollowups} open follow-ups`} />,
     }] : []),
     {
       value: 'scheduling',
       label: 'Scheduling',
       icon: CalendarDays,
-      group: GROUP_BOOKINGS,
       ...(needsAvailability
         ? { notify: <NotificationDot label="No availability windows configured" /> }
         : {}),
     },
-    ...(canManageSurveys ? [{
-      value: 'surveys',
-      label: 'Surveys',
-      icon: ClipboardList,
-      group: GROUP_COMMUNICATION,
-    }] : []),
-    ...(canManageAnnouncements ? [{
-      value: 'announcements',
-      label: 'Announcements',
-      icon: Megaphone,
-      group: GROUP_COMMUNICATION,
-    }] : []),
-    { value: 'analytics', label: 'Analytics', icon: BarChart3, group: GROUP_INSIGHTS },
-    ...(canManageServices ? [{
-      value: 'services',
-      label: 'Services',
-      icon: HeartHandshake,
-      group: GROUP_INSIGHTS,
-    }] : []),
   ];
 
   useEffect(() => {
+    // A redirect is in flight for a moved tab: rewriting the URL here would
+    // race the navigation and strip the tab before the redirect reads it.
+    if (movedTo !== null) return;
     if (
       requestedTab !== tab ||
       (tab === defaultTab && params.get('tab') !== null) ||
@@ -236,7 +206,7 @@ export default function CounsellingPage() {
       next.delete('subtab');
       setParams(next, { replace: true });
     }
-  }, [params, defaultTab, rawSessionId, rawSubTab, requestedTab, selectedId, setParams, tab]);
+  }, [params, defaultTab, movedTo, rawSessionId, rawSubTab, requestedTab, selectedId, setParams, tab]);
 
   function setTab(nextTab: string) {
     const next = new URLSearchParams(params);
@@ -266,6 +236,11 @@ export default function CounsellingPage() {
     }
     setParams(next, { replace: false });
   }
+
+  // The four relocated surfaces are their own routes now, so hand the URL over
+  // before rendering anything — `tab` would otherwise fall back to the default
+  // and the link would land on the wrong section.
+  if (movedTo !== null) return <Navigate to={movedTo} replace />;
 
   return (
     <TooltipProvider delayDuration={150} skipDelayDuration={300}>
@@ -300,28 +275,6 @@ export default function CounsellingPage() {
             <TabsContent value="scheduling">
               <SchedulingTab />
             </TabsContent>
-
-            <TabsContent value="analytics">
-              <AnalyticsTab />
-            </TabsContent>
-
-            {canManageSurveys && (
-              <TabsContent value="surveys">
-                <SurveysTab />
-              </TabsContent>
-            )}
-
-            {canManageAnnouncements && (
-              <TabsContent value="announcements">
-                <AnnouncementsTab />
-              </TabsContent>
-            )}
-
-            {canManageServices && (
-              <TabsContent value="services">
-                <ServicesTab />
-              </TabsContent>
-            )}
           </TabSections>
         </Tabs>
       </main>
