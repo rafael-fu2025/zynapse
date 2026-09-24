@@ -119,7 +119,7 @@ export default function NotificationsPage() {
                         {notificationLabel(n.template_code, n.context)}
                       </span>
                       {detail !== null && (
-                        <span className="mt-0.5 block font-mono text-xs text-muted-foreground">
+                        <span className="mt-0.5 block tabular-nums text-xs text-muted-foreground">
                           {detail}
                         </span>
                       )}

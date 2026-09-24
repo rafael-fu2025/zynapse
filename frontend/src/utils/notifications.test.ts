@@ -101,10 +101,14 @@ describe('getNotificationDestination', () => {
       expect(getNotificationDestination('counselling.queue_called', null, auth)).toBe('/me');
     });
 
-    it('routes counselling.* to /counselling?tab=sessions for guidance counselors', () => {
+    it('routes counselling.* to the Queue board for guidance counselors', () => {
+      // Sessions are Queue-only as of 2026-09-23 (third revision): an on-going
+      // patient's row expands in place, and `?session=N` force-opens its row.
+      // The Appointments book can no longer show a session, so it is the wrong
+      // target for anything session-shaped.
       const auth = mockAuth(['counselling.records.read']);
       expect(getNotificationDestination('counselling.session_opened', null, auth)).toBe(
-        '/counselling?tab=sessions',
+        '/counselling?tab=queue',
       );
     });
 

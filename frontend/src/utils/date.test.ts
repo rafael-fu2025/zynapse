@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   appDateTimeToUtcSql,
+  fmtClock,
   fmtShort,
+  fmtTimeRange,
   fmtUtcToApp,
   utcSqlToAppParts,
   wholeMonthSpanLabel,
@@ -65,6 +67,56 @@ describe('appDateTimeToUtcSql / utcSqlToAppParts', () => {
     // 00:00 UTC the same day.
     expect(appDateTimeToUtcSql('2026-08-01', '08:00')).toBe('2026-08-01 00:00:00');
     expect(MANILA_OFFSET_HOURS).toBe(8); // guard the assumption this file makes
+  });
+});
+
+describe('fmtClock / fmtTimeRange', () => {
+  /**
+   * The clinic reads a 12-hour clock (2026-09-23). These values are
+   * app-timezone *wall-clock*, NOT UTC instants — the whole point of the
+   * helper is that it does no zone conversion, so these assertions must hold
+   * on a CI runner set to any zone.
+   */
+  it('renders a morning hour on the 12-hour clock', () => {
+    expect(fmtClock('09:00')).toBe('9:00 AM');
+    expect(fmtClock('09:00:00')).toBe('9:00 AM');
+    expect(fmtClock('08:15')).toBe('8:15 AM');
+  });
+
+  it('renders an afternoon hour on the 12-hour clock', () => {
+    expect(fmtClock('13:30')).toBe('1:30 PM');
+    expect(fmtClock('23:59')).toBe('11:59 PM');
+  });
+
+  it('renders noon as 12 PM, not 0 PM or 12 AM', () => {
+    // The classic off-by-one: hour 12 is PM but must not render as "0 PM".
+    expect(fmtClock('12:00')).toBe('12:00 PM');
+    expect(fmtClock('12:45')).toBe('12:45 PM');
+  });
+
+  it('renders midnight as 12 AM, not 0 AM', () => {
+    // The other classic: hour 0 is AM but must not render as "0 AM".
+    expect(fmtClock('00:00')).toBe('12:00 AM');
+    expect(fmtClock('00:05')).toBe('12:05 AM');
+  });
+
+  it('does not shift the value by the host timezone', () => {
+    // A wall-clock column must render as written. If this were routed through
+    // parseUtc, an 09:00 shift would come back as 5:00 PM on a UTC+8 runner.
+    expect(fmtClock('09:00')).toBe('9:00 AM');
+    expect(fmtClock('18:00')).toBe('6:00 PM');
+  });
+
+  it('returns unparseable input untouched rather than "Invalid Date"', () => {
+    expect(fmtClock('')).toBe('');
+    expect(fmtClock('not-a-time')).toBe('not-a-time');
+    // Out-of-range hours are rejected, not wrapped.
+    expect(fmtClock('25:00')).toBe('25:00');
+  });
+
+  it('joins a start/end pair with a spaced en dash', () => {
+    expect(fmtTimeRange('09:00:00', '10:30:00')).toBe('9:00 AM – 10:30 AM');
+    expect(fmtTimeRange('13:00', '17:00')).toBe('1:00 PM – 5:00 PM');
   });
 });
 

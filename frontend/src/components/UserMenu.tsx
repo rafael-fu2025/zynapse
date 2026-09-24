@@ -175,7 +175,7 @@ export function UserMenu() {
             {me.data?.identifier && (
               <>
                 <span>·</span>
-                <span className="font-mono">{me.data.identifier}</span>
+                <span className="tabular-nums">{me.data.identifier}</span>
               </>
             )}
           </div>

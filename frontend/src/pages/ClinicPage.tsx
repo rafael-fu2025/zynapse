@@ -50,6 +50,7 @@ import { TableStateRows } from '@/components/TableStates';
 import { SessionProgressTracker, type SessionProgressStep } from '@/components/SessionProgressTracker';
 import { MobileCardList, MobileCard, MobileCardField, MobileCardActions } from '@/components/MobileCardList';
 import { PatientIdCell } from '@/components/PatientIdCell';
+import { WeekdayCheckboxes } from '@/components/WeekdayCheckboxes';
 import { formatQueueNumber } from '@/components/KioskCheckin';
 import { DatePicker } from '@/components/ui/date-picker';
 import { TimePicker } from '@/components/ui/time-picker';
@@ -134,7 +135,7 @@ import {
   type ScheduleType,
   type StaffSchedule,
 } from '@/schemas/staffSchedule';
-import { fmtUtcToApp } from '@/utils/date';
+import { fmtTimeRange, fmtUtcToApp } from '@/utils/date';
 import { statusLabel } from '@/utils/status';
 import { titleCase } from '@/lib/utils';
 
@@ -420,7 +421,7 @@ function CareDialog({ encounter, onClose }: { encounter: Encounter; onClose: () 
                 <span className="ml-2">{t.description}</span>
               </span>
               {t.quantity_used !== null && (
-                <span className="font-mono text-muted-foreground">
+                <span className="tabular-nums text-muted-foreground">
                   {t.quantity_used} {t.unit ?? ''} {t.medicine_name ?? ''}
                 </span>
               )}
@@ -521,7 +522,7 @@ function EncounterViewDialog({ encounter, onClose }: { encounter: Encounter; onC
         <div className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
           <div>
             <p className="text-xs text-muted-foreground">Patient</p>
-            <p className="font-mono">{encounter.patient_school_id}</p>
+            <p className="tabular-nums">{encounter.patient_school_id}</p>
           </div>
           <div>
             <p className="text-xs text-muted-foreground">Chief complaint</p>
@@ -574,7 +575,7 @@ function EncounterViewDialog({ encounter, onClose }: { encounter: Encounter; onC
               <span className="ml-2">{t.description}</span>
             </span>
             {t.quantity_used !== null && (
-              <span className="font-mono text-muted-foreground">
+              <span className="tabular-nums text-muted-foreground">
                 {t.quantity_used} {t.unit ?? ''} {t.medicine_name ?? ''}
               </span>
             )}
@@ -606,7 +607,7 @@ function ClinicGuidanceReferralDialog({ encounter, onClose }: { encounter: Encou
   return <DialogContent lockDismiss>
     <DialogHeader><DialogTitle>Refer patient to Guidance</DialogTitle></DialogHeader>
     {result !== null ? <div className="space-y-4"><div className="rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-4"><p className="font-medium">Referral #{result.id}</p><p className="text-sm text-muted-foreground">Status: {result.status.replace('_', ' ')}</p><p className="mt-2 text-sm">The Clinic encounter remains active. Guidance acknowledgement, review, and queue handoff are separate actions.</p></div><DialogFooter><Button onClick={onClose}>Continue encounter</Button></DialogFooter></div> : <form noValidate onSubmit={(event) => void submit(event)} className="space-y-4">
-      <div className="rounded-lg border bg-muted/30 p-3"><p className="font-medium">{encounter.patient_name ?? encounter.patient_school_id}</p><p className="font-mono text-xs text-muted-foreground">{encounter.patient_school_id}</p></div>
+      <div className="rounded-lg border bg-muted/30 p-3"><p className="font-medium">{encounter.patient_name ?? encounter.patient_school_id}</p><p className="tabular-nums text-xs text-muted-foreground">{encounter.patient_school_id}</p></div>
       <div className="grid grid-cols-2 gap-3"><div className="space-y-1.5"><Label htmlFor="clinic-referral-from">From</Label><Input id="clinic-referral-from" value="Clinic" readOnly disabled /></div><div className="space-y-1.5"><Label htmlFor="clinic-referral-to">To</Label><Input id="clinic-referral-to" value="Guidance" readOnly disabled /></div></div>
       <div className="space-y-1.5"><Label htmlFor="clinic-referral-artifact">Artifact</Label><Input id="clinic-referral-artifact" value="Intake pass" readOnly disabled /></div>
       <div className="space-y-1.5"><Label htmlFor="clinic-referral-reason">Reason (optional)</Label><Input id="clinic-referral-reason" {...register('reason_code', { maxLength: 64 })} />{errors.reason_code !== undefined && <p className="text-xs text-destructive">Reason is too long.</p>}</div>
@@ -660,7 +661,7 @@ function ClinicEncounterWorkspace({
         <div>
           <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Active Clinic encounter</p>
           <DialogTitle className="text-lg font-semibold">{encounter.patient_name ?? encounter.patient_school_id}</DialogTitle>
-          <p className="font-mono text-xs text-muted-foreground">{encounter.patient_school_id} · Encounter #{encounter.id}</p>
+          <p className="tabular-nums text-xs text-muted-foreground">{encounter.patient_school_id} · Encounter #{encounter.id}</p>
         </div>
         <Badge variant={encounter.status === 'open' ? 'success' : 'secondary'} className="mr-6">
           {statusLabel(encounter.status)}
@@ -786,7 +787,7 @@ function QueueTab({ onOpenEncounter }: QueueTabProps) {
               const canNoShow = q.encounter_status === 'open';
               return (
                 <TableRow key={q.id}>
-                  <TableCell className="px-3 font-mono text-sm font-semibold">{formatQueueNumber(q.position)}</TableCell>
+                  <TableCell className="px-3 tabular-nums text-sm font-semibold">{formatQueueNumber(q.position)}</TableCell>
                   <TableCell className="px-3">
                     {q.display_name}
                     <span className="ml-1.5">
@@ -882,7 +883,7 @@ function QueueTab({ onOpenEncounter }: QueueTabProps) {
           return (
             <MobileCard key={q.id} aria-label={`Queue ${formatQueueNumber(q.position)}`}>
               <div className="mb-1 flex items-center justify-between gap-2">
-                <span className="font-mono text-sm font-semibold text-foreground">{formatQueueNumber(q.position)}</span>
+                <span className="tabular-nums text-sm font-semibold text-foreground">{formatQueueNumber(q.position)}</span>
                 <div className="flex flex-wrap justify-end gap-1.5">
                   <Badge variant={QUEUE_STATUS_VARIANT[q.status]}>{titleCase(q.status)}</Badge>
                   {q.encounter_outcome !== undefined && q.encounter_outcome !== null && (
@@ -891,7 +892,7 @@ function QueueTab({ onOpenEncounter }: QueueTabProps) {
                 </div>
               </div>
               <p className="text-sm font-medium text-foreground">{q.display_name}</p>
-              <p className="font-mono text-[10px] text-muted-foreground"><PatientIdCell id={q.patient_school_id} name={q.patient_name} /></p>
+              <p className="tabular-nums text-[10px] text-muted-foreground"><PatientIdCell id={q.patient_school_id} name={q.patient_name} /></p>
               <MobileCardField label="Complaint"><span className="text-xs">{q.chief_complaint}</span></MobileCardField>
               <MobileCardField label="Station"><StationBadge station={q.station_id} /></MobileCardField>
               <MobileCardActions>
@@ -1024,14 +1025,14 @@ function StaffSchedulesTab({
                   <span className="ml-1.5"><PatientIdCell id={`#${s.user_id}`} name={s.user_name} /></span>
                 </TableCell>
                 <TableCell className="px-3 text-xs">{DAY_NAMES[s.day_of_week]}</TableCell>
-                <TableCell className="px-3 font-mono text-xs">{s.shift_start.slice(0, 5)}–{s.shift_end.slice(0, 5)}</TableCell>
+                <TableCell className="px-3 tabular-nums text-xs">{fmtTimeRange(s.shift_start, s.shift_end)}</TableCell>
                 <TableCell className="px-3">
                   <Badge variant={s.schedule_type === 'leave' ? 'warning' : s.schedule_type === 'on_call' ? 'info' : 'secondary'}>
                     {titleCase(s.schedule_type)}
                   </Badge>
                   {!s.is_active && <Badge variant="secondary" className="ml-1.5">Archived</Badge>}
                   {s.effective_from !== null && (
-                    <span className="ml-1.5 font-mono text-[10px] text-muted-foreground">
+                    <span className="ml-1.5 tabular-nums text-[10px] text-muted-foreground">
                       {s.effective_from.slice(0, 10)}{s.effective_to !== null ? ` → ${s.effective_to.slice(0, 10)}` : ' →'}
                     </span>
                   )}
@@ -1110,10 +1111,10 @@ function StaffSchedulesTab({
             </div>
             <MobileCardField label="User"><PatientIdCell id={`#${s.user_id}`} name={s.user_name} /></MobileCardField>
             <MobileCardField label="Day"><span className="text-xs">{DAY_NAMES[s.day_of_week]}</span></MobileCardField>
-            <MobileCardField label="Shift"><span className="font-mono text-xs">{s.shift_start.slice(0, 5)}–{s.shift_end.slice(0, 5)}</span></MobileCardField>
+            <MobileCardField label="Shift"><span className="tabular-nums text-xs">{fmtTimeRange(s.shift_start, s.shift_end)}</span></MobileCardField>
             {s.effective_from !== null && (
               <MobileCardField label="Effective">
-                <span className="font-mono text-xs text-muted-foreground">
+                <span className="tabular-nums text-xs text-muted-foreground">
                   {s.effective_from.slice(0, 10)}{s.effective_to !== null ? ` → ${s.effective_to.slice(0, 10)}` : ' →'}
                 </span>
               </MobileCardField>
@@ -1190,7 +1191,7 @@ function AddShiftDialog({ onClose }: { onClose: () => void }) {
     };
   });
   const [userId, setUserId] = useState('');
-  const [dow, setDow] = useState('1');
+  const [days, setDays] = useState<number[]>([1]);
   const [start, setStart] = useState('09:00');
   const [end, setEnd] = useState('17:00');
   const [type, setType] = useState<ScheduleType>('regular');
@@ -1200,7 +1201,7 @@ function AddShiftDialog({ onClose }: { onClose: () => void }) {
   function submit() {
     const parsed = createStaffScheduleSchema.safeParse({
       user_id: userId,
-      day_of_week: dow,
+      days_of_week: days,
       shift_start: start,
       shift_end: end,
       schedule_type: type,
@@ -1238,12 +1239,17 @@ function AddShiftDialog({ onClose }: { onClose: () => void }) {
             placeholder="Search staff by name or number…"
           />
         </div>
-        <div className="space-y-1.5">
-          <Label id="ss-dow-label" className="text-xs">Day</Label>
-          <Select value={dow} onValueChange={setDow}>
-            <SelectTrigger aria-labelledby="ss-dow-label" className="h-8 w-full"><SelectValue /></SelectTrigger>
-            <SelectContent>{DAY_NAMES.map((n, i) => <SelectItem key={n} value={String(i)}>{n}</SelectItem>)}</SelectContent>
-          </Select>
+        <div className="space-y-1.5 sm:col-span-2">
+          <Label id="ss-dow-label" className="text-xs">Days</Label>
+          <WeekdayCheckboxes
+            idPrefix="ss"
+            value={days}
+            disabled={create.isPending}
+            onChange={setDays}
+          />
+          <p className="text-xs text-muted-foreground">
+            Tick every day this shift applies to — they are added together.
+          </p>
         </div>
         <div className="space-y-1.5">
           <Label htmlFor="ss-start" className="text-xs">Start</Label>
@@ -1601,7 +1607,7 @@ function EncounterTable(props: EncounterTableProps) {
                           : undefined
                   }
                 >
-                  <TableCell className="px-3 font-mono text-xs">{e.id}</TableCell>
+                  <TableCell className="px-3 tabular-nums text-xs">{e.id}</TableCell>
                   <TableCell className="px-3"><PatientIdCell id={e.patient_school_id} name={e.patient_name} /></TableCell>
                   <TableCell className="px-3">
                     {e.chief_complaint}
@@ -1662,7 +1668,7 @@ function EncounterTable(props: EncounterTableProps) {
               }
             >
               <div className="mb-1 flex items-center justify-between gap-2">
-                <span className="font-mono text-xs text-muted-foreground">#{e.id}</span>
+                <span className="tabular-nums text-xs text-muted-foreground">#{e.id}</span>
                 {e.closed_at === null
                   ? <Badge variant="info">{statusLabel(e.status)}</Badge>
                   : <span className="text-xs text-muted-foreground">Closed {fmtUtcToApp(e.closed_at)}</span>}

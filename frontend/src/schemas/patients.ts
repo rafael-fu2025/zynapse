@@ -95,6 +95,20 @@ export const employeeFacetsSchema = z.object({
 });
 export type EmployeeFacets = z.infer<typeof employeeFacetsSchema>;
 
+/**
+ * Facet options for the Students tab filters: the distinct `department`,
+ * `course` and `year_level` values present in the live student registry —
+ * the same three categorical fields the MIS student endpoint filters on
+ * (`department`, `program`, `level`). Sourced from our own rows so the
+ * selects still populate off-campus, where the MIS API is unreachable.
+ */
+export const studentFacetsSchema = z.object({
+  departments: z.array(z.string()),
+  courses: z.array(z.string()),
+  yearLevels: z.array(z.number().int()),
+});
+export type StudentFacets = z.infer<typeof studentFacetsSchema>;
+
 export const createStudentSchema = z.object({
   student_number: z.string().min(1, 'Required').max(50),
   first_name: z.string().min(1, 'Required').max(100),

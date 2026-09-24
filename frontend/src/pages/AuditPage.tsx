@@ -390,7 +390,7 @@ export default function AuditPage() {
                 value={draft.request_id ?? ''}
                 onChange={(event) => setDraft((current) => ({ ...current, request_id: event.target.value }))}
                 placeholder="32-char ID or UUID"
-                className="font-mono text-xs"
+                className="tabular-nums text-xs"
               />
             </FilterField>
           </div>
@@ -560,7 +560,7 @@ function EntityLabel({ event }: { event: AuditEvent }) {
 
 function ShortCode({ value }: { value: string | null }) {
   if (value === null) return <span className="text-xs text-muted-foreground">Not captured</span>;
-  return <span className="font-mono text-[11px] text-muted-foreground" title={value}>{value.slice(0, 10)}…</span>;
+  return <span className="tabular-nums text-[11px] text-muted-foreground" title={value}>{value.slice(0, 10)}…</span>;
 }
 
 function VerificationStatus({ verification }: { verification: ReturnType<typeof useVerifyAuditChain> }) {
@@ -619,7 +619,7 @@ function EventDetailDialog({ id, detail, onClose }: { id: number | null; detail:
               <dl className="grid grid-cols-[110px_minmax(0,1fr)] gap-x-3 gap-y-3 text-xs">
                 <dt className="text-muted-foreground">Entity</dt><dd className="break-all text-foreground">{event.entity_type} / {event.entity_id ?? 'not assigned'}</dd>
                 <dt className="text-muted-foreground">Actor</dt><dd><ActorLabel actor={event.actor} /></dd>
-                <dt className="text-muted-foreground">Previous event</dt><dd className="font-mono text-foreground">{event.prev_id ?? 'genesis'}</dd>
+                <dt className="text-muted-foreground">Previous event</dt><dd className="tabular-nums text-foreground">{event.prev_id ?? 'genesis'}</dd>
                 <dt className="text-muted-foreground">Request ID</dt><dd><CopyableCode value={event.request_id} /></dd>
                 <dt className="text-muted-foreground">Commit hash</dt><dd><CopyableCode value={event.commit_hash} /></dd>
               </dl>
@@ -630,7 +630,7 @@ function EventDetailDialog({ id, detail, onClose }: { id: number | null; detail:
                     <Clipboard /> Copy
                   </Button>
                 </div>
-                <pre className="max-h-[45dvh] overflow-auto border bg-muted/40 p-3 font-mono text-[11px] leading-5 text-foreground">
+                <pre className="max-h-[45dvh] overflow-auto border bg-muted/40 p-3 tabular-nums text-[11px] leading-5 text-foreground">
                   {JSON.stringify(event.payload, null, 2)}
                 </pre>
               </div>

@@ -106,6 +106,10 @@ final class Routes implements BaseRoutes
             $r->get('students/search',                       'PatientController::searchStudents');
             $r->get('patients/lookup',                       'PatientController::lookupForKiosk');
             $r->post('students',                             'PatientController::createStudent');
+            // Facet options for the Students tab filters. MUST stay above
+            // `students/(:segment)`, which would otherwise swallow it as a
+            // showStudent lookup for the id "facets".
+            $r->get('students/facets',                       'PatientController::studentFacets');
             $r->get('students/(:segment)',                   'PatientController::showStudent/$1');
             $r->post('students/(:num)',                      'PatientController::updateStudent/$1');
             $r->post('students/(:num)/archive',              'PatientController::setStudentArchived/$1');

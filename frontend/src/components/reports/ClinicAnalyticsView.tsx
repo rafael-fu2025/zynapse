@@ -66,13 +66,13 @@ function MedicationRankList({
     <ol className="space-y-2.5">
       {items.map((item, index) => (
         <li key={item.generic_name} className="flex items-center gap-3">
-          <span className="w-5 shrink-0 text-right font-mono text-xs text-muted-foreground">{index + 1}</span>
+          <span className="w-5 shrink-0 text-right tabular-nums text-xs text-muted-foreground">{index + 1}</span>
           <div className="min-w-0 flex-1">
             <div className="flex items-baseline justify-between gap-2 text-xs">
               <span className="truncate font-medium text-foreground">
                 {item.generic_name}{item.brand_name ? ` · ${item.brand_name}` : ''}
               </span>
-              <span className="shrink-0 font-mono tabular-nums text-muted-foreground">{item.qty} {item.unit}</span>
+              <span className="shrink-0 tabular-nums text-muted-foreground">{item.qty} {item.unit}</span>
             </div>
             <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-muted">
               <div className="h-full rounded-full bg-primary" style={{ width: `${Math.round((item.qty / max) * 100)}%` }} />

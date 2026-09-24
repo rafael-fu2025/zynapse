@@ -53,7 +53,7 @@ export function MoveStockDialog({ item, onClose }: { item: InventoryItem; onClos
       </DialogHeader>
       <form onSubmit={(e) => void onSubmit(e)} className="space-y-3" noValidate>
         <p className="text-xs text-muted-foreground">
-          On hand: <span className="font-mono">{item.quantity_on_hand} {item.unit}</span>.
+          On hand: <span className="tabular-nums">{item.quantity_on_hand} {item.unit}</span>.
           Adjustments may go either way. Dispensing is a separate action
           (tied to an open visit) and deliveries use the Receive button.
         </p>

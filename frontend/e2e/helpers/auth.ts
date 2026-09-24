@@ -142,6 +142,23 @@ export async function signInMocked(
       body: JSON.stringify({ success: true, data: session, errors: [], meta: null }),
     }));
 
+  // The sidebar counter is fetched on EVERY authenticated route
+  // (`useDashboardCounters` in AppSidebar), so a mocked sign-in that does not
+  // stub it leaks one real request. With the PHP dev server up, that request
+  // carries the fake token, gets a 401, the interceptor tries the unstubbed
+  // /auth/refresh, that 401s too, and the SPA logs out to /login — so specs
+  // fail on whether port 8090 happens to be listening rather than on the code
+  // under test. Diagnosed 2026-09-23, when it was masquerading as 6 unrelated
+  // kiosk-media failures and 2 portal failures at once.
+  //
+  // `{}` is safe: AppSidebar suppresses the badge for a zero/absent count, so
+  // no accessible name changes and no spec that asserts on the sidebar moves.
+  await page.route('**/api/v1/dashboard/counters**', (route) =>
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({ success: true, data: {}, errors: [], meta: null }),
+    }));
+
   await page.goto('/login');
   await submitLoginForm(page, session.email, 'mock-credentials-not-used');
   await page.waitForURL('/');

@@ -105,7 +105,7 @@ export function PatientPicker({
                 }}
               >
                 <span className="flex items-center gap-1.5">
-                  <span className="font-mono">{s.student_number}</span>
+                  <span className="tabular-nums">{s.student_number}</span>
                   {s.is_directory_record && (
                     <span className="rounded border border-sky-300 bg-sky-50 px-1 py-0.5 text-[9px] font-medium leading-none text-sky-700 dark:border-sky-800 dark:bg-sky-950/40 dark:text-sky-300">
                       Directory

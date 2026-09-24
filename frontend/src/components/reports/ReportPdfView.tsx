@@ -8,6 +8,7 @@
  * images/fonts that could fail to inline — what you see is what lands in
  * the PDF. Mirrors the on-screen sections in ReportsPage.
  */
+import { format } from 'date-fns';
 import { moduleLabel } from '@/pages/ReportsPage';
 import type {
   ClinicReport,
@@ -140,10 +141,11 @@ export default function ReportPdfView({
   end: string;
   data: AnyReport | undefined;
 }) {
-  const generated = new Date().toLocaleString(undefined, {
-    dateStyle: 'medium',
-    timeStyle: 'short',
-  });
+  // Explicit 12-hour pattern rather than `toLocaleString({ timeStyle: 'short' })`:
+  // that follows the runtime locale, so a machine set to a 24-hour locale would
+  // stamp the report in military time. The clinic reads a 12-hour clock
+  // (2026-09-23), and a printed report should not vary by who exported it.
+  const generated = format(new Date(), 'MMM d, yyyy · h:mm a');
 
   return (
     <div style={{ width: 794, background: '#ffffff', color: INK, fontFamily: 'system-ui, -apple-system, "Segoe UI", sans-serif', padding: 32 }}>

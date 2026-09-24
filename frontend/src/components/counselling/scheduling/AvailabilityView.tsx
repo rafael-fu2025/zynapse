@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button';
 import { ConfirmDialog, type ConfirmAction } from '@/components/ConfirmDialog';
 import { Dialog } from '@/components/ui/dialog';
 import { TableStateBlock, TableStateRows } from '@/components/TableStates';
+import { fmtTimeRange } from '@/utils/date';
 import {
   Table,
   TableBody,
@@ -12,11 +13,13 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { useAvailability, useRemoveSlot } from '@/hooks/useSchedule';
+import { useAvailability, useCounsellors, useRemoveSlot } from '@/hooks/useSchedule';
 import { hasPermission, useAuthStore } from '@/store/auth';
-import { DAY_NAMES, type Availability } from '@/schemas/schedule';
+import { DAY_NAMES } from '@/schemas/schedule';
+import { StaffAvatarStack } from '@/components/StaffAvatarStack';
 import { AddSlotDialog } from '../dialogs';
 import { AvailabilityCalendar } from './AvailabilityCalendar';
+import { groupAvailability, staffNameLookup, type AvailabilitySlot } from './availabilitySlots';
 
 interface AvailabilityViewProps {
   view: string;
@@ -31,15 +34,33 @@ export function AvailabilityView({ view, onViewChange }: AvailabilityViewProps) 
   const [confirm, setConfirm] = useState<ConfirmAction | null>(null);
 
   const availability = useAvailability();
+  const counsellors = useCounsellors();
   const availabilityRows = availability.data ?? [];
   const removeSlot = useRemoveSlot();
 
-  function confirmRemove(w: Availability) {
+  // One row per *slot*, not per counsellor window: three people working the
+  // same hours are one entry with three avatars, which is how an admin reads a
+  // schedule. Capacity is pooled, matching what the portal books against.
+  const slots = groupAvailability(availabilityRows, staffNameLookup(counsellors.data));
+
+  function confirmRemove(slot: AvailabilitySlot) {
+    const names = slot.members.map((m) => m.name ?? `Staff #${m.id}`).join(', ');
+    const when = `${DAY_NAMES[slot.day_of_week]} ${fmtTimeRange(slot.start_time, slot.end_time)}`;
     setConfirm({
-      title: `Remove availability window on ${DAY_NAMES[w.day_of_week]}?`,
-      description: 'Existing bookings in this window are not automatically cancelled, but no new bookings can be made against it.',
+      title: `Remove availability on ${when}?`,
+      description:
+        slot.windowIds.length > 1
+          ? `This slot has ${slot.members.length} staff assigned (${names}) and removing it deletes ${slot.windowIds.length} windows — one per person. Existing bookings are not automatically cancelled, but no new bookings can be made against it.`
+          : `Assigned: ${names}. Existing bookings in this window are not automatically cancelled, but no new bookings can be made against it.`,
       confirmLabel: 'Remove window',
-      run: () => removeSlot.mutate(w.id),
+      run: () => {
+        // One request per window — the endpoint removes a single id.
+        void (async () => {
+          for (const id of slot.windowIds) {
+            await removeSlot.mutateAsync(id);
+          }
+        })();
+      },
     });
   }
 
@@ -82,13 +103,14 @@ export function AvailabilityView({ view, onViewChange }: AvailabilityViewProps) 
             <TableRow>
               <TableHead className="px-3">Day</TableHead>
               <TableHead className="px-3">Window</TableHead>
+              <TableHead className="px-3">Assigned</TableHead>
               <TableHead className="px-3">Capacity</TableHead>
               <TableHead className="px-3 text-right">Actions</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             <TableStateRows
-              colSpan={4}
+              colSpan={5}
               isLoading={availability.isLoading}
               isError={availability.isError}
               isEmpty={availabilityRows.length === 0}
@@ -101,28 +123,36 @@ export function AvailabilityView({ view, onViewChange }: AvailabilityViewProps) 
                 description: 'Add one to accept bookings.',
               }}
             />
-            {availability.data?.map((w) => (
-              <TableRow key={w.id}>
-                <TableCell className="px-3 text-xs font-medium">{DAY_NAMES[w.day_of_week]}</TableCell>
-                <TableCell className="px-3 font-mono text-xs">
-                  {w.start_time.slice(0, 5)}–{w.end_time.slice(0, 5)}
-                </TableCell>
-                <TableCell className="px-3 text-xs">{w.max_slots}</TableCell>
-                <TableCell className="px-3 text-right">
-                  {canMutate && (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      aria-label={`Remove window #${w.id}`}
-                      disabled={removeSlot.isPending}
-                      onClick={() => confirmRemove(w)}
-                    >
-                      <Trash2 className="size-3.5" /> Remove
-                    </Button>
-                  )}
-                </TableCell>
-              </TableRow>
-            ))}
+            {slots.map((slot) => {
+              const names = slot.members.map((m) => m.name ?? `Staff #${m.id}`).join(', ');
+              return (
+                <TableRow key={slot.key}>
+                  <TableCell className="px-3 text-xs font-medium">
+                    {DAY_NAMES[slot.day_of_week]}
+                  </TableCell>
+                  <TableCell className="px-3 text-xs">
+                    {fmtTimeRange(slot.start_time, slot.end_time)}
+                  </TableCell>
+                  <TableCell className="px-3">
+                    <StaffAvatarStack people={slot.members} size="sm" max={3} />
+                  </TableCell>
+                  <TableCell className="px-3 text-xs">{slot.max_slots}</TableCell>
+                  <TableCell className="px-3 text-right">
+                    {canMutate && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        aria-label={`Remove window ${fmtTimeRange(slot.start_time, slot.end_time)} on ${DAY_NAMES[slot.day_of_week]} — ${names}`}
+                        disabled={removeSlot.isPending}
+                        onClick={() => confirmRemove(slot)}
+                      >
+                        <Trash2 className="size-3.5" /> Remove
+                      </Button>
+                    )}
+                  </TableCell>
+                </TableRow>
+              );
+            })}
           </TableBody>
         </Table>
       )}
@@ -144,7 +174,7 @@ export function AvailabilityView({ view, onViewChange }: AvailabilityViewProps) 
           />
           {!availability.isLoading && !availability.isError && availabilityRows.length > 0 && (
             <AvailabilityCalendar
-              windows={availability.data ?? []}
+              slots={slots}
               onRemove={canMutate ? confirmRemove : () => undefined}
               removing={removeSlot.isPending}
             />

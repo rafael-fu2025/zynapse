@@ -76,6 +76,9 @@ $routes->group('api/v1/audit', ['namespace' => 'App\Controllers\Api\Audit', 'fil
 // ---------------------------------------------------------------------
 $routes->group('api/v1/admin', ['namespace' => 'App\Controllers\Api\Admin', 'filter' => 'api_auth'], static function (RouteCollection $r): void {
     $r->get('users',                       'UserController::index');
+    // Person-type facet options for the Users list filter. Sits with the
+    // other literal `users/...` segments, above the (:num) routes.
+    $r->get('users/facets',                'UserController::facets');
     $r->post('users',                      'UserController::create');
     $r->post('users/provision',            'UserController::provision');
     $r->post('users/sync-directory',       'UserController::syncDirectory');

@@ -497,11 +497,13 @@ final class ClinicService extends BaseService
                     );
                     // Same-transaction provider notification (within
                     // the NotificationOutboxService whitelist).
-                    $this->notify->enqueue(
-                        (int) $appt['provider_user_id'],
-                        'appointment.no_show',
-                        ['resource_code' => 'appointment#' . $apptId, 'next_status' => 'no_show'],
-                    );
+                    if ($appt['provider_user_id'] !== null) {
+                        $this->notify->enqueue(
+                            (int) $appt['provider_user_id'],
+                            'appointment.no_show',
+                            ['resource_code' => 'appointment#' . $apptId, 'next_status' => 'no_show'],
+                        );
+                    }
                 }
             }
 

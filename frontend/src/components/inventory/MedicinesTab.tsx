@@ -274,7 +274,7 @@ export function MedicinesTab() {
                   <TableCell className="px-3 text-xs">
                     {m.category === null ? '—' : highlightMatch(m.category, q)}
                   </TableCell>
-                  <TableCell className="px-3 font-mono text-xs">
+                  <TableCell className="px-3 tabular-nums text-xs">
                     {m.quantity_on_hand} {m.unit}
                   </TableCell>
                   <TableCell className="px-3 text-xs">
@@ -352,9 +352,9 @@ export function MedicinesTab() {
               <MobileCardField label="Category">
                 {m.category === null ? '—' : highlightMatch(m.category, q)}
               </MobileCardField>
-              <MobileCardField label="On hand"><span className="font-mono text-xs">{m.quantity_on_hand} {m.unit}</span></MobileCardField>
-              <MobileCardField label="Reorder threshold"><span className="font-mono text-xs">{m.reorder_threshold}</span></MobileCardField>
-              <MobileCardField label="Target stock"><span className="font-mono text-xs">{m.target_stock ?? 'Not configured'}</span></MobileCardField>
+              <MobileCardField label="On hand"><span className="tabular-nums text-xs">{m.quantity_on_hand} {m.unit}</span></MobileCardField>
+              <MobileCardField label="Reorder threshold"><span className="tabular-nums text-xs">{m.reorder_threshold}</span></MobileCardField>
+              <MobileCardField label="Target stock"><span className="tabular-nums text-xs">{m.target_stock ?? 'Not configured'}</span></MobileCardField>
               <MobileCardField label="Earliest expiry">
                 <span className="text-xs">
                   {m.earliest_expiry ?? '—'}

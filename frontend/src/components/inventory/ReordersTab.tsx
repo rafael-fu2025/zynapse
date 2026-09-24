@@ -217,7 +217,7 @@ export function ReordersTab() {
             />
             {rows.map((r, idx) => (
               <TableRow key={r.id} {...reorderRowNav.getRowProps(idx)}>
-                <TableCell className="px-3 font-mono text-xs">
+                <TableCell className="px-3 tabular-nums text-xs">
                   {r.id}
                   {r.auto_triggered && <Badge variant="outline" className="ml-1.5">Auto</Badge>}
                 </TableCell>
@@ -227,8 +227,8 @@ export function ReordersTab() {
                     : highlightMatch(r.item_name, debouncedQ)}
                   {r.item_type === 'supply' && <Badge variant="outline" className="ml-1.5">Supply</Badge>}
                 </TableCell>
-                <TableCell className="px-3 font-mono text-xs">{r.requested_quantity} {r.unit ?? ''}</TableCell>
-                <TableCell className="px-3 font-mono text-xs text-muted-foreground">
+                <TableCell className="px-3 tabular-nums text-xs">{r.requested_quantity} {r.unit ?? ''}</TableCell>
+                <TableCell className="px-3 tabular-nums text-xs text-muted-foreground">
                   {r.reorder_level}
                 </TableCell>
                 <TableCell className="px-3">
@@ -292,8 +292,8 @@ export function ReordersTab() {
               {r.item_type === 'supply' && <Badge variant="outline">Supply</Badge>}
               <Badge variant={URGENCY_VARIANT[r.urgency]}>{titleCase(r.urgency)}</Badge>
             </div>
-            <MobileCardField label="Qty to buy"><span className="font-mono text-xs">{r.requested_quantity} {r.unit ?? ''}</span></MobileCardField>
-            <MobileCardField label="Threshold"><span className="font-mono text-xs text-muted-foreground">{r.reorder_level}</span></MobileCardField>
+            <MobileCardField label="Qty to buy"><span className="tabular-nums text-xs">{r.requested_quantity} {r.unit ?? ''}</span></MobileCardField>
+            <MobileCardField label="Threshold"><span className="tabular-nums text-xs text-muted-foreground">{r.reorder_level}</span></MobileCardField>
             <MobileCardField label="Dates">
               <span className="text-xs text-muted-foreground">
                 {r.order_date !== null && <>bought {r.order_date}<br /></>}

@@ -14,6 +14,7 @@ import {
   employeeFacetsSchema,
   employeeSchema,
   portalAccountSchema,
+  studentFacetsSchema,
   studentSchema,
   updateEmployeeSchema,
   updateStudentSchema,
@@ -24,6 +25,7 @@ import {
   type Employee,
   type PortalAccount,
   type Student,
+  type StudentFacets,
   type UpdateEmployeeInput,
   type UpdateStudentInput,
 } from '@/schemas/patients';
@@ -97,14 +99,92 @@ export function employeeSearchParams(input: {
   return params;
 }
 
-export function useStudents(cursor: string | null, limit = 25, includeArchived = false) {
+/**
+ * Query string for the student list.
+ *
+ * Mirrors `employeeListParams`: the `'all'` sentinel must never reach the
+ * wire (the backend treats blank as "no filter", but the literal string
+ * `all` would filter on a department actually named "all"), and the first
+ * page omits `cursor` rather than sending an empty one.
+ *
+ * `year_level` travels as its numeric string; the backend binds it as an
+ * integer, so there is no string comparison against a TINYINT column.
+ */
+export function studentListParams(input: {
+  cursor: string | null;
+  limit: number;
+  includeArchived: boolean;
+  department?: string;
+  course?: string;
+  yearLevel?: string;
+}): URLSearchParams {
+  const params = new URLSearchParams();
+
+  if (input.cursor !== null && input.cursor !== '') params.set('cursor', input.cursor);
+  params.set('limit', String(input.limit));
+  if (input.includeArchived) params.set('include_archived', '1');
+
+  if (input.department !== undefined && input.department !== FACET_ALL) {
+    params.set('department', input.department);
+  }
+  if (input.course !== undefined && input.course !== FACET_ALL) {
+    params.set('course', input.course);
+  }
+  if (input.yearLevel !== undefined && input.yearLevel !== FACET_ALL) {
+    params.set('year_level', input.yearLevel);
+  }
+
+  return params;
+}
+
+/**
+ * Query string for the student search. The active facets ride along so a
+ * filter is not silently dropped while the user types — the same defect
+ * that made the employee teaching filter look broken.
+ */
+export function studentSearchParams(input: {
+  q: string;
+  department?: string;
+  course?: string;
+  yearLevel?: string;
+}): URLSearchParams {
+  const params = new URLSearchParams({ q: input.q });
+
+  if (input.department !== undefined && input.department !== FACET_ALL) {
+    params.set('department', input.department);
+  }
+  if (input.course !== undefined && input.course !== FACET_ALL) {
+    params.set('course', input.course);
+  }
+  if (input.yearLevel !== undefined && input.yearLevel !== FACET_ALL) {
+    params.set('year_level', input.yearLevel);
+  }
+
+  return params;
+}
+
+export function useStudents(
+  cursor: string | null,
+  limit = 25,
+  includeArchived = false,
+  department = FACET_ALL,
+  course = FACET_ALL,
+  yearLevel = FACET_ALL,
+) {
   return useQuery<StudentPage, ApiEnvelopeError>({
-    queryKey: ['patients', 'students', { cursor, limit, includeArchived }],
+    queryKey: [
+      'patients', 'students',
+      { cursor, limit, includeArchived, department, course, yearLevel },
+    ],
     queryFn: async () => {
-      const params = new URLSearchParams();
-      if (cursor !== null) params.set('cursor', cursor);
-      params.set('limit', String(limit));
-      if (includeArchived) params.set('include_archived', '1');
+      const params = studentListParams({
+        cursor,
+        limit,
+        includeArchived,
+        department,
+        course,
+        yearLevel,
+      });
       const res = await apiClient.get<unknown[]>(
         `/clinic/students?${params.toString()}`,
       );
@@ -119,10 +199,18 @@ export function useStudents(cursor: string | null, limit = 25, includeArchived =
 
 export function useStudentSearch(
   q: string,
-  opts: { enabled?: boolean } = {},
+  opts: {
+    enabled?: boolean;
+    department?: string;
+    course?: string;
+    yearLevel?: string;
+  } = {},
 ) {
+  const department = opts.department ?? FACET_ALL;
+  const course = opts.course ?? FACET_ALL;
+  const yearLevel = opts.yearLevel ?? FACET_ALL;
   return useQuery<Student[], ApiEnvelopeError>({
-    queryKey: ['patients', 'students', 'search', q],
+    queryKey: ['patients', 'students', 'search', q, { department, course, yearLevel }],
     // `enabled` must include the CALLER's permission gate, not just the
     // query length — surfaces like the command palette render the search
     // only for `clinic.patients.read` holders, and without this gate
@@ -130,11 +218,32 @@ export function useStudentSearch(
     // (2026-09 audit).
     enabled: (opts.enabled ?? true) && q.trim().length >= 2,
     queryFn: async () => {
+      const params = studentSearchParams({ q: q.trim(), department, course, yearLevel });
       const res = await apiClient.get<unknown[]>(
-        `/clinic/students/search?q=${encodeURIComponent(q.trim())}`,
+        `/clinic/students/search?${params.toString()}`,
       );
       return z.array(studentSchema).parse(res.data);
     },
+  });
+}
+
+/**
+ * Facet options for the Students tab filters — distinct MIS-supplied
+ * department / course / year level values present in the live registry.
+ *
+ * Unlike `useEmployeeFacets`' source, these come from our own synced rows
+ * rather than a MIS lookup call, so the selects still populate when the
+ * campus network (and therefore the MIS API) is unreachable.
+ */
+export function useStudentFacets() {
+  return useQuery<StudentFacets, ApiEnvelopeError>({
+    queryKey: ['patients', 'students', 'facets'],
+    queryFn: async () => {
+      const res = await apiClient.get<unknown>('/clinic/students/facets');
+      return studentFacetsSchema.parse(res.data);
+    },
+    // Facets change only when the registry is re-synced.
+    staleTime: 5 * 60 * 1000,
   });
 }
 

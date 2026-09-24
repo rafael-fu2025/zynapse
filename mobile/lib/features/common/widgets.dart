@@ -6,6 +6,29 @@ import '../../core/models/session.dart';
 
 /// Shared building blocks used across feature screens.
 
+/// [showTimePicker], pinned to a **12-hour** dial.
+///
+/// The stock picker follows the device's `alwaysUse24HourFormat`, so the same
+/// build shows a 24-hour dial on a handset configured that way while the rest
+/// of the system says `9:00 AM`. The clinic reads a 12-hour clock
+/// (2026-09-23), so the display must not vary by device.
+///
+/// Pair this with [fmtClockParts] for the button label — `TimeOfDay.format`
+/// honours the device setting too.
+Future<TimeOfDay?> showTwelveHourTimePicker({
+  required BuildContext context,
+  required TimeOfDay initialTime,
+}) {
+  return showTimePicker(
+    context: context,
+    initialTime: initialTime,
+    builder: (ctx, child) => MediaQuery(
+      data: MediaQuery.of(ctx).copyWith(alwaysUse24HourFormat: false),
+      child: child!,
+    ),
+  );
+}
+
 /// Avatar placeholder crest — the mobile-only FU / FUHS brand split.
 ///
 /// Clinic & counselling staff roles (clinic_staff, counsellor,

@@ -30,17 +30,26 @@ export function useStaffSchedules(includeArchived = false) {
   });
 }
 
+/**
+ * Create one shift per selected weekday, in a single request. The backend
+ * inserts the whole set atomically, so the toast reports how many shifts
+ * landed rather than claiming one.
+ */
 export function useCreateStaffSchedule() {
   const qc = useQueryClient();
-  return useMutation<StaffSchedule, ApiEnvelopeError, CreateStaffScheduleInput>({
+  return useMutation<{ schedule: StaffSchedule; created: number }, ApiEnvelopeError, CreateStaffScheduleInput>({
     mutationFn: async (input) => {
       const valid = createStaffScheduleSchema.parse(input);
       const res = await apiClient.post<unknown>('/clinic/staff-schedules', valid);
-      return staffScheduleSchema.parse(res.data);
+      const created =
+        z.object({ created: z.number().int().positive().optional() }).parse(res.data).created ?? 1;
+      return { schedule: staffScheduleSchema.parse(res.data), created };
     },
-    onSuccess: () => {
+    onSuccess: (result) => {
       void qc.invalidateQueries({ queryKey: KEY });
-      toast.success('Staff schedule added.');
+      toast.success(
+        result.created === 1 ? 'Staff schedule added.' : `${result.created} staff schedules added.`,
+      );
     },
     onError: (err) => {
       toast.error(err.errors[0]?.message ?? 'Failed to add schedule.');

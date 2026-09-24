@@ -24,7 +24,13 @@ final class GuidanceSessionWorkflowContractTest extends TestCase
         $queue = $this->read('app/Modules/Counselling/Services/QueueService.php');
         $this->assertStringContainsString('completeLinkedSession($sessionId)', $controller);
         $this->assertStringContainsString("'status' => 'done'", $queue);
-        $this->assertStringContainsString("->where('status', 'confirmed')->update", $queue);
+        // The linked appointment is promoted to `completed` from BOTH live
+        // statuses. Pinning only `confirmed` (2026-09-23) left an appointment
+        // that was never explicitly confirmed stuck at `scheduled` for ever,
+        // so it kept resurfacing on the Guidance day board as a live row for a
+        // patient who had already been seen. `ScheduleService::transition(
+        // 'complete')` has always accepted both — this is the odd one out.
+        $this->assertStringContainsString("->whereIn('status', ['scheduled', 'confirmed'])->update", $queue);
         $this->assertStringContainsString("(string) \$queue['status'] === 'done'", $queue);
     }
 

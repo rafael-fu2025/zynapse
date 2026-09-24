@@ -20,6 +20,7 @@ import { useRecomputeAnalytics, useSchedulingAnalytics } from '@/hooks/useSchedu
 import { useUrlFilter } from '@/hooks/useUrlFilter';
 import { hasPermission, useAuthStore } from '@/store/auth';
 import { DAY_NAMES, type SlotAnalytics } from '@/schemas/schedule';
+import { fmtClock } from '@/utils/date';
 
 type SortKey = 'total_appointments' | 'total_no_shows' | 'no_show_rate' | 'recommended_overbooking';
 
@@ -134,9 +135,9 @@ export function AnalyticsTab() {
             />
             {sorted.map((s: SlotAnalytics) => (
               <TableRow key={s.id}>
-                <TableCell className="px-3 font-mono text-xs">#{s.counsellor_user_id}</TableCell>
+                <TableCell className="px-3 tabular-nums text-xs">#{s.counsellor_user_id}</TableCell>
                 <TableCell className="px-3 text-xs">{DAY_NAMES[s.day_of_week]}</TableCell>
-                <TableCell className="px-3 font-mono text-xs">{s.time_slot.slice(0, 5)}</TableCell>
+                <TableCell className="px-3 tabular-nums text-xs">{fmtClock(s.time_slot)}</TableCell>
                 <TableCell className="px-3 text-xs">{s.total_appointments}</TableCell>
                 <TableCell className="px-3 text-xs">{s.total_no_shows}</TableCell>
                 <TableCell className="px-3">

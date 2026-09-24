@@ -26,8 +26,19 @@ use Modules\Counselling\DTOs\SessionDto;
  */
 final class QueueService extends BaseService
 {
+    /**
+     * `start` accepts `waiting` as well as `called` (2026-09-23).
+     *
+     * The Guidance console no longer surfaces **Call next** — the desk reads
+     * its day from the appointment board and serves the patient whose slot is
+     * now, not the FIFO head. Without this widening every kiosk walk-in would
+     * sit at `waiting` with no reachable transition, since `callNext()` was
+     * the only writer of `called`. `callNext()` itself is unchanged and still
+     * available (the public board's FIFO contract depends on it); `called`
+     * stays valid so the existing flow is untouched.
+     */
     private const TRANSITIONS = [
-        'start' => ['called'],
+        'start' => ['waiting', 'called'],
         'skip' => ['waiting', 'called'],
         'complete' => ['in_session'],
     ];
@@ -89,7 +100,7 @@ final class QueueService extends BaseService
                         (string) $row['patient_school_id'],
                         (int) $row['id'], null, null,
                         (string) ($row['reason'] ?: 'Scheduled Guidance appointment'),
-                        (int) $row['counsellor_user_id'],
+                        $row['counsellor_user_id'] !== null ? (int) $row['counsellor_user_id'] : null,
                     );
                     return 1;
                 });
@@ -520,7 +531,13 @@ final class QueueService extends BaseService
         }
         if ($queue['counselling_appointment_id'] !== null) {
             $appointmentId = (int) $queue['counselling_appointment_id'];
-            $this->db->table('counselling_appointments')->where('counselling_appointments.tenant_id', CurrentTenant::id())->where('id', $appointmentId)->where('status', 'confirmed')->update([
+            // `scheduled` as well as `confirmed` (2026-09-23). Completing a
+            // linked session used to only promote a *confirmed* appointment,
+            // so one that was never explicitly confirmed stayed `scheduled`
+            // for ever — it kept resurfacing on the day board as a live row
+            // for a patient who had already been seen. `transition('complete')`
+            // has always accepted both, so this was the odd one out.
+            $this->db->table('counselling_appointments')->where('counselling_appointments.tenant_id', CurrentTenant::id())->where('id', $appointmentId)->whereIn('status', ['scheduled', 'confirmed'])->update([
                 'status' => 'completed',
                 'updated_at' => $now,
             ]);

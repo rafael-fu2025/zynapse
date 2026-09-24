@@ -51,6 +51,7 @@ final class UserAdminService extends BaseService
         string $status = 'all',
         string $group = 'all',
         string $sort = 'newest',
+        string $kind = 'all',
     ): array {
         $builder = $this->db->table('users u')
             ->select("u.id, u.username, u.status, u.active, u.created_at, u.updated_at, u.last_active, i.secret AS email, COALESCE(i.force_reset, 0) AS force_reset, u.kind AS person_kind, u.first_name AS person_first_name, u.last_name AS person_last_name", false)
@@ -77,6 +78,12 @@ final class UserAdminService extends BaseService
                 ->join('auth_groups_users filter_gu', 'filter_gu.user_id = u.id')
                 ->join('auth_groups filter_g', 'filter_g.id = filter_gu.group_id')
                 ->where('filter_g.name', $group);
+        }
+        if ($kind !== 'all') {
+            // Person-type facet. `unlinked` is the NULL bucket — platform
+            // accounts (the seeded superadmin among them) that carry no person
+            // record, so the user list cannot classify them by kind.
+            $builder->where('u.kind', $kind === 'unlinked' ? null : $kind);
         }
 
         $direction = $sort === 'oldest' ? 'ASC' : 'DESC';
@@ -129,7 +136,10 @@ final class UserAdminService extends BaseService
                     }
                 }
                 $syntheticId = -1;
-                if ($group === 'all' || $group === 'student') {
+                // The person-type facet must hold for upstream-only rows too,
+                // otherwise a Student filter would still surface unprovisioned
+                // employees found through the same search.
+                if (($group === 'all' || $group === 'student') && ($kind === 'all' || $kind === 'student')) {
                     $misStudents = $fuMis->searchStudents($search, 10);
                     foreach ($misStudents as $ms) {
                         $uname = 'stu-' . ($ms['identifier'] ?? '');
@@ -156,7 +166,7 @@ final class UserAdminService extends BaseService
                         ];
                     }
                 }
-                if ($group === 'all' || $group === 'employee') {
+                if (($group === 'all' || $group === 'employee') && ($kind === 'all' || $kind === 'employee')) {
                     $misEmployees = $fuMis->searchEmployees($search, 10);
                     foreach ($misEmployees as $me) {
                         $uname = 'emp-' . ($me['identifier'] ?? '');
@@ -193,6 +203,49 @@ final class UserAdminService extends BaseService
             'next'  => $final['nextCursor'],
             'count' => count($data),
         ];
+    }
+
+    /**
+     * Person-type facet options — the distinct `users.kind` values present in
+     * the active tenant, plus `unlinked` when any platform account carries no
+     * person record.
+     *
+     * Derived from the rows rather than the closed enum
+     * (`student|employee|contractor|alumni`) so every option is guaranteed to
+     * match at least one user: `contractor` and `alumni` are valid values that
+     * are currently empty, and offering them would return nothing. `unlinked`
+     * represents `kind IS NULL` and is not expressible as an enum member.
+     *
+     * @return array{kinds: list<string>}
+     */
+    public function kindFacets(): array
+    {
+        $rows = $this->db->table('users')
+            ->select('kind')
+            ->where('tenant_id', CurrentTenant::id())
+            ->where('deleted_at', null)
+            ->groupBy('kind')
+            ->get()
+            ->getResultArray();
+
+        $kinds       = [];
+        $hasUnlinked = false;
+
+        foreach ($rows as $row) {
+            if ($row['kind'] === null) {
+                $hasUnlinked = true;
+                continue;
+            }
+            $kinds[] = (string) $row['kind'];
+        }
+
+        sort($kinds);
+
+        if ($hasUnlinked) {
+            $kinds[] = 'unlinked';
+        }
+
+        return ['kinds' => $kinds];
     }
 
     public function get(int $userId): array

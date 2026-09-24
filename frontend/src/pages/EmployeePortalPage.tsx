@@ -108,7 +108,7 @@ export default function EmployeePortalPage() {
                     {profile.data.first_name} {profile.data.middle_name !== null ? `${profile.data.middle_name} ` : ''}
                     {profile.data.last_name}
                   </p>
-                  <p className="mt-0.5 font-mono text-xs text-white/70 dark:text-muted-foreground">
+                  <p className="mt-0.5 tabular-nums text-xs text-white/70 dark:text-muted-foreground">
                     ID: {profile.data.employee_number}
                   </p>
                 </div>
@@ -269,7 +269,7 @@ export default function EmployeePortalPage() {
                 {profile.data.emergency_contact_phone !== null && (
                   <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
                     <Phone className="size-3" aria-hidden />
-                    <span className="font-mono">{profile.data.emergency_contact_phone}</span>
+                    <span className="tabular-nums">{profile.data.emergency_contact_phone}</span>
                   </p>
                 )}
               </CardContent>
@@ -303,7 +303,7 @@ export default function EmployeePortalPage() {
                         <div className="flex-1">
                           <p className="font-medium">{notificationLabel(n.template_code, n.context)}</p>
                           {notificationDetail(n.template_code, n.context) !== null && (
-                            <p className="font-mono text-[10px] text-muted-foreground">
+                            <p className="tabular-nums text-[10px] text-muted-foreground">
                               {notificationDetail(n.template_code, n.context)}
                             </p>
                           )}

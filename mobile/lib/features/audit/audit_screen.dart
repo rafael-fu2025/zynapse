@@ -851,7 +851,6 @@ class _AuditTile extends StatelessWidget {
                             style: const TextStyle(
                               fontSize: 12,
                               color: Colors.black54,
-                              fontFamily: 'monospace',
                             ),
                             overflow: TextOverflow.ellipsis,
                           ),
@@ -1010,7 +1009,6 @@ class _EventDetailSheetState extends State<_EventDetailSheet> {
               '${event.prevId ?? 'genesis'}',
               style: const TextStyle(
                 fontSize: 13,
-                fontFamily: 'monospace',
               ),
             ),
           ),
@@ -1068,7 +1066,6 @@ class _EventDetailSheetState extends State<_EventDetailSheet> {
               style: TextStyle(
                 fontSize: 11,
                 height: 1.5,
-                fontFamily: 'monospace',
                 color: scheme.onSurface,
               ),
             ),
@@ -1129,7 +1126,6 @@ class _CopyableCode extends StatelessWidget {
             value!,
             style: const TextStyle(
               fontSize: 12,
-              fontFamily: 'monospace',
             ),
           ),
         ),

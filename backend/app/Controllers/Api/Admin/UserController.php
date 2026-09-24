@@ -32,6 +32,7 @@ final class UserController extends ApiController
         $status = trim((string) ($this->request->getGet('status') ?? 'all'));
         $group = trim((string) ($this->request->getGet('group') ?? 'all'));
         $sort = trim((string) ($this->request->getGet('sort') ?? 'newest'));
+        $kind = trim((string) ($this->request->getGet('kind') ?? 'all'));
 
         $errors = [];
         if ($limit === false || $limit < 1 || $limit > 100) {
@@ -52,6 +53,10 @@ final class UserController extends ApiController
         if (! in_array($sort, ['newest', 'oldest'], true)) {
             $errors[] = ['code' => 'validation.field', 'message' => 'sort must be newest or oldest.', 'field' => 'sort'];
         }
+        // `unlinked` is the NULL-kind bucket, not an enum member.
+        if (! in_array($kind, ['all', 'student', 'employee', 'contractor', 'alumni', 'unlinked'], true)) {
+            $errors[] = ['code' => 'validation.field', 'message' => 'kind must be all, student, employee, contractor, alumni, or unlinked.', 'field' => 'kind'];
+        }
         if ($errors !== []) {
             throw ApiException::validationFailure($errors);
         }
@@ -63,6 +68,7 @@ final class UserController extends ApiController
             $status,
             $group,
             $sort,
+            $kind,
         );
 
         return $this->ok(
@@ -71,6 +77,18 @@ final class UserController extends ApiController
                 'result_count' => $page['count'],
             ],
         );
+    }
+
+    /**
+     * Person-type facet options for the Users list filter — the distinct
+     * `users.kind` values present in the tenant, plus `unlinked` when any
+     * platform account carries no person record.
+     */
+    public function facets(): ResponseInterface
+    {
+        $this->authorize('rbac.read');
+
+        return $this->ok($this->service->kindFacets());
     }
 
     public function create(): ResponseInterface

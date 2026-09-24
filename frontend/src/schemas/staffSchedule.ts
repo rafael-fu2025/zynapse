@@ -29,7 +29,14 @@ export const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 const baseScheduleInput = {
   user_id: z.coerce.number().int().positive('User ID is required.'),
-  day_of_week: z.coerce.number().int().min(0, 'Pick a weekday.').max(6, 'Pick a weekday.'),
+  /**
+   * A **set** of weekdays — the roster dialog ticks every day the shift
+   * applies to and the backend inserts the whole set in one transaction
+   * (2026-09-23). A single day is just a one-element set.
+   */
+  days_of_week: z
+    .array(z.coerce.number().int().min(0, 'Pick a weekday.').max(6, 'Pick a weekday.'))
+    .min(1, 'Pick at least one weekday.'),
   shift_start: z.string().regex(TIME_RE, 'Use HH:MM.'),
   shift_end: z.string().regex(TIME_RE, 'Use HH:MM.'),
   schedule_type: z.enum(SCHEDULE_TYPES),

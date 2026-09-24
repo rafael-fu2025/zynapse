@@ -2,12 +2,21 @@
  * FollowupsTab — the RA 11036 §24 aftercare caseload (Phase C).
  * Open items lead; the loop is closed: addressed/closed require an
  * outcome note. Gated by `counselling.responses.read_any`.
+ *
+ * 2026-09-23: a **Follow-up appointments** section now sits above the
+ * caseload. The aftercare loop is only half the picture — the other half is
+ * the follow-up slots themselves, and they arrive from two places: the
+ * patient books one through the portal, or the desk books one for them. The
+ * section reads `type=follow_up` with no source filter, so both appear, and
+ * the "Booked by" column says which. The scope selector narrows the window
+ * (Upcoming / Today / Archived / All) and lives in the URL like every other
+ * filter in the app.
  */
-import { Inbox, UserCheck } from 'lucide-react';
+import { CalendarClock, Inbox, UserCheck } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { TableStateBlock } from '@/components/TableStates';
+import { TableStateBlock, TableStateRows } from '@/components/TableStates';
 import { Label } from '@/components/ui/label';
 import { PageToolbar } from '@/components/PageHeader';
 import {
@@ -32,7 +41,110 @@ import {
   useTransitionFollowup,
   type GuidanceFollowup,
 } from '@/hooks/useGuidanceFollowups';
-import { fmtUtcToApp } from '@/utils/date';
+import { useAppointments } from '@/hooks/useSchedule';
+import { useUrlFilter } from '@/hooks/useUrlFilter';
+import { titleCase } from '@/lib/utils';
+import { SOURCE_LABEL, type AppointmentScope } from '@/schemas/schedule';
+import { fmtTimeRange, fmtUtcToApp } from '@/utils/date';
+import { STATUS_VARIANT } from '../constants';
+
+const SCOPE_OPTIONS: ReadonlyArray<{ value: AppointmentScope; label: string }> = [
+  { value: 'upcoming', label: 'Upcoming' },
+  { value: 'today', label: 'Today' },
+  { value: 'archived', label: 'Archived' },
+  { value: 'all', label: 'All' },
+];
+
+/**
+ * Follow-up slots, from both booking origins. A compact table rather than a
+ * board — this is a supporting list, the caseload below is the worklist.
+ */
+function FollowUpAppointments() {
+  const [scope, setScope] = useUrlFilter('followup_scope', { default: 'upcoming' });
+  const appointments = useAppointments({ type: 'follow_up', scope: scope as AppointmentScope });
+  const rows = appointments.data?.data ?? [];
+
+  return (
+    <section
+      aria-labelledby="followup-appointments-heading"
+      className="overflow-hidden rounded-xl border bg-card"
+    >
+      <header className="flex flex-wrap items-center justify-between gap-2 border-b px-3 py-2">
+        <div className="flex items-center gap-2">
+          <CalendarClock className="size-4 text-muted-foreground" aria-hidden />
+          <div>
+            <h2 id="followup-appointments-heading" className="text-sm font-semibold text-foreground">
+              Follow-up appointments
+            </h2>
+            <p className="text-xs text-muted-foreground">
+              Every follow-up slot, whether the student booked it or the desk did.
+            </p>
+          </div>
+        </div>
+        <Select value={scope} onValueChange={setScope}>
+          <SelectTrigger aria-label="Follow-up appointment window" className="h-8 w-36">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {SCOPE_OPTIONS.map((option) => (
+              <SelectItem key={option.value} value={option.value}>
+                {option.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </header>
+
+      <Table ariaLabel="Follow-up appointments">
+        <TableHeader className="bg-muted/50">
+          <TableRow>
+            <TableHead className="px-3">When</TableHead>
+            <TableHead className="px-3">Patient</TableHead>
+            <TableHead className="px-3">Booked by</TableHead>
+            <TableHead className="px-3">Status</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          <TableStateRows
+            colSpan={4}
+            isLoading={appointments.isLoading}
+            isError={appointments.isError}
+            isEmpty={rows.length === 0}
+            onRetry={() => void appointments.refetch()}
+            pending={appointments.isFetching}
+            errorMessage="Failed to load follow-up appointments."
+            loadingLabel="Loading follow-up appointments"
+            empty={{
+              title: 'No follow-up appointments in this window.',
+              description: 'Follow-up slots booked by students or by the counselling team appear here.',
+            }}
+          />
+          {rows.map((a) => (
+            <TableRow key={a.id}>
+              <TableCell className="px-3 tabular-nums text-xs text-muted-foreground">
+                {a.appointment_date} {fmtTimeRange(a.start_time, a.end_time)}
+              </TableCell>
+              <TableCell className="px-3">
+                <p className="text-xs font-medium text-foreground">
+                  {a.patient_display_name ?? a.patient_school_id}
+                </p>
+                <p className="tabular-nums text-xs text-muted-foreground">{a.patient_school_id}</p>
+              </TableCell>
+              <TableCell className="px-3 text-xs">
+                <Badge variant={a.source === 'patient' ? 'info' : 'secondary'}>
+                  {SOURCE_LABEL[a.source]}
+                </Badge>
+              </TableCell>
+              <TableCell className="px-3">
+                <Badge variant={STATUS_VARIANT[a.status]}>{titleCase(a.status)}</Badge>
+              </TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+    </section>
+  );
+}
 
 const STATUS_VARIANTS: Record<string, 'destructive' | 'info' | 'success' | 'secondary'> = {
   new: 'destructive',
@@ -149,6 +261,8 @@ export function FollowupsTab() {
           </p>
         </div>
       </PageToolbar>
+
+      <FollowUpAppointments />
 
       <TableStateBlock
         isLoading={followups.isLoading}

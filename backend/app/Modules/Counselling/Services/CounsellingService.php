@@ -28,9 +28,25 @@ final class CounsellingService extends BaseService
     }
 
     /**
+     * List sessions, optionally narrowed to the sessions of one appointment.
+     *
+     * The appointment filter exists because the Sessions & Notes tab was
+     * retired (2026-09-23): session notes are now reached by expanding the
+     * patient's booking, and that expansion has to resolve a booking to its
+     * session. A session reaches its appointment through
+     * `counselling_queue_entries.counselling_appointment_id`, which is a
+     * many-to-one hop — so this is a **filter, not a lookup**, and the caller
+     * takes the newest row. A re-opened slot can legitimately own more than
+     * one session.
+     *
+     * The link is resolved as a separate id query rather than a join: the
+     * keyset paginator orders on bare `created_at` / `id`, and joining a
+     * second table that carries both columns would make every clause
+     * ambiguous.
+     *
      * @return array{data: array<int, array<string, mixed>>, next: ?string, count: int}
      */
-    public function listSessions(?string $cursor, int $limit): array
+    public function listSessions(?string $cursor, int $limit, ?int $appointmentId = null): array
     {
         $this->policy->check('list');
 
@@ -40,6 +56,24 @@ final class CounsellingService extends BaseService
             ->where('archived_at', null)
             ->orderBy('created_at', 'DESC')
             ->orderBy('id', 'DESC');
+
+        if ($appointmentId !== null) {
+            $sessionIds = array_map(
+                static fn (array $r): int => (int) $r['counselling_session_id'],
+                $this->db->table('counselling_queue_entries')
+                    ->select('counselling_session_id')
+                    ->where('tenant_id', CurrentTenant::id())
+                    ->where('counselling_appointment_id', $appointmentId)
+                    ->where('counselling_session_id IS NOT NULL', null, false)
+                    ->get()->getResultArray(),
+            );
+
+            if ($sessionIds === []) {
+                return ['data' => [], 'next' => null, 'count' => 0];
+            }
+
+            $builder->whereIn('counselling_sessions.id', $sessionIds);
+        }
 
         KeysetPaginator::apply($builder, $cursor, $limit);
 

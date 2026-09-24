@@ -62,7 +62,21 @@ final class CounsellingController extends ApiController
         $cursor = (string) ($this->request->getGet('cursor') ?? '');
         $limit  = (int)    ($this->request->getGet('limit')  ?? 25);
 
-        $page = $this->service->listSessions($cursor !== '' ? $cursor : null, $limit);
+        // `appointment_id` narrows the list to the sessions of one booking.
+        // The Appointments table expands a row into that booking's session
+        // and notes, and this is how it resolves the id (2026-09-23).
+        $rawAppointment = $this->request->getGet('appointment_id');
+        $appointmentId  = null;
+        if ($rawAppointment !== null && $rawAppointment !== '') {
+            if (! is_numeric($rawAppointment) || (int) $rawAppointment < 1) {
+                throw ApiException::validationFailure([
+                    ['code' => 'validation.field', 'message' => 'appointment_id must be a positive integer.', 'field' => 'appointment_id'],
+                ]);
+            }
+            $appointmentId = (int) $rawAppointment;
+        }
+
+        $page = $this->service->listSessions($cursor !== '' ? $cursor : null, $limit, $appointmentId);
         return $this->ok(
             $page['data'],
             \App\Http\ApiResponse::paginationMeta($page['count'], $page['next'], null),

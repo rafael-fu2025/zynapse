@@ -25,11 +25,23 @@ import { useAvailability, useBookAppointment, useCounsellors } from '@/hooks/use
 import {
   APPOINTMENT_TYPES,
   bookAppointmentSchema,
+  type Appointment,
   type BookAppointmentInput,
 } from '@/schemas/schedule';
 import { TYPE_LABEL } from '../constants';
 
-export function BookAppointmentDialog({ onClose }: { onClose: () => void }) {
+interface BookAppointmentDialogProps {
+  onClose: () => void;
+  /**
+   * Hands the created appointment back to the caller. The Appointments table
+   * pins it to the top of the list so the booking the user just made is the
+   * first thing they see (2026-09-23) — the book is date-ascending, so a new
+   * booking otherwise lands at the bottom, out of view.
+   */
+  onBooked?: (appointment: Appointment) => void;
+}
+
+export function BookAppointmentDialog({ onClose, onBooked }: BookAppointmentDialogProps) {
   const book = useBookAppointment();
   const availability = useAvailability();
   const counsellors = useCounsellors();
@@ -48,8 +60,9 @@ export function BookAppointmentDialog({ onClose }: { onClose: () => void }) {
 
   const onSubmit = handleSubmit((values) => {
     book.mutate(values, {
-      onSuccess: () => {
+      onSuccess: (appointment) => {
         reset();
+        onBooked?.(appointment);
         onClose();
       },
     });

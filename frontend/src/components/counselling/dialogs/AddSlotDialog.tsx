@@ -18,9 +18,10 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { TimePicker } from '@/components/ui/time-picker';
+import { WeekdayCheckboxes } from '@/components/WeekdayCheckboxes';
 import { useAddSlot, useCounsellors } from '@/hooks/useSchedule';
 import { hasPermission, useAuthStore } from '@/store/auth';
-import { addSlotSchema, DAY_NAMES, type AddSlotInput } from '@/schemas/schedule';
+import { addSlotSchema, type AddSlotInput } from '@/schemas/schedule';
 
 export function AddSlotDialog({ onClose }: { onClose: () => void }) {
   const add = useAddSlot();
@@ -30,10 +31,10 @@ export function AddSlotDialog({ onClose }: { onClose: () => void }) {
   const { register, handleSubmit, formState: { errors }, reset, setValue, watch } =
     useForm<AddSlotInput>({
       resolver: zodResolver(addSlotSchema),
-      defaultValues: { day_of_week: 1, max_slots: 1 },
+      // Monday pre-ticked: the common case is a weekday window, and an empty
+      // set would make the first submit fail validation for no reason.
+      defaultValues: { days_of_week: [1], max_slots: 1 },
     });
-
-  const dow = watch('day_of_week');
 
   const onSubmit = handleSubmit((values) => {
     add.mutate(values, {
@@ -67,18 +68,20 @@ export function AddSlotDialog({ onClose }: { onClose: () => void }) {
           </div>
         )}
         <div className="space-y-1.5">
-          <Label id="slot-dow-label">Day of week</Label>
-          <Select
-            value={String(dow)}
-            onValueChange={(v) => setValue('day_of_week', Number(v), { shouldValidate: true })}
-          >
-            <SelectTrigger aria-labelledby="slot-dow-label"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              {DAY_NAMES.map((name, i) => (
-                <SelectItem key={name} value={String(i)}>{name}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <Label id="slot-dow-label">Days of the week</Label>
+          <WeekdayCheckboxes
+            idPrefix="slot"
+            value={watch('days_of_week') ?? []}
+            disabled={add.isPending}
+            invalid={errors.days_of_week !== undefined}
+            onChange={(next) => setValue('days_of_week', next, { shouldValidate: true, shouldDirty: true })}
+          />
+          <p className="text-xs text-muted-foreground">
+            Tick every day this window applies to — they are added together.
+          </p>
+          {errors.days_of_week !== undefined && (
+            <p role="alert" className="text-xs text-destructive">{errors.days_of_week.message}</p>
+          )}
         </div>
         <div className="grid grid-cols-2 gap-3">
           <div className="space-y-1.5">

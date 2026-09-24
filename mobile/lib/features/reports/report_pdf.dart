@@ -3,6 +3,8 @@ import 'dart:typed_data';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 
+import '../../core/utils/dates.dart';
+
 /// ReportPdfGenerator — builds a styled, chart-rich PDF for a report module
 /// from the same `GET /reports/{module}` payload the tab already renders.
 ///
@@ -84,7 +86,7 @@ class ReportPdfGenerator {
                   pw.Text('$start → $end',
                       style: const pw.TextStyle(color: _muted, fontSize: 9)),
                   pw.Text(
-                    'Generated ${generated.month}/${generated.day} ${generated.hour.toString().padLeft(2, '0')}:${generated.minute.toString().padLeft(2, '0')}',
+                    'Generated ${generated.month}/${generated.day} ${fmtClock(generated)}',
                     style: const pw.TextStyle(color: _muted, fontSize: 8),
                   ),
                 ],

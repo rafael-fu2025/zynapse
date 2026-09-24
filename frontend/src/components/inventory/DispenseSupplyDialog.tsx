@@ -47,7 +47,7 @@ export function DispenseSupplyDialog({ item, onClose }: { item: InventoryItem; o
       </DialogHeader>
       <div className="space-y-3">
         <p className="text-xs text-muted-foreground">
-          On hand: <span className="font-mono">{item.quantity_on_hand} {item.unit}</span>. Stock is tied to
+          On hand: <span className="tabular-nums">{item.quantity_on_hand} {item.unit}</span>. Stock is tied to
           an open clinic visit.
         </p>
         <div className="space-y-1.5">

@@ -116,6 +116,7 @@ import { titleCase } from '@/lib/utils';
 
 const STATUS_VARIANT: Record<Appointment['status'], 'info' | 'success' | 'warning' | 'destructive'> = {
   scheduled: 'info',
+  confirmed: 'info',
   checked_in: 'warning',
   completed: 'success',
   cancelled: 'destructive',
@@ -125,6 +126,7 @@ const STATUS_VARIANT: Record<Appointment['status'], 'info' | 'success' | 'warnin
 const STATUS_OPTIONS: ReadonlyArray<{ value: Appointment['status'] | 'all'; label: string }> = [
   { value: 'all',        label: 'All statuses' },
   { value: 'scheduled',  label: 'Scheduled' },
+  { value: 'confirmed',  label: 'Confirmed' },
   { value: 'checked_in', label: 'Checked in' },
   { value: 'completed',  label: 'Completed' },
   { value: 'cancelled',  label: 'Cancelled' },
@@ -212,7 +214,7 @@ function ScheduleDialog({
     defaultValues: initial !== undefined
       ? {
           patient_school_id: initial.patient_school_id,
-          provider_user_id: initial.provider_user_id,
+          ...(initial.provider_user_id !== null ? { provider_user_id: initial.provider_user_id } : {}),
           scheduled_at: initial.scheduled_at,
           reason: initial.reason ?? '',
         }
@@ -379,12 +381,12 @@ function AppointmentDetailDialog({ appointmentId, onClose }: { appointmentId: nu
                       {a.patient_kind}
                     </Badge>
                   ) : null}
-                  <span className="block font-mono text-[10px] text-muted-foreground">
+                  <span className="block tabular-nums text-[10px] text-muted-foreground">
                     {a.patient_school_id}
                   </span>
                 </span>
               ) : (
-                <span className="font-mono text-xs">{a.patient_school_id}</span>
+                <span className="tabular-nums text-xs">{a.patient_school_id}</span>
               )}
             </dd>
           </div>
@@ -420,9 +422,10 @@ function AppointmentDetailDialog({ appointmentId, onClose }: { appointmentId: nu
  * at row-render time. We avoid the per-row hook call (which would
  * fire one query per appointment) and just match against the list.
  */
-function useProviderNameLookup(): (id: number) => string {
+function useProviderNameLookup(): (id: number | null) => string {
   const employees = useEmployees(null, 100);
   return (id) => {
+    if (id === null) return 'Unassigned';
     const e = (employees.data?.data ?? []).find((x) => x.id === id);
     return e !== undefined ? `${e.last_name}, ${e.first_name}` : `#${id}`;
   };
@@ -509,14 +512,14 @@ function AppointmentCard(props: AppointmentActionProps & { providerName: string 
   return (
     <MobileCard aria-label={`Appointment ${a.id}`}>
       <div className="mb-1 flex items-center justify-between gap-2">
-        <span className="font-mono text-xs text-muted-foreground">#{a.id}</span>
+        <span className="tabular-nums text-xs text-muted-foreground">#{a.id}</span>
         <Badge variant={STATUS_VARIANT[a.status]}>{statusLabel(a.status)}</Badge>
       </div>
       <p className="text-sm font-medium text-foreground">
         {a.patient_name !== undefined && a.patient_name !== null ? a.patient_name : a.patient_school_id}
       </p>
       {a.patient_name !== undefined && a.patient_name !== null && (
-        <p className="font-mono text-[10px] text-muted-foreground">
+        <p className="tabular-nums text-[10px] text-muted-foreground">
           <PatientIdCell id={a.patient_school_id} name={a.patient_name} />
           {a.patient_kind !== undefined && a.patient_kind !== null ? ` · ${a.patient_kind}` : ''}
         </p>
@@ -577,12 +580,12 @@ function AppointmentRow({
 
   return (
     <TableRow>
-      <TableCell className="px-3 font-mono text-xs">#{a.id}</TableCell>
+      <TableCell className="px-3 tabular-nums text-xs">#{a.id}</TableCell>
       <TableCell className="px-3">
         {a.patient_name !== undefined && a.patient_name !== null ? (
           <div className="leading-tight">
             <p className="text-sm font-medium">{a.patient_name}</p>
-            <p className="font-mono text-[10px] text-muted-foreground">
+            <p className="tabular-nums text-[10px] text-muted-foreground">
               <PatientIdCell id={a.patient_school_id} name={a.patient_name} />
               {a.patient_kind !== undefined && a.patient_kind !== null ? ` · ${a.patient_kind}` : ''}
             </p>

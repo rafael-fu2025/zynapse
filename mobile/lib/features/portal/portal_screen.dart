@@ -401,7 +401,6 @@ class _ProfileCard extends StatelessWidget {
                         Text(
                           profile.kioskIdentifier!,
                           style: TextStyle(
-                            fontFamily: 'monospace',
                             fontSize: 12,
                             color: scheme.primary,
                           ),

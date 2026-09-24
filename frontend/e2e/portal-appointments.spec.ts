@@ -63,3 +63,138 @@ for (const role of ['student', 'employee'] as const) {
     await expect(page.getByText('Guidance Provider')).toBeVisible();
   });
 }
+
+test('booking modal opens from My Appointments and shows time slots without provider name', async ({ page }) => {
+  let bookedPayload: Record<string, unknown> | null = null;
+
+  await signIn(page, 'student');
+
+  await page.route('**/api/v1/me/appointment-slots**', (route) =>
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        success: true,
+        data: {
+          slots: [
+            {
+              department: 'clinic',
+              starts_at: '2026-09-25T01:00:00Z',
+              ends_at: '2026-09-25T02:00:00Z',
+              duration_minutes: 60,
+              remaining: 3,
+            },
+          ],
+        },
+      }),
+    }),
+  );
+
+  await page.route('**/api/v1/me/appointments', (route) => {
+    if (route.request().method() === 'POST') {
+      bookedPayload = route.request().postDataJSON() as Record<string, unknown>;
+      return route.fulfill({
+        contentType: 'application/json',
+        status: 201,
+        body: JSON.stringify({
+          success: true,
+          data: {
+            department: 'clinic',
+            id: 99,
+            provider_user_id: null,
+            provider_name: null,
+            starts_at: '2026-09-25T01:00:00Z',
+            ends_at: '2026-09-25T02:00:00Z',
+            status: 'scheduled',
+            reason: 'Annual check',
+            type: null,
+          },
+        }),
+      });
+    }
+    return route.continue();
+  });
+  await page.getByRole('tab', { name: 'Appointments' }).click();
+
+  // "Book an appointment" button is located in the upper right of "My appointments"
+  const bookBtn = page.getByRole('button', { name: 'Book an appointment' });
+  await expect(bookBtn).toBeVisible();
+  await bookBtn.click();
+
+  // Modal dialog is open
+  const dialog = page.getByRole('dialog');
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole('heading', { name: 'Book an appointment' })).toBeVisible();
+
+  // Before a date is picked there is no availability to choose from: the
+  // control is disabled and says so, rather than opening an empty popover.
+  const slotBefore = dialog.getByRole('combobox').filter({ hasText: /pick a date first/i });
+  await expect(slotBefore).toBeDisabled();
+  await expect(dialog.getByText('Pick a date to see available times.')).toBeVisible();
+
+  // Set date to trigger slot fetch via DatePicker
+  await dialog.getByRole('button', { name: /pick a date/i }).click();
+  const dayButton = page.locator('[role="gridcell"] button, button[name="day"], .rdp-day_button').filter({ hasNotText: '' }).first();
+  await dayButton.click();
+
+  // Select slot — options show time slot and remaining count, NEVER a provider name
+  const slotSelect = dialog.getByRole('combobox').filter({ hasText: /choose a time slot/i });
+  await slotSelect.click();
+
+  const slotOption = page.getByRole('option', { name: /9:00 AM/i });
+  await expect(slotOption).toBeVisible();
+  // Verify provider name is NOT in the option text
+  await expect(slotOption).not.toContainText('Provider');
+  await expect(slotOption).not.toContainText('Nurse');
+  await expect(slotOption).not.toContainText('Dr');
+  await slotOption.click();
+
+  // Fill optional reason
+  const reasonInput = dialog.getByPlaceholder('Brief reason for your visit');
+  await reasonInput.fill('Annual check');
+
+  // Submit booking
+  const submitBtn = dialog.getByRole('button', { name: 'Book appointment', exact: true });
+  await submitBtn.click();
+
+  // Modal closes upon successful booking
+  await expect(dialog).not.toBeVisible();
+  await expect(page.getByText('Appointment booked.')).toBeVisible();
+
+  // Verify the payload sent to the backend contained NO provider_user_id
+  expect(bookedPayload).not.toBeNull();
+  expect(bookedPayload?.['department']).toBe('clinic');
+  expect(bookedPayload?.['starts_at']).toBe('2026-09-25T01:00:00Z');
+  expect(bookedPayload?.['reason']).toBe('Annual check');
+  expect(bookedPayload).not.toHaveProperty('provider_user_id');
+});
+
+test('slot picker disables and reports "No available time." when nothing is bookable', async ({ page }) => {
+  await signIn(page, 'student');
+
+  // Staff schedules are set, but every slot on the day is taken.
+  await page.route('**/api/v1/me/appointment-slots**', (route) =>
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({ success: true, data: { slots: [] } }),
+    }),
+  );
+
+  await page.getByRole('tab', { name: 'Appointments' }).click();
+  await page.getByRole('button', { name: 'Book an appointment' }).click();
+
+  const dialog = page.getByRole('dialog');
+  await dialog.getByRole('button', { name: /pick a date/i }).click();
+  const dayButton = page.locator('[role="gridcell"] button, button[name="day"], .rdp-day_button').filter({ hasNotText: '' }).first();
+  await dayButton.click();
+
+  // No thin empty dropdown: the control is disabled and the state is named.
+  const slotSelect = dialog.getByRole('combobox').filter({ hasText: /no available time/i });
+  await expect(slotSelect).toBeDisabled();
+  await expect(dialog.getByText('No available time.')).toBeVisible();
+
+  // Booking cannot proceed without a slot.
+  await expect(
+    dialog.getByRole('button', { name: 'Book appointment', exact: true }),
+  ).toBeDisabled();
+});
+

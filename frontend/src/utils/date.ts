@@ -65,6 +65,47 @@ export function fmtHumanDate(ymd: string): string {
   return formatInTimeZone(fromZonedTime(`${ymd} 00:00:00`, tz), tz, 'MMM d, yyyy');
 }
 
+/** `HH:mm`, with optional `:ss` and optional single-digit hour. */
+const WALL_CLOCK = /^(\d{1,2}):(\d{2})/;
+
+/**
+ * Render a wall-clock time (`HH:mm` or `HH:mm:ss`) on a **12-hour** clock —
+ * `9:00 AM`, `2:30 PM`.
+ *
+ * These values are not UTC instants. Columns like `counselling_availability`
+ * `.start_time` or `clinic_staff_schedules.shift_start` are app-timezone
+ * wall-clock, so this deliberately does **no** zone conversion: it reads the
+ * hour and minute and formats them. Routing them through `parseUtc` would
+ * shift every one of them by the offset.
+ *
+ * The clinic runs on a 12-hour clock (2026-09-23): `HH:mm` was being rendered
+ * raw via `slice(0, 5)`, which reads as military time to the staff using it.
+ *
+ * Anything that is not a well-formed time is returned **untouched** rather
+ * than rendered as `Invalid Date` or, worse, as a plausible wrong value. That
+ * matters for a missing `end_time`: coercing `''` would produce `12:00 AM` and
+ * state a time nobody entered.
+ */
+export function fmtClock(hhmm: string): string {
+  const match = hhmm.trim().match(WALL_CLOCK);
+  if (match === null) return hhmm;
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  if (hour > 23 || minute > 59) return hhmm;
+  // Constructed in local time and formatted in local time, so the hour and
+  // minute survive intact whatever zone the host (or CI runner) is in.
+  return format(new Date(2000, 0, 1, hour, minute), 'h:mm a');
+}
+
+/**
+ * `9:00 AM – 10:30 AM` for a start/end wall-clock pair. The spaced en dash is
+ * deliberate: with meridiem suffixes attached, the unspaced form this replaced
+ * (`09:00–10:30`) collapses into an unreadable run.
+ */
+export function fmtTimeRange(start: string, end: string): string {
+  return `${fmtClock(start)} – ${fmtClock(end)}`;
+}
+
 /**
  * Inverse of fmtUtcToApp for form inputs: compose an app-timezone local
  * date (`YYYY-MM-DD`) + time (`HH:mm` or `HH:mm:ss`) into the UTC MySQL

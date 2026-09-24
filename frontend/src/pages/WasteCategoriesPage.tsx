@@ -93,7 +93,7 @@ function WasteCategoryRow({ cat }: { cat: WasteCategory }) {
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <span className="font-medium">{cat.name}</span>
-            <span className="font-mono text-xs text-muted-foreground">({cat.code})</span>
+            <span className="tabular-nums text-xs text-muted-foreground">({cat.code})</span>
             {!cat.is_active && <Badge variant="secondary">archived</Badge>}
           </div>
         </div>
@@ -140,7 +140,7 @@ function WasteCategoryRow({ cat }: { cat: WasteCategory }) {
     <li className="flex items-center justify-between gap-2 rounded-md border px-2 py-1.5">
       <div className="flex min-w-0 flex-1 items-center gap-2">
         <span className="truncate font-medium">{cat.name}</span>
-        <span className="shrink-0 font-mono text-xs text-muted-foreground">({cat.code})</span>
+        <span className="shrink-0 tabular-nums text-xs text-muted-foreground">({cat.code})</span>
         {!cat.is_active && <Badge variant="secondary" className="shrink-0">archived</Badge>}
         <span className="ml-auto shrink-0 text-xs text-muted-foreground">
           {cat.expected_yield_pct !== null ? `${cat.expected_yield_pct}% Yield` : '—'}
@@ -303,7 +303,7 @@ export default function WasteCategoriesPage() {
         <CardHeader className="pb-3">
           <CardTitle className="flex items-center justify-between gap-2 text-base">
             <span>{showArchived ? 'All categories' : 'Active categories'}</span>
-            <Badge variant="secondary" className="font-mono">{cats.data?.length ?? 0}</Badge>
+            <Badge variant="secondary" className="tabular-nums">{cats.data?.length ?? 0}</Badge>
           </CardTitle>
         </CardHeader>
         <CardContent>
@@ -393,23 +393,23 @@ function DeviationReport() {
                 {rows.map((r) => (
                   <tr key={r.category_id} className="border-b last:border-0">
                     <td className="py-1.5 pr-3">{r.name}</td>
-                    <td className="py-1.5 pr-3 font-mono text-xs">{r.batch_count}</td>
-                    <td className="py-1.5 pr-3 font-mono text-xs">
+                    <td className="py-1.5 pr-3 tabular-nums text-xs">{r.batch_count}</td>
+                    <td className="py-1.5 pr-3 tabular-nums text-xs">
                       {r.actual_yield_pct !== null ? `${r.actual_yield_pct}%` : '—'} / {r.expected_yield_pct !== null ? `${r.expected_yield_pct}%` : '—'}
                     </td>
                     <td className="py-1.5 pr-3">
                       {r.yield_delta_pp !== null && (
-                        <Badge variant={r.yield_delta_pp >= 0 ? 'success' : 'warning'} className="font-mono">
+                        <Badge variant={r.yield_delta_pp >= 0 ? 'success' : 'warning'} className="tabular-nums">
                           {r.yield_delta_pp >= 0 ? '+' : ''}{r.yield_delta_pp} pp
                         </Badge>
                       )}
                     </td>
-                    <td className="py-1.5 pr-3 font-mono text-xs">
+                    <td className="py-1.5 pr-3 tabular-nums text-xs">
                       {r.actual_days !== null ? `${r.actual_days}d` : '—'} / {r.expected_days !== null ? `${r.expected_days}d` : '—'}
                     </td>
                     <td className="py-1.5">
                       {r.days_delta !== null && (
-                        <Badge variant={r.days_delta <= 0 ? 'success' : 'warning'} className="font-mono">
+                        <Badge variant={r.days_delta <= 0 ? 'success' : 'warning'} className="tabular-nums">
                           {r.days_delta > 0 ? '+' : ''}{r.days_delta}d
                         </Badge>
                       )}

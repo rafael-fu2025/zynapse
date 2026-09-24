@@ -70,8 +70,8 @@ export function BatchesDialog({ medicineId, onClose }: { medicineId: number; onC
               const writable = b.status === 'active' && b.quantity_remaining > 0;
               return (
                 <TableRow key={b.id}>
-                  <TableCell className="font-mono text-xs">{b.batch_number}</TableCell>
-                  <TableCell className="font-mono text-xs">
+                  <TableCell className="tabular-nums text-xs">{b.batch_number}</TableCell>
+                  <TableCell className="tabular-nums text-xs">
                     {b.quantity_remaining}/{b.quantity_received}
                   </TableCell>
                   <TableCell className="text-xs">

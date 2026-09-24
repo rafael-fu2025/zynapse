@@ -8,7 +8,10 @@ import reactHooks from 'eslint-plugin-react-hooks';
 import reactRefresh from 'eslint-plugin-react-refresh';
 
 export default tseslint.config(
-  { ignores: ['dist', 'node_modules', 'coverage'] },
+  // `*.timestamp-*.mjs` is a throwaway ESM copy of the TS config that Vitest
+  // writes next to it and does not always clean up. Linting it fails on an
+  // unrelated `no-undef` for `URL`, breaking the `--max-warnings 0` gate.
+  { ignores: ['dist', 'node_modules', 'coverage', '*.timestamp-*.mjs'] },
   js.configs.recommended,
   ...tseslint.configs.recommendedTypeChecked,
   // Plain JS files (this config, postcss.config.js) and TS files outside

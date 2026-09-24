@@ -160,7 +160,7 @@ function PatientAutocomplete({
               >
                 <span className="min-w-0 flex-1">
                   <span className="block truncate text-sm font-medium">{p.name}</span>
-                  <span className="block font-mono text-xs text-muted-foreground">{p.school_id}</span>
+                  <span className="block tabular-nums text-xs text-muted-foreground">{p.school_id}</span>
                 </span>
                 <Badge variant={p.kind === 'student' ? 'info' : 'secondary'}>
                   {p.kind === 'student' ? 'Student' : 'Employee'}
@@ -369,7 +369,7 @@ function QrDialog({ referral, onClose }: { referral: Referral; onClose: () => vo
         <div className="flex flex-col items-center gap-3">
           <QRCodeCanvas value={token} size={192} includeMargin />
           <div className="flex items-center gap-2">
-            <p className="break-all font-mono text-xs text-foreground">{token}</p>
+            <p className="break-all tabular-nums text-xs text-foreground">{token}</p>
             <CopyButton value={token} label="Copy QR token" successMessage="QR token copied." />
           </div>
           <p className="text-xs text-muted-foreground">
@@ -823,8 +823,8 @@ export default function ReferralsPage() {
             />
             {rows.map((r) => (
               <TableRow key={r.id}>
-                <TableCell className="px-3 font-mono text-xs">{r.id}</TableCell>
-                <TableCell className="px-3 font-mono text-xs">{r.patient_school_id}</TableCell>
+                <TableCell className="px-3 tabular-nums text-xs">{r.id}</TableCell>
+                <TableCell className="px-3 tabular-nums text-xs">{r.patient_school_id}</TableCell>
                 <TableCell className="px-3">{titleCase(r.source_module)}</TableCell>
                 <TableCell className="px-3">{titleCase(r.target_module)}</TableCell>
                 <TableCell className="px-3 text-xs">{titleCase(r.artifact_type)}</TableCell>

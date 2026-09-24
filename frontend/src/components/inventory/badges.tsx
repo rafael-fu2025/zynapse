@@ -75,7 +75,7 @@ export function LastMovementHint({
     ? `by ${initialsFromEmail(movement.user_email)}`
     : '';
   return (
-    <p className={cn('mt-0.5 text-[11px] font-mono', tone)}>
+    <p className={cn('mt-0.5 text-[11px] tabular-nums', tone)}>
       {movement.type === 'received' ? '↑ ' : movement.type === 'dispensed' ? '↓ ' : isWriteOff ? '· ' : '· '}
       {sign}{movement.quantity} {unit}
       {userText !== '' && <> · {userText}</>}
@@ -106,7 +106,7 @@ export function SupplyLastMovementHint({
     ? `by ${initialsFromEmail(movement.user_email)}`
     : '';
   return (
-    <p className={cn('mt-0.5 text-[11px] font-mono', tone)}>
+    <p className={cn('mt-0.5 text-[11px] tabular-nums', tone)}>
       {movement.qty_delta < 0 ? '↓ ' : movement.reason_code === 'receive' ? '↑ ' : '· '}
       {sign}{Math.abs(movement.qty_delta)} {unit}
       {userText !== '' && <> · {userText}</>}

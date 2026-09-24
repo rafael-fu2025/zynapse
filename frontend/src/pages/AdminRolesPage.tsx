@@ -89,7 +89,7 @@ function MatrixSection({
           <TableBody>
             {codes.map((code) => (
               <TableRow key={code}>
-                <TableCell className="px-3 font-mono text-xs">{code}</TableCell>
+                <TableCell className="px-3 tabular-nums text-xs">{code}</TableCell>
                 {roles.map((role) => (
                   <TableCell key={role.code} className="px-2 text-center">
                     {role.wildcard || role.permissions.includes(code) ? (
@@ -160,7 +160,7 @@ export default function AdminRolesPage() {
                   {roleRows.map((role) => (
                     <TableRow key={role.code}>
                       <TableCell className="px-3 text-sm font-medium">{role.name}</TableCell>
-                      <TableCell className="px-3 font-mono text-xs text-muted-foreground">{role.code}</TableCell>
+                      <TableCell className="px-3 tabular-nums text-xs text-muted-foreground">{role.code}</TableCell>
                       <TableCell className="px-3">
                         {role.wildcard ? (
                           <Badge className="bg-amber-200 text-amber-900 hover:bg-amber-200 dark:bg-amber-900 dark:text-amber-200">Platform Owner · wildcard (*)</Badge>

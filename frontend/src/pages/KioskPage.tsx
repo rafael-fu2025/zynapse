@@ -258,7 +258,7 @@ export default function KioskPage() {
               </div>
             ) : (
               <div className="flex items-center gap-1">
-                <Badge variant="secondary" className="font-mono text-xs">{k.station}</Badge>
+                <Badge variant="secondary" className="tabular-nums text-xs">{k.station}</Badge>
                 <Button
                   variant="ghost"
                   size="icon-sm"
@@ -322,7 +322,7 @@ export default function KioskPage() {
                         blank left the operator unable to identify the person.
                         Fall back to the recorded guest name, then an em dash. */}
                     {c.patient_school_id !== null ? (
-                      <span className="font-mono text-xs">{c.patient_school_id}</span>
+                      <span className="tabular-nums text-xs">{c.patient_school_id}</span>
                     ) : c.guest_name !== null && c.guest_name !== '' ? (
                       <span>
                         {c.guest_name} <span className="text-xs text-muted-foreground">(guest)</span>

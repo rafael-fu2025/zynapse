@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { employeeListParams, employeeSearchParams } from './usePatients';
+import { employeeListParams, employeeSearchParams, studentListParams, studentSearchParams } from './usePatients';
 
 describe('employeeListParams', () => {
   it('omits the first-page cursor and the "all" facet sentinel', () => {
@@ -90,5 +90,120 @@ describe('employeeSearchParams', () => {
     expect(params.get('q')).toBe('Torres');
     expect(params.get('department')).toBe('College of Law & Jurisprudence');
     expect(params.get('position')).toBe('Dean');
+  });
+});
+
+describe('studentListParams', () => {
+  it('omits the first-page cursor and the "all" facet sentinels', () => {
+    const params = studentListParams({
+      cursor: null,
+      limit: 25,
+      includeArchived: false,
+      department: 'all',
+      course: 'all',
+      yearLevel: 'all',
+    });
+
+    expect(params.toString()).toBe('limit=25');
+    expect(params.has('cursor')).toBe(false);
+    expect(params.has('department')).toBe(false);
+    expect(params.has('course')).toBe(false);
+    expect(params.has('year_level')).toBe(false);
+  });
+
+  it('carries a real cursor and all three facets', () => {
+    const params = studentListParams({
+      cursor: 'abc123',
+      limit: 25,
+      includeArchived: false,
+      department: 'CCS',
+      course: 'BSIT',
+      yearLevel: '3',
+    });
+
+    expect(params.get('cursor')).toBe('abc123');
+    expect(params.get('department')).toBe('CCS');
+    expect(params.get('course')).toBe('BSIT');
+    expect(params.get('year_level')).toBe('3');
+    expect(params.get('limit')).toBe('25');
+  });
+
+  it('never sends the literal "all" as a facet value', () => {
+    // "all" is a UI sentinel. Sending it would filter on a department
+    // literally named "all" and silently return nothing.
+    const params = studentListParams({
+      cursor: null,
+      limit: 25,
+      includeArchived: false,
+      department: 'all',
+      course: 'all',
+      yearLevel: 'all',
+    });
+
+    expect(params.getAll('department')).toEqual([]);
+    expect(params.getAll('course')).toEqual([]);
+    expect(params.getAll('year_level')).toEqual([]);
+    expect(params.toString()).not.toContain('all');
+  });
+
+  it('keeps an empty-string cursor off the wire', () => {
+    const params = studentListParams({
+      cursor: '',
+      limit: 25,
+      includeArchived: false,
+    });
+
+    expect(params.has('cursor')).toBe(false);
+  });
+
+  it('flags archived inclusion', () => {
+    const params = studentListParams({
+      cursor: null,
+      limit: 50,
+      includeArchived: true,
+    });
+
+    expect(params.get('include_archived')).toBe('1');
+  });
+
+  it('sends a year level as a numeric value, never a display label', () => {
+    // MIS numbers levels per scheme (College 1-5, ELEM Grade 1-6), so the
+    // wire value is the bare number and the "Year n" label lives in the UI.
+    const params = studentListParams({
+      cursor: null,
+      limit: 25,
+      includeArchived: false,
+      yearLevel: '2',
+    });
+
+    expect(params.get('year_level')).toBe('2');
+    expect(Number(params.get('year_level'))).toBe(2);
+  });
+});
+
+describe('studentSearchParams', () => {
+  it('sends only the query when no facet is active', () => {
+    const params = studentSearchParams({
+      q: 'Santos',
+      department: 'all',
+      course: 'all',
+      yearLevel: 'all',
+    });
+
+    expect(params.toString()).toBe('q=Santos');
+  });
+
+  it('keeps the active facets in force during a search', () => {
+    const params = studentSearchParams({
+      q: 'Santos',
+      department: 'NURSING',
+      course: 'BSN',
+      yearLevel: '1',
+    });
+
+    expect(params.get('q')).toBe('Santos');
+    expect(params.get('department')).toBe('NURSING');
+    expect(params.get('course')).toBe('BSN');
+    expect(params.get('year_level')).toBe('1');
   });
 });

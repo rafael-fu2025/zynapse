@@ -92,7 +92,7 @@ export default function Layout() {
               <Search className="size-3.5" />
               <span>Search…</span>
             </span>
-            <kbd className="ml-auto rounded border bg-muted px-1 font-mono text-[10px]">⌘K</kbd>
+            <kbd className="ml-auto rounded border bg-muted px-1 tabular-nums text-[10px]">⌘K</kbd>
           </button>
           <HeaderBreadcrumbs />
           {/*

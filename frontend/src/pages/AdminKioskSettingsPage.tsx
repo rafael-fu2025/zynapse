@@ -115,8 +115,8 @@ function TvPreview({ settings }: { settings: KioskSettings }) {
         <section aria-label="Now Serving preview" className="h-[44%] shrink-0 overflow-hidden rounded-md border bg-muted/20 p-1.5">
           <h3 className="mb-1 text-center text-[0.5rem] font-bold uppercase tracking-[0.16em] text-muted-foreground">Now Serving</h3>
           <div className="grid h-[calc(100%-0.875rem)] grid-cols-2 gap-1.5">
-            <div className="flex min-h-0 flex-col items-center justify-center overflow-hidden rounded border bg-card px-1 text-center"><b className="text-[0.52rem] uppercase text-muted-foreground">Guidance</b><p className="font-mono text-xl font-bold leading-none text-primary">G-012</p><p className="w-full truncate text-[0.55rem]">Ana Dela Cruz</p></div>
-            <div className="flex min-h-0 flex-col items-center justify-center overflow-hidden rounded border bg-card px-1 text-center"><b className="text-[0.52rem] uppercase text-muted-foreground">Clinic</b><p className="font-mono text-xl font-bold leading-none text-primary">C-008</p><p className="w-full truncate text-[0.55rem]">Ben Santos</p></div>
+            <div className="flex min-h-0 flex-col items-center justify-center overflow-hidden rounded border bg-card px-1 text-center"><b className="text-[0.52rem] uppercase text-muted-foreground">Guidance</b><p className="tabular-nums text-xl font-bold leading-none text-primary">G-012</p><p className="w-full truncate text-[0.55rem]">Ana Dela Cruz</p></div>
+            <div className="flex min-h-0 flex-col items-center justify-center overflow-hidden rounded border bg-card px-1 text-center"><b className="text-[0.52rem] uppercase text-muted-foreground">Clinic</b><p className="tabular-nums text-xl font-bold leading-none text-primary">C-008</p><p className="w-full truncate text-[0.55rem]">Ben Santos</p></div>
           </div>
         </section>
         {settings.display.mediaEnabled

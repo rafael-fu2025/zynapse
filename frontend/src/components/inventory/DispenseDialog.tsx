@@ -57,7 +57,7 @@ export function DispenseDialog({ medicine, onClose }: { medicine: Medicine; onCl
       </DialogHeader>
       <form noValidate onSubmit={(e) => void onSubmit(e)} className="space-y-3">
         <p className="text-xs text-muted-foreground">
-          On hand: <span className="font-mono">{medicine.quantity_on_hand} {medicine.unit}</span>.
+          On hand: <span className="tabular-nums">{medicine.quantity_on_hand} {medicine.unit}</span>.
           Stock is drawn from the earliest-expiring lot first (FEFO).
         </p>
         <div className="space-y-1.5">

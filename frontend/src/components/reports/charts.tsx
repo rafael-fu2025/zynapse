@@ -261,7 +261,7 @@ export function StatusDoughnutChart({
                 <li key={item.label} className="flex items-center gap-1.5 text-xs text-muted-foreground">
                   <span className="size-2 shrink-0 rounded-sm" style={{ backgroundColor: palette[index % palette.length] ?? palette[0] }} />
                   {item.label}
-                  <span className="font-mono tabular-nums text-foreground">{item.value.toLocaleString()}</span>
+                  <span className="tabular-nums text-foreground">{item.value.toLocaleString()}</span>
                   <span>({legendTotal > 0 ? Math.round((item.value / legendTotal) * 100) : 0}%)</span>
                 </li>
               ))}

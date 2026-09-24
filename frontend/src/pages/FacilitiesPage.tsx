@@ -210,7 +210,7 @@ function StartBatchDialog({ unit, onClose }: { unit: BmgUnit; onClose: () => voi
                     onChange={(e) => setRow(i, { weight_kg: e.target.value })}
                   />
                 </div>
-                <div className="w-14 pb-2 text-right font-mono text-xs text-muted-foreground">
+                <div className="w-14 pb-2 text-right tabular-nums text-xs text-muted-foreground">
                   {ratio !== null ? `${ratio.toFixed(0)}%` : '—'}
                 </div>
                 <Button size="icon" variant="ghost" className="mb-0.5" disabled={rows.length < 2} onClick={() => removeRow(i)} aria-label="Remove component">
@@ -224,7 +224,7 @@ function StartBatchDialog({ unit, onClose }: { unit: BmgUnit; onClose: () => voi
         <div className="flex items-center justify-between rounded-md border bg-muted/40 px-3 py-2">
           <Label htmlFor={totalId} className="text-xs">Total input weight</Label>
           <div className="text-right">
-            <span id={totalId} className="font-mono text-sm font-semibold">{total.toFixed(2)} kg</span>
+            <span id={totalId} className="tabular-nums text-sm font-semibold">{total.toFixed(2)} kg</span>
             {unit.spec_capacity_kg !== null && unit.spec_capacity_kg > 0 && (
               <p className={`text-[11px] ${total > unit.spec_capacity_kg ? 'font-medium text-destructive' : 'text-muted-foreground'}`}>
                 Drum capacity: {unit.spec_capacity_kg} kg
@@ -235,7 +235,7 @@ function StartBatchDialog({ unit, onClose }: { unit: BmgUnit; onClose: () => voi
         {firstCat !== null && suggest.data !== null && suggest.data !== undefined && (
           <p className="flex items-center gap-1.5 rounded-md border border-primary/20 bg-primary/5 px-3 py-2 text-xs text-foreground">
             <Sparkles className="size-3.5 text-primary" />
-            Suggested drum for this category: <span className="font-mono font-medium">{suggest.data.code}</span>
+            Suggested drum for this category: <span className="tabular-nums font-medium">{suggest.data.code}</span>
             {suggest.data.location_code !== null && ` · ${suggest.data.location_code}`}
             {suggest.data.spec_capacity_kg !== null && ` · ${suggest.data.spec_capacity_kg} kg cap`}
           </p>
@@ -693,15 +693,15 @@ function AnalyticsDialog({ unit, batchId, onClose }: { unit: BmgUnit; batchId: n
       {analytics.isLoading && <Loader2 className="mx-auto size-4 animate-spin text-muted-foreground" />}
       {a !== undefined && (
         <div className="grid grid-cols-2 gap-3 rounded-md border p-3 text-sm">
-          <div>Input: <span className="font-mono">{a.input_kg} kg</span></div>
-          <div>Output: <span className="font-mono">{a.output_kg} kg</span></div>
+          <div>Input: <span className="tabular-nums">{a.input_kg} kg</span></div>
+          <div>Output: <span className="tabular-nums">{a.output_kg} kg</span></div>
           <div>Yield: <Badge variant="info">{a.yield_pct}%</Badge> <span className="text-xs text-muted-foreground">({a.yield_class})</span></div>
-          <div>Mass reduction: <span className="font-mono">{a.mass_reduction_pct}%</span></div>
-          {a.expected_yield_pct !== null && <div>Expected: <span className="font-mono">{a.expected_yield_pct}%</span></div>}
-          {a.expected_days !== null && <div>Expected days: <span className="font-mono">{a.expected_days}</span> <span className="text-xs text-muted-foreground">(mix-weighted)</span></div>}
+          <div>Mass reduction: <span className="tabular-nums">{a.mass_reduction_pct}%</span></div>
+          {a.expected_yield_pct !== null && <div>Expected: <span className="tabular-nums">{a.expected_yield_pct}%</span></div>}
+          {a.expected_days !== null && <div>Expected days: <span className="tabular-nums">{a.expected_days}</span> <span className="text-xs text-muted-foreground">(mix-weighted)</span></div>}
           {a.expected_completion_date !== null && <div>ETA: <span>{fmtHumanDate(a.expected_completion_date)}</span></div>}
-          {a.days_until_expected !== null && <div>Days left: <span className="font-mono">{a.days_until_expected}</span></div>}
-          {a.progress_pct !== null && <div>Progress: <span className="font-mono">{a.progress_pct}%</span></div>}
+          {a.days_until_expected !== null && <div>Days left: <span className="tabular-nums">{a.days_until_expected}</span></div>}
+          {a.progress_pct !== null && <div>Progress: <span className="tabular-nums">{a.progress_pct}%</span></div>}
         </div>
       )}
 
@@ -712,7 +712,7 @@ function AnalyticsDialog({ unit, batchId, onClose }: { unit: BmgUnit; batchId: n
           </p>
           {blend.data.blend_cn !== null ? (
             <p className="flex items-center gap-2">
-              <span className="font-mono font-semibold">{blend.data.blend_cn}</span>
+              <span className="tabular-nums font-semibold">{blend.data.blend_cn}</span>
               <Badge variant={blend.data.status === 'optimal' ? 'success' : 'warning'}>
                 {blend.data.status === 'optimal' ? 'Optimal (15–30)' : blend.data.status === 'high' ? 'Too high' : blend.data.status === 'low' ? 'Too low' : 'Unknown'}
               </Badge>
@@ -732,7 +732,7 @@ function AnalyticsDialog({ unit, batchId, onClose }: { unit: BmgUnit; batchId: n
             {a.composition.map((c) => (
               <div key={c.category_id} className="flex items-center justify-between text-sm">
                 <span>{c.category_name}</span>
-                <span className="font-mono text-xs text-muted-foreground">
+                <span className="tabular-nums text-xs text-muted-foreground">
                   {c.weight_kg} kg{c.ratio_pct !== null ? ` · ${c.ratio_pct}%` : ''}
                   {c.expected_days !== null ? ` · ~${c.expected_days}d` : ''}
                   {c.sample_count > 0 ? ` (${c.sample_count} trials)` : ' (no history)'}
@@ -822,7 +822,7 @@ function ProcessingDrumsCard() {
           <DrumImage className="size-5" />
           Processing Drums
         </CardTitle>
-        <Badge variant={items.length > 0 ? 'warning' : 'secondary'} className="font-mono">
+        <Badge variant={items.length > 0 ? 'warning' : 'secondary'} className="tabular-nums">
           {items.length} active
         </Badge>
       </CardHeader>
@@ -877,7 +877,7 @@ function DrumCard({ batch }: { batch: ActiveBatch }) {
 
       <header className="flex items-start justify-between gap-2 border-b border-border/60 pb-2">
         <div className="min-w-0">
-          <p className="font-mono text-sm font-bold tracking-wide text-foreground">{batch.unit_code}</p>
+          <p className="tabular-nums text-sm font-bold tracking-wide text-foreground">{batch.unit_code}</p>
           <p className="truncate text-xs text-muted-foreground" title={batch.unit_name}>{batch.unit_name}</p>
         </div>
         <Badge variant={isInput ? 'info' : 'warning'} className="shrink-0 uppercase">
@@ -888,7 +888,7 @@ function DrumCard({ batch }: { batch: ActiveBatch }) {
       <dl className="space-y-1 text-[13px]">
         <div className="flex items-center justify-between">
           <dt className="text-muted-foreground">Batch</dt>
-          <dd className="font-mono font-semibold text-foreground">{batch.batch_code}</dd>
+          <dd className="tabular-nums font-semibold text-foreground">{batch.batch_code}</dd>
         </div>
         <div className="flex items-center justify-between">
           <dt className="text-muted-foreground">Waste</dt>
@@ -896,12 +896,12 @@ function DrumCard({ batch }: { batch: ActiveBatch }) {
         </div>
         <div className="flex items-center justify-between">
           <dt className="text-muted-foreground">Input</dt>
-          <dd className="font-mono font-semibold text-foreground">{batch.input_kg.toFixed(2)} kg</dd>
+          <dd className="tabular-nums font-semibold text-foreground">{batch.input_kg.toFixed(2)} kg</dd>
         </div>
         <div className="flex items-start justify-between gap-2">
           <dt className="shrink-0 text-muted-foreground">Expected Done</dt>
           <dd className="text-right">
-            <span className="font-mono font-semibold text-foreground">
+            <span className="tabular-nums font-semibold text-foreground">
               {batch.expected_completion_date !== null ? fmtShort(batch.expected_completion_date) : '—'}
             </span>
             {batch.days_until_expected !== null && (
@@ -1098,7 +1098,7 @@ function CreateUnitDialog({ onClose, existingCodes }: { onClose: () => void; exi
                 <SelectItem value="unset">— None —</SelectItem>
                 {(cats.data ?? []).map((c) => (
                   <SelectItem key={c.id} value={String(c.id)}>
-                    {c.name} <span className="font-mono text-xs text-muted-foreground">({c.code})</span>
+                    {c.name} <span className="tabular-nums text-xs text-muted-foreground">({c.code})</span>
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -1178,7 +1178,7 @@ function EditUnitDialog({ unit, onClose }: { unit: BmgUnit; onClose: () => void 
       <div className="space-y-3">
         <div className="space-y-1.5">
           <Label>Drum code</Label>
-          <Input value={unit.code} disabled className="font-mono" />
+          <Input value={unit.code} disabled className="tabular-nums" />
           <p className="text-[10px] text-muted-foreground">Drum code cannot be changed.</p>
         </div>
         <div className="space-y-1.5">
@@ -1207,7 +1207,7 @@ function EditUnitDialog({ unit, onClose }: { unit: BmgUnit; onClose: () => void 
                 <SelectItem value="unset">— None —</SelectItem>
                 {(cats.data ?? []).map((c) => (
                   <SelectItem key={c.id} value={String(c.id)}>
-                    {c.name} <span className="font-mono text-xs text-muted-foreground">({c.code})</span>
+                    {c.name} <span className="tabular-nums text-xs text-muted-foreground">({c.code})</span>
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -1254,7 +1254,7 @@ function ArchiveUnitDialog({ unit, onClose }: { unit: BmgUnit; onClose: () => vo
       </DialogHeader>
       <div className="space-y-2 text-sm text-muted-foreground">
         <p>
-          The drum will be soft-archived (<code className="font-mono">archived_at</code> set)
+          The drum will be soft-archived (<code className="tabular-nums">archived_at</code> set)
           and removed from the active list. Audit history is preserved.
         </p>
         {hasActiveBatch && (
@@ -1373,7 +1373,7 @@ function ComplianceDialog({ unit, batchId, onClose }: { unit: BmgUnit; batchId: 
       {c !== undefined && (
         <div className="space-y-3">
           <div className="flex items-center justify-between rounded-md border bg-muted/40 px-3 py-2 text-sm">
-            <span className="font-mono">{c.reference_code}</span>
+            <span className="tabular-nums">{c.reference_code}</span>
             <Badge variant={c.pfrp_met ? 'success' : 'warning'}>
               {c.pfrp_met ? 'PFRP met' : 'PFRP not met'}
             </Badge>
@@ -1382,22 +1382,22 @@ function ComplianceDialog({ unit, batchId, onClose }: { unit: BmgUnit; batchId: 
           <div className="rounded-md border p-3">
             <p className="mb-2 text-xs font-medium text-muted-foreground">Pathogen-reduction evidence (PFRP)</p>
             <div className="grid grid-cols-2 gap-2 text-sm">
-              <div>Thermophilic days (≥55°C): <span className="font-mono">{c.thermophilic_days}</span></div>
-              <div>Peak temperature: <span className="font-mono">{c.max_temperature_c !== null ? `${c.max_temperature_c}°C` : '—'}</span></div>
-              <div>Consecutive PFRP days: <span className="font-mono">{c.consecutive_pfrp_days}</span></div>
-              <div>Status: <span className="font-mono">{titleCase(c.status)}</span></div>
+              <div>Thermophilic days (≥55°C): <span className="tabular-nums">{c.thermophilic_days}</span></div>
+              <div>Peak temperature: <span className="tabular-nums">{c.max_temperature_c !== null ? `${c.max_temperature_c}°C` : '—'}</span></div>
+              <div>Consecutive PFRP days: <span className="tabular-nums">{c.consecutive_pfrp_days}</span></div>
+              <div>Status: <span className="tabular-nums">{titleCase(c.status)}</span></div>
             </div>
           </div>
 
           <div className="rounded-md border p-3">
             <p className="mb-2 text-xs font-medium text-muted-foreground">Mass balance</p>
             <div className="grid grid-cols-2 gap-2 text-sm">
-              <div>Input: <span className="font-mono">{c.input_kg} kg</span></div>
-              <div>Output: <span className="font-mono">{c.output_kg} kg</span></div>
-              <div>Losses: <span className="font-mono">{c.loss_kg} kg</span></div>
-              <div>In-process: <span className="font-mono">{c.in_process_kg} kg</span></div>
-              <div>Yield: <span className="font-mono">{c.yield_pct !== null ? `${c.yield_pct}%` : '—'}</span></div>
-              <div>Unaccounted: <span className="font-mono">{c.unaccounted_kg} kg</span></div>
+              <div>Input: <span className="tabular-nums">{c.input_kg} kg</span></div>
+              <div>Output: <span className="tabular-nums">{c.output_kg} kg</span></div>
+              <div>Losses: <span className="tabular-nums">{c.loss_kg} kg</span></div>
+              <div>In-process: <span className="tabular-nums">{c.in_process_kg} kg</span></div>
+              <div>Yield: <span className="tabular-nums">{c.yield_pct !== null ? `${c.yield_pct}%` : '—'}</span></div>
+              <div>Unaccounted: <span className="tabular-nums">{c.unaccounted_kg} kg</span></div>
             </div>
           </div>
 
@@ -1504,11 +1504,11 @@ function BatchHistoryDialog({ unitId, onClose }: { unitId: number | null; onClos
             />
             {batchRows.map((b) => (
               <TableRow key={b.id}>
-                <TableCell className="px-3 font-mono text-xs">{b.reference_code}</TableCell>
-                <TableCell className="px-3 font-mono text-xs">{b.unit_code}</TableCell>
+                <TableCell className="px-3 tabular-nums text-xs">{b.reference_code}</TableCell>
+                <TableCell className="px-3 tabular-nums text-xs">{b.unit_code}</TableCell>
                 <TableCell className="px-3"><Badge variant={b.status === 'released' ? 'success' : b.status === 'cancelled' ? 'destructive' : 'secondary'}>{titleCase(b.status)}</Badge></TableCell>
-                <TableCell className="px-3 font-mono text-xs">{b.total_input_weight_kg} kg</TableCell>
-                <TableCell className="px-3 font-mono text-xs">{b.output_weight_kg !== null ? `${b.output_weight_kg} kg` : '—'}</TableCell>
+                <TableCell className="px-3 tabular-nums text-xs">{b.total_input_weight_kg} kg</TableCell>
+                <TableCell className="px-3 tabular-nums text-xs">{b.output_weight_kg !== null ? `${b.output_weight_kg} kg` : '—'}</TableCell>
                 <TableCell className="px-3 text-xs">
                   {b.quality_grade !== null && <Badge variant="secondary" className="mr-1">{titleCase(b.quality_grade)}</Badge>}
                   {b.maturity_level !== null && <Badge variant="secondary">{titleCase(b.maturity_level)}</Badge>}
@@ -1549,7 +1549,7 @@ function OpenAlertsBanner() {
         <ul className="space-y-0.5 text-xs text-muted-foreground">
           {items.slice(0, 3).map((a) => (
             <li key={a.alert_id}>
-              <span className="font-mono">{a.reference_code}</span> · <Badge variant={a.severity === 'critical' ? 'destructive' : 'warning'}>{a.severity}</Badge> · {a.message}
+              <span className="tabular-nums">{a.reference_code}</span> · <Badge variant={a.severity === 'critical' ? 'destructive' : 'warning'}>{a.severity}</Badge> · {a.message}
             </li>
           ))}
         </ul>
@@ -1764,7 +1764,7 @@ export default function FacilitiesPage() {
               const activeBatch = u.active_batch_id ?? null;
               return (
                 <TableRow key={u.id} id={`unit-${u.id}`} className="scroll-mt-24">
-                  <TableCell className="px-3 font-mono text-xs">{u.code}</TableCell>
+                  <TableCell className="px-3 tabular-nums text-xs">{u.code}</TableCell>
                   <TableCell className="px-3">{u.display_name}</TableCell>
                   <TableCell className="px-3">
                     <Badge variant={unitStatusVariant(u.status)}>{statusLabel(u.status)}</Badge>
@@ -1772,7 +1772,7 @@ export default function FacilitiesPage() {
                       <Badge variant="secondary" className="ml-1.5">Archived</Badge>
                     )}
                   </TableCell>
-                  <TableCell className="px-3 font-mono text-xs text-muted-foreground">
+                  <TableCell className="px-3 tabular-nums text-xs text-muted-foreground">
                     {activeBatch === null ? '—' : `#${activeBatch}`}
                   </TableCell>
                   <TableCell className="px-3">
@@ -1786,7 +1786,7 @@ export default function FacilitiesPage() {
                             style={{ width: `${Math.min(u.utilization_pct, 100)}%` }}
                           />
                         </div>
-                        <span className="font-mono text-xs font-medium text-foreground">{u.utilization_pct}%</span>
+                        <span className="tabular-nums text-xs font-medium text-foreground">{u.utilization_pct}%</span>
                       </div>
                     )}
                   </TableCell>
@@ -1838,7 +1838,7 @@ export default function FacilitiesPage() {
           return (
             <MobileCard key={u.id} aria-label={`Drum ${u.code}`}>
               <div className="mb-1 flex items-center justify-between gap-2">
-                <span className="font-mono text-sm font-medium text-foreground">{u.code}</span>
+                <span className="tabular-nums text-sm font-medium text-foreground">{u.code}</span>
                 <div className="flex flex-wrap justify-end gap-1.5">
                   <Badge variant={unitStatusVariant(u.status)}>{statusLabel(u.status)}</Badge>
                   {archived && <Badge variant="secondary">Archived</Badge>}
@@ -1846,7 +1846,7 @@ export default function FacilitiesPage() {
               </div>
               <p className="text-sm text-foreground">{u.display_name}</p>
               <MobileCardField label="Active batch">
-                <span className="font-mono text-xs text-muted-foreground">{activeBatch === null ? '—' : `#${activeBatch}`}</span>
+                <span className="tabular-nums text-xs text-muted-foreground">{activeBatch === null ? '—' : `#${activeBatch}`}</span>
               </MobileCardField>
               {activeBatch !== null && u.utilization_pct !== undefined && (
                 <MobileCardField label="Utilization">
@@ -1857,7 +1857,7 @@ export default function FacilitiesPage() {
                         style={{ width: `${Math.min(u.utilization_pct, 100)}%` }}
                       />
                     </div>
-                    <span className="font-mono text-xs font-medium text-foreground">{u.utilization_pct}%</span>
+                    <span className="tabular-nums text-xs font-medium text-foreground">{u.utilization_pct}%</span>
                   </div>
                 </MobileCardField>
               )}

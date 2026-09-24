@@ -1,37 +1,19 @@
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+/**
+ * SchedulingTab — counsellor availability windows.
+ *
+ * Appointments moved out to their own section on 2026-09-23, so the `subtab`
+ * switch that used to live here is gone: this tab is now only the weekly
+ * availability grid (list or calendar). `?avail_view=` is kept, and
+ * CounsellingPage rewrites a legacy `?subtab=appointments` deep link to the
+ * Appointments tab.
+ */
 import { useUrlFilter } from '@/hooks/useUrlFilter';
-import { AvailabilityView, AppointmentsTable } from '../scheduling';
+import { AvailabilityView } from '../scheduling';
 
 export function SchedulingTab() {
-  const [subTab, setSubTab] = useUrlFilter('subtab', { default: 'availability' });
-  const [status, setStatus] = useUrlFilter('appt_status', { default: 'all' });
-  const [date, setDate] = useUrlFilter('appt_date', { default: '' });
   const [availabilityView, setAvailabilityView] = useUrlFilter('avail_view', { default: 'list' });
 
   return (
-    <div className="space-y-4">
-      <Tabs value={subTab} onValueChange={setSubTab} className="space-y-4">
-        <TabsList>
-          <TabsTrigger value="availability">Availability Windows</TabsTrigger>
-          <TabsTrigger value="appointments">Appointments</TabsTrigger>
-        </TabsList>
-
-        <TabsContent value="availability">
-          <AvailabilityView
-            view={availabilityView}
-            onViewChange={setAvailabilityView}
-          />
-        </TabsContent>
-
-        <TabsContent value="appointments">
-          <AppointmentsTable
-            status={status}
-            onStatusChange={setStatus}
-            date={date}
-            onDateChange={setDate}
-          />
-        </TabsContent>
-      </Tabs>
-    </div>
+    <AvailabilityView view={availabilityView} onViewChange={setAvailabilityView} />
   );
 }

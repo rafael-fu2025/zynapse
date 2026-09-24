@@ -67,9 +67,9 @@ export function LedgerBody({
                 )}
                 {r.note !== null && r.note !== '' ? <span className="ml-1 text-muted-foreground">· {r.note}</span> : ''}
               </TableCell>
-              <TableCell className="px-3 text-right font-mono text-xs text-emerald-600">{r.qty_in !== null ? `+${r.qty_in}` : ''}</TableCell>
-              <TableCell className="px-3 text-right font-mono text-xs text-destructive">{r.qty_out !== null ? `-${r.qty_out}` : ''}</TableCell>
-              <TableCell className="px-3 text-right font-mono text-xs font-semibold">{r.balance_after ?? '—'}</TableCell>
+              <TableCell className="px-3 text-right tabular-nums text-xs text-emerald-600">{r.qty_in !== null ? `+${r.qty_in}` : ''}</TableCell>
+              <TableCell className="px-3 text-right tabular-nums text-xs text-destructive">{r.qty_out !== null ? `-${r.qty_out}` : ''}</TableCell>
+              <TableCell className="px-3 text-right tabular-nums text-xs font-semibold">{r.balance_after ?? '—'}</TableCell>
             </TableRow>
           ))}
         </TableBody>

@@ -76,7 +76,7 @@ export function AddBatchDialog({ medicine, onClose }: { medicine: Medicine; onCl
       {order !== null && (
         <form noValidate onSubmit={(e) => void onSubmit(e)} className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <p className="col-span-2 rounded-md bg-muted/50 p-2 text-xs text-muted-foreground">
-            Receiving purchase <span className="font-mono">#{order.id}</span> —{' '}
+            Receiving purchase <span className="tabular-nums">#{order.id}</span> —{' '}
             <span className="font-medium text-foreground">{order.requested_quantity} {medicine.unit}</span>{' '}
             bought. Lower the quantity below for a partial delivery and explain the shortfall.
           </p>

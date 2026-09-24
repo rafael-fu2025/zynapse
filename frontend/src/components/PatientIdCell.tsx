@@ -12,13 +12,13 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 export function PatientIdCell({ id, name }: { id: string; name?: string | null | undefined }) {
   const trimmed = name?.trim();
   if (!trimmed) {
-    return <span className="font-mono text-xs">{id}</span>;
+    return <span className="tabular-nums text-xs">{id}</span>;
   }
   return (
     <TooltipProvider delayDuration={150}>
       <Tooltip>
         <TooltipTrigger asChild>
-          <span className="cursor-help font-mono text-xs underline decoration-dotted underline-offset-2">
+          <span className="cursor-help tabular-nums text-xs underline decoration-dotted underline-offset-2">
             {id}
           </span>
         </TooltipTrigger>

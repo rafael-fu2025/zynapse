@@ -199,7 +199,7 @@ export function EquipmentTab() {
                 </TableCell>
                 <TableCell className="px-3 text-sm">{it.category ?? '—'}</TableCell>
                 <TableCell className="px-3 text-sm">{it.location ?? '—'}</TableCell>
-                <TableCell className="px-3 font-mono text-xs">{it.total_units}</TableCell>
+                <TableCell className="px-3 tabular-nums text-xs">{it.total_units}</TableCell>
                 <TableCell className="px-3">
                   <EquipmentStatusChips item={it} />
                 </TableCell>
@@ -240,7 +240,7 @@ export function EquipmentTab() {
             <EquipmentStatusChips item={it} />
             <MobileCardField label="Category"><span className="text-sm">{it.category ?? '—'}</span></MobileCardField>
             <MobileCardField label="Location"><span className="text-sm">{it.location ?? '—'}</span></MobileCardField>
-            <MobileCardField label="Units"><span className="font-mono text-xs">{it.total_units}</span></MobileCardField>
+            <MobileCardField label="Units"><span className="tabular-nums text-xs">{it.total_units}</span></MobileCardField>
             <MobileCardActions>{equipmentActions(it)}</MobileCardActions>
           </MobileCard>
         ))}

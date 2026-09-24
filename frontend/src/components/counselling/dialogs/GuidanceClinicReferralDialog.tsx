@@ -58,7 +58,7 @@ export function GuidanceClinicReferralDialog({ session, onClose }: { session: Se
         <form noValidate onSubmit={(event) => void submit(event)} className="space-y-4">
           <div className="rounded-lg border bg-muted/30 p-3 text-sm">
             <p className="font-medium">{session.patient_display_name}</p>
-            <p className="font-mono text-xs text-muted-foreground">{session.patient_school_id}</p>
+            <p className="tabular-nums text-xs text-muted-foreground">{session.patient_school_id}</p>
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5"><Label htmlFor="guidance-referral-from">From</Label><Input id="guidance-referral-from" value="Guidance" readOnly disabled /></div>

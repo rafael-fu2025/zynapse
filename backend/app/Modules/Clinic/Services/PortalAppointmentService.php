@@ -45,15 +45,33 @@ final class PortalAppointmentService extends BaseService
             if ($to) $b->where('appointment_date <=', $to);
             foreach ($b->get()->getResultArray() as $row) $out[] = $this->guidanceRow($row);
         }
-        $names = $this->providerNames(array_values(array_unique(array_column($out, 'provider_user_id'))));
-        foreach ($out as &$row) $row['provider_name'] = $names[$row['provider_user_id']] ?? null;
+        // Unassigned appointments have nobody to name yet, and a null in the
+        // id list would reach `whereIn` — filter before the lookup, then leave
+        // provider_name null rather than inventing "Provider #0".
+        $ids = array_values(array_filter(
+            array_unique(array_column($out, 'provider_user_id')),
+            static fn($id): bool => $id !== null,
+        ));
+        $names = $this->providerNames($ids);
+        foreach ($out as &$row) $row['provider_name'] = $row['provider_user_id'] !== null ? ($names[$row['provider_user_id']] ?? null) : null;
         unset($row);
         usort($out, static fn(array $a, array $b): int => strcmp((string) $a['starts_at'], (string) $b['starts_at']));
         return $out;
     }
 
-    /** @return list<array<string,mixed>> */
-    public function slots(string $department, string $from, string $to, ?int $providerId): array
+    /**
+     * Available times for a department, pooled across every staff member.
+     *
+     * The patient books a TIME, not a person (2026-09-23). Slots used to be
+     * one row per free staff member ("9:00 AM · Nurse Reyes"), which asked the
+     * patient to choose staff they have no basis to choose, and forced the desk
+     * to honour a pairing that made no operational sense. A slot's `remaining`
+     * is now the department's spare capacity at that instant, and the provider
+     * is assigned later by whoever approves the appointment.
+     *
+     * @return list<array<string,mixed>>
+     */
+    public function slots(string $department, string $from, string $to): array
     {
         $start = new DateTimeImmutable($from, new DateTimeZone(self::LOCAL_TZ));
         $end = new DateTimeImmutable($to, new DateTimeZone(self::LOCAL_TZ));
@@ -62,39 +80,48 @@ final class PortalAppointmentService extends BaseService
             'code'=>'validation.range','message'=>'Choose a valid range within the 90-day booking horizon.','field'=>'to',
         ]]);
         $slots = $department === 'clinic'
-            ? $this->clinicSlots($start, $end, $providerId)
-            : $this->guidanceSlots($start, $end, $providerId);
+            ? $this->clinicSlots($start, $end)
+            : $this->guidanceSlots($start, $end);
         return array_values(array_filter($slots, static fn(array $slot): bool =>
             new DateTimeImmutable((string) $slot['starts_at']) >= (new DateTimeImmutable('now', new DateTimeZone('UTC')))->modify('+1 hour')
         ));
     }
 
-    /** @return array<string,mixed> */
+    /**
+     * Book a department and a time. No provider is named or reserved.
+     *
+     * @return array<string,mixed>
+     */
     public function book(int $userId, array $input): array
     {
         $department = (string) $input['department'];
-        $provider = (int) $input['provider_user_id'];
         $startUtc = $this->parseUtc((string) $input['starts_at']);
         $this->assertPatientFree($userId, $startUtc);
         $startLocal = $startUtc->setTimezone(new DateTimeZone(self::LOCAL_TZ));
-        $available = $this->slots($department, $startLocal->format('Y-m-d'), $startLocal->format('Y-m-d'), $provider);
-        if (! array_filter($available, static fn(array $s): bool => (int) $s['provider_user_id'] === $provider && $s['starts_at'] === $startUtc->format(DATE_ATOM))) {
+        // Re-derive availability at commit time: the time must still exist and
+        // still have a place left. The check is repeated inside the write
+        // transaction below, because this read is not locking.
+        $available = $this->slots($department, $startLocal->format('Y-m-d'), $startLocal->format('Y-m-d'));
+        if (! array_filter($available, static fn(array $s): bool => $s['starts_at'] === $startUtc->format(DATE_ATOM))) {
             throw new ApiException('statemachine.schedule.slot_full', 409, [[
                 'code'=>'statemachine.schedule.slot_full','message'=>'That appointment slot is no longer available.',
             ]]);
         }
         if ($department === 'clinic') {
-            $dto = $this->clinicAppointments->bookSelf(
-                $userId, $provider, $startUtc->format('Y-m-d H:i:s'), $input['reason'] ?? null,
-            )->toArray();
-            $row = $this->clinicRow($dto);
-            // Pass the proof-of-booking QR through — bookSelf mints it,
-            // but clinicRow used to drop the field, so students booked
-            // from the portal could never render their QR (2026-09 audit).
-            $row['qr_token'] = $dto['qr_token'] ?? null;
-            return $row;
+            return $this->txn(function () use ($userId, $startUtc, $input): array {
+                $this->assertClinicPlace($startUtc);
+                $dto = $this->clinicAppointments->bookSelf(
+                    $userId, null, $startUtc->format('Y-m-d H:i:s'), $input['reason'] ?? null,
+                )->toArray();
+                $row = $this->clinicRow($dto);
+                // Pass the proof-of-booking QR through — bookSelf mints it,
+                // but clinicRow used to drop the field, so students booked
+                // from the portal could never render their QR (2026-09 audit).
+                $row['qr_token'] = $dto['qr_token'] ?? null;
+                return $row;
+            });
         }
-        return $this->bookGuidance($userId, $provider, $startLocal, (string) ($input['type'] ?? 'initial'), $input['reason'] ?? null);
+        return $this->bookGuidance($userId, $startLocal, (string) ($input['type'] ?? 'initial'), $input['reason'] ?? null);
     }
 
     /** @return array<string,mixed> */
@@ -117,8 +144,11 @@ final class PortalAppointmentService extends BaseService
             $update = ['status'=>'cancelled','updated_at'=>$now];
             if ($department === 'counselling') $update['cancellation_reason'] = 'Cancelled by patient';
             $this->db->table($table)->where($table . '.tenant_id', CurrentTenant::id())->where('id', $id)->update($update);
-            $provider = (int) ($row[$department === 'clinic' ? 'provider_user_id' : 'counsellor_user_id']);
-            foreach (array_unique([$userId, $provider]) as $recipient) $this->notifyAppointment($recipient, $department, $id, $start, 'cancelled');
+            $owner = $row[$department === 'clinic' ? 'provider_user_id' : 'counsellor_user_id'];
+            // An unapproved appointment has no owner, so only the patient is
+            // told. Coercing null here would enqueue to user 0.
+            $recipients = $owner !== null ? array_unique([$userId, (int) $owner]) : [$userId];
+            foreach ($recipients as $recipient) $this->notifyAppointment($recipient, $department, $id, $start, 'cancelled');
             return $department === 'clinic' ? $this->clinicRow(array_merge($row, $update)) : $this->guidanceRow(array_merge($row, $update));
         });
     }
@@ -137,70 +167,230 @@ final class PortalAppointmentService extends BaseService
         return $rows;
     }
 
-    /** @return list<array<string,mixed>> */
-    private function clinicSlots(DateTimeImmutable $from, DateTimeImmutable $to, ?int $provider): array
+    /**
+     * Clinic capacity is one appointment per staff member per 60-minute slot,
+     * so a time's capacity is simply the number of scheduled staff covering
+     * it. Leave removes that staff member's contribution, not the whole slot —
+     * the difference matters when three nurses are rostered and one is away.
+     *
+     * Coverage is keyed by staff id so a person holding both a `regular` and
+     * an `on_call` schedule over the same hour counts once; the old code
+     * emitted a duplicate slot per schedule.
+     *
+     * @return list<array<string,mixed>>
+     */
+    private function clinicSlots(DateTimeImmutable $from, DateTimeImmutable $to): array
     {
-        $b = $this->db->table('clinic_staff_schedules s')->select('s.*, u.first_name, u.last_name')
-            ->where('s.tenant_id', CurrentTenant::id())
-            ->join('users u', 'u.id=s.user_id')->where('s.is_active', 1)->whereIn('s.schedule_type', ['regular','on_call']);
-        if ($provider) $b->where('s.user_id', $provider);
-        $schedules = $b->get()->getResultArray(); $out=[];
-        for ($day=$from; $day <= $to; $day=$day->modify('+1 day')) foreach ($schedules as $s) {
-            if ((int)$s['day_of_week'] !== (int)$day->format('w')) continue;
-            if ($s['effective_from'] && $day->format('Y-m-d') < $s['effective_from']) continue;
-            if ($s['effective_to'] && $day->format('Y-m-d') > $s['effective_to']) continue;
-            $leaveBuilder = $this->db->table('clinic_staff_schedules')->where('clinic_staff_schedules.tenant_id', CurrentTenant::id())->where('user_id',(int)$s['user_id'])->where('is_active',1)->where('schedule_type','leave')->where('day_of_week',(int)$day->format('w'))
-                ->groupStart()->where('effective_from',null)->orWhere('effective_from <=',$day->format('Y-m-d'))->groupEnd()
-                ->groupStart()->where('effective_to',null)->orWhere('effective_to >=',$day->format('Y-m-d'))->groupEnd();
-            $leave = $leaveBuilder->countAllResults();
-            if ($leave > 0) continue;
-            $cursor = new DateTimeImmutable($day->format('Y-m-d').' '.$s['shift_start'], new DateTimeZone(self::LOCAL_TZ));
-            $finish = new DateTimeImmutable($day->format('Y-m-d').' '.$s['shift_end'], new DateTimeZone(self::LOCAL_TZ));
-            while ($cursor->modify('+60 minutes') <= $finish) {
-                $utc=$cursor->setTimezone(new DateTimeZone('UTC'));
-                $clash=$this->db->table('clinic_appointments')->where('clinic_appointments.tenant_id', CurrentTenant::id())->where('provider_user_id',(int)$s['user_id'])->whereIn('status',['scheduled','checked_in'])->where('scheduled_at >',$utc->modify('-60 minutes')->format('Y-m-d H:i:s'))->where('scheduled_at <',$utc->modify('+60 minutes')->format('Y-m-d H:i:s'))->where('archived_at',null)->countAllResults();
-                if (!$clash) $out[]=$this->slot('clinic',(int)$s['user_id'],$utc,trim($s['first_name'].' '.$s['last_name']));
-                $cursor=$cursor->modify('+60 minutes');
+        $schedules = $this->db->table('clinic_staff_schedules')
+            ->select('user_id, day_of_week, shift_start, shift_end, effective_from, effective_to')
+            ->where('tenant_id', CurrentTenant::id())
+            ->where('is_active', 1)->whereIn('schedule_type', ['regular','on_call'])
+            ->get()->getResultArray();
+        $leave = $this->db->table('clinic_staff_schedules')
+            ->select('user_id, day_of_week, effective_from, effective_to')
+            ->where('tenant_id', CurrentTenant::id())->where('is_active', 1)
+            ->where('schedule_type', 'leave')->get()->getResultArray();
+
+        $places = [];
+        for ($day = $from; $day <= $to; $day = $day->modify('+1 day')) {
+            $dow = (int) $day->format('w');
+            $date = $day->format('Y-m-d');
+            foreach ($schedules as $s) {
+                if ((int) $s['day_of_week'] !== $dow) continue;
+                if ($s['effective_from'] && $date < $s['effective_from']) continue;
+                if ($s['effective_to'] && $date > $s['effective_to']) continue;
+                if ($this->onLeave($leave, (int) $s['user_id'], $dow, $date)) continue;
+                $cursor = new DateTimeImmutable($date.' '.$s['shift_start'], new DateTimeZone(self::LOCAL_TZ));
+                $finish = new DateTimeImmutable($date.' '.$s['shift_end'], new DateTimeZone(self::LOCAL_TZ));
+                while ($cursor->modify('+60 minutes') <= $finish) {
+                    $places[$date][$cursor->format('H:i')][(int) $s['user_id']] = 1;
+                    $cursor = $cursor->modify('+60 minutes');
+                }
             }
+        }
+
+        return $this->pooledSlots('clinic', $places, $this->clinicBookedInstants($from, $to));
+    }
+
+    /**
+     * Guidance capacity is the sum of `max_slots` across every active window
+     * covering the instant. Overlapping windows belonging to one counsellor
+     * take the larger figure rather than adding up, so a counsellor cannot
+     * inflate capacity by declaring two windows over the same hour.
+     *
+     * @return list<array<string,mixed>>
+     */
+    private function guidanceSlots(DateTimeImmutable $from, DateTimeImmutable $to): array
+    {
+        $windows = $this->db->table('counselling_availability')
+            ->select('counsellor_user_id, day_of_week, start_time, end_time, max_slots')
+            ->where('tenant_id', CurrentTenant::id())->where('is_active', 1)
+            ->get()->getResultArray();
+
+        $places = [];
+        for ($day = $from; $day <= $to; $day = $day->modify('+1 day')) {
+            $dow = (int) $day->format('w');
+            $date = $day->format('Y-m-d');
+            foreach ($windows as $w) {
+                if ((int) $w['day_of_week'] !== $dow) continue;
+                $counsellor = (int) $w['counsellor_user_id'];
+                $max = (int) $w['max_slots'];
+                $cursor = new DateTimeImmutable($date.' '.$w['start_time'], new DateTimeZone(self::LOCAL_TZ));
+                $finish = new DateTimeImmutable($date.' '.$w['end_time'], new DateTimeZone(self::LOCAL_TZ));
+                while ($cursor->modify('+60 minutes') <= $finish) {
+                    $key = $cursor->format('H:i');
+                    if ($max > ($places[$date][$key][$counsellor] ?? 0)) $places[$date][$key][$counsellor] = $max;
+                    $cursor = $cursor->modify('+60 minutes');
+                }
+            }
+        }
+
+        return $this->pooledSlots('counselling', $places, $this->guidanceBookedInstants($from, $to));
+    }
+
+    /**
+     * Collapse per-staff coverage into one row per time, carrying the places
+     * still free. `remaining` is capacity minus what the department already
+     * holds, and only times with at least one place left are emitted.
+     *
+     * @param array<string,array<string,array<int,int>>> $places date => 'H:i' => staffId => places
+     * @param list<int> $booked UTC start instants already held in the department
+     * @return list<array<string,mixed>>
+     */
+    private function pooledSlots(string $department, array $places, array $booked): array
+    {
+        $out = [];
+        foreach ($places as $date => $times) {
+            foreach ($times as $time => $perStaff) {
+                $utc = (new DateTimeImmutable($date.' '.$time.':00', new DateTimeZone(self::LOCAL_TZ)))
+                    ->setTimezone(new DateTimeZone('UTC'));
+                $remaining = array_sum($perStaff) - $this->overlapping($booked, $utc->getTimestamp());
+                if ($remaining > 0) $out[] = $this->slot($department, $utc, $remaining);
+            }
+        }
+        usort($out, static fn(array $a, array $b): int => strcmp((string) $a['starts_at'], (string) $b['starts_at']));
+
+        return $out;
+    }
+
+    /**
+     * Appointments whose 60-minute window overlaps the one starting at $at.
+     *
+     * Unassigned bookings count. The patient holds that time even though no
+     * staff member owns it yet, so it must not be offered to anyone else —
+     * counting only assigned appointments would double-sell every slot that
+     * is still waiting for approval.
+     *
+     * @param list<int> $booked
+     */
+    private function overlapping(array $booked, int $at): int
+    {
+        $n = 0;
+        foreach ($booked as $ts) if (abs($ts - $at) < 3600) $n++;
+        return $n;
+    }
+
+    /**
+     * A staff member is off when any active `leave` schedule for that weekday
+     * covers the date.
+     *
+     * @param list<array<string,mixed>> $leave
+     */
+    private function onLeave(array $leave, int $userId, int $dow, string $date): bool
+    {
+        foreach ($leave as $l) {
+            if ((int) $l['user_id'] !== $userId || (int) $l['day_of_week'] !== $dow) continue;
+            if ($l['effective_from'] && $date < $l['effective_from']) continue;
+            if ($l['effective_to'] && $date > $l['effective_to']) continue;
+            return true;
+        }
+        return false;
+    }
+
+    /** @return list<int> */
+    private function clinicBookedInstants(DateTimeImmutable $from, DateTimeImmutable $to): array
+    {
+        // Padded by a day either side: a late appointment on the previous day
+        // still overlaps the first slot of the range.
+        $rows = $this->db->table('clinic_appointments')
+            ->select('scheduled_at')
+            ->where('tenant_id', CurrentTenant::id())
+            ->whereIn('status', ['scheduled','confirmed','checked_in'])
+            ->where('archived_at', null)
+            ->where('scheduled_at >=', $this->localBoundaryUtc($from->modify('-1 day')->format('Y-m-d'), false))
+            ->where('scheduled_at <=', $this->localBoundaryUtc($to->modify('+1 day')->format('Y-m-d'), true))
+            ->get()->getResultArray();
+        $out = [];
+        foreach ($rows as $r) $out[] = (new DateTimeImmutable((string) $r['scheduled_at'], new DateTimeZone('UTC')))->getTimestamp();
+        return $out;
+    }
+
+    /** @return list<int> */
+    private function guidanceBookedInstants(DateTimeImmutable $from, DateTimeImmutable $to): array
+    {
+        $rows = $this->db->table('counselling_appointments')
+            ->select('appointment_date, start_time')
+            ->where('tenant_id', CurrentTenant::id())
+            ->whereIn('status', ['scheduled','confirmed'])
+            ->where('appointment_date >=', $from->modify('-1 day')->format('Y-m-d'))
+            ->where('appointment_date <=', $to->modify('+1 day')->format('Y-m-d'))
+            ->get()->getResultArray();
+        $out = [];
+        foreach ($rows as $r) {
+            $out[] = (new DateTimeImmutable((string) $r['appointment_date'].' '.(string) $r['start_time'], new DateTimeZone(self::LOCAL_TZ)))
+                ->setTimezone(new DateTimeZone('UTC'))->getTimestamp();
         }
         return $out;
     }
 
-    /** @return list<array<string,mixed>> */
-    private function guidanceSlots(DateTimeImmutable $from, DateTimeImmutable $to, ?int $provider): array
+    /**
+     * The read-only check in book() cannot guard the race on its own now that
+     * capacity is pooled: with no named provider there is no per-provider
+     * clash to reject a second booking. Lock the schedules that define the
+     * capacity, then re-derive the day inside the transaction, so the last
+     * place cannot be sold twice.
+     */
+    private function assertClinicPlace(DateTimeImmutable $startUtc): void
     {
-        $b=$this->db->table('counselling_availability a')->select('a.*,u.first_name,u.last_name')->where('a.tenant_id', CurrentTenant::id())->join('users u','u.id=a.counsellor_user_id')->where('a.is_active',1);
-        if ($provider) $b->where('a.counsellor_user_id',$provider);
-        $windows=$b->get()->getResultArray(); $out=[];
-        for($day=$from;$day<=$to;$day=$day->modify('+1 day')) foreach($windows as $w){
-            if((int)$w['day_of_week']!==(int)$day->format('w'))continue;
-            $cursor=new DateTimeImmutable($day->format('Y-m-d').' '.$w['start_time'],new DateTimeZone(self::LOCAL_TZ));
-            $finish=new DateTimeImmutable($day->format('Y-m-d').' '.$w['end_time'],new DateTimeZone(self::LOCAL_TZ));
-            while($cursor->modify('+60 minutes')<=$finish){
-                $end=$cursor->modify('+60 minutes');
-                $count=$this->db->table('counselling_appointments')->where('counselling_appointments.tenant_id', CurrentTenant::id())->where('counsellor_user_id',(int)$w['counsellor_user_id'])->where('appointment_date',$day->format('Y-m-d'))->whereIn('status',['scheduled','confirmed'])->where('start_time <',$end->format('H:i:s'))->where('end_time >',$cursor->format('H:i:s'))->countAllResults();
-                if($count<(int)$w['max_slots'])$out[]=$this->slot('counselling',(int)$w['counsellor_user_id'],$cursor->setTimezone(new DateTimeZone('UTC')),trim($w['first_name'].' '.$w['last_name']));
-                $cursor=$end;
-            }
+        $this->db->query(
+            'SELECT `id` FROM `clinic_staff_schedules` WHERE `tenant_id` = ? AND `is_active` = 1 FOR UPDATE',
+            [CurrentTenant::id()],
+        )->getResultArray();
+        $local = $startUtc->setTimezone(new DateTimeZone(self::LOCAL_TZ));
+        $available = $this->clinicSlots($local, $local);
+        if (! array_filter($available, static fn(array $s): bool => $s['starts_at'] === $startUtc->format(DATE_ATOM))) {
+            throw new ApiException('statemachine.schedule.slot_full', 409, [[
+                'code'=>'statemachine.schedule.slot_full','message'=>'That slot was just taken. Choose another time.',
+            ]]);
         }
-        return $out;
     }
 
-    /** @return array<string,mixed> */
-    private function bookGuidance(int $userId,int $provider,DateTimeImmutable $local,string $type,?string $reason): array
+    /**
+     * Guidance capacity is the sum of `max_slots` over every window covering
+     * the instant — not one counsellor's window. Locking those windows and
+     * counting the department's live appointments is what stops the last
+     * place being sold twice now that no counsellor is named at booking.
+     *
+     * @return array<string,mixed>
+     */
+    private function bookGuidance(int $userId, DateTimeImmutable $local, string $type, ?string $reason): array
     {
-        return $this->txn(function()use($userId,$provider,$local,$type,$reason):array{
-            $this->assertPatientFree($userId,$local->setTimezone(new DateTimeZone('UTC')));
-            $user=$this->db->table('users')->select('student_number,employee_number')->where('users.tenant_id', CurrentTenant::id())->where('id',$userId)->get()->getRowArray();
+        return $this->txn(function () use ($userId, $local, $type, $reason): array {
+            $utc = $local->setTimezone(new DateTimeZone('UTC'));
+            $this->assertPatientFree($userId, $utc);
+            $user = $this->db->table('users')->select('student_number,employee_number')->where('users.tenant_id', CurrentTenant::id())->where('id',$userId)->get()->getRowArray();
             if($user===null)throw new ApiException('resource.not_found',404,[['code'=>'resource.not_found','message'=>'Patient not found.']]);
             $school=(string)($user['student_number']?:$user['employee_number']); $end=$local->modify('+60 minutes'); $now=gmdate('Y-m-d H:i:s');
-            $window=$this->db->query('SELECT `id`,`max_slots` FROM `counselling_availability` WHERE `tenant_id`=? AND `counsellor_user_id`=? AND `day_of_week`=? AND `is_active`=1 AND `start_time`<=? AND `end_time`>=? LIMIT 1 FOR UPDATE',[CurrentTenant::id(),$provider,(int)$local->format('w'),$local->format('H:i:s'),$end->format('H:i:s')])->getRowArray();
-            if($window===null)throw new ApiException('statemachine.schedule.outside_availability',409,[['code'=>'statemachine.schedule.outside_availability','message'=>'The provider is no longer available for that slot.']]);
-            $count=$this->db->query('SELECT COUNT(*) AS n FROM `counselling_appointments` WHERE `tenant_id`=? AND `counsellor_user_id`=? AND `appointment_date`=? AND `status` IN (?,?) AND NOT (?<=`start_time` OR ?>=`end_time`) FOR UPDATE',[CurrentTenant::id(),$provider,$local->format('Y-m-d'),'scheduled','confirmed',$end->format('H:i:s'),$local->format('H:i:s')])->getRowArray();
-            if((int)($count['n']??0)>=(int)$window['max_slots'])throw new ApiException('statemachine.schedule.slot_full',409,[['code'=>'statemachine.schedule.slot_full','message'=>'That slot was just booked. Choose another time.']]);
-            $this->db->table('counselling_appointments')->insert(['tenant_id'=>CurrentTenant::id(),'patient_user_id'=>$userId,'patient_school_id'=>$school,'counsellor_user_id'=>$provider,'appointment_date'=>$local->format('Y-m-d'),'start_time'=>$local->format('H:i:s'),'end_time'=>$end->format('H:i:s'),'type'=>$type,'status'=>'scheduled','reason'=>$reason?:null,'created_by_user_id'=>$userId,'created_at'=>$now,'updated_at'=>$now]);
+            $windows=$this->db->query('SELECT `id`,`max_slots` FROM `counselling_availability` WHERE `tenant_id`=? AND `day_of_week`=? AND `is_active`=1 AND `start_time`<=? AND `end_time`>=? FOR UPDATE',[CurrentTenant::id(),(int)$local->format('w'),$local->format('H:i:s'),$end->format('H:i:s')])->getResultArray();
+            $capacity=0; foreach($windows as$w)$capacity+=(int)$w['max_slots'];
+            if($capacity===0)throw new ApiException('statemachine.schedule.outside_availability',409,[['code'=>'statemachine.schedule.outside_availability','message'=>'No provider is available for that slot.']]);
+            $count=$this->db->query('SELECT COUNT(*) AS n FROM `counselling_appointments` WHERE `tenant_id`=? AND `appointment_date`=? AND `status` IN (?,?) AND NOT (?<=`start_time` OR ?>=`end_time`) FOR UPDATE',[CurrentTenant::id(),$local->format('Y-m-d'),'scheduled','confirmed',$end->format('H:i:s'),$local->format('H:i:s')])->getRowArray();
+            if((int)($count['n']??0)>=$capacity)throw new ApiException('statemachine.schedule.slot_full',409,[['code'=>'statemachine.schedule.slot_full','message'=>'That slot was just booked. Choose another time.']]);
+            $this->db->table('counselling_appointments')->insert(['tenant_id'=>CurrentTenant::id(),'patient_user_id'=>$userId,'patient_school_id'=>$school,'counsellor_user_id'=>null,'appointment_date'=>$local->format('Y-m-d'),'start_time'=>$local->format('H:i:s'),'end_time'=>$end->format('H:i:s'),'type'=>$type,'status'=>'scheduled','reason'=>$reason?:null,'created_by_user_id'=>$userId,'created_at'=>$now,'updated_at'=>$now]);
             $id=(int)$this->db->insertID(); $utc=$local->setTimezone(new DateTimeZone('UTC'));
-            foreach(array_unique([$userId,$provider])as$recipient)$this->notifyAppointment($recipient,'counselling',$id,$utc,'scheduled');
+            // Only the patient is notified: nobody owns this appointment yet.
+            // Approval notifies whoever picks it up.
+            $this->notifyAppointment($userId,'counselling',$id,$utc,'scheduled');
             $row=$this->db->table('counselling_appointments')->where('counselling_appointments.tenant_id', CurrentTenant::id())->where('id',$id)->get()->getRowArray(); return $this->guidanceRow($row);
         });
     }
@@ -211,15 +401,44 @@ final class PortalAppointmentService extends BaseService
     { try { return (new DateTimeImmutable($value))->setTimezone(new DateTimeZone('UTC')); } catch(\Throwable){ throw ApiException::validationFailure([['code'=>'validation.field','message'=>'starts_at must be an ISO-8601 timestamp.','field'=>'starts_at']]); } }
     private function localBoundaryUtc(string $date,bool $end):string
     { return (new DateTimeImmutable($date.($end?' 23:59:59':' 00:00:00'),new DateTimeZone(self::LOCAL_TZ)))->setTimezone(new DateTimeZone('UTC'))->format('Y-m-d H:i:s'); }
+    /**
+     * A bookable time. It names no provider: `remaining` is how many places
+     * the department still has at that instant, pooled across all staff.
+     *
+     * @return array<string,mixed>
+     */
+    private function slot(string $department, DateTimeImmutable $utc, int $remaining): array
+    {
+        return [
+            'department'       => $department,
+            'starts_at'        => $utc->format(DATE_ATOM),
+            'ends_at'          => $utc->modify('+60 minutes')->format(DATE_ATOM),
+            'duration_minutes' => 60,
+            'remaining'        => $remaining,
+        ];
+    }
+
+    /**
+     * `provider_user_id` is null until someone approves the appointment. It is
+     * passed through as null rather than cast, because `(int) null` is 0 and 0
+     * is a user id that does not exist — a client reading it would render
+     * "Provider #0" instead of "not yet assigned".
+     *
+     * @return array<string,mixed>
+     */
+    private function clinicRow(array $r): array
+    {
+        $utc = new DateTimeImmutable((string) $r['scheduled_at'], new DateTimeZone('UTC'));
+        return ['department'=>'clinic','id'=>(int)$r['id'],'provider_user_id'=>($r['provider_user_id'] ?? null) !== null ? (int) $r['provider_user_id'] : null,'starts_at'=>$utc->format(DATE_ATOM),'ends_at'=>$utc->modify('+60 minutes')->format(DATE_ATOM),'status'=>(string)$r['status'],'reason'=>$r['reason']??null,'type'=>null,'queue_entry_id'=>null];
+    }
+
     /** @return array<string,mixed> */
-    private function slot(string $department,int $provider,DateTimeImmutable $utc,string $name):array
-    { return ['department'=>$department,'provider_user_id'=>$provider,'provider_name'=>$name,'starts_at'=>$utc->format(DATE_ATOM),'ends_at'=>$utc->modify('+60 minutes')->format(DATE_ATOM),'duration_minutes'=>60]; }
-    /** @return array<string,mixed> */
-    private function clinicRow(array $r):array
-    { $utc=new DateTimeImmutable((string)$r['scheduled_at'],new DateTimeZone('UTC')); return ['department'=>'clinic','id'=>(int)$r['id'],'provider_user_id'=>(int)$r['provider_user_id'],'starts_at'=>$utc->format(DATE_ATOM),'ends_at'=>$utc->modify('+60 minutes')->format(DATE_ATOM),'status'=>(string)$r['status'],'reason'=>$r['reason']??null,'type'=>null,'queue_entry_id'=>null]; }
-    /** @return array<string,mixed> */
-    private function guidanceRow(array $r):array
-    { $local=new DateTimeImmutable((string)$r['appointment_date'].' '.(string)$r['start_time'],new DateTimeZone(self::LOCAL_TZ)); $end=new DateTimeImmutable((string)$r['appointment_date'].' '.(string)$r['end_time'],new DateTimeZone(self::LOCAL_TZ)); return ['department'=>'counselling','id'=>(int)$r['id'],'provider_user_id'=>(int)$r['counsellor_user_id'],'starts_at'=>$local->setTimezone(new DateTimeZone('UTC'))->format(DATE_ATOM),'ends_at'=>$end->setTimezone(new DateTimeZone('UTC'))->format(DATE_ATOM),'status'=>(string)$r['status'],'reason'=>$r['reason']??null,'type'=>$r['type']??null,'queue_entry_id'=>null]; }
+    private function guidanceRow(array $r): array
+    {
+        $local = new DateTimeImmutable((string) $r['appointment_date'].' '.(string) $r['start_time'], new DateTimeZone(self::LOCAL_TZ));
+        $end = new DateTimeImmutable((string) $r['appointment_date'].' '.(string) $r['end_time'], new DateTimeZone(self::LOCAL_TZ));
+        return ['department'=>'counselling','id'=>(int)$r['id'],'provider_user_id'=>($r['counsellor_user_id'] ?? null) !== null ? (int) $r['counsellor_user_id'] : null,'starts_at'=>$local->setTimezone(new DateTimeZone('UTC'))->format(DATE_ATOM),'ends_at'=>$end->setTimezone(new DateTimeZone('UTC'))->format(DATE_ATOM),'status'=>(string)$r['status'],'reason'=>$r['reason']??null,'type'=>$r['type']??null,'queue_entry_id'=>null];
+    }
     /** @return array<int,string> */
     private function providerNames(array $ids):array
     { if(!$ids)return[];$out=[];foreach($this->db->table('users')->select('id,first_name,last_name,username')->where('users.tenant_id', CurrentTenant::id())->whereIn('id',$ids)->get()->getResultArray()as$r)$out[(int)$r['id']]=trim($r['first_name'].' '.$r['last_name'])?:$r['username'];return$out; }

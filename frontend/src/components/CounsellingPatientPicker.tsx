@@ -111,7 +111,7 @@ export function CounsellingPatientPicker({
               >
                 <span className="min-w-0 flex-1">
                   <span className="block truncate text-sm font-medium">{p.name}</span>
-                  <span className="block font-mono text-xs text-muted-foreground">{p.school_id}</span>
+                  <span className="block tabular-nums text-xs text-muted-foreground">{p.school_id}</span>
                 </span>
                 <Badge variant={p.kind === 'student' ? 'info' : 'secondary'}>
                   {p.kind === 'student' ? 'Student' : 'Employee'}

@@ -112,8 +112,20 @@ final class ScheduleService extends BaseService
     }
 
     /**
+     * Add one or more availability windows in a single transaction.
+     *
+     * The desk sets its week in one sitting, so the payload carries a **set**
+     * of weekdays: `days_of_week: [1,3,5]` inserts three windows sharing one
+     * time range. All-or-nothing — a failure on any day rolls the whole set
+     * back, so the desk can never end up with half a week added and no clear
+     * signal which half.
+     *
+     * `day_of_week` (single) is still accepted for older callers and for the
+     * one-day case; `days_of_week` wins when both are present.
+     *
      * @param array<string, mixed> $input validated payload
-     * @return array<string, mixed>
+     * @return array{id:int, ids:list<int>} `id` is the first row, kept for
+     *         backward compatibility with single-day callers
      */
     public function addSlot(array $input): array
     {
@@ -121,7 +133,9 @@ final class ScheduleService extends BaseService
         $counsellorId = (int) ($input['counsellor_user_id'] ?? $userId);
         $this->assertScheduleMutation($counsellorId);
 
-        return $this->txn(function () use ($input, $userId, $counsellorId): array {
+        $days = $this->normaliseDaysOfWeek($input);
+
+        return $this->txn(function () use ($input, $userId, $counsellorId, $days): array {
             $start        = (string) $input['start_time'];
             $end          = (string) $input['end_time'];
             if ($start >= $end) {
@@ -131,23 +145,75 @@ final class ScheduleService extends BaseService
             }
 
             $now = $this->utcNow();
-            $this->db->table('counselling_availability')->insert([
-                'tenant_id'          => CurrentTenant::id(),
-                'counsellor_user_id' => $counsellorId,
-                'day_of_week'        => (int) $input['day_of_week'],
-                'start_time'         => $start,
-                'end_time'           => $end,
-                'max_slots'          => (int) ($input['max_slots'] ?? 1),
-                'is_active'          => 1,
-                'created_at'         => $now,
-                'updated_at'         => $now,
-            ]);
-            $id = (int) $this->db->insertID();
+            $ids = [];
+            foreach ($days as $day) {
+                $this->db->table('counselling_availability')->insert([
+                    'tenant_id'          => CurrentTenant::id(),
+                    'counsellor_user_id' => $counsellorId,
+                    'day_of_week'        => $day,
+                    'start_time'         => $start,
+                    'end_time'           => $end,
+                    'max_slots'          => (int) ($input['max_slots'] ?? 1),
+                    'is_active'          => 1,
+                    'created_at'         => $now,
+                    'updated_at'         => $now,
+                ]);
+                $id = (int) $this->db->insertID();
+                $ids[] = $id;
 
-            $this->audit->enqueue('counselling.availability_added', 'counselling_availability', $id, $userId, []);
+                $this->audit->enqueue('counselling.availability_added', 'counselling_availability', $id, $userId, []);
+            }
 
-            return ['id' => $id];
+            return ['id' => $ids[0], 'ids' => $ids];
         });
+    }
+
+    /**
+     * Resolve the requested weekdays into a sorted, de-duplicated list.
+     *
+     * @param array<string, mixed> $input
+     * @return list<int> 0=Sun … 6=Sat
+     */
+    private function normaliseDaysOfWeek(array $input): array
+    {
+        $raw = $input['days_of_week'] ?? null;
+
+        if (is_array($raw)) {
+            $candidates = $raw;
+        } elseif (array_key_exists('day_of_week', $input) && $input['day_of_week'] !== '' && $input['day_of_week'] !== null) {
+            $candidates = [$input['day_of_week']];
+        } else {
+            throw ApiException::validationFailure([
+                ['code' => 'validation.field', 'message' => 'Pick at least one weekday.', 'field' => 'days_of_week'],
+            ]);
+        }
+
+        $days = [];
+        foreach ($candidates as $candidate) {
+            if (! is_numeric($candidate)) {
+                throw ApiException::validationFailure([
+                    ['code' => 'validation.field', 'message' => 'Weekdays must be numbers 0-6.', 'field' => 'days_of_week'],
+                ]);
+            }
+            $day = (int) $candidate;
+            if ($day < 0 || $day > 6) {
+                throw ApiException::validationFailure([
+                    ['code' => 'validation.field', 'message' => 'Weekdays must be numbers 0-6.', 'field' => 'days_of_week'],
+                ]);
+            }
+            $days[$day] = $day;
+        }
+
+        if ($days === []) {
+            throw ApiException::validationFailure([
+                ['code' => 'validation.field', 'message' => 'Pick at least one weekday.', 'field' => 'days_of_week'],
+            ]);
+        }
+
+        $days = array_values($days);
+        sort($days);
+
+        return $days;
     }
 
     /** Soft removal — the slot stops accepting bookings. */
@@ -173,40 +239,141 @@ final class ScheduleService extends BaseService
 
     // --------------------------------------------------- appointments
 
+    /** Buckets the Queue board reads, each a disjoint slice of the calendar. */
+    public const APPOINTMENT_SCOPES = ['upcoming', 'today', 'archived'];
+
     /**
+     * List appointments, optionally narrowed to one calendar bucket.
+     *
+     * Scopes are resolved against the **Manila** business day, never a raw
+     * UTC date — the module has regressed on this before. The three buckets
+     * are disjoint:
+     *
+     *   - `upcoming` — dated after today, still live (scheduled|confirmed)
+     *   - `today`    — dated today, still live
+     *   - `archived` — resolved (completed|cancelled|no_show) OR dated before
+     *                  today, so a stale un-actioned row still surfaces
+     *
+     * Every scope returns rows from **both** booking sources: appointments
+     * patients booked through the portal and appointments staff booked on
+     * their behalf. `source` on each row says which.
+     *
      * @return array{data: array<int, array<string, mixed>>, next: ?string, count: int}
      */
-    public function listAppointments(?string $cursor, int $limit, ?string $status, ?string $date = null): array
-    {
+    public function listAppointments(
+        ?string $cursor,
+        int $limit,
+        ?string $status,
+        ?string $date = null,
+        ?string $scope = null,
+        ?string $type = null,
+    ): array {
         $this->policy->check('scheduleRead');
 
-        $scope = $this->scheduleScope(null);
-        $builder = $this->db->table('counselling_appointments')
-            ->where('counselling_appointments.tenant_id', CurrentTenant::id())
-            ->select('*')
-            ->orderBy('appointment_date', 'ASC')
-            ->orderBy('start_time', 'ASC')
-            ->orderBy('id', 'ASC');
-        if ($scope !== null) {
-            $builder->where('counsellor_user_id', $scope);
+        $counsellorId = $this->scheduleScope(null);
+        $builder = $this->db->table('counselling_appointments a')
+            ->where('a.tenant_id', CurrentTenant::id())
+            ->select('a.*, p.first_name AS patient_first_name, p.last_name AS patient_last_name,'
+                . ' c.first_name AS counsellor_first_name, c.last_name AS counsellor_last_name')
+            ->join('users p', 'p.id = a.patient_user_id', 'left')
+            ->join('users c', 'c.id = a.counsellor_user_id', 'left');
+        if ($counsellorId !== null) {
+            // A counsellor sees their own appointments plus any unassigned
+            // bookings that are waiting for approval / claim (same pooled
+            // discipline as Guidance queue lanes).
+            $builder->groupStart()
+                ->where('a.counsellor_user_id', $counsellorId)
+                ->orWhere('a.counsellor_user_id', null)
+                ->groupEnd();
         }
         if ($status !== null && $status !== '') {
-            $builder->where('status', $status);
+            $builder->where('a.status', $status);
         }
         if ($date !== null && $date !== '') {
-            $builder->where('appointment_date', $date);
+            $builder->where('a.appointment_date', $date);
+        }
+        if ($type !== null && $type !== '') {
+            $builder->where('a.type', $type);
         }
 
-        KeysetPaginator::apply($builder, $cursor, $limit);
+        // Archived reads newest-first (what just finished); live buckets read
+        // soonest-first (what is coming). The cursor direction must match.
+        $descending = $scope === 'archived';
+        $today      = ManilaDay::today();
+        if ($scope === 'upcoming') {
+            $builder->where('a.appointment_date >', $today)->whereIn('a.status', ['scheduled', 'confirmed']);
+        } elseif ($scope === 'today') {
+            $builder->where('a.appointment_date', $today)->whereIn('a.status', ['scheduled', 'confirmed']);
+        } elseif ($scope === 'archived') {
+            $builder->groupStart()
+                ->whereIn('a.status', ['completed', 'cancelled', 'no_show'])
+                ->orWhere('a.appointment_date <', $today)
+            ->groupEnd();
+        }
 
-        $rows  = $builder->get()->getResultArray();
-        $final = KeysetPaginator::finalize($rows, $limit);
+        $direction = $descending ? 'DESC' : 'ASC';
+        $builder->orderBy('a.appointment_date', $direction)
+            ->orderBy('a.start_time', $direction)
+            ->orderBy('a.id', $direction);
+
+        $rows = $this->applyAppointmentKeyset($builder, $cursor, $limit, $descending);
+        $hasNext = count($rows) > $limit;
+        if ($hasNext) {
+            $rows = array_slice($rows, 0, $limit);
+        }
+        $last = $rows === [] ? null : $rows[count($rows) - 1];
 
         return [
-            'data'  => array_map(fn (array $r): array => $this->appointmentRow($r), $final['rows']),
-            'next'  => $final['nextCursor'],
+            'data'  => array_map(fn (array $r): array => $this->appointmentRow($r), $rows),
+            'next'  => $hasNext && $last !== null
+                ? KeysetPaginator::encode(
+                    (string) $last['appointment_date'] . ' ' . (string) $last['start_time'],
+                    (int) $last['id'],
+                )
+                : null,
             'count' => $limit,
         ];
+    }
+
+    /**
+     * Keyset pagination over the appointment's own calendar ordering.
+     *
+     * The shared {@see KeysetPaginator} keys on `(created_at, id)` — the wrong
+     * axis for a schedule, where rows are read in date order. Rather than
+     * reintroduce OFFSET, the cursor reuses the same opaque base64 encoding
+     * but carries `"<appointment_date> <start_time>"` as its tuple stamp, and
+     * the comparison is a three-part lexicographic walk over
+     * `(appointment_date, start_time, id)`.
+     *
+     * @return array<int, array<string, mixed>> rows, at most `$limit + 1`
+     */
+    private function applyAppointmentKeyset(
+        \CodeIgniter\Database\BaseBuilder $builder,
+        ?string $cursor,
+        int $limit,
+        bool $descending,
+    ): array {
+        $builder->limit($limit + 1);
+
+        $decoded = KeysetPaginator::decode($cursor);
+        if ($decoded !== null) {
+            $stamp = $decoded['created_at'];
+            $date  = substr($stamp, 0, 10);
+            $time  = substr($stamp, 11);
+            $op    = $descending ? '<' : '>';
+
+            $builder->groupStart()
+                ->where('a.appointment_date ' . $op, $date)
+                ->orGroupStart()->where('a.appointment_date', $date)->where('a.start_time ' . $op, $time)->groupEnd()
+                ->orGroupStart()
+                    ->where('a.appointment_date', $date)
+                    ->where('a.start_time', $time)
+                    ->where('a.id ' . $op, $decoded['id'])
+                ->groupEnd()
+            ->groupEnd();
+        }
+
+        return $builder->get()->getResultArray();
     }
 
     /**
@@ -345,7 +512,7 @@ final class ScheduleService extends BaseService
                     ['code' => 'resource.not_found', 'message' => "Appointment #{$id} not found."],
                 ]);
             }
-            $this->assertScheduleMutation((int) $row['counsellor_user_id']);
+            $this->assertScheduleMutation($row['counsellor_user_id'] !== null ? (int) $row['counsellor_user_id'] : null);
 
             $current = (string) $row['status'];
             if (! in_array($current, self::TRANSITIONS[$action], true)) {
@@ -357,7 +524,18 @@ final class ScheduleService extends BaseService
             if ($action === 'cancel' && $cancellationReason !== null && $cancellationReason !== '') {
                 $update['cancellation_reason'] = $cancellationReason;
             }
+            // Approval assigns the approver: a portal booking names no
+            // counsellor, so confirming is what puts one on the appointment.
+            // A row that already has one keeps it — confirming on someone
+            // else's behalf must not take their appointment away from them.
+            if ($action === 'confirm' && $row['counsellor_user_id'] === null) {
+                $update['counsellor_user_id'] = $userId;
+            }
             $this->db->table('counselling_appointments')->where('counselling_appointments.tenant_id', CurrentTenant::id())->where('id', $id)->update($update);
+            // The snapshot above predates the assignment, so read the counsellor
+            // back out of the update — otherwise the person who just claimed
+            // this appointment is the one recipient who is not notified.
+            $counsellorId = $update['counsellor_user_id'] ?? $row['counsellor_user_id'];
             if (in_array($action, ['cancel', 'no_show'], true)) {
                 $this->db->table('counselling_queue_entries')->where('counselling_queue_entries.tenant_id', CurrentTenant::id())->where('counselling_appointment_id', $id)->whereIn('status', ['waiting','called'])->update(['status'=>'skipped','finished_at'=>$now,'updated_at'=>$now]);
             }
@@ -388,7 +566,7 @@ final class ScheduleService extends BaseService
                 ['outcome' => self::RESULT[$action]],
             );
             $appointmentAt = (new DateTimeImmutable((string) $row['appointment_date'].' '.(string) $row['start_time'], new DateTimeZone('Asia/Manila')))->setTimezone(new DateTimeZone('UTC'))->format(DATE_ATOM);
-            foreach (array_unique(array_filter([$patientUserId ?? 0, (int) $row['counsellor_user_id']])) as $recipient) {
+            foreach (array_unique(array_filter([$patientUserId ?? 0, (int) $counsellorId])) as $recipient) {
                 \Config\Services::notificationOutbox()->enqueue($recipient, 'appointment.'.self::RESULT[$action], ['resource_code'=>'appointment#'.$id,'appointment_at'=>$appointmentAt,'appointment_status'=>self::RESULT[$action],'destination'=>'counselling']);
             }
 
@@ -422,7 +600,7 @@ final class ScheduleService extends BaseService
                  . ' `start_time` AS time_slot, COUNT(*) AS total,'
                  . ' SUM(CASE WHEN `status` = ? THEN 1 ELSE 0 END) AS no_shows'
                  . ' FROM `counselling_appointments`'
-                 . ' WHERE `tenant_id` = ?';
+                 . ' WHERE `tenant_id` = ? AND `counsellor_user_id` IS NOT NULL';
             $params = ['no_show', CurrentTenant::id()];
             if ($counsellorUserId !== null) {
                 $sql     .= ' AND `counsellor_user_id` = ?';
@@ -520,16 +698,42 @@ final class ScheduleService extends BaseService
     // ------------------------------------------------------------ helpers
 
     /**
+     * Serialise an appointment row.
+     *
+     * `source` distinguishes the two booking origins the Guidance desk reads
+     * side by side: `patient` (self-booked through the portal, so
+     * `created_by_user_id` is the patient) versus `counsellor` / `staff`
+     * (booked on the patient's behalf). Legacy rows with no creator fall
+     * back to `staff` rather than claiming the patient booked them.
+     *
+     * `patient_display_name` / `counsellor_display_name` are only populated
+     * by {@see listAppointments()}, which joins `users`; the write paths
+     * re-read the bare row and leave them null.
+     *
      * @param array<string, mixed> $r
      * @return array<string, mixed>
      */
     private function appointmentRow(array $r): array
     {
+        $patientUserId   = isset($r['patient_user_id']) && $r['patient_user_id'] !== null ? (int) $r['patient_user_id'] : null;
+        // Null until approved — a portal booking carries no counsellor.
+        $counsellorId    = isset($r['counsellor_user_id']) && $r['counsellor_user_id'] !== null ? (int) $r['counsellor_user_id'] : null;
+        $createdByUserId = isset($r['created_by_user_id']) && $r['created_by_user_id'] !== null ? (int) $r['created_by_user_id'] : null;
+
+        $source = 'staff';
+        if ($createdByUserId !== null) {
+            if ($patientUserId !== null && $createdByUserId === $patientUserId) {
+                $source = 'patient';
+            } elseif ($counsellorId !== null && $createdByUserId === $counsellorId) {
+                $source = 'counsellor';
+            }
+        }
+
         return [
             'id'                  => (int)    $r['id'],
-            'patient_user_id'     => isset($r['patient_user_id']) && $r['patient_user_id'] !== null ? (int) $r['patient_user_id'] : null,
+            'patient_user_id'     => $patientUserId,
             'patient_school_id'   => (string) $r['patient_school_id'],
-            'counsellor_user_id'  => (int)    $r['counsellor_user_id'],
+            'counsellor_user_id'  => $counsellorId,
             'appointment_date'    => (string) $r['appointment_date'],
             'start_time'          => (string) $r['start_time'],
             'end_time'            => (string) $r['end_time'],
@@ -537,8 +741,29 @@ final class ScheduleService extends BaseService
             'status'              => (string) $r['status'],
             'reason'              => $r['reason'] !== null ? (string) $r['reason'] : null,
             'cancellation_reason' => $r['cancellation_reason'] !== null ? (string) $r['cancellation_reason'] : null,
+            'source'              => $source,
+            'patient_display_name'   => $this->personName($r, 'patient_first_name', 'patient_last_name'),
+            'counsellor_display_name' => $this->personName($r, 'counsellor_first_name', 'counsellor_last_name'),
             'created_at'          => (string) $r['created_at'],
         ];
+    }
+
+    /**
+     * Join-derived display name, or null when the caller read a bare row.
+     * Falls back to the school id only where the caller supplies one.
+     *
+     * @param array<string, mixed> $r
+     */
+    private function personName(array $r, string $firstKey, string $lastKey): ?string
+    {
+        $first = trim((string) ($r[$firstKey] ?? ''));
+        $last  = trim((string) ($r[$lastKey] ?? ''));
+        $name  = trim($first . ' ' . $last);
+        if ($name !== '') {
+            return $name;
+        }
+
+        return null;
     }
 
     private function utcNow(): string
@@ -564,13 +789,22 @@ final class ScheduleService extends BaseService
         return \App\Auth\CurrentUser::assert();
     }
 
-    private function assertScheduleMutation(int $counsellorId): void
+    /**
+     * Ownership guard: a counsellor may only mutate their own appointment
+     * unless they hold `counselling.schedule.team_manage`.
+     *
+     * `$counsellorId` is nullable because a portal booking carries no
+     * counsellor until someone approves it. An unassigned appointment has no
+     * owner to defend, so any counsellor with `counselling.schedule.manage`
+     * may act on it — and confirming it is exactly how they claim it.
+     */
+    private function assertScheduleMutation(?int $counsellorId): void
     {
         if ($this->canTeamManage()) {
             return;
         }
         $this->policy->check('scheduleManage');
-        if ($counsellorId !== \App\Auth\CurrentUser::assert()) {
+        if ($counsellorId !== null && $counsellorId !== \App\Auth\CurrentUser::assert()) {
             throw ApiException::forbidden('rbac.record.forbidden');
         }
     }

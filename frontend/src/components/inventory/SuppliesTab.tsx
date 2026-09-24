@@ -242,14 +242,14 @@ export function SuppliesTab() {
             />
             {rows.map((it, idx) => (
               <TableRow key={it.id} {...supplyRowNav.getRowProps(idx)}>
-                <TableCell className="px-3 font-mono text-xs">{highlightMatch(it.sku, q)}</TableCell>
+                <TableCell className="px-3 tabular-nums text-xs">{highlightMatch(it.sku, q)}</TableCell>
                 <TableCell className="px-3">
                   {highlightMatch(it.name, q)}
                   <SupplyLastMovementHint movement={it.last_movement ?? null} unit={it.unit} />
                 </TableCell>
-                <TableCell className="px-3 font-mono text-xs">{it.quantity_on_hand} {it.unit}</TableCell>
-                <TableCell className="px-3 font-mono text-xs text-muted-foreground">{it.reorder_level}</TableCell>
-                <TableCell className="px-3 font-mono text-xs text-muted-foreground">{it.target_stock ?? '—'}</TableCell>
+                <TableCell className="px-3 tabular-nums text-xs">{it.quantity_on_hand} {it.unit}</TableCell>
+                <TableCell className="px-3 tabular-nums text-xs text-muted-foreground">{it.reorder_level}</TableCell>
+                <TableCell className="px-3 tabular-nums text-xs text-muted-foreground">{it.target_stock ?? '—'}</TableCell>
                 <TableCell className="px-3">
                   <StockBadge
                     onHand={it.quantity_on_hand}
@@ -301,10 +301,10 @@ export function SuppliesTab() {
               />
             </div>
             <SupplyLastMovementHint movement={it.last_movement ?? null} unit={it.unit} />
-            <MobileCardField label="SKU"><span className="font-mono text-xs">{highlightMatch(it.sku, q)}</span></MobileCardField>
-            <MobileCardField label="On hand"><span className="font-mono text-xs">{it.quantity_on_hand} {it.unit}</span></MobileCardField>
-            <MobileCardField label="Reorder level"><span className="font-mono text-xs text-muted-foreground">{it.reorder_level}</span></MobileCardField>
-            <MobileCardField label="Target stock"><span className="font-mono text-xs text-muted-foreground">{it.target_stock ?? 'Not configured'}</span></MobileCardField>
+            <MobileCardField label="SKU"><span className="tabular-nums text-xs">{highlightMatch(it.sku, q)}</span></MobileCardField>
+            <MobileCardField label="On hand"><span className="tabular-nums text-xs">{it.quantity_on_hand} {it.unit}</span></MobileCardField>
+            <MobileCardField label="Reorder level"><span className="tabular-nums text-xs text-muted-foreground">{it.reorder_level}</span></MobileCardField>
+            <MobileCardField label="Target stock"><span className="tabular-nums text-xs text-muted-foreground">{it.target_stock ?? 'Not configured'}</span></MobileCardField>
             <MobileCardActions>{supplyActions(it)}</MobileCardActions>
           </MobileCard>
         ))}

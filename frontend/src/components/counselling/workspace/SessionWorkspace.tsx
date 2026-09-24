@@ -25,7 +25,14 @@ import { SessionInterviewsPanel } from './SessionInterviewsPanel';
 
 interface SessionWorkspaceProps {
   sessionId: number;
-  onCloseWorkspace?: () => void;
+  /**
+   * Hides the Close button when absent, so the workspace can be the permanent
+   * content of a tab as well as a dismissible drawer.
+   *
+   * `| undefined` is explicit for `exactOptionalPropertyTypes`: callers that
+   * forward an optional handler pass `undefined` rather than omitting the key.
+   */
+  onCloseWorkspace?: (() => void) | undefined;
 }
 
 export function SessionWorkspace({ sessionId, onCloseWorkspace }: SessionWorkspaceProps) {
@@ -117,10 +124,10 @@ export function SessionWorkspace({ sessionId, onCloseWorkspace }: SessionWorkspa
           <div className="flex flex-wrap items-start justify-between gap-2">
             <div>
               <p className="font-medium">{selected.patient_display_name}</p>
-              <p className="font-mono text-xs text-muted-foreground">{selected.patient_school_id}</p>
+              <p className="tabular-nums text-xs text-muted-foreground">{selected.patient_school_id}</p>
             </div>
             {selected.queue_number && (
-              <Badge variant="outline" className="font-mono">
+              <Badge variant="outline" className="tabular-nums">
                 {selected.queue_number}
               </Badge>
             )}

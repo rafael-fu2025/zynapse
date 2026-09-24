@@ -114,7 +114,7 @@ function UnitRow({
   return (
     <div className="rounded-lg border p-3">
       <div className="flex flex-wrap items-center gap-2">
-        <span className="font-mono text-xs text-muted-foreground">#{unit.id}</span>
+        <span className="tabular-nums text-xs text-muted-foreground">#{unit.id}</span>
         <EquipmentStatusBadge status={unit.status} />
         {unit.condition_note !== null && (
           <span className="text-xs text-muted-foreground">{unit.condition_note}</span>
@@ -176,7 +176,7 @@ function UnitRow({
           <ul className="mt-1 space-y-1 border-l pl-3">
             {log.map((entry) => (
               <li key={entry.id} className="text-[11px] text-muted-foreground">
-                <span className="font-mono">{fmtRelativeFromNow(entry.created_at)}</span>
+                <span className="tabular-nums">{fmtRelativeFromNow(entry.created_at)}</span>
                 {' — '}
                 {entry.from_status !== null ? EQUIPMENT_STATUS_LABEL[entry.from_status] : 'added'}
                 {' → '}

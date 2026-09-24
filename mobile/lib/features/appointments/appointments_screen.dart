@@ -568,7 +568,10 @@ class _StaffScheduleDialogState extends State<_StaffScheduleDialog> {
   }
 
   Future<void> _pickTime() async {
-    final picked = await showTimePicker(context: context, initialTime: _time);
+    final picked = await showTwelveHourTimePicker(
+      context: context,
+      initialTime: _time,
+    );
     if (picked != null) setState(() => _time = picked);
   }
 
@@ -766,7 +769,10 @@ class _StaffScheduleDialogState extends State<_StaffScheduleDialog> {
                   child: OutlinedButton.icon(
                     onPressed: _submitting ? null : _pickTime,
                     icon: const Icon(HugeIcons.strokeRoundedClock01, size: 18),
-                    label: Text(_time.format(context)),
+                    // Not `_time.format(context)`: that honours the device's
+                    // 24-hour setting, so the same build reads `09:00` on one
+                    // handset and `9:00 AM` on another. See fmtClockParts.
+                    label: Text(fmtClockParts(_time.hour, _time.minute)),
                   ),
                 ),
               ],
@@ -880,7 +886,10 @@ class _BookingDialogState extends State<_BookingDialog> {
   }
 
   Future<void> _pickTime() async {
-    final picked = await showTimePicker(context: context, initialTime: _time);
+    final picked = await showTwelveHourTimePicker(
+      context: context,
+      initialTime: _time,
+    );
     if (picked != null) setState(() => _time = picked);
   }
 
@@ -1012,7 +1021,10 @@ class _BookingDialogState extends State<_BookingDialog> {
                   child: OutlinedButton.icon(
                     onPressed: _submitting ? null : _pickTime,
                     icon: const Icon(HugeIcons.strokeRoundedClock01, size: 18),
-                    label: Text(_time.format(context)),
+                    // Not `_time.format(context)`: that honours the device's
+                    // 24-hour setting, so the same build reads `09:00` on one
+                    // handset and `9:00 AM` on another. See fmtClockParts.
+                    label: Text(fmtClockParts(_time.hour, _time.minute)),
                   ),
                 ),
               ],

@@ -20,11 +20,6 @@ import {
   type WriteNotesInput,
 } from '@/schemas/counselling';
 
-interface SessionPage {
-  data: Session[];
-  next: string | null;
-}
-
 /**
  * Patient autocomplete for the counselling forms — narrow,
  * counselling-scoped lookup (`GET /counselling/patient-lookup`), gated by
@@ -47,24 +42,24 @@ export function useCounsellingPatientLookup(query: string) {
   });
 }
 
-export function useSessions(cursor: string | null, limit = 25) {
-  return useQuery<SessionPage, ApiEnvelopeError>({
-    queryKey: ['counselling', 'sessions', { cursor, limit }],
-    // Other counsellors open/close sessions; poll so the list reflects
-    // their actions without a manual refresh.
-    refetchInterval: 30_000,
-    queryFn: async () => {
-      const params = new URLSearchParams();
-      if (cursor !== null) params.set('cursor', cursor);
-      params.set('limit', String(limit));
-      const res = await apiClient.get<{ data: unknown[]; next: string | null }>(
-        `/counselling/sessions?${params.toString()}`,
-      );
-      const data = z.array(sessionSchema).parse(res.data);
-      return { data, next: res.data?.next ?? null };
-    },
-  });
-}
+/**
+ * Two hooks were removed here on 2026-09-23 (third revision):
+ *
+ *   - `useSessions(cursor, limit)` — the paged list of *every* session in the
+ *     tenant. Its last consumer was the retired Sessions & Notes tab, so it had
+ *     been dead since the tab went. It also carried a real defect: it read
+ *     `res.data?.next`, which `apiClient` never populates because it unwraps the
+ *     envelope, so its Next button could never have worked. Removing it retires
+ *     the last instance of that pattern in this module.
+ *   - `useAppointmentSessions(appointmentId)` — resolved a booking to its
+ *     sessions via `?appointment_id=`, for the Appointments table's expandable
+ *     row. Sessions are Queue-only now, so nothing resolves a booking to a
+ *     session any more.
+ *
+ * The backend `?appointment_id=` filter both of them used is **still there**
+ * and still pinned by `SessionAppointmentLinkContractTest`; it simply has no
+ * caller in the SPA.
+ */
 
 export function useSession(sessionId: number | null) {
   return useQuery<SessionDetail, ApiEnvelopeError>({

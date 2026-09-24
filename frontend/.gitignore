@@ -12,3 +12,7 @@ Thumbs.db
 /coverage
 /.idea
 /.vscode
+# Vitest writes a throwaway ESM copy of the TS config next to it and does not
+# always clean it up. Left behind, `eslint .` picks it up and fails the
+# `--max-warnings 0` gate on an unrelated `no-undef`.
+*.timestamp-*.mjs

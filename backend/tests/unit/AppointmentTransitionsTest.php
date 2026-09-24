@@ -47,17 +47,26 @@ final class AppointmentTransitionsTest extends TestCase
         );
     }
 
-    public function testCheckedInIsOnlyReachableFromScheduled(): void
+    public function testConfirmedIsReachableFromScheduled(): void
     {
-        // Guards the other side of the widening: we did NOT broaden
-        // `checked_in` itself — that would let a completed appointment
-        // silently re-open. A drift here would let the auto-check-in
-        // pass transition a `completed` row.
         $transitions = $this->readTransitions();
-        $this->assertSame(['scheduled'], $transitions['checked_in'] ?? null);
+        $this->assertContains(
+            'scheduled',
+            $transitions['confirmed'] ?? [],
+            '`confirmed` must be reachable from `scheduled` (staff approves portal booking).',
+        );
     }
 
-    public function testControllerWhitelistAcceptsNoShow(): void
+    public function testCheckedInIsReachableFromScheduledAndConfirmed(): void
+    {
+        // `checked_in` is reachable from `scheduled` (kiosk/walk-in) and
+        // `confirmed` (desk check-in after approval). It must NOT accept
+        // `completed` or terminal states.
+        $transitions = $this->readTransitions();
+        $this->assertSame(['scheduled', 'confirmed'], $transitions['checked_in'] ?? null);
+    }
+
+    public function testControllerWhitelistAcceptsNoShowAndConfirmed(): void
     {
         // The CI4 validator reaches the service via the controller's
         // `in_list[...]` rule. A typo here (e.g. `no-show`, `noShow`)
@@ -68,9 +77,9 @@ final class AppointmentTransitionsTest extends TestCase
         );
         $this->assertIsString($controller);
         $this->assertStringContainsString(
-            "in_list[checked_in,completed,cancelled,no_show]",
+            "in_list[confirmed,checked_in,completed,cancelled,no_show]",
             $controller,
-            'AppointmentController status whitelist must include `no_show` for the cascade to reach the service.',
+            'AppointmentController status whitelist must include `confirmed` and `no_show` for the cascade to reach the service.',
         );
     }
 

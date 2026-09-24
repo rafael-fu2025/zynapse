@@ -53,3 +53,18 @@ String localToUtcSql(DateTime local) {
 
 /// Formats a [DateTime] as `yyyy-MM-dd` (date-only input).
 String toDateInput(DateTime d) => DateFormat('yyyy-MM-dd').format(d);
+
+/// `9:00 AM` — the 12-hour clock, from an hour/minute pair.
+///
+/// **Use this instead of `TimeOfDay.format(context)`.** That follows the
+/// *device* setting, so a phone configured for 24-hour time renders `09:00`
+/// while every other surface in the system says `9:00 AM`. The clinic reads a
+/// 12-hour clock (2026-09-23), so the display must not depend on the handset.
+///
+/// Takes an hour/minute pair rather than a `TimeOfDay` so this stays a pure
+/// `intl` helper — `core/utils` has no Flutter material dependency.
+String fmtClockParts(int hour, int minute) =>
+    DateFormat('h:mm a').format(DateTime(2000, 1, 1, hour, minute));
+
+/// `9:00 AM` — the 12-hour clock, for a local wall-clock [DateTime].
+String fmtClock(DateTime d) => DateFormat('h:mm a').format(d);

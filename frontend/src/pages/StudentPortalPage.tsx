@@ -128,7 +128,7 @@ export default function StudentPortalPage() {
                         {profile.data.first_name} {profile.data.middle_name !== null ? `${profile.data.middle_name} ` : ''}
                         {profile.data.last_name}
                       </p>
-                      <p className="mt-0.5 font-mono text-xs text-white/70 dark:text-muted-foreground">
+                      <p className="mt-0.5 tabular-nums text-xs text-white/70 dark:text-muted-foreground">
                         ID: {profile.data.student_number}
                       </p>
                     </div>
@@ -316,7 +316,7 @@ export default function StudentPortalPage() {
                       <div className="flex-1">
                           <p className="font-medium">{notificationLabel(n.template_code, n.context)}</p>
                           {notificationDetail(n.template_code, n.context) !== null && (
-                            <p className="font-mono text-[10px] text-muted-foreground">
+                            <p className="tabular-nums text-[10px] text-muted-foreground">
                               {notificationDetail(n.template_code, n.context)}
                             </p>
                           )}

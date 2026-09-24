@@ -39,6 +39,20 @@ function announcement(id: string, order: number, title: string, overrides: Recor
 
 async function mockQueue(target: Page | BrowserContext) {
   await target.route('**/api/v1/clinic/queue/state', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ data: queueState }) }));
+  // The public display is unauthenticated, so it also pulls the LIVE kiosk
+  // settings, and `useKioskSettings` commits any remote snapshot whose content
+  // differs from the local cache. These specs drive the display entirely from
+  // localStorage fixtures, so an unstubbed fetch lets the dev database win:
+  // revision 7 with a real video in the playlist overwrote the fixture and the
+  // "No active playlist item is configured." empty state never appeared
+  // (diagnosed 2026-09-23). `revision: 0` is the hook's own "nothing to
+  // commit" sentinel — see the `if (!active || snapshot.revision === 0) return`
+  // guard in useKioskSettings. Specs that go through signInAsAdmin register
+  // their own kiosk-settings route afterwards and take precedence.
+  await target.route('**/api/v1/kiosk-settings', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify({ success: true, data: { settings: settings(), revision: 0, updated_at: null }, errors: [], meta: null }),
+  }));
 }
 
 async function installSettings(page: Page, value: unknown) {

@@ -31,17 +31,36 @@ final class PatientController extends ApiController
         $cursor   = (string) ($this->request->getGet('cursor') ?? '');
         $limit    = (int)    ($this->request->getGet('limit')  ?? 25);
         $archived = (string) ($this->request->getGet('include_archived') ?? '');
+        // Facet filters — the three categorical fields MIS supplies and
+        // filters on itself (`department`, `program`, `level`), stored
+        // locally as `department`, `course` and `year_level`.
+        $department = (string) ($this->request->getGet('department') ?? '');
+        $course     = (string) ($this->request->getGet('course') ?? '');
+        $yearLevel  = (string) ($this->request->getGet('year_level') ?? '');
 
         $page = $this->service->listStudents(
             $cursor !== '' ? $cursor : null,
             $limit,
             $archived === '1' || $archived === 'true',
+            $department !== '' ? $department : null,
+            $course !== '' ? $course : null,
+            $yearLevel !== '' ? (int) $yearLevel : null,
         );
 
         return $this->ok(
             $page['data'],
             \App\Http\ApiResponse::paginationMeta($page['count'], $page['next'], null),
         );
+    }
+
+    /**
+     * Facet options for the Students tab filters — distinct MIS-supplied
+     * department / course / year level values present in the tenant's live
+     * students. Feeds the Department, Program and Year Level selects.
+     */
+    public function studentFacets(): ResponseInterface
+    {
+        return $this->ok($this->service->studentFacets());
     }
 
     public function searchStudents(): ResponseInterface
@@ -53,7 +72,17 @@ final class PatientController extends ApiController
             ]);
         }
 
-        return $this->ok($this->service->searchStudents($q, (int) ($this->request->getGet('limit') ?? 20)));
+        $department = (string) ($this->request->getGet('department') ?? '');
+        $course     = (string) ($this->request->getGet('course') ?? '');
+        $yearLevel  = (string) ($this->request->getGet('year_level') ?? '');
+
+        return $this->ok($this->service->searchStudents(
+            $q,
+            (int) ($this->request->getGet('limit') ?? 20),
+            $department !== '' ? $department : null,
+            $course !== '' ? $course : null,
+            $yearLevel !== '' ? (int) $yearLevel : null,
+        ));
     }
 
     /**

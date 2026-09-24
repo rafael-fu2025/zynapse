@@ -161,7 +161,7 @@ function ProcessLogSection({ batchId }: { batchId: number }) {
                     </Badge>
                   )}
                   {l.device_id !== null && l.device_id !== undefined && (
-                    <Badge variant="outline" className="font-mono">{l.device_id}</Badge>
+                    <Badge variant="outline" className="tabular-nums">{l.device_id}</Badge>
                   )}
                 </div>
               </header>
@@ -375,7 +375,7 @@ function AlertRow({ alert, disabled, onAck }: { alert: BmgAlert; disabled: boole
           <Badge variant={SEVERITY_VARIANT[alert.severity]} className="uppercase">
             {alert.severity}
           </Badge>
-          <span className="font-mono text-xs text-muted-foreground">{alert.code}</span>
+          <span className="tabular-nums text-xs text-muted-foreground">{alert.code}</span>
           <span className="text-[10px] text-muted-foreground">{fmtUtcToApp(alert.triggered_at)}</span>
         </div>
         <p className="text-sm text-foreground">{alert.message}</p>
@@ -410,11 +410,11 @@ function AnalyticsSection({ batchId }: { batchId: number }) {
           <dl className="grid grid-cols-2 gap-3 text-sm">
             <div className="rounded-md border p-2">
               <dt className="text-xs text-muted-foreground">Input</dt>
-              <dd className="font-mono font-semibold">{a.input_kg} kg</dd>
+              <dd className="tabular-nums font-semibold">{a.input_kg} kg</dd>
             </div>
             <div className="rounded-md border p-2">
               <dt className="text-xs text-muted-foreground">Output</dt>
-              <dd className="font-mono font-semibold">{a.output_kg} kg</dd>
+              <dd className="tabular-nums font-semibold">{a.output_kg} kg</dd>
             </div>
             <div className="rounded-md border p-2">
               <dt className="text-xs text-muted-foreground">Yield</dt>
@@ -425,24 +425,24 @@ function AnalyticsSection({ batchId }: { batchId: number }) {
             </div>
             <div className="rounded-md border p-2">
               <dt className="text-xs text-muted-foreground">Mass reduction</dt>
-              <dd className="font-mono font-semibold">{a.mass_reduction_pct}%</dd>
+              <dd className="tabular-nums font-semibold">{a.mass_reduction_pct}%</dd>
             </div>
             {a.expected_yield_pct !== null && (
               <div className="rounded-md border p-2">
                 <dt className="text-xs text-muted-foreground">Expected yield</dt>
-                <dd className="font-mono font-semibold">{a.expected_yield_pct}%</dd>
+                <dd className="tabular-nums font-semibold">{a.expected_yield_pct}%</dd>
               </div>
             )}
             {a.expected_days !== null && (
               <div className="rounded-md border p-2">
                 <dt className="text-xs text-muted-foreground">Expected days</dt>
-                <dd className="font-mono font-semibold">{a.expected_days} days <span className="text-[10px] font-normal text-muted-foreground">(mix-weighted)</span></dd>
+                <dd className="tabular-nums font-semibold">{a.expected_days} days <span className="text-[10px] font-normal text-muted-foreground">(mix-weighted)</span></dd>
               </div>
             )}
             {a.reference_duration_days !== null && (
               <div className="rounded-md border p-2">
                 <dt className="text-xs text-muted-foreground">Reference (manual)</dt>
-                <dd className="font-mono font-semibold">{a.reference_duration_days} days</dd>
+                <dd className="tabular-nums font-semibold">{a.reference_duration_days} days</dd>
               </div>
             )}
           </dl>
@@ -454,7 +454,7 @@ function AnalyticsSection({ batchId }: { batchId: number }) {
               {a.composition.map((c) => (
                 <div key={c.category_id} className="flex items-center justify-between text-sm">
                   <span>{c.category_name}</span>
-                  <span className="font-mono text-xs text-muted-foreground">
+                  <span className="tabular-nums text-xs text-muted-foreground">
                     {c.weight_kg} kg{c.ratio_pct !== null ? ` · ${c.ratio_pct}%` : ''}
                     {c.expected_days !== null ? ` · ~${c.expected_days}d` : ''}
                     {c.sample_count > 0 ? ` (${c.sample_count} trials)` : ' (no history)'}
@@ -482,7 +482,7 @@ function DrumDetail({ batch }: { batch: ActiveBatch }) {
         title={
           <span className="flex items-center gap-2">
             <Cylinder className="size-5 text-primary" />
-            <span className="font-mono">{batch.unit_code}</span>
+            <span className="tabular-nums">{batch.unit_code}</span>
             <Badge variant={isInput ? 'info' : 'warning'} className="uppercase">
               {isInput ? 'Input' : 'Processing'}
             </Badge>
@@ -526,11 +526,11 @@ function DrumDetail({ batch }: { batch: ActiveBatch }) {
             </div>
             <div className="rounded-md border p-2">
               <dt className="text-xs text-muted-foreground">Input</dt>
-              <dd className="font-mono font-semibold">{batch.input_kg.toFixed(2)} kg</dd>
+              <dd className="tabular-nums font-semibold">{batch.input_kg.toFixed(2)} kg</dd>
             </div>
             <div className="rounded-md border p-2">
               <dt className="text-xs text-muted-foreground">Output</dt>
-              <dd className="font-mono font-semibold">
+              <dd className="tabular-nums font-semibold">
                 {batch.output_kg !== null ? `${batch.output_kg.toFixed(2)} kg` : '—'}
               </dd>
             </div>
@@ -546,7 +546,7 @@ function DrumDetail({ batch }: { batch: ActiveBatch }) {
             <div className="flex items-center justify-between text-sm">
               <span className="text-muted-foreground">Expected completion</span>
               <span className="text-right">
-                <span className="font-mono font-semibold">
+                <span className="tabular-nums font-semibold">
                   {batch.expected_completion_date !== null ? fmtShort(batch.expected_completion_date) : '—'}
                 </span>
                 {batch.days_until_expected !== null && (

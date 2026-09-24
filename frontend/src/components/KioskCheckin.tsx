@@ -610,7 +610,7 @@ export function QueueAssignmentDialog({
               </p>
               <p
                 aria-label={`Queue number ${queueNumber}`}
-                className={`font-mono font-bold tabular-nums text-primary ${
+                className={`font-bold tabular-nums text-primary ${
                   large ? 'text-8xl leading-none' : 'text-6xl leading-none'
                 }`}
               >
@@ -740,7 +740,7 @@ export function ScanResultCard({
           <div className="flex items-center justify-between gap-2">
             <div className="min-w-0">
               <p className={`truncate font-semibold text-foreground ${large ? 'text-2xl' : 'text-lg'}`}>{result.student.name}</p>
-              <p className="font-mono text-xs text-muted-foreground">
+              <p className="tabular-nums text-xs text-muted-foreground">
                 {result.student.student_number}
                 {result.student.kind === 'employee' ? ' · Employee' : ''}
                 {result.student.course !== null ? ` · ${result.student.course}` : ''}
@@ -892,7 +892,7 @@ export function RejectedScansAlert({
         <ul className="list-disc space-y-0.5 pl-4">
           {rejected.map((r, i) => (
             <li key={`${r.identifier}-${i}`}>
-              <span className="font-mono">{r.identifier}</span> — {r.message}
+              <span className="tabular-nums">{r.identifier}</span> — {r.message}
             </li>
           ))}
         </ul>

@@ -333,7 +333,7 @@ class ApiService {
     return (data?['slots'] as List? ?? []).whereType<Map<String,dynamic>>().map(PortalAppointmentSlot.fromJson).toList();
   }
   Future<void> bookPortalAppointment(PortalAppointmentSlot slot,{String? reason,String type='initial'}) async {
-    await _dio.post<Map<String,dynamic>>('/me/appointments',data:{'department':slot.department,'provider_user_id':slot.providerUserId,'starts_at':slot.startsAt.toUtc().toIso8601String(),'type':type,if(reason!=null&&reason.isNotEmpty)'reason':reason});
+    await _dio.post<Map<String,dynamic>>('/me/appointments',data:{'department':slot.department,'starts_at':slot.startsAt.toUtc().toIso8601String(),'type':type,if(reason!=null&&reason.isNotEmpty)'reason':reason});
   }
   Future<void> cancelPortalAppointment(PortalAppointment appointment) async {
     await _dio.post<Map<String,dynamic>>('/me/appointments/${appointment.department}/${appointment.id}/cancel');

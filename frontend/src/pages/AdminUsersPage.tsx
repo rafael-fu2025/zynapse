@@ -59,12 +59,14 @@ import {
 import {
   createUserSchema,
   useAdminRoles,
+  useAdminUserFacets,
   useAdminUsers,
   useCreateUser,
   useProvisionDirectoryUser,
   useResetUserPassword,
   useSetUserActive,
   useSetUserGroups,
+  personKindLabel,
   type AdminRole,
   type AdminUser,
   type AdminUsersFilters,
@@ -485,8 +487,12 @@ export default function AdminUsersPage() {
     status: rawStatus === 'active' || rawStatus === 'disabled' ? rawStatus : 'all',
     group: searchParams.get('group') ?? 'all',
     sort: rawSort === 'oldest' ? 'oldest' : 'newest',
+    // Person type. Not narrowed against the facet list here — the list is
+    // only known after the facets query resolves, and the effect below
+    // drops a value the tenant no longer carries.
+    kind: searchParams.get('kind') ?? 'all',
   }), [rawSort, rawStatus, searchParams]);
-  const filterKey = `${filters.search}|${filters.status}|${filters.group}|${filters.sort}`;
+  const filterKey = `${filters.search}|${filters.status}|${filters.group}|${filters.sort}|${filters.kind}`;
 
   const [searchDraft, setSearchDraft] = useState(filters.search);
   const debouncedSearch = useDebouncedValue(searchDraft, 300);
@@ -498,6 +504,7 @@ export default function AdminUsersPage() {
   const [confirm, setConfirm] = useState<ConfirmAction | null>(null);
 
   const roles = useAdminRoles();
+  const userFacets = useAdminUserFacets();
   const list = useAdminUsers(cursor, filters, 25);
   const setActive = useSetUserActive();
   const resetPassword = useResetUserPassword();
@@ -548,9 +555,21 @@ export default function AdminUsersPage() {
     setSearchParams(next, { replace: true });
   }, [filters.group, roles.data, searchParams, setSearchParams]);
 
-  function updateFilter(key: 'status' | 'group' | 'sort', value: string) {
+  // Same guard for the person-type facet: a deep link can carry a kind the
+  // tenant no longer has (an alumni filter after the last alumni row is
+  // removed, say). Drop it rather than leave the list pinned to a value the
+  // dropdown no longer offers.
+  useEffect(() => {
+    if (userFacets.data === undefined || filters.kind === 'all') return;
+    if (userFacets.data.kinds.includes(filters.kind)) return;
     const next = new URLSearchParams(searchParams);
-    const defaults = { status: 'all', group: 'all', sort: 'newest' };
+    next.delete('kind');
+    setSearchParams(next, { replace: true });
+  }, [filters.kind, userFacets.data, searchParams, setSearchParams]);
+
+  function updateFilter(key: 'status' | 'group' | 'sort' | 'kind', value: string) {
+    const next = new URLSearchParams(searchParams);
+    const defaults = { status: 'all', group: 'all', sort: 'newest', kind: 'all' };
     if (value === defaults[key]) next.delete(key); else next.set(key, value);
     setSearchParams(next, { replace: true });
   }
@@ -598,7 +617,8 @@ export default function AdminUsersPage() {
   }
 
   const roleOptions = roles.data ?? [];
-  const hasFilters = filters.search !== '' || filters.status !== 'all' || filters.group !== 'all';
+  const hasFilters = filters.search !== '' || filters.status !== 'all'
+    || filters.group !== 'all' || filters.kind !== 'all';
 
   return (
     <main className="space-y-4 p-6">
@@ -618,38 +638,64 @@ export default function AdminUsersPage() {
         toolbar={
           <section aria-labelledby="user-filters-heading" className="w-full space-y-3">
             <h2 id="user-filters-heading" className="sr-only">User filters</h2>
-            <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
+            {/* Labelled controls, matching the Patients toolbar. The row must
+                align `items-end`, not `items-center`: each label adds height
+                above its control, and centring floats the shorter siblings
+                mid-column instead of lining their controls up. */}
+            <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-end">
               <SearchBox
                 value={searchDraft}
                 onValueChange={setSearchDraft}
                 placeholder="Search email or username"
                 ariaLabel="Search users"
                 inputId="users-search"
+                label="Search"
                 isFetching={list.isFetching && list.data !== undefined}
                 className="w-full sm:flex-[2_1_240px] lg:max-w-md"
               />
-              <Select value={filters.status} onValueChange={(value) => updateFilter('status', value)}>
-                <SelectTrigger aria-label="Filter users by status" className="sm:flex-1 sm:min-w-[160px]"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All statuses</SelectItem>
-                  <SelectItem value="active">Active</SelectItem>
-                  <SelectItem value="disabled">Disabled</SelectItem>
-                </SelectContent>
-              </Select>
-              <Select value={filters.group} onValueChange={(value) => updateFilter('group', value)} disabled={roles.isLoading || roles.isError}>
-                <SelectTrigger aria-label="Filter users by role" className="sm:flex-1 sm:min-w-[160px]"><SelectValue placeholder="All roles" /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All roles</SelectItem>
-                  {roleOptions.map((role) => <SelectItem key={role.code} value={role.code}>{role.name}</SelectItem>)}
-                </SelectContent>
-              </Select>
-              <Select value={filters.sort} onValueChange={(value) => updateFilter('sort', value)}>
-                <SelectTrigger aria-label="Sort users" className="sm:flex-1 sm:min-w-[160px]"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="newest">Newest first</SelectItem>
-                  <SelectItem value="oldest">Oldest first</SelectItem>
-                </SelectContent>
-              </Select>
+              <div className="space-y-1 sm:flex-1 sm:min-w-[160px]">
+                <Label id="users-status-label" className="text-xs">Status</Label>
+                <Select value={filters.status} onValueChange={(value) => updateFilter('status', value)}>
+                  <SelectTrigger aria-labelledby="users-status-label" className="w-full"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All statuses</SelectItem>
+                    <SelectItem value="active">Active</SelectItem>
+                    <SelectItem value="disabled">Disabled</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1 sm:flex-1 sm:min-w-[160px]">
+                <Label id="users-role-label" className="text-xs">Role</Label>
+                <Select value={filters.group} onValueChange={(value) => updateFilter('group', value)} disabled={roles.isLoading || roles.isError}>
+                  <SelectTrigger aria-labelledby="users-role-label" className="w-full"><SelectValue placeholder="All roles" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All roles</SelectItem>
+                    {roleOptions.map((role) => <SelectItem key={role.code} value={role.code}>{role.name}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1 sm:flex-1 sm:min-w-[160px]">
+                <Label id="users-kind-label" className="text-xs">Person type</Label>
+                <Select value={filters.kind} onValueChange={(value) => updateFilter('kind', value)} disabled={userFacets.isLoading || userFacets.isError}>
+                  <SelectTrigger aria-labelledby="users-kind-label" className="w-full"><SelectValue placeholder="All person types" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All person types</SelectItem>
+                    {(userFacets.data?.kinds ?? []).map((kind) => (
+                      <SelectItem key={kind} value={kind}>{personKindLabel(kind)}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1 sm:flex-1 sm:min-w-[160px]">
+                <Label id="users-sort-label" className="text-xs">Sort</Label>
+                <Select value={filters.sort} onValueChange={(value) => updateFilter('sort', value)}>
+                  <SelectTrigger aria-labelledby="users-sort-label" className="w-full"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="newest">Newest first</SelectItem>
+                    <SelectItem value="oldest">Oldest first</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
           </section>
         }
@@ -843,7 +889,7 @@ export default function AdminUsersPage() {
               </DialogDescription>
             </DialogHeader>
             <div className="flex items-center gap-2">
-              <p className="min-w-0 flex-1 break-all rounded-lg bg-muted p-3 text-center font-mono text-sm">{tempCredential.password}</p>
+              <p className="min-w-0 flex-1 break-all rounded-lg bg-muted p-3 text-center tabular-nums text-sm">{tempCredential.password}</p>
               <CopyButton value={tempCredential.password} label="Copy temporary password" successMessage="Temporary password copied." />
             </div>
             <DialogFooter>

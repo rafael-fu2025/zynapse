@@ -3,7 +3,7 @@
  */
 import { z } from 'zod';
 
-export const APPOINTMENT_STATUSES = ['scheduled', 'checked_in', 'completed', 'cancelled', 'no_show'] as const;
+export const APPOINTMENT_STATUSES = ['scheduled', 'confirmed', 'checked_in', 'completed', 'cancelled', 'no_show'] as const;
 export type AppointmentStatus = (typeof APPOINTMENT_STATUSES)[number];
 
 export const appointmentSchema = z.object({
@@ -14,7 +14,7 @@ export const appointmentSchema = z.object({
   // raw school id in that case.
   patient_name: z.string().nullable().optional(),
   patient_kind: z.enum(['student', 'employee']).nullable().optional(),
-  provider_user_id: z.number().int().positive(),
+  provider_user_id: z.number().int().positive().nullable(),
   provider_name: z.string().nullable().optional(),
   scheduled_at: z.string(),
   status: z.enum(APPOINTMENT_STATUSES),

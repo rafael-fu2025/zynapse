@@ -202,7 +202,9 @@ final class CheckinService extends BaseService
                     $appointmentId,
                     $checkinId,
                     $purpose,
-                    $appointment !== null ? (int) $appointment['counsellor_user_id'] : null,
+                    ($appointment !== null && $appointment['counsellor_user_id'] !== null)
+                        ? (int) $appointment['counsellor_user_id']
+                        : null,
                 );
                 $message .= " Queue number {$queue['queue_number']}.";
                 return $this->result(

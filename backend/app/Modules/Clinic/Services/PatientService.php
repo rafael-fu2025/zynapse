@@ -40,10 +40,27 @@ final class PatientService extends BaseService
     // ----------------------------------------------------------- students
 
     /**
+     * @param ?string $department Exact-match on the MIS-owned `department` —
+     *                            the student payload's department code, e.g.
+     *                            `CCS`.
+     * @param ?string $course     Exact-match on the MIS-owned `course` (MIS
+     *                            `program`), e.g. `BSIT`.
+     * @param ?int    $yearLevel  Exact-match on the MIS-owned `year_level`
+     *                            (MIS `level`). Only meaningful alongside a
+     *                            department: MIS numbers levels per scheme
+     *                            (College 1-5, ELEM Grade 1-6, SHS 11-12), so
+     *                            `3` means different cohorts in different
+     *                            departments.
      * @return array{data: array<int, array<string, mixed>>, next: ?string, count: int}
      */
-    public function listStudents(?string $cursor, int $limit, bool $includeArchived = false): array
-    {
+    public function listStudents(
+        ?string $cursor,
+        int $limit,
+        bool $includeArchived = false,
+        ?string $department = null,
+        ?string $course = null,
+        ?int $yearLevel = null,
+    ): array {
         $this->policy->check('patientsRead');
 
         $builder = $this->db->table('users')
@@ -56,6 +73,8 @@ final class PatientService extends BaseService
         if (! $includeArchived) {
             $builder->where('archived_at', null);
         }
+
+        $this->applyStudentFacetFilters($builder, $department, $course, $yearLevel);
 
         KeysetPaginator::apply($builder, $cursor, $limit);
 
@@ -70,16 +89,107 @@ final class PatientService extends BaseService
     }
 
     /**
+     * Apply the student facet filters (department / course / year level) to a
+     * builder.
+     *
+     * These are the same three categorical fields the FU MIS student list
+     * endpoint itself filters on (`department`, `program`, `level`), which is
+     * why they are the only facets the tab offers: the MIS student record is
+     * exactly `student_id, first_name, middle_name, last_name, program, level,
+     * department`. There is no `section` — Synapse carries the column and the
+     * mapper probes for it, but MIS never returns it, so every synced student
+     * has it null.
+     *
+     * Values are compared with equality only, so a facet can narrow the result
+     * set but never widen it. Blank/`all` means "no filter", keeping the UI
+     * sentinel out of SQL. `$yearLevel` binds as an integer.
+     */
+    private function applyStudentFacetFilters(
+        \CodeIgniter\Database\BaseBuilder $builder,
+        ?string $department,
+        ?string $course,
+        ?int $yearLevel,
+    ): void {
+        if ($department !== null && $department !== '' && $department !== 'all') {
+            $builder->where('department', $department);
+        }
+        if ($course !== null && $course !== '' && $course !== 'all') {
+            $builder->where('course', $course);
+        }
+        if ($yearLevel !== null) {
+            $builder->where('year_level', $yearLevel);
+        }
+    }
+
+    /**
+     * Student facet options — the distinct `department`, `course` and
+     * `year_level` values present in the active tenant's live (non-archived)
+     * students.
+     *
+     * Derived from the synced rows rather than the MIS lookup registries
+     * (`/students/departments`, `/programs`, `/levels`) for two reasons: those
+     * endpoints are reachable only from the campus network, so a dropdown fed
+     * from them would be empty off-campus; and the registries are a superset,
+     * so every listed option is guaranteed to match at least one student here.
+     *
+     * Department values are MIS codes (`CCS`, `NURSING`), not full names — the
+     * lookup registry maps them to descriptions and can be used to label the
+     * options when the campus network is available.
+     *
+     * @return array{departments: list<string>, courses: list<string>, yearLevels: list<int>}
+     */
+    public function studentFacets(): array
+    {
+        $this->policy->check('patientsRead');
+
+        // `col != ''` is NULL-safe here: in SQL a NULL comparison yields
+        // NULL (not TRUE), so NULL and empty-string rows are both excluded
+        // without needing an explicit IS NOT NULL branch.
+        $pick = function (string $column): array {
+            $rows = $this->db->table('users')
+                ->where('users.tenant_id', CurrentTenant::id())
+                ->where('kind', 'student')
+                ->where('archived_at', null)
+                ->where($column . ' !=', '')
+                ->distinct()
+                ->select($column)
+                ->orderBy($column, 'ASC')
+                ->get()
+                ->getResultArray();
+
+            return array_values(array_map(static fn (array $r): string => (string) $r[$column], $rows));
+        };
+
+        return [
+            'departments' => $pick('department'),
+            'courses'     => $pick('course'),
+            'yearLevels'  => array_values(array_map(
+                static fn (string $v): int => (int) $v,
+                $pick('year_level'),
+            )),
+        ];
+    }
+
+    /**
      * Bounded LIKE search on number + names (escaped so `%`/`_` in user
      * input match literally).
      *
      * @return array<int, array<string, mixed>>
      */
-    public function searchStudents(string $q, int $limit = 20): array
-    {
+    public function searchStudents(
+        string $q,
+        int $limit = 20,
+        ?string $department = null,
+        ?string $course = null,
+        ?int $yearLevel = null,
+    ): array {
         $this->policy->check('patientsRead');
 
         $limit = max(1, min($limit, 50));
+
+        $deptFilter    = ($department !== null && $department !== '' && $department !== 'all') ? $department : null;
+        $courseFilter  = ($course !== null && $course !== '' && $course !== 'all') ? $course : null;
+        $yearFilter    = $yearLevel;
 
         $builder = $this->db->table('users')
             ->where('users.tenant_id', CurrentTenant::id())
@@ -92,7 +202,12 @@ final class PatientService extends BaseService
                 ->orLike('last_name', $q)
                 ->orLike('middle_name', $q)
                 ->orLike('course', $q)
-            ->groupEnd()
+                ->orLike('department', $q)
+            ->groupEnd();
+
+        $this->applyStudentFacetFilters($builder, $deptFilter, $courseFilter, $yearFilter);
+
+        $builder
             ->orderBy('last_name', 'ASC')
             ->orderBy('first_name', 'ASC')
             ->limit($limit);
@@ -118,6 +233,17 @@ final class PatientService extends BaseService
                 foreach ($misStudents as $ms) {
                     if ($remaining <= 0) {
                         break;
+                    }
+                    // Keep the facets in force for upstream-only rows too — the
+                    // same trap the old employee teaching filter fell into.
+                    if ($deptFilter !== null && (string) ($ms['department'] ?? '') !== $deptFilter) {
+                        continue;
+                    }
+                    if ($courseFilter !== null && (string) ($ms['course'] ?? '') !== $courseFilter) {
+                        continue;
+                    }
+                    if ($yearFilter !== null && ($ms['year_level'] ?? null) !== $yearFilter) {
+                        continue;
                     }
                     $num = strtolower((string) ($ms['identifier'] ?? ''));
                     if ($num === '' || isset($knownNumbers[$num])) {

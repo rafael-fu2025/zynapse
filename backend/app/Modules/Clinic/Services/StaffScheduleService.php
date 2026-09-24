@@ -59,46 +59,114 @@ final class StaffScheduleService extends BaseService
     }
 
     /**
+     * Create one shift per selected weekday, in a single transaction.
+     *
+     * The roster dialog ticks a set of weekdays (2026-09-23), so a five-day
+     * shift is one submission rather than five. Every per-day guard the
+     * single-day path applied still runs for each day — shift order, the user
+     * existing, and the overlap scan — and any failure rolls the whole set
+     * back, so the roster can never hold half a week.
+     *
+     * `day_of_week` (single) is still accepted for older callers;
+     * `days_of_week` wins when both are present.
+     *
      * @param array<string, mixed> $input
-     * @return array<string, mixed>
+     * @return array<string, mixed> first created row, plus `created`
      */
     public function create(array $input): array
     {
         $this->policy->check('schedulesManage');
         $actor = \App\Auth\CurrentUser::assert();
 
-        return $this->txn(function () use ($input, $actor): array {
+        $days = $this->normaliseDaysOfWeek($input);
+
+        return $this->txn(function () use ($input, $actor, $days): array {
             $start   = (string) $input['shift_start'];
             $end     = (string) $input['shift_end'];
             $userId  = (int) $input['user_id'];
-            $dow     = (int) $input['day_of_week'];
             $this->assertShiftOrder($start, $end);
             $this->assertUserExists($userId);
-            $this->assertNoOverlap($userId, $dow, $start, $end);
             $this->assertEffectiveOrder($this->dateOrNull($input, 'effective_from'), $this->dateOrNull($input, 'effective_to'));
 
             $now = $this->utcNow();
-            $this->db->table('clinic_staff_schedules')->insert([
-                'tenant_id'      => CurrentTenant::id(),
-                'user_id'        => (int) $input['user_id'],
-                'day_of_week'    => (int) $input['day_of_week'],
-                'shift_start'    => $start,
-                'shift_end'      => $end,
-                'schedule_type'  => $this->normalizeType($input['schedule_type'] ?? null),
-                'effective_from' => $this->dateOrNull($input, 'effective_from'),
-                'effective_to'   => $this->dateOrNull($input, 'effective_to'),
-                'is_active'      => 1,
-                'created_at'     => $now,
-                'updated_at'     => $now,
-            ]);
-            $id = (int) $this->db->insertID();
+            $ids = [];
+            foreach ($days as $dow) {
+                // Per-day, because "no two active shifts may overlap" is a
+                // per-weekday rule and the set may span days that already
+                // hold a shift.
+                $this->assertNoOverlap($userId, $dow, $start, $end);
 
-            $this->audit->enqueue('clinic.staff_schedule_created', 'clinic_staff_schedules', $id, $actor, [
-                'resource_code' => 'user#' . (string) ((int) $input['user_id']),
-            ]);
+                $this->db->table('clinic_staff_schedules')->insert([
+                    'tenant_id'      => CurrentTenant::id(),
+                    'user_id'        => $userId,
+                    'day_of_week'    => $dow,
+                    'shift_start'    => $start,
+                    'shift_end'      => $end,
+                    'schedule_type'  => $this->normalizeType($input['schedule_type'] ?? null),
+                    'effective_from' => $this->dateOrNull($input, 'effective_from'),
+                    'effective_to'   => $this->dateOrNull($input, 'effective_to'),
+                    'is_active'      => 1,
+                    'created_at'     => $now,
+                    'updated_at'     => $now,
+                ]);
+                $id = (int) $this->db->insertID();
+                $ids[] = $id;
 
-            return $this->getRow($id);
+                $this->audit->enqueue('clinic.staff_schedule_created', 'clinic_staff_schedules', $id, $actor, [
+                    'resource_code' => 'user#' . (string) $userId,
+                ]);
+            }
+
+            return [...$this->getRow($ids[0]), 'created' => count($ids)];
         });
+    }
+
+    /**
+     * Resolve the requested weekdays into a sorted, de-duplicated list.
+     *
+     * @param array<string, mixed> $input
+     * @return list<int> 0=Sun … 6=Sat
+     */
+    private function normaliseDaysOfWeek(array $input): array
+    {
+        $raw = $input['days_of_week'] ?? null;
+
+        if (is_array($raw)) {
+            $candidates = $raw;
+        } elseif (array_key_exists('day_of_week', $input) && $input['day_of_week'] !== '' && $input['day_of_week'] !== null) {
+            $candidates = [$input['day_of_week']];
+        } else {
+            throw ApiException::validationFailure([
+                ['code' => 'validation.field', 'message' => 'Pick at least one weekday.', 'field' => 'days_of_week'],
+            ]);
+        }
+
+        $days = [];
+        foreach ($candidates as $candidate) {
+            if (! is_numeric($candidate)) {
+                throw ApiException::validationFailure([
+                    ['code' => 'validation.field', 'message' => 'Weekdays must be numbers 0-6.', 'field' => 'days_of_week'],
+                ]);
+            }
+            $day = (int) $candidate;
+            if ($day < 0 || $day > 6) {
+                throw ApiException::validationFailure([
+                    ['code' => 'validation.field', 'message' => 'Weekdays must be numbers 0-6.', 'field' => 'days_of_week'],
+                ]);
+            }
+            $days[$day] = $day;
+        }
+
+        if ($days === []) {
+            throw ApiException::validationFailure([
+                ['code' => 'validation.field', 'message' => 'Pick at least one weekday.', 'field' => 'days_of_week'],
+            ]);
+        }
+
+        $days = array_values($days);
+        sort($days);
+
+        return $days;
     }
 
     /**

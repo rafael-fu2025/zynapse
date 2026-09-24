@@ -88,6 +88,7 @@ import {
   useSetEmployeeArchived,
   useSetStudentArchived,
   useStudent,
+  useStudentFacets,
   useStudentSearch,
   useStudents,
   useUpdateAllergy,
@@ -169,20 +170,20 @@ function PortalCredentialModal({
           </DialogTitle>
         </DialogHeader>
         <p className="text-sm text-muted-foreground">
-          A SYNAPSE account was created for {kind} <span className="font-mono">{identifier}</span>.
+          A SYNAPSE account was created for {kind} <span className="tabular-nums">{identifier}</span>.
           Share these credentials once through a secure channel — the password is shown here and cannot be retrieved later.
         </p>
         <dl className="space-y-2 text-sm">
           <div className="space-y-0.5">
             <dt className="text-xs text-muted-foreground">Email</dt>
-            <dd className="flex items-center gap-2 font-mono">
+            <dd className="flex items-center gap-2 tabular-nums">
               <Mail className="size-3.5 text-muted-foreground" aria-hidden />
               <span className="min-w-0 flex-1 truncate">{account.email}</span>
             </dd>
           </div>
           <div className="space-y-0.5">
             <dt className="text-xs text-muted-foreground">Temporary password</dt>
-            <dd className="rounded-md border bg-muted/50 px-3 py-2 font-mono text-xs break-all">
+            <dd className="rounded-md border bg-muted/50 px-3 py-2 tabular-nums text-xs break-all">
               {account.temporary_password}
             </dd>
           </div>
@@ -498,7 +499,7 @@ function ManageMedicalRecordDialog({ studentId, onClose }: { studentId: number |
                   {c.is_primary && <Badge variant="info">primary</Badge>}
                   <span className="font-medium">{c.contact_name}</span>
                   <span className="text-xs text-muted-foreground">({c.relationship})</span>
-                  <span className="min-w-0 flex-1 truncate font-mono text-xs">{c.phone}</span>
+                  <span className="min-w-0 flex-1 truncate tabular-nums text-xs">{c.phone}</span>
                   <span className="flex items-center gap-0.5">
                     <Button variant="ghost" size="sm" className="size-7 p-0" aria-label={`Edit contact ${c.contact_name}`} onClick={() => startEditContact(c)}>
                       <Pencil className="size-3.5" />
@@ -623,7 +624,7 @@ function StudentDetailDialog({ studentId, onClose }: { studentId: number | strin
                   {c.is_primary && <Badge variant="info">primary</Badge>}
                   <span className="font-medium">{c.contact_name}</span>
                   <span className="text-xs text-muted-foreground">({c.relationship})</span>
-                  <span className="min-w-0 flex-1 truncate font-mono text-xs">{c.phone}</span>
+                  <span className="min-w-0 flex-1 truncate tabular-nums text-xs">{c.phone}</span>
                 </li>
               ))}
             </ul>
@@ -917,7 +918,7 @@ function EmployeeDetailDialog({ employeeId, onClose }: { employeeId: number | st
           </div>
           <div>
             <dt className="text-xs text-muted-foreground">Hired</dt>
-            <dd className="font-mono text-xs">{e.date_hired ?? '—'}</dd>
+            <dd className="tabular-nums text-xs">{e.date_hired ?? '—'}</dd>
           </div>
           <div className="col-span-2">
             <dt className="text-xs text-muted-foreground">Emergency contact</dt>
@@ -927,7 +928,7 @@ function EmployeeDetailDialog({ employeeId, onClose }: { employeeId: number | st
                   <span>
                     {e.emergency_contact_name ?? '—'}
                     {e.emergency_contact_phone !== null && (
-                      <span className="ml-2 font-mono text-xs">{e.emergency_contact_phone}</span>
+                      <span className="ml-2 tabular-nums text-xs">{e.emergency_contact_phone}</span>
                     )}
                   </span>
                 )
@@ -984,6 +985,14 @@ export default function PatientsPage() {
   const [confirm, setConfirm] = useState<ConfirmAction | null>(null);
   const [showArchived, setShowArchived] = useUrlFilter('archived', { default: '' });
   const [showArchivedEmp, setShowArchivedEmp] = useUrlFilter('emp_archived', { default: '' });
+  // Students tab facets. Department, Course (MIS `program`) and Year Level
+  // (MIS `level`) are the three categorical fields the MIS student endpoint
+  // itself filters on, and the only ones our synced rows carry. There is
+  // deliberately no Section select: MIS returns no section for a student, so
+  // every synced row has it null and the filter could never match.
+  const [stuDepartment, setStuDepartment] = useUrlFilter('stu_department', { default: 'all' });
+  const [stuCourse, setStuCourse] = useUrlFilter('stu_course', { default: 'all' });
+  const [stuYear, setStuYear] = useUrlFilter('stu_year', { default: 'all' });
   // Employees tab facets. Department and Position are the only two
   // categorical fields the FU MIS employee payload actually supplies
   // (`department_name` and `position`), so they are the only facets the
@@ -997,8 +1006,17 @@ export default function PatientsPage() {
 
   const searching = query.trim().length >= 2;
   const empSearching = empQuery.trim().length >= 2;
-  const list = useStudents(cursor, 25, showArchived === '1');
-  const search = useStudentSearch(query);
+  // An active facet is a filter even with nothing typed, so the empty state
+  // must read "no matches" rather than "no students registered".
+  const studentFiltered = searching
+    || stuDepartment !== 'all' || stuCourse !== 'all' || stuYear !== 'all';
+  const list = useStudents(cursor, 25, showArchived === '1', stuDepartment, stuCourse, stuYear);
+  const search = useStudentSearch(query, {
+    department: stuDepartment,
+    course: stuCourse,
+    yearLevel: stuYear,
+  });
+  const stuFacets = useStudentFacets();
   const employees = useEmployees(empCursor, 25, showArchivedEmp === '1', 'all', empDepartment, empPosition);
   const empFacets = useEmployeeFacets();
   const empSearch = useEmployeeSearch(empQuery, empDepartment, empPosition);
@@ -1175,12 +1193,75 @@ export default function PatientsPage() {
                 <Input
                   id="student-search"
                   aria-label="Search students"
-                  placeholder="Search number or name (min 2 chars)"
+                  placeholder="Search number, name, department (min 2 chars)"
                   className="pl-9 placeholder:truncate"
                   value={queryDraft}
                   onChange={(e) => setQuery(e.target.value)}
                 />
               </div>
+            </div>
+            <div className="space-y-1">
+              <Label id="stu-department-label" className="text-xs">Department</Label>
+              <Select
+                value={stuDepartment}
+                onValueChange={(v) => { setStuDepartment(v); setCursor(null); setHistory([null]); }}
+              >
+                <SelectTrigger
+                  aria-labelledby="stu-department-label"
+                  className="w-52"
+                  disabled={stuFacets.isLoading || (stuFacets.data?.departments.length ?? 0) === 0}
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All departments</SelectItem>
+                  {(stuFacets.data?.departments ?? []).map((d) => (
+                    <SelectItem key={d} value={d}>{d}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1">
+              <Label id="stu-course-label" className="text-xs">Program</Label>
+              <Select
+                value={stuCourse}
+                onValueChange={(v) => { setStuCourse(v); setCursor(null); setHistory([null]); }}
+              >
+                <SelectTrigger
+                  aria-labelledby="stu-course-label"
+                  className="w-56"
+                  disabled={stuFacets.isLoading || (stuFacets.data?.courses.length ?? 0) === 0}
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All programs</SelectItem>
+                  {(stuFacets.data?.courses ?? []).map((c) => (
+                    <SelectItem key={c} value={c}>{c}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1">
+              <Label id="stu-year-label" className="text-xs">Year level</Label>
+              <Select
+                value={stuYear}
+                onValueChange={(v) => { setStuYear(v); setCursor(null); setHistory([null]); }}
+              >
+                <SelectTrigger
+                  aria-labelledby="stu-year-label"
+                  className="w-36"
+                  disabled={stuFacets.isLoading || (stuFacets.data?.yearLevels.length ?? 0) === 0}
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All years</SelectItem>
+                  {(stuFacets.data?.yearLevels ?? []).map((y) => (
+                    <SelectItem key={y} value={String(y)}>Year {y}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
             <div className="space-y-1">
               <Label className="text-xs">Status</Label>
@@ -1224,19 +1305,19 @@ export default function PatientsPage() {
                     description: 'Students appear after their first university-ID login or an HR/MIS sync.',
                   }}
                   noResults={{
-                    title: 'No students match this search.',
-                    description: 'Try a different student number or name.',
+                    title: 'No students match these filters.',
+                    description: 'Try a different student number, name, department, program, or year level.',
                   }}
-                  hasFilters={searching}
+                  hasFilters={studentFiltered}
                 />
                 {rows.map((s) => (
                   <TableRow key={s.id}>
-                    <TableCell className="px-3 font-mono text-xs">{s.student_number}</TableCell>
+                    <TableCell className="px-3 tabular-nums text-xs">{s.student_number}</TableCell>
                     <TableCell className="px-3">{s.last_name}, {s.first_name}</TableCell>
                     <TableCell className="px-3 text-xs">
                       {s.course ?? '—'}{s.year_level !== null ? ` · Y${s.year_level}` : ''}
                     </TableCell>
-                    <TableCell className="px-3 font-mono text-xs">{s.blood_type ?? '—'}</TableCell>
+                    <TableCell className="px-3 tabular-nums text-xs">{s.blood_type ?? '—'}</TableCell>
                     <TableCell className="px-3">
                       {s.consecutive_no_shows >= 3
                         ? <Badge variant="destructive">{s.consecutive_no_shows}</Badge>
@@ -1276,7 +1357,7 @@ export default function PatientsPage() {
           )}
           {!loading && !errored && rows.length === 0 && (
             <p className="rounded-xl border border-dashed p-6 text-center text-sm text-muted-foreground md:hidden">
-              {searching ? 'No matches.' : 'No students registered.'}
+              {studentFiltered ? 'No matches.' : 'No students registered.'}
             </p>
           )}
           <MobileCardList>
@@ -1294,9 +1375,9 @@ export default function PatientsPage() {
                     <Badge variant="success">Active</Badge>
                   )}
                 </div>
-                <MobileCardField label="Number"><span className="font-mono text-xs">{s.student_number}</span></MobileCardField>
+                <MobileCardField label="Number"><span className="tabular-nums text-xs">{s.student_number}</span></MobileCardField>
                 <MobileCardField label="Course / Yr"><span className="text-xs">{s.course ?? '—'}{s.year_level !== null ? ` · Y${s.year_level}` : ''}</span></MobileCardField>
-                <MobileCardField label="Blood"><span className="font-mono text-xs">{s.blood_type ?? '—'}</span></MobileCardField>
+                <MobileCardField label="Blood"><span className="tabular-nums text-xs">{s.blood_type ?? '—'}</span></MobileCardField>
                 <MobileCardField label="No-shows">
                   {s.consecutive_no_shows >= 3
                     ? <Badge variant="destructive">{s.consecutive_no_shows}</Badge>
@@ -1439,7 +1520,7 @@ export default function PatientsPage() {
                       />
                       {empRows.map((e) => (
                     <TableRow key={e.id}>
-                      <TableCell className="px-3 font-mono text-xs">{e.employee_number}</TableCell>
+                      <TableCell className="px-3 tabular-nums text-xs">{e.employee_number}</TableCell>
                       <TableCell className="px-3">{e.last_name}, {e.first_name}</TableCell>
                       <TableCell className="px-3 text-xs">{e.department ?? '—'}</TableCell>
                       <TableCell className="px-3 text-xs">{e.position ?? '—'}</TableCell>
@@ -1516,7 +1597,7 @@ export default function PatientsPage() {
                         {!e.is_directory_record && <TeachingBadge isTeaching={e.is_teaching} />}
                         {e.archived && <Badge variant="secondary">Archived</Badge>}
                       </div>
-                      <MobileCardField label="Number"><span className="font-mono text-xs">{e.employee_number}</span></MobileCardField>
+                      <MobileCardField label="Number"><span className="tabular-nums text-xs">{e.employee_number}</span></MobileCardField>
                       <MobileCardField label="Department"><span className="text-xs">{e.department ?? '—'}</span></MobileCardField>
                       <MobileCardField label="Position"><span className="text-xs">{e.position ?? '—'}</span></MobileCardField>
                       <MobileCardActions>{employeeActions(e)}</MobileCardActions>

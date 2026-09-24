@@ -161,7 +161,12 @@ export function getNotificationDestination(
     return '/me';
   }
   if (template.startsWith('counselling.') && hasPermission(auth, 'counselling.records.read')) {
-    return '/counselling?tab=sessions';
+    // Sessions and notes are read on the **Queue** board now (2026-09-23,
+    // third revision) — an on-going patient's row expands in place, and a
+    // `?session=N` link force-opens the matching row. The Appointments book no
+    // longer offers a way into a session, so pointing session notifications
+    // there would land the user on a page that cannot show what they clicked.
+    return '/counselling?tab=queue';
   }
   if (template.startsWith('admin.') && hasPermission(auth, 'rbac.manage')) {
     return '/admin/users';

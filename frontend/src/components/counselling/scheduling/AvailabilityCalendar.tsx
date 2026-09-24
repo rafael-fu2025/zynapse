@@ -1,44 +1,49 @@
 import { Trash2 } from 'lucide-react';
-import { DAY_NAMES, type Availability } from '@/schemas/schedule';
+import { DAY_NAMES } from '@/schemas/schedule';
+import { fmtClock, fmtTimeRange } from '@/utils/date';
+import { StaffAvatarStack } from '@/components/StaffAvatarStack';
+import type { AvailabilitySlot } from './availabilitySlots';
 import { timeToMinutes } from '../format';
 
-function layoutDayLanes(windows: Availability[]): Array<{ w: Availability; lane: number; lanes: number }> {
-  const sorted = [...windows].sort(
+function layoutDayLanes(slots: AvailabilitySlot[]): Array<{ s: AvailabilitySlot; lane: number; lanes: number }> {
+  const sorted = [...slots].sort(
     (a, b) => timeToMinutes(a.start_time) - timeToMinutes(b.start_time),
   );
   const laneEnds: number[] = [];
-  const placed = sorted.map((w) => {
-    const start = timeToMinutes(w.start_time);
+  const placed = sorted.map((s) => {
+    const start = timeToMinutes(s.start_time);
     let lane = laneEnds.findIndex((end) => end <= start);
     if (lane === -1) {
       lane = laneEnds.length;
       laneEnds.push(0);
     }
-    laneEnds[lane] = timeToMinutes(w.end_time);
-    return { w, lane };
+    laneEnds[lane] = timeToMinutes(s.end_time);
+    return { s, lane };
   });
   const lanes = Math.max(1, laneEnds.length);
   return placed.map((p) => ({ ...p, lanes }));
 }
 
 const HOUR_PX = 48;
+/** Room for the time row plus the avatar row; a 1-hour slot is 48px anyway. */
+const MIN_BLOCK_PX = 48;
 
 interface AvailabilityCalendarProps {
-  windows: Availability[];
-  onRemove: (w: Availability) => void;
+  slots: AvailabilitySlot[];
+  onRemove: (s: AvailabilitySlot) => void;
   removing: boolean;
 }
 
 export function AvailabilityCalendar({
-  windows,
+  slots,
   onRemove,
   removing,
 }: AvailabilityCalendarProps) {
   let startHour = 8;
   let endHour = 18;
-  if (windows.length > 0) {
-    startHour = Math.floor(Math.min(...windows.map((w) => timeToMinutes(w.start_time))) / 60);
-    endHour = Math.ceil(Math.max(...windows.map((w) => timeToMinutes(w.end_time))) / 60);
+  if (slots.length > 0) {
+    startHour = Math.floor(Math.min(...slots.map((s) => timeToMinutes(s.start_time))) / 60);
+    endHour = Math.ceil(Math.max(...slots.map((s) => timeToMinutes(s.end_time))) / 60);
     if (endHour <= startHour) {
       startHour = 8;
       endHour = 18;
@@ -63,10 +68,10 @@ export function AvailabilityCalendar({
             {hours.map((h, i) => (
               <p
                 key={h}
-                className="absolute right-1.5 font-mono text-[10px] text-muted-foreground"
+                className="absolute right-1.5 text-[10px] text-muted-foreground"
                 style={{ top: i * HOUR_PX + 2 }}
               >
-                {String(h).padStart(2, '0')}:00
+                {fmtClock(`${h}:00`)}
               </p>
             ))}
           </div>
@@ -80,16 +85,17 @@ export function AvailabilityCalendar({
                   style={{ top: i * HOUR_PX }}
                 />
               ))}
-              {layoutDayLanes(windows.filter((w) => w.day_of_week === day)).map(({ w, lane, lanes }) => {
-                const top = ((timeToMinutes(w.start_time) - startHour * 60) / 60) * HOUR_PX;
+              {layoutDayLanes(slots.filter((s) => s.day_of_week === day)).map(({ s, lane, lanes }) => {
+                const top = ((timeToMinutes(s.start_time) - startHour * 60) / 60) * HOUR_PX;
                 const height = Math.max(
-                  28,
-                  ((timeToMinutes(w.end_time) - timeToMinutes(w.start_time)) / 60) * HOUR_PX,
+                  MIN_BLOCK_PX,
+                  ((timeToMinutes(s.end_time) - timeToMinutes(s.start_time)) / 60) * HOUR_PX,
                 );
+                const names = s.members.map((m) => m.name ?? `Staff #${m.id}`).join(', ');
                 return (
                   <div
-                    key={w.id}
-                    className="absolute overflow-hidden rounded-md border border-primary/30 bg-primary/10 p-1"
+                    key={s.key}
+                    className="absolute flex flex-col overflow-hidden rounded-md border border-primary/30 bg-primary/10 p-1"
                     style={{
                       top,
                       height,
@@ -98,20 +104,25 @@ export function AvailabilityCalendar({
                     }}
                   >
                     <div className="flex items-start justify-between gap-1">
-                      <p className="font-mono text-[10px] leading-tight text-foreground">
-                        {w.start_time.slice(0, 5)}–{w.end_time.slice(0, 5)}
+                      <p className="truncate text-[10px] leading-tight text-foreground">
+                        {fmtTimeRange(s.start_time, s.end_time)}
                       </p>
                       <button
                         type="button"
-                        aria-label={`Remove window #${w.id}`}
+                        aria-label={`Remove window ${fmtTimeRange(s.start_time, s.end_time)} on ${DAY_NAMES[s.day_of_week]} — ${names}`}
                         disabled={removing}
-                        onClick={() => onRemove(w)}
+                        onClick={() => onRemove(s)}
                         className="shrink-0 rounded-sm p-0.5 text-muted-foreground hover:text-destructive disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
                       >
                         <Trash2 className="size-3" aria-hidden />
                       </button>
                     </div>
-                    <p className="text-[10px] text-muted-foreground">cap {w.max_slots}</p>
+                    <div className="mt-auto flex items-center justify-between gap-1">
+                      <StaffAvatarStack people={s.members} size="xs" max={3} />
+                      <span className="shrink-0 text-[10px] text-muted-foreground">
+                        cap {s.max_slots}
+                      </span>
+                    </div>
                   </div>
                 );
               })}

@@ -35,11 +35,19 @@ use Throwable;
  */
 final class AppointmentService extends BaseService
 {
+    /**
+     * `confirmed` is the approval step, and mirrors counselling's — a portal
+     * booking names no provider, so confirming is what puts a staff member on
+     * the appointment. `checked_in` still accepts a `scheduled` row because
+     * the kiosk and the lazy auto-check-in sweep both skip approval; they must
+     * keep working for a patient who walks up without a desk confirmation.
+     */
     private const TRANSITIONS = [
-        'checked_in' => ['scheduled'],
+        'confirmed'  => ['scheduled'],
+        'checked_in' => ['scheduled', 'confirmed'],
         'completed'  => ['checked_in'],
-        'cancelled'  => ['scheduled', 'checked_in'],
-        'no_show'    => ['scheduled', 'checked_in'],
+        'cancelled'  => ['scheduled', 'confirmed', 'checked_in'],
+        'no_show'    => ['scheduled', 'confirmed', 'checked_in'],
     ];
 
     public function __construct(
@@ -164,10 +172,12 @@ final class AppointmentService extends BaseService
             static fn (array $r) => isset($r['patient_user_id']) && $r['patient_user_id'] !== null ? (int) $r['patient_user_id'] : null,
             $rows,
         ))));
-        $providerIds = array_values(array_unique(array_map(
-            static fn (array $r) => (int) $r['provider_user_id'],
+        // Same nullable-id convention as patients: an unassigned appointment
+        // has no provider to look up, and `whereIn` must not receive a null.
+        $providerIds = array_values(array_unique(array_filter(array_map(
+            static fn (array $r) => isset($r['provider_user_id']) && $r['provider_user_id'] !== null ? (int) $r['provider_user_id'] : null,
             $rows,
-        )));
+        ))));
 
         // Patients are `users` (identity-consolidated) — resolve names
         // + kind directly, no patients_students / patients_employees join.
@@ -260,7 +270,8 @@ final class AppointmentService extends BaseService
         $out = [];
         foreach ($rows as $r) {
             $pid  = isset($r['patient_user_id']) && $r['patient_user_id'] !== null ? (int) $r['patient_user_id'] : 0;
-            $prov = (int) $r['provider_user_id'];
+            // Null while the appointment awaits approval — no name to resolve.
+            $prov = isset($r['provider_user_id']) && $r['provider_user_id'] !== null ? (int) $r['provider_user_id'] : null;
             if ($pid > 0) {
                 $r['patient_name'] = $patientNames[$pid] ?? null;
                 $r['patient_kind'] = $patientKinds[$pid] ?? null;
@@ -271,7 +282,7 @@ final class AppointmentService extends BaseService
                 $r['patient_name'] = $patientNames['sid:' . $sid] ?? null;
                 $r['patient_kind'] = $patientKinds['sid:' . $sid] ?? null;
             }
-            $r['provider_name'] = $providerNames[$prov] ?? null;
+            $r['provider_name'] = $prov !== null ? ($providerNames[$prov] ?? null) : null;
             $r['encounter_id']  = $encounterIds[(int) $r['id']] ?? null;
             $out[] = $r;
         }
@@ -386,7 +397,16 @@ final class AppointmentService extends BaseService
      * Same-transaction insert + provider notification + audit as the
      * staff path.
      */
-    public function bookSelf(int $patientUserId, int $providerUserId, string $scheduledAtUtc, ?string $reason): AppointmentDto
+    /**
+     * Book an appointment for the patient themselves.
+     *
+     * `$providerUserId` is nullable since 2026-09-23: a portal booking carries
+     * only a department and a time, and the provider is filled in by whoever
+     * approves the appointment. While nobody owns it there is no one to clash
+     * with and no one to notify, so both steps are skipped rather than
+     * defaulted to 0 — which would have enqueued a notification to user 0.
+     */
+    public function bookSelf(int $patientUserId, ?int $providerUserId, string $scheduledAtUtc, ?string $reason): AppointmentDto
     {
         $userId = \App\Auth\CurrentUser::assert();
 
@@ -424,7 +444,9 @@ final class AppointmentService extends BaseService
             $schoolId = (string) ($patient['student_number'] ?? $patient['employee_number'] ?? '');
 
             $this->assertNoClash('patient_user_id', $patientUserId, $scheduledAtUtc, 'You already have an appointment in that window.');
-            $this->assertNoClash('provider_user_id', $providerUserId, $scheduledAtUtc, 'That provider is already booked at that time.');
+            if ($providerUserId !== null) {
+                $this->assertNoClash('provider_user_id', $providerUserId, $scheduledAtUtc, 'That provider is already booked at that time.');
+            }
 
             $nowSql = $now->format('Y-m-d H:i:s');
             // QR proof-of-booking: mint a high-entropy token, store only its
@@ -447,12 +469,15 @@ final class AppointmentService extends BaseService
 
             $this->audit->enqueue('clinic.appointment_scheduled', 'clinic_appointments', $id, $userId, ['next_status' => 'scheduled']);
 
-            // Same-transaction provider notification (no PII).
-            $this->notify->enqueue(
-                $providerUserId,
-                'appointment.assigned',
-                ['resource_code' => 'appointment#' . $id, 'scheduled_at' => $scheduledAtUtc, 'appointment_at' => $scheduledAtUtc, 'appointment_status' => 'scheduled', 'destination' => 'clinic'],
-            );
+            // Same-transaction provider notification (no PII). Unassigned
+            // appointments notify nobody here; approval does that instead.
+            if ($providerUserId !== null) {
+                $this->notify->enqueue(
+                    $providerUserId,
+                    'appointment.assigned',
+                    ['resource_code' => 'appointment#' . $id, 'scheduled_at' => $scheduledAtUtc, 'appointment_at' => $scheduledAtUtc, 'appointment_status' => 'scheduled', 'destination' => 'clinic'],
+                );
+            }
             if ($patientUserId !== $providerUserId) {
                 $this->notify->enqueue($patientUserId, 'appointment.scheduled', ['resource_code' => 'appointment#' . $id, 'appointment_at' => $scheduledAtUtc, 'appointment_status' => 'scheduled', 'destination' => 'clinic']);
             }
@@ -671,16 +696,32 @@ final class AppointmentService extends BaseService
 
             $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
 
+            $update = ['status' => $nextStatus, 'updated_at' => $now];
+            // Whoever acts on the appointment owns it: a portal booking names no
+            // provider, so approving puts a staff member on it. Check-in counts
+            // too, because the kiosk and the auto-check-in sweep skip approval
+            // entirely — without this an unapproved appointment could reach
+            // `checked_in` and still have nobody attached. A row that already
+            // has a provider keeps it: a staff-side booking names one
+            // deliberately, and acting on someone's behalf must not silently
+            // take their appointment away from them.
+            if (in_array($nextStatus, ['confirmed', 'checked_in'], true) && $row['provider_user_id'] === null) {
+                $update['provider_user_id'] = $userId;
+            }
             $this->db->table('clinic_appointments')
                 ->where('clinic_appointments.tenant_id', CurrentTenant::id())
                 ->where('id', $appointmentId)
-                ->update(['status' => $nextStatus, 'updated_at' => $now]);
+                ->update($update);
+            // The snapshot above predates the assignment, so read the provider
+            // back out of the update — otherwise the newly assigned staff member
+            // is the one person not told about the appointment they just took.
+            $providerId = $update['provider_user_id'] ?? $row['provider_user_id'];
 
             // Panel revision: checking in creates the day's ENCOUNTER
             // (the anchor for all clinic actions) and queues it — same
             // transaction, same discipline as the kiosk walk-in flow.
             if ($nextStatus === 'checked_in') {
-                $this->openEncounterForAppointment($row, $userId, $now);
+                $this->openEncounterForAppointment($row, $userId, $now, $providerId !== null ? (int) $providerId : null);
             }
             if (in_array($nextStatus, ['cancelled', 'no_show'], true)) {
                 $encounter = $this->db->table('clinic_encounters')->where('clinic_encounters.tenant_id', CurrentTenant::id())->select('id')->where('appointment_id', $appointmentId)->get()->getRowArray();
@@ -696,7 +737,7 @@ final class AppointmentService extends BaseService
                 $userId,
                 ['previous_status' => (string) $row['status'], 'next_status' => $nextStatus],
             );
-            foreach (array_unique(array_filter([(int) ($row['patient_user_id'] ?? 0), (int) $row['provider_user_id']])) as $recipient) {
+            foreach (array_unique(array_filter([(int) ($row['patient_user_id'] ?? 0), (int) $providerId])) as $recipient) {
                 $this->notify->enqueue($recipient, 'appointment.' . $nextStatus, ['resource_code'=>'appointment#'.$appointmentId,'appointment_at'=>(string)$row['scheduled_at'],'appointment_status'=>$nextStatus,'destination'=>'clinic']);
             }
 
@@ -714,8 +755,12 @@ final class AppointmentService extends BaseService
      * the path idempotent without surfacing a duplicate-key error.
      *
      * @param array<string, mixed> $appt locked appointment row
+     * @param int|null $attendingUserId the appointment's provider, or null when
+     *        nobody owns it yet — `clinic_encounters.attending_user_id` is
+     *        NOT NULL with an FK to `users`, so the actor is used instead of
+     *        coercing null to 0 and failing the constraint.
      */
-    private function openEncounterForAppointment(array $appt, int $userId, string $now): int
+    private function openEncounterForAppointment(array $appt, int $userId, string $now, ?int $attendingUserId = null): int
     {
         $appointmentId = (int) $appt['id'];
 
@@ -738,7 +783,7 @@ final class AppointmentService extends BaseService
             'appointment_id'    => $appointmentId,
             'chief_complaint'   => $reason,
             'status'            => 'open',
-            'attending_user_id' => (int) $appt['provider_user_id'],
+            'attending_user_id' => $attendingUserId ?? $userId,
             'started_at'        => $now,
             'created_at'        => $now,
             'updated_at'        => $now,
@@ -865,11 +910,14 @@ final class AppointmentService extends BaseService
             // provider or patient changed — excluding this row itself.
             if (in_array('scheduled_at', $changed, true) || in_array('provider_user_id', $changed, true) || in_array('patient_user_id', $update, true)) {
                 $slot    = (string) ($update['scheduled_at'] ?? $row['scheduled_at']);
-                $provId  = (int) ($update['provider_user_id'] ?? $row['provider_user_id']);
+                $rawProv = $update['provider_user_id'] ?? $row['provider_user_id'];
+                $provId  = $rawProv !== null ? (int) $rawProv : null;
                 $patId   = array_key_exists('patient_user_id', $update)
                     ? ($update['patient_user_id'] !== null ? (int) $update['patient_user_id'] : null)
                     : ($row['patient_user_id'] !== null ? (int) $row['patient_user_id'] : null);
-                $this->assertNoClash('provider_user_id', $provId, $slot, 'The provider already has an appointment within an hour of this slot.', $appointmentId);
+                if ($provId !== null) {
+                    $this->assertNoClash('provider_user_id', $provId, $slot, 'The provider already has an appointment within an hour of this slot.', $appointmentId);
+                }
                 if ($patId !== null) {
                     $this->assertNoClash('patient_user_id', $patId, $slot, 'The patient already has an appointment within an hour of this slot.', $appointmentId);
                 }
@@ -892,19 +940,22 @@ final class AppointmentService extends BaseService
             );
 
             // Notify the (possibly new) provider when slot or provider
-            // changed. Same-transaction guarantee: the row in the
-            // notification matches the row the user just saved.
+            // changed. An unapproved appointment has no provider yet, so
+            // notify only if one is assigned.
             if (in_array('provider_user_id', $changed, true) || in_array('scheduled_at', $changed, true)) {
                 $slot = (string) ($update['scheduled_at'] ?? $row['scheduled_at']);
-                $this->notify->enqueue(
-                    (int) ($update['provider_user_id'] ?? $row['provider_user_id']),
-                    'appointment.rescheduled',
-                    [
-                        'resource_code' => 'appointment#' . $appointmentId,
-                        'scheduled_at' => $slot, 'appointment_at' => $slot,
-                        'appointment_status' => 'scheduled', 'destination' => 'clinic',
-                    ],
-                );
+                $notifyProv = $update['provider_user_id'] ?? $row['provider_user_id'];
+                if ($notifyProv !== null) {
+                    $this->notify->enqueue(
+                        (int) $notifyProv,
+                        'appointment.rescheduled',
+                        [
+                            'resource_code' => 'appointment#' . $appointmentId,
+                            'scheduled_at' => $slot, 'appointment_at' => $slot,
+                            'appointment_status' => 'scheduled', 'destination' => 'clinic',
+                        ],
+                    );
+                }
                 $patientId = (int) ($update['patient_user_id'] ?? $row['patient_user_id'] ?? 0);
                 if ($patientId > 0) {
                     $this->notify->enqueue($patientId, 'appointment.rescheduled', ['resource_code'=>'appointment#'.$appointmentId,'appointment_at'=>$slot,'appointment_status'=>'scheduled','destination'=>'clinic']);
@@ -970,8 +1021,16 @@ final class AppointmentService extends BaseService
                         // advanced or cancelled this row. Skip silently.
                         return 0;
                     }
+                    // An unapproved appointment has no provider, and the
+                    // encounter's `attending_user_id` is NOT NULL — there is
+                    // literally nobody to attend this visit. Leave it scheduled
+                    // until someone approves it, or until the patient scans in
+                    // at the kiosk, which assigns the acting staff member.
+                    if ($row['provider_user_id'] === null) {
+                        return 0;
+                    }
 
-                    $userId = (int) ($row['provider_user_id'] ?? 0);
+                    $userId = (int) $row['provider_user_id'];
 
                     $this->db->table('clinic_appointments')
                         ->where('clinic_appointments.tenant_id', CurrentTenant::id())
@@ -1046,6 +1105,13 @@ final class AppointmentService extends BaseService
                     if ($row === null || (string) $row['status'] !== 'scheduled') {
                         return 0; // lost the race
                     }
+                    // Nobody ever approved this appointment, so the clinic never
+                    // committed to it. Striking the patient as a no-show for the
+                    // clinic's own inaction would be wrong, and it would feed the
+                    // three-strike counter. Leave it for a human to resolve.
+                    if ($row['provider_user_id'] === null) {
+                        return 0;
+                    }
 
                     $this->db->table('clinic_appointments')
                         ->where('clinic_appointments.tenant_id', CurrentTenant::id())
@@ -1056,7 +1122,7 @@ final class AppointmentService extends BaseService
                     // hang off `encounter_id`, and an appointment that
                     // aged out never opened an encounter.
 
-                    $providerId = (int) ($row['provider_user_id'] ?? 0);
+                    $providerId = (int) $row['provider_user_id'];
                     $this->audit->enqueue(
                         'clinic.appointment_no_show',
                         'clinic_appointments',

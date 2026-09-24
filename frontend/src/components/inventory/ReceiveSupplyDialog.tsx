@@ -58,7 +58,7 @@ export function ReceiveSupplyDialog({ item, onClose }: { item: InventoryItem; on
       {order !== null && (
         <div className="space-y-3">
           <p className="rounded-md bg-muted/50 p-2 text-xs text-muted-foreground">
-            Receiving purchase <span className="font-mono">#{order.id}</span> —{' '}
+            Receiving purchase <span className="tabular-nums">#{order.id}</span> —{' '}
             <span className="font-medium text-foreground">{ordered} {item.unit}</span>{' '}
             bought. Lower the quantity below for a partial delivery.
           </p>

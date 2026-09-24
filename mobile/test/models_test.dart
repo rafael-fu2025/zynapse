@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:synapse_mobile/core/models/appointment.dart';
+import 'package:synapse_mobile/core/models/appointment_portal.dart';
 import 'package:synapse_mobile/core/models/equipment.dart';
 import 'package:synapse_mobile/core/models/notification.dart';
 import 'package:synapse_mobile/core/models/queue.dart';
@@ -61,6 +62,36 @@ void main() {
       expect(a.patientLabel, contains('Gabriel S. Lopez'));
       expect(a.providerLabel, 'Nina Reyes');
       expect(a.status, 'scheduled');
+    });
+
+    test('parses an unassigned appointment row with null provider', () {
+      final a = Appointment.fromJson(const {
+        'id': 58,
+        'patient_school_id': '20261970',
+        'patient_name': 'Gabriel S. Lopez',
+        'patient_kind': 'student',
+        'provider_user_id': null,
+        'provider_name': null,
+        'scheduled_at': '2026-09-25 06:00:00',
+        'status': 'scheduled',
+        'reason': 'Counselling request',
+        'encounter_id': null,
+        'created_at': '2026-09-23 01:23:45',
+      });
+      expect(a.providerUserId, isNull);
+      expect(a.providerLabel, 'Unassigned');
+    });
+
+    test('parses a pooled portal appointment slot without provider', () {
+      final slot = PortalAppointmentSlot.fromJson(const {
+        'department': 'clinic',
+        'starts_at': '2026-09-25T01:00:00Z',
+        'ends_at': '2026-09-25T02:00:00Z',
+        'duration_minutes': 60,
+        'remaining': 3,
+      });
+      expect(slot.department, 'clinic');
+      expect(slot.remaining, 3);
     });
   });
 

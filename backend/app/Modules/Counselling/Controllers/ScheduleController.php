@@ -39,8 +39,11 @@ final class ScheduleController extends ApiController
     {
         $payload = $this->request->getJSON(true) ?? [];
 
+        // `day_of_week` is no longer required: the desk now ticks a set of
+        // weekdays and posts `days_of_week` (2026-09-23). The single-day
+        // shape is still accepted so older callers keep working.
         $rules = [
-            'day_of_week'        => 'required|integer|greater_than_equal_to[0]|less_than_equal_to[6]',
+            'day_of_week'        => 'permit_empty|integer|greater_than_equal_to[0]|less_than_equal_to[6]',
             'start_time'         => 'required|regex_match[/^\d{2}:\d{2}(:\d{2})?$/]',
             'end_time'           => 'required|regex_match[/^\d{2}:\d{2}(:\d{2})?$/]',
             'max_slots'          => 'permit_empty|is_natural_no_zero',
@@ -50,7 +53,52 @@ final class ScheduleController extends ApiController
             throw ApiException::validationFailure($this->collectErrors());
         }
 
+        $this->assertWeekdaysPresent($payload);
+
         return $this->ok($this->service->addSlot($payload), null, 201);
+    }
+
+    /**
+     * Reject a weekday set that is not a non-empty list of 0-6.
+     *
+     * CI4's rule engine validates scalars, not arrays of ints, so the shape
+     * check lives here; `ScheduleService::normaliseDaysOfWeek()` remains the
+     * authoritative normaliser for the values themselves.
+     *
+     * @param array<string, mixed> $payload
+     */
+    private function assertWeekdaysPresent(array $payload): void
+    {
+        $raw = $payload['days_of_week'] ?? null;
+
+        if ($raw === null) {
+            if (array_key_exists('day_of_week', $payload) && $payload['day_of_week'] !== '' && $payload['day_of_week'] !== null) {
+                return;
+            }
+            throw ApiException::validationFailure([
+                ['code' => 'validation.field', 'message' => 'Pick at least one weekday.', 'field' => 'days_of_week'],
+            ]);
+        }
+
+        if (! is_array($raw)) {
+            throw ApiException::validationFailure([
+                ['code' => 'validation.field', 'message' => 'Weekdays must be a list of numbers 0-6.', 'field' => 'days_of_week'],
+            ]);
+        }
+
+        foreach ($raw as $candidate) {
+            if (! is_numeric($candidate) || (int) $candidate < 0 || (int) $candidate > 6) {
+                throw ApiException::validationFailure([
+                    ['code' => 'validation.field', 'message' => 'Weekdays must be numbers 0-6.', 'field' => 'days_of_week'],
+                ]);
+            }
+        }
+
+        if ($raw === []) {
+            throw ApiException::validationFailure([
+                ['code' => 'validation.field', 'message' => 'Pick at least one weekday.', 'field' => 'days_of_week'],
+            ]);
+        }
     }
 
     public function removeSlot(int $id): ResponseInterface
@@ -65,10 +113,27 @@ final class ScheduleController extends ApiController
         $limit  = (int)    ($this->request->getGet('limit')  ?? 25);
         $status = (string) ($this->request->getGet('status') ?? '');
         $date   = (string) ($this->request->getGet('date') ?? '');
+        $scope  = (string) ($this->request->getGet('scope') ?? '');
+        $type   = (string) ($this->request->getGet('type') ?? '');
 
         if ($status !== '' && ! in_array($status, ['scheduled', 'confirmed', 'completed', 'cancelled', 'no_show'], true)) {
             throw ApiException::validationFailure([
                 ['code' => 'validation.field', 'message' => 'Unknown status filter.', 'field' => 'status'],
+            ]);
+        }
+
+        // `scope` is the Queue board's calendar bucket (upcoming / today /
+        // archived); `all` is accepted so the Appointments tab can name its
+        // unfiltered state explicitly.
+        if ($scope !== '' && $scope !== 'all' && ! in_array($scope, ScheduleService::APPOINTMENT_SCOPES, true)) {
+            throw ApiException::validationFailure([
+                ['code' => 'validation.field', 'message' => 'Unknown scope filter.', 'field' => 'scope'],
+            ]);
+        }
+
+        if ($type !== '' && ! in_array($type, ['initial', 'follow_up', 'crisis', 'referral_based'], true)) {
+            throw ApiException::validationFailure([
+                ['code' => 'validation.field', 'message' => 'Unknown appointment type filter.', 'field' => 'type'],
             ]);
         }
 
@@ -77,6 +142,8 @@ final class ScheduleController extends ApiController
             $limit,
             $status !== '' ? $status : null,
             $date !== '' ? $date : null,
+            $scope !== '' ? $scope : null,
+            $type !== '' ? $type : null,
         );
 
         return $this->ok(

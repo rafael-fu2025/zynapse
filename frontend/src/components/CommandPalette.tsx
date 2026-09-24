@@ -520,7 +520,7 @@ export function CommandPalette() {
 
 function Kbd({ children }: { children: ReactNode }): JSX.Element {
   return (
-    <kbd className="inline-flex min-w-[1.25rem] items-center justify-center rounded border bg-background px-1 font-mono text-[10px]">
+    <kbd className="inline-flex min-w-[1.25rem] items-center justify-center rounded border bg-background px-1 tabular-nums text-[10px]">
       {children}
     </kbd>
   );

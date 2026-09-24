@@ -6,7 +6,7 @@ class Appointment {
     required this.patientSchoolId,
     this.patientName,
     this.patientKind,
-    required this.providerUserId,
+    this.providerUserId,
     this.providerName,
     required this.scheduledAt,
     required this.status,
@@ -21,7 +21,7 @@ class Appointment {
         patientSchoolId: (json['patient_school_id'] ?? '') as String,
         patientName: json['patient_name'] as String?,
         patientKind: json['patient_kind'] as String?,
-        providerUserId: json['provider_user_id'] as int,
+        providerUserId: json['provider_user_id'] as int?,
         providerName: json['provider_name'] as String?,
         scheduledAt: (json['scheduled_at'] ?? '') as String,
         status: (json['status'] ?? 'scheduled') as String,
@@ -43,7 +43,7 @@ class Appointment {
   /// `student` | `employee` | null.
   final String? patientKind;
 
-  final int providerUserId;
+  final int? providerUserId;
 
   /// `First Last` of the provider; falls back to username.
   final String? providerName;
@@ -73,7 +73,7 @@ class Appointment {
 
   String get providerLabel => (providerName != null && providerName!.isNotEmpty)
       ? providerName!
-      : 'Provider #$providerUserId';
+      : (providerUserId != null ? 'Provider #$providerUserId' : 'Unassigned');
 }
 
 /// Result of the PUBLIC `/appointments/verify` endpoint — minimum
