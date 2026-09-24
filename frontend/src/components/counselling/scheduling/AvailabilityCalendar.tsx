@@ -1,4 +1,4 @@
-import { Trash2 } from 'lucide-react';
+import { Pencil, Trash2 } from 'lucide-react';
 import { DAY_NAMES } from '@/schemas/schedule';
 import { fmtClock, fmtTimeRange } from '@/utils/date';
 import { StaffAvatarStack } from '@/components/StaffAvatarStack';
@@ -32,12 +32,19 @@ interface AvailabilityCalendarProps {
   slots: AvailabilitySlot[];
   onRemove: (s: AvailabilitySlot) => void;
   removing: boolean;
+  /**
+   * Absent for viewers who cannot manage the schedule, which is what hides the
+   * edit affordance — the trash button beside it predates that gate and is left
+   * as it was.
+   */
+  onEdit?: ((s: AvailabilitySlot) => void) | undefined;
 }
 
 export function AvailabilityCalendar({
   slots,
   onRemove,
   removing,
+  onEdit,
 }: AvailabilityCalendarProps) {
   let startHour = 8;
   let endHour = 18;
@@ -119,9 +126,16 @@ export function AvailabilityCalendar({
                     </div>
                     <div className="mt-auto flex items-center justify-between gap-1">
                       <StaffAvatarStack people={s.members} size="xs" max={3} />
-                      <span className="shrink-0 text-[10px] text-muted-foreground">
-                        cap {s.max_slots}
-                      </span>
+                      {onEdit !== undefined && (
+                        <button
+                          type="button"
+                          aria-label={`Edit window ${fmtTimeRange(s.start_time, s.end_time)} on ${DAY_NAMES[s.day_of_week]} — ${names}`}
+                          onClick={() => onEdit(s)}
+                          className="shrink-0 rounded-sm p-0.5 text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+                        >
+                          <Pencil className="size-3" aria-hidden />
+                        </button>
+                      )}
                     </div>
                   </div>
                 );

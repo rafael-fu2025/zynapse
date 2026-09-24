@@ -12,6 +12,7 @@ import {
   availabilitySchema,
   bookAppointmentSchema,
   slotAnalyticsSchema,
+  updateSlotSchema,
   type AddSlotInput,
   type Appointment,
   type AppointmentAction,
@@ -21,6 +22,7 @@ import {
   type Availability,
   type BookAppointmentInput,
   type SlotAnalytics,
+  type UpdateSlotInput,
 } from '@/schemas/schedule';
 import { fmtHumanDate } from '@/utils/date';
 
@@ -67,6 +69,46 @@ export function useAddSlot() {
     },
     onError: (err) => {
       toast.error(err.errors[0]?.message ?? 'Failed to add window.');
+    },
+  });
+}
+
+/**
+ * Edit availability windows in place (2026-09-24).
+ *
+ * The row the desk sees groups the windows that share a day and time range —
+ * one per counsellor — so an edit fans out one request per id, exactly as the
+ * remove flow does. The backend writes to the addressed row only, so an edit
+ * can never leave a second window behind.
+ *
+ * Invalidation is on settle, not on success: a fan-out of several requests is
+ * not atomic, so a failure part-way through still has to resync the list
+ * rather than leave the desk looking at rows that already changed.
+ */
+export function useUpdateSlot() {
+  const qc = useQueryClient();
+  return useMutation<Availability[], ApiEnvelopeError, { ids: number[]; input: UpdateSlotInput }>({
+    mutationFn: async ({ ids, input }) => {
+      const valid = updateSlotSchema.parse(input);
+      const updated: Availability[] = [];
+      for (const id of ids) {
+        const res = await apiClient.post<unknown>(`/counselling/availability/${id}/update`, valid);
+        updated.push(availabilitySchema.parse(res.data));
+      }
+      return updated;
+    },
+    onSuccess: (updated) => {
+      toast.success(
+        updated.length === 1
+          ? 'Availability window updated.'
+          : `${updated.length} availability windows updated.`,
+      );
+    },
+    onError: (err) => {
+      toast.error(err.errors[0]?.message ?? 'Failed to update window.');
+    },
+    onSettled: () => {
+      void qc.invalidateQueries({ queryKey: ['schedule', 'availability'] });
     },
   });
 }

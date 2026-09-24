@@ -46,7 +46,6 @@ final class ScheduleController extends ApiController
             'day_of_week'        => 'permit_empty|integer|greater_than_equal_to[0]|less_than_equal_to[6]',
             'start_time'         => 'required|regex_match[/^\d{2}:\d{2}(:\d{2})?$/]',
             'end_time'           => 'required|regex_match[/^\d{2}:\d{2}(:\d{2})?$/]',
-            'max_slots'          => 'permit_empty|is_natural_no_zero',
             'counsellor_user_id' => 'permit_empty|is_natural_no_zero',
         ];
         if (! $this->makeValidation($rules)->run($payload)) {
@@ -99,6 +98,30 @@ final class ScheduleController extends ApiController
                 ['code' => 'validation.field', 'message' => 'Pick at least one weekday.', 'field' => 'days_of_week'],
             ]);
         }
+    }
+
+    /**
+     * Edit an availability window in place (2026-09-24).
+     *
+     * Every field is optional — a caller may send only what it changed — so
+     * the service keeps the current value for anything absent. Duplicate and
+     * ordering checks live in the service, next to the write they guard.
+     */
+    public function updateSlot(int $id): ResponseInterface
+    {
+        $payload = $this->request->getJSON(true) ?? [];
+
+        $rules = [
+            'day_of_week'        => 'permit_empty|integer|greater_than_equal_to[0]|less_than_equal_to[6]',
+            'start_time'         => 'permit_empty|regex_match[/^\d{2}:\d{2}(:\d{2})?$/]',
+            'end_time'           => 'permit_empty|regex_match[/^\d{2}:\d{2}(:\d{2})?$/]',
+            'counsellor_user_id' => 'permit_empty|is_natural_no_zero',
+        ];
+        if (! $this->makeValidation($rules)->run($payload)) {
+            throw ApiException::validationFailure($this->collectErrors());
+        }
+
+        return $this->ok($this->service->updateSlot($id, $payload));
     }
 
     public function removeSlot(int $id): ResponseInterface

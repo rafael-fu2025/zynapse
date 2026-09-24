@@ -213,17 +213,18 @@ final class PortalAppointmentService extends BaseService
     }
 
     /**
-     * Guidance capacity is the sum of `max_slots` across every active window
-     * covering the instant. Overlapping windows belonging to one counsellor
-     * take the larger figure rather than adding up, so a counsellor cannot
-     * inflate capacity by declaring two windows over the same hour.
+     * Guidance capacity is **one appointment per counsellor covering the
+     * instant** — the rule the clinic path already used. Coverage is keyed by
+     * counsellor id, so a counsellor holding two overlapping windows over the
+     * same hour counts once rather than twice: capacity cannot be inflated by
+     * declaring the same cover more than once (2026-09-24).
      *
      * @return list<array<string,mixed>>
      */
     private function guidanceSlots(DateTimeImmutable $from, DateTimeImmutable $to): array
     {
         $windows = $this->db->table('counselling_availability')
-            ->select('counsellor_user_id, day_of_week, start_time, end_time, max_slots')
+            ->select('counsellor_user_id, day_of_week, start_time, end_time')
             ->where('tenant_id', CurrentTenant::id())->where('is_active', 1)
             ->get()->getResultArray();
 
@@ -234,12 +235,11 @@ final class PortalAppointmentService extends BaseService
             foreach ($windows as $w) {
                 if ((int) $w['day_of_week'] !== $dow) continue;
                 $counsellor = (int) $w['counsellor_user_id'];
-                $max = (int) $w['max_slots'];
                 $cursor = new DateTimeImmutable($date.' '.$w['start_time'], new DateTimeZone(self::LOCAL_TZ));
                 $finish = new DateTimeImmutable($date.' '.$w['end_time'], new DateTimeZone(self::LOCAL_TZ));
                 while ($cursor->modify('+60 minutes') <= $finish) {
-                    $key = $cursor->format('H:i');
-                    if ($max > ($places[$date][$key][$counsellor] ?? 0)) $places[$date][$key][$counsellor] = $max;
+                    // One place per counsellor, not one per window.
+                    $places[$date][$cursor->format('H:i')][$counsellor] = 1;
                     $cursor = $cursor->modify('+60 minutes');
                 }
             }
@@ -366,10 +366,14 @@ final class PortalAppointmentService extends BaseService
     }
 
     /**
-     * Guidance capacity is the sum of `max_slots` over every window covering
-     * the instant — not one counsellor's window. Locking those windows and
-     * counting the department's live appointments is what stops the last
-     * place being sold twice now that no counsellor is named at booking.
+     * Guidance capacity is the number of **distinct counsellors** covering the
+     * instant, not a sum of per-window figures. Locking those windows and
+     * counting the department's live appointments is what stops the last place
+     * being sold twice now that no counsellor is named at booking.
+     *
+     * Counting distinct counsellors rather than rows is also what makes this
+     * agree with the slot list: one counsellor holding two overlapping windows
+     * is one place in both places, where the two used to disagree.
      *
      * @return array<string,mixed>
      */
@@ -381,8 +385,10 @@ final class PortalAppointmentService extends BaseService
             $user = $this->db->table('users')->select('student_number,employee_number')->where('users.tenant_id', CurrentTenant::id())->where('id',$userId)->get()->getRowArray();
             if($user===null)throw new ApiException('resource.not_found',404,[['code'=>'resource.not_found','message'=>'Patient not found.']]);
             $school=(string)($user['student_number']?:$user['employee_number']); $end=$local->modify('+60 minutes'); $now=gmdate('Y-m-d H:i:s');
-            $windows=$this->db->query('SELECT `id`,`max_slots` FROM `counselling_availability` WHERE `tenant_id`=? AND `day_of_week`=? AND `is_active`=1 AND `start_time`<=? AND `end_time`>=? FOR UPDATE',[CurrentTenant::id(),(int)$local->format('w'),$local->format('H:i:s'),$end->format('H:i:s')])->getResultArray();
-            $capacity=0; foreach($windows as$w)$capacity+=(int)$w['max_slots'];
+            $windows=$this->db->query('SELECT `counsellor_user_id` FROM `counselling_availability` WHERE `tenant_id`=? AND `day_of_week`=? AND `is_active`=1 AND `start_time`<=? AND `end_time`>=? FOR UPDATE',[CurrentTenant::id(),(int)$local->format('w'),$local->format('H:i:s'),$end->format('H:i:s')])->getResultArray();
+            // Distinct counsellors: two overlapping windows held by one person
+            // are one place, matching what the portal offered.
+            $capacity=count(array_unique(array_map(static fn(array $w):int=>(int)$w['counsellor_user_id'],$windows)));
             if($capacity===0)throw new ApiException('statemachine.schedule.outside_availability',409,[['code'=>'statemachine.schedule.outside_availability','message'=>'No provider is available for that slot.']]);
             $count=$this->db->query('SELECT COUNT(*) AS n FROM `counselling_appointments` WHERE `tenant_id`=? AND `appointment_date`=? AND `status` IN (?,?) AND NOT (?<=`start_time` OR ?>=`end_time`) FOR UPDATE',[CurrentTenant::id(),$local->format('Y-m-d'),'scheduled','confirmed',$end->format('H:i:s'),$local->format('H:i:s')])->getRowArray();
             if((int)($count['n']??0)>=$capacity)throw new ApiException('statemachine.schedule.slot_full',409,[['code'=>'statemachine.schedule.slot_full','message'=>'That slot was just booked. Choose another time.']]);

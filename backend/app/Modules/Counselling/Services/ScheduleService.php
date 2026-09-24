@@ -24,9 +24,12 @@ use Modules\Counselling\Policies\CounsellingPolicy;
  * Rules ported from the legacy module:
  *   - Bookings must fall inside an ACTIVE availability window of the
  *     counsellor for that weekday.
- *   - Overlap capacity: concurrent scheduled/confirmed appointments in
- *     the window may not exceed `max_slots` (ConflictDetector predicate,
- *     rebuilt with BOUND parameters — the legacy version interpolated).
+ *   - One appointment per slot: a counsellor may hold a single
+ *     scheduled/confirmed appointment over any given time (the
+ *     ConflictDetector predicate, rebuilt with BOUND parameters — the
+ *     legacy version interpolated). A time covered by three counsellors
+ *     therefore admits three bookings, one each — capacity is a count of
+ *     cover, not a per-counsellor number (2026-09-24).
  *   - Three-strike no-show: `no_show` increments the patient registry
  *     counter; `completed` resets it. At 3 consecutive strikes `book()`
  *     refuses the booking unless the caller holds
@@ -92,7 +95,7 @@ final class ScheduleService extends BaseService
         $counsellorUserId = $this->scheduleScope($counsellorUserId);
         $builder = $this->db->table('counselling_availability')
             ->where('counselling_availability.tenant_id', CurrentTenant::id())
-            ->select('id, counsellor_user_id, day_of_week, start_time, end_time, max_slots, is_active')
+            ->select('id, counsellor_user_id, day_of_week, start_time, end_time, is_active')
             ->where('is_active', 1)
             ->orderBy('counsellor_user_id', 'ASC')
             ->orderBy('day_of_week', 'ASC')
@@ -101,14 +104,25 @@ final class ScheduleService extends BaseService
             $builder->where('counsellor_user_id', $counsellorUserId);
         }
 
-        return array_map(static fn (array $r): array => [
+        return array_map(fn (array $r): array => $this->availabilityRow($r), $builder->get()->getResultArray());
+    }
+
+    /**
+     * Shape one availability row for the API. Shared by list and update so
+     * the two shapes cannot drift apart.
+     *
+     * @param array<string, mixed> $r
+     * @return array<string, mixed>
+     */
+    private function availabilityRow(array $r): array
+    {
+        return [
             'id'                 => (int) $r['id'],
             'counsellor_user_id' => (int) $r['counsellor_user_id'],
             'day_of_week'        => (int) $r['day_of_week'],
             'start_time'         => (string) $r['start_time'],
             'end_time'           => (string) $r['end_time'],
-            'max_slots'          => (int) $r['max_slots'],
-        ], $builder->get()->getResultArray());
+        ];
     }
 
     /**
@@ -147,13 +161,16 @@ final class ScheduleService extends BaseService
             $now = $this->utcNow();
             $ids = [];
             foreach ($days as $day) {
+                // Per-day, because a window is identified by its weekday —
+                // the same hours on another day are a different window.
+                $this->assertNoDuplicateWindow($counsellorId, $day, $start, $end);
+
                 $this->db->table('counselling_availability')->insert([
                     'tenant_id'          => CurrentTenant::id(),
                     'counsellor_user_id' => $counsellorId,
                     'day_of_week'        => $day,
                     'start_time'         => $start,
                     'end_time'           => $end,
-                    'max_slots'          => (int) ($input['max_slots'] ?? 1),
                     'is_active'          => 1,
                     'created_at'         => $now,
                     'updated_at'         => $now,
@@ -216,6 +233,79 @@ final class ScheduleService extends BaseService
         return $days;
     }
 
+    /**
+     * Edit an availability window **in place**.
+     *
+     * Until this existed the desk could only remove a window and add another,
+     * which left the original row behind — the duplicate rows that
+     * `synapse:counselling-dedupe-availability` cleans up. This method
+     * therefore only ever writes to the addressed row: there is no insert and
+     * no delete, so an edit cannot produce a second window, and the id the
+     * desk holds stays valid.
+     *
+     * Unspecified fields keep their current value, so a caller may send only
+     * what it changed.
+     *
+     * @param array<string, mixed> $input validated payload
+     * @return array<string, mixed>
+     */
+    public function updateSlot(int $id, array $input): array
+    {
+        $userId = \App\Auth\CurrentUser::assert();
+
+        return $this->txn(function () use ($id, $input, $userId): array {
+            $existing = $this->selectForUpdate('counselling_availability', ['tenant_id' => CurrentTenant::id(), 'id' => $id, 'is_active' => 1]);
+            if ($existing === null) {
+                throw new ApiException('resource.not_found', 404, [
+                    ['code' => 'resource.not_found', 'message' => "Availability slot #{$id} not found."],
+                ]);
+            }
+            $this->assertScheduleMutation((int) $existing['counsellor_user_id']);
+
+            $counsellorId = isset($input['counsellor_user_id']) && $input['counsellor_user_id'] !== ''
+                ? (int) $input['counsellor_user_id']
+                : (int) $existing['counsellor_user_id'];
+            $day   = isset($input['day_of_week']) && $input['day_of_week'] !== '' ? (int) $input['day_of_week'] : (int) $existing['day_of_week'];
+            $start = isset($input['start_time'])  && $input['start_time'] !== ''  ? (string) $input['start_time'] : (string) $existing['start_time'];
+            $end   = isset($input['end_time'])    && $input['end_time'] !== ''    ? (string) $input['end_time']   : (string) $existing['end_time'];
+
+            if ($start >= $end) {
+                throw ApiException::validationFailure([
+                    ['code' => 'validation.field', 'message' => 'start_time must precede end_time.', 'field' => 'start_time'],
+                ]);
+            }
+
+            // Exclude this row, so an edit that only moves the window — or
+            // resends the same times — does not collide with itself.
+            $this->assertNoDuplicateWindow($counsellorId, $day, $start, $end, $id);
+
+            $this->db->table('counselling_availability')
+                ->where('counselling_availability.tenant_id', CurrentTenant::id())
+                ->where('id', $id)
+                ->update([
+                    'counsellor_user_id' => $counsellorId,
+                    'day_of_week'        => $day,
+                    'start_time'         => $start,
+                    'end_time'           => $end,
+                    'updated_at'         => $this->utcNow(),
+                ]);
+
+            $this->audit->enqueue('counselling.availability_updated', 'counselling_availability', $id, $userId, []);
+
+            $fresh = $this->db->table('counselling_availability')
+                ->where('counselling_availability.tenant_id', CurrentTenant::id())
+                ->where('id', $id)
+                ->get()->getRowArray();
+            if ($fresh === null) {
+                throw new ApiException('resource.not_found', 404, [
+                    ['code' => 'resource.not_found', 'message' => "Availability slot #{$id} not found."],
+                ]);
+            }
+
+            return $this->availabilityRow($fresh);
+        });
+    }
+
     /** Soft removal — the slot stops accepting bookings. */
     public function removeSlot(int $id): void
     {
@@ -235,6 +325,44 @@ final class ScheduleService extends BaseService
             ]);
             $this->audit->enqueue('counselling.availability_removed', 'counselling_availability', $id, $userId, []);
         });
+    }
+
+    /**
+     * Refuse a second active window with the same counsellor, weekday, and
+     * exact time range.
+     *
+     * Deliberately narrower than the clinic roster's overlap rule. With
+     * capacity gone, two *overlapping* windows grant no extra bookable
+     * places — a time either has cover or it does not — so an overlap may be
+     * a legitimate way to declare it and is left alone. An identical window
+     * is never legitimate: it is the same cover written twice, and because
+     * the desk had no way to edit a window, doubling it up was the only way
+     * to "change" one.
+     *
+     * @param int|null $excludeId the row being edited, so an update that
+     *                            keeps its own slot does not match itself
+     */
+    private function assertNoDuplicateWindow(int $counsellorId, int $day, string $start, string $end, ?int $excludeId = null): void
+    {
+        $builder = $this->db->table('counselling_availability')
+            ->where('counselling_availability.tenant_id', CurrentTenant::id())
+            ->where('counsellor_user_id', $counsellorId)
+            ->where('day_of_week', $day)
+            ->where('start_time', $start)
+            ->where('end_time', $end)
+            ->where('is_active', 1);
+        if ($excludeId !== null) {
+            $builder->where('id !=', $excludeId);
+        }
+        if ($builder->countAllResults() > 0) {
+            throw new ApiException('resource.conflict', 409, [
+                [
+                    'code'    => 'resource.conflict',
+                    'message' => 'That counsellor already has this exact window on that day.',
+                    'field'   => 'start_time',
+                ],
+            ]);
+        }
     }
 
     // --------------------------------------------------- appointments
@@ -418,7 +546,7 @@ final class ScheduleService extends BaseService
             // 1. Must fit an active availability window (locked so a
             //    concurrent removeSlot cannot race the booking).
             $window = $this->db->query(
-                'SELECT `id`, `max_slots` FROM `counselling_availability`'
+                'SELECT `id` FROM `counselling_availability`'
                 . ' WHERE `tenant_id` = ? AND `counsellor_user_id` = ? AND `day_of_week` = ? AND `is_active` = 1'
                 . ' AND `start_time` <= ? AND `end_time` >= ? LIMIT 1 FOR UPDATE',
                 [CurrentTenant::id(), $counsellorId, $dow, $start, $end],
@@ -429,7 +557,10 @@ final class ScheduleService extends BaseService
                 ]);
             }
 
-            // 2. Overlap capacity (ConflictDetector predicate, bound).
+            // 2. One appointment per counsellor per time. This path names a
+            //    counsellor, so the count stays scoped to them — the
+            //    department-wide count belongs to the portal, which pools
+            //    cover across every counsellor.
             $overlaps = $this->db->query(
                 'SELECT COUNT(*) AS n FROM `counselling_appointments`'
                 . ' WHERE `tenant_id` = ? AND `counsellor_user_id` = ? AND `appointment_date` = ?'
@@ -437,9 +568,9 @@ final class ScheduleService extends BaseService
                 . ' AND NOT (? <= `start_time` OR ? >= `end_time`) FOR UPDATE',
                 [CurrentTenant::id(), $counsellorId, $date, 'scheduled', 'confirmed', $end, $start],
             )->getRowArray();
-            if ((int) ($overlaps['n'] ?? 0) >= (int) $window['max_slots']) {
+            if ((int) ($overlaps['n'] ?? 0) >= 1) {
                 throw new ApiException('statemachine.schedule.slot_full', 409, [
-                    ['code' => 'statemachine.schedule.slot_full', 'message' => 'This time overlaps a fully booked slot.'],
+                    ['code' => 'statemachine.schedule.slot_full', 'message' => 'This counsellor already holds an appointment over that time.'],
                 ]);
             }
 

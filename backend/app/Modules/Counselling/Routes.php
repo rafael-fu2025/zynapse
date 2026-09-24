@@ -38,6 +38,7 @@ final class Routes implements BaseRoutes
             $r->get('availability',                   'ScheduleController::listAvailability');
             $r->get('counsellors',                    'ScheduleController::counsellors');
             $r->post('availability',                  'ScheduleController::addSlot');
+            $r->post('availability/(:num)/update',    'ScheduleController::updateSlot/$1');
             $r->post('availability/(:num)/remove',    'ScheduleController::removeSlot/$1');
             $r->get('appointments',                   'ScheduleController::listAppointments');
             $r->post('appointments',                  'ScheduleController::book');

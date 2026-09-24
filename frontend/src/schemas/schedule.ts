@@ -12,7 +12,6 @@ export const availabilitySchema = z.object({
   day_of_week: z.number().int().min(0).max(6),
   start_time: z.string(),
   end_time: z.string(),
-  max_slots: z.number().int().positive(),
 });
 export type Availability = z.infer<typeof availabilitySchema>;
 
@@ -76,10 +75,26 @@ export const addSlotSchema = z.object({
     .min(1, 'Pick at least one weekday.'),
   start_time: z.string().regex(TIME_RE, 'Use HH:MM.'),
   end_time: z.string().regex(TIME_RE, 'Use HH:MM.'),
-  max_slots: z.coerce.number().int().min(1, 'At least 1 slot.'),
   counsellor_user_id: z.coerce.number().int().positive().optional(),
 });
 export type AddSlotInput = z.infer<typeof addSlotSchema>;
+
+/**
+ * Availability window edit (2026-09-24).
+ *
+ * Every field is optional on the wire — the backend keeps the current value
+ * for anything absent — so a caller may send only what it changed. The desk's
+ * edit dialog sends the whole set it displays. A window is one weekday, not a
+ * set: moving a window to another day changes that row rather than spreading
+ * it, which is what `days_of_week` does on create.
+ */
+export const updateSlotSchema = z.object({
+  day_of_week: z.coerce.number().int().min(0, 'Pick a weekday.').max(6, 'Pick a weekday.').optional(),
+  start_time: z.string().regex(TIME_RE, 'Use HH:MM.').optional(),
+  end_time: z.string().regex(TIME_RE, 'Use HH:MM.').optional(),
+  counsellor_user_id: z.coerce.number().int().positive().optional(),
+});
+export type UpdateSlotInput = z.infer<typeof updateSlotSchema>;
 
 export const bookAppointmentSchema = z.object({
   patient_school_id: z.string().min(1, 'Required.').max(32),

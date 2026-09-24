@@ -8,7 +8,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
   Select,
@@ -28,12 +27,12 @@ export function AddSlotDialog({ onClose }: { onClose: () => void }) {
   const counsellors = useCounsellors();
   const auth = useAuthStore();
   const team = hasPermission(auth, 'counselling.schedule.team_manage');
-  const { register, handleSubmit, formState: { errors }, reset, setValue, watch } =
+  const { handleSubmit, formState: { errors }, reset, setValue, watch } =
     useForm<AddSlotInput>({
       resolver: zodResolver(addSlotSchema),
       // Monday pre-ticked: the common case is a weekday window, and an empty
       // set would make the first submit fail validation for no reason.
-      defaultValues: { days_of_week: [1], max_slots: 1 },
+      defaultValues: { days_of_week: [1] },
     });
 
   const onSubmit = handleSubmit((values) => {
@@ -108,19 +107,6 @@ export function AddSlotDialog({ onClose }: { onClose: () => void }) {
               <p role="alert" className="text-xs text-destructive">{errors.end_time.message}</p>
             )}
           </div>
-        </div>
-        <div className="space-y-1.5">
-          <Label htmlFor="slot-max">Concurrent capacity (max slots)</Label>
-          <Input
-            id="slot-max"
-            type="number"
-            min={1}
-            aria-invalid={errors.max_slots !== undefined}
-            {...register('max_slots', { valueAsNumber: true })}
-          />
-          {errors.max_slots !== undefined && (
-            <p role="alert" className="text-xs text-destructive">{errors.max_slots.message}</p>
-          )}
         </div>
         <DialogFooter>
           <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>

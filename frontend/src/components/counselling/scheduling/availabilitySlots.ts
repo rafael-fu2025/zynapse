@@ -7,11 +7,11 @@
  * "who covers this slot?" — which is the question an admin is actually asking.
  *
  * So windows sharing (weekday, start, end) collapse into one slot carrying
- * every staff member assigned to it. `max_slots` is pooled, which also makes
- * the number here agree with what the patient portal books against (the portal
- * sums `max_slots` across covering windows).
+ * every staff member assigned to it. That member count *is* the capacity the
+ * patient portal books against — one appointment per counsellor covering a
+ * time — so there is no separate number to carry here (2026-09-24).
  *
- * Kept pure — no query hooks — so the grouping and pooling can be unit tested.
+ * Kept pure — no query hooks — so the grouping can be unit tested.
  */
 import type { Availability } from '@/schemas/schedule';
 import type { StaffPerson } from '@/components/staffAvatar';
@@ -22,9 +22,10 @@ export interface AvailabilitySlot {
   day_of_week: number;
   start_time: string;
   end_time: string;
-  /** Pooled across every window in the group. */
-  max_slots: number;
-  /** Every window collapsed into this slot — needed so removal stays honest. */
+  /**
+   * Every window collapsed into this slot. Removal and edit both fan out one
+   * request per id, so this is what keeps those operations honest.
+   */
   windowIds: number[];
   members: StaffPerson[];
 }
@@ -40,10 +41,9 @@ export function groupAvailability(
     const key = `${w.day_of_week}|${w.start_time}|${w.end_time}`;
     const existing = byKey.get(key);
     if (existing !== undefined) {
-      existing.max_slots += w.max_slots;
       existing.windowIds.push(w.id);
-      // Same person can hold two windows over the same hours (a stale row);
-      // list them once.
+      // A person can still hold two windows over the same hours from before
+      // duplicates were rejected; list them once.
       if (!existing.members.some((m) => m.id === w.counsellor_user_id)) {
         existing.members.push({ id: w.counsellor_user_id, name: nameOf(w.counsellor_user_id) });
       }
@@ -54,7 +54,6 @@ export function groupAvailability(
       day_of_week: w.day_of_week,
       start_time: w.start_time,
       end_time: w.end_time,
-      max_slots: w.max_slots,
       windowIds: [w.id],
       members: [{ id: w.counsellor_user_id, name: nameOf(w.counsellor_user_id) }],
     });

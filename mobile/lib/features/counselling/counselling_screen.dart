@@ -383,8 +383,6 @@ class _SchedulingViewState extends State<_SchedulingView> {
         ),
         const CrudField.time('start_time', 'Start time', initial: '08:00'),
         const CrudField.time('end_time', 'End time', initial: '17:00'),
-        const CrudField.number('max_slots', 'Capacity',
-            initial: '1', required: false),
       ],
       submitLabel: 'Add',
     );
@@ -541,7 +539,6 @@ class _SchedulingViewState extends State<_SchedulingView> {
                 '${w['start_time']}–${w['end_time']}',
                 style: const TextStyle(fontWeight: FontWeight.w600),
               ),
-              subtitle: Text('Capacity ${w['max_slots'] ?? 1}'),
               trailing: _canManageSchedule
                   ? IconButton(
                       icon:

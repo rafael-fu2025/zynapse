@@ -1630,7 +1630,7 @@ class ApiService {
   }
 
   /// `POST /counselling/availability` — body `{ day_of_week (0-6),
-  /// start_time, end_time, max_slots?, counsellor_user_id? }`.
+  /// start_time, end_time, counsellor_user_id? }`.
   Future<void> addCounsellingAvailability(Map<String, dynamic> payload) async {
     await _dio.post<Map<String, dynamic>>('/counselling/availability',
         data: payload);

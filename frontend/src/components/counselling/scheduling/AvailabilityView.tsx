@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { CalendarDays, List, Plus, Trash2 } from 'lucide-react';
+import { CalendarDays, List, Pencil, Plus, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ConfirmDialog, type ConfirmAction } from '@/components/ConfirmDialog';
 import { Dialog } from '@/components/ui/dialog';
@@ -13,11 +13,11 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { useAvailability, useCounsellors, useRemoveSlot } from '@/hooks/useSchedule';
+import { useAvailability, useCounsellors, useRemoveSlot, useUpdateSlot } from '@/hooks/useSchedule';
 import { hasPermission, useAuthStore } from '@/store/auth';
 import { DAY_NAMES } from '@/schemas/schedule';
 import { StaffAvatarStack } from '@/components/StaffAvatarStack';
-import { AddSlotDialog } from '../dialogs';
+import { AddSlotDialog, EditSlotDialog } from '../dialogs';
 import { AvailabilityCalendar } from './AvailabilityCalendar';
 import { groupAvailability, staffNameLookup, type AvailabilitySlot } from './availabilitySlots';
 
@@ -32,15 +32,19 @@ export function AvailabilityView({ view, onViewChange }: AvailabilityViewProps) 
 
   const [openAddSlot, setOpenAddSlot] = useState(false);
   const [confirm, setConfirm] = useState<ConfirmAction | null>(null);
+  // Edit dialog — the row being edited, or null when closed.
+  const [editing, setEditing] = useState<AvailabilitySlot | null>(null);
 
   const availability = useAvailability();
   const counsellors = useCounsellors();
   const availabilityRows = availability.data ?? [];
   const removeSlot = useRemoveSlot();
+  const update = useUpdateSlot();
 
   // One row per *slot*, not per counsellor window: three people working the
   // same hours are one entry with three avatars, which is how an admin reads a
-  // schedule. Capacity is pooled, matching what the portal books against.
+  // schedule. That head-count is also the capacity the portal books against —
+  // one appointment per counsellor covering the time.
   const slots = groupAvailability(availabilityRows, staffNameLookup(counsellors.data));
 
   function confirmRemove(slot: AvailabilitySlot) {
@@ -104,13 +108,12 @@ export function AvailabilityView({ view, onViewChange }: AvailabilityViewProps) 
               <TableHead className="px-3">Day</TableHead>
               <TableHead className="px-3">Window</TableHead>
               <TableHead className="px-3">Assigned</TableHead>
-              <TableHead className="px-3">Capacity</TableHead>
               <TableHead className="px-3 text-right">Actions</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             <TableStateRows
-              colSpan={5}
+              colSpan={4}
               isLoading={availability.isLoading}
               isError={availability.isError}
               isEmpty={availabilityRows.length === 0}
@@ -136,18 +139,28 @@ export function AvailabilityView({ view, onViewChange }: AvailabilityViewProps) 
                   <TableCell className="px-3">
                     <StaffAvatarStack people={slot.members} size="sm" max={3} />
                   </TableCell>
-                  <TableCell className="px-3 text-xs">{slot.max_slots}</TableCell>
                   <TableCell className="px-3 text-right">
                     {canMutate && (
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        aria-label={`Remove window ${fmtTimeRange(slot.start_time, slot.end_time)} on ${DAY_NAMES[slot.day_of_week]} — ${names}`}
-                        disabled={removeSlot.isPending}
-                        onClick={() => confirmRemove(slot)}
-                      >
-                        <Trash2 className="size-3.5" /> Remove
-                      </Button>
+                      <div className="flex justify-end gap-1">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          aria-label={`Edit window ${fmtTimeRange(slot.start_time, slot.end_time)} on ${DAY_NAMES[slot.day_of_week]} — ${names}`}
+                          disabled={update.isPending}
+                          onClick={() => setEditing(slot)}
+                        >
+                          <Pencil className="size-3.5" /> Edit
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          aria-label={`Remove window ${fmtTimeRange(slot.start_time, slot.end_time)} on ${DAY_NAMES[slot.day_of_week]} — ${names}`}
+                          disabled={removeSlot.isPending}
+                          onClick={() => confirmRemove(slot)}
+                        >
+                          <Trash2 className="size-3.5" /> Remove
+                        </Button>
+                      </div>
                     )}
                   </TableCell>
                 </TableRow>
@@ -177,6 +190,7 @@ export function AvailabilityView({ view, onViewChange }: AvailabilityViewProps) 
               slots={slots}
               onRemove={canMutate ? confirmRemove : () => undefined}
               removing={removeSlot.isPending}
+              onEdit={canMutate ? (s: AvailabilitySlot) => setEditing(s) : undefined}
             />
           )}
         </div>
@@ -184,6 +198,10 @@ export function AvailabilityView({ view, onViewChange }: AvailabilityViewProps) 
 
       <Dialog open={openAddSlot} onOpenChange={setOpenAddSlot}>
         {openAddSlot && <AddSlotDialog onClose={() => setOpenAddSlot(false)} />}
+      </Dialog>
+
+      <Dialog open={editing !== null} onOpenChange={(o) => !o && setEditing(null)}>
+        {editing !== null && <EditSlotDialog slot={editing} onClose={() => setEditing(null)} />}
       </Dialog>
 
       <ConfirmDialog
