@@ -293,26 +293,17 @@ function CreateStudentDialog({ onClose }: { onClose: () => void }) {
           <Label htmlFor="blood_type">Blood type</Label>
           <Input id="blood_type" placeholder="O+" {...register('blood_type')} />
         </div>
-        {/* Identity-consolidated: a portal account is ALWAYS created. */}
-        <div className="col-span-2 rounded-lg border bg-muted/30 p-3">
-          <p className="text-xs text-muted-foreground">
-            A portal login is created automatically for this student. The account email pre-fills
-            with the university address (<code>first.last@foundationu.com</code>) from the name
-            above — correct it before submitting if the person's address differs.
-          </p>
-          <div className="mt-3 space-y-1.5">
-            <Label htmlFor="student-account-email">Account email (pre-filled)</Label>
-            <Input
-              id="student-account-email"
-              type="email"
-              placeholder="first.last@foundationu.com"
-              aria-invalid={errors.account_email !== undefined}
-              {...register('account_email', { onChange: () => { emailManuallyEdited.current = true; } })}
-            />
-            {errors.account_email !== undefined && (
-              <p role="alert" className="text-xs text-destructive">{errors.account_email.message}</p>
-            )}
-          </div>
+        <div className="col-span-2 space-y-1.5">
+          <Label htmlFor="student-account-email">Account email</Label>
+          <Input
+            id="student-account-email"
+            type="email"
+            aria-invalid={errors.account_email !== undefined}
+            {...register('account_email', { onChange: () => { emailManuallyEdited.current = true; } })}
+          />
+          {errors.account_email !== undefined && (
+            <p role="alert" className="text-xs text-destructive">{errors.account_email.message}</p>
+          )}
         </div>
         <DialogFooter className="col-span-2">
           <Button type="button" variant="outline" onClick={handleClose}>Cancel</Button>
@@ -728,26 +719,17 @@ function CreateEmployeeDialog({ onClose }: { onClose: () => void }) {
           <Label htmlFor="position">Position</Label>
           <Input id="position" {...register('position')} />
         </div>
-        {/* Identity-consolidated: a portal account is ALWAYS created. */}
-        <div className="col-span-2 rounded-lg border bg-muted/30 p-3">
-          <p className="text-xs text-muted-foreground">
-            A portal login is created automatically for this employee. The account email pre-fills
-            with the university address (<code>first.last@foundationu.com</code>) from the name
-            above — correct it before submitting if the person's address differs.
-          </p>
-          <div className="mt-3 space-y-1.5">
-            <Label htmlFor="employee-account-email">Account email (pre-filled)</Label>
-            <Input
-              id="employee-account-email"
-              type="email"
-              placeholder="first.last@foundationu.com"
-              aria-invalid={errors.account_email !== undefined}
-              {...register('account_email', { onChange: () => { emailManuallyEdited.current = true; } })}
-            />
-            {errors.account_email !== undefined && (
-              <p role="alert" className="text-xs text-destructive">{errors.account_email.message}</p>
-            )}
-          </div>
+        <div className="col-span-2 space-y-1.5">
+          <Label htmlFor="employee-account-email">Account email</Label>
+          <Input
+            id="employee-account-email"
+            type="email"
+            aria-invalid={errors.account_email !== undefined}
+            {...register('account_email', { onChange: () => { emailManuallyEdited.current = true; } })}
+          />
+          {errors.account_email !== undefined && (
+            <p role="alert" className="text-xs text-destructive">{errors.account_email.message}</p>
+          )}
         </div>
         <DialogFooter className="col-span-2">
           <Button type="button" variant="outline" onClick={handleClose}>Cancel</Button>
