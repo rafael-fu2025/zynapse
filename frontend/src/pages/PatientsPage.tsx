@@ -29,7 +29,7 @@ import {
   Trash2,
   UserPlus,
 } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { Badge } from '@/components/ui/badge';
 import { PageHeader, PageToolbar } from '@/components/PageHeader';
@@ -110,6 +110,7 @@ import {
   type Student,
   type UpdateEmployeeInput,
 } from '@/schemas/patients';
+import { deriveUniversityEmail } from '@/lib/universityEmail';
 
 const SEVERITY_VARIANT = { mild: 'info', moderate: 'warning', severe: 'destructive' } as const;
 
@@ -203,6 +204,16 @@ function CreateStudentDialog({ onClose }: { onClose: () => void }) {
     useForm<CreateStudentInput>({ resolver: zodResolver(createStudentSchema) });
 
   const gender = watch('gender');
+  // The account email pre-fills from the university convention
+  // (first.last@foundationu.com) as the name is typed — until the user
+  // edits it by hand, after which their correction wins.
+  const emailManuallyEdited = useRef(false);
+  const derivedEmail = deriveUniversityEmail(watch('first_name'), watch('last_name'));
+  useEffect(() => {
+    if (!emailManuallyEdited.current) {
+      setValue('account_email', derivedEmail ?? '');
+    }
+  }, [derivedEmail, setValue]);
 
   const onSubmit = handleSubmit((values) => {
     create.mutate(values, {
@@ -285,17 +296,18 @@ function CreateStudentDialog({ onClose }: { onClose: () => void }) {
         {/* Identity-consolidated: a portal account is ALWAYS created. */}
         <div className="col-span-2 rounded-lg border bg-muted/30 p-3">
           <p className="text-xs text-muted-foreground">
-            A portal login is created automatically for this student. Account email defaults to{' '}
-            <code>{`<student_number>@synapse.dev`}</code>.
+            A portal login is created automatically for this student. The account email pre-fills
+            with the university address (<code>first.last@foundationu.com</code>) from the name
+            above — correct it before submitting if the person's address differs.
           </p>
           <div className="mt-3 space-y-1.5">
-            <Label htmlFor="student-account-email">Account email (optional)</Label>
+            <Label htmlFor="student-account-email">Account email (pre-filled)</Label>
             <Input
               id="student-account-email"
               type="email"
-              placeholder="patient@synapse.dev"
+              placeholder="first.last@foundationu.com"
               aria-invalid={errors.account_email !== undefined}
-              {...register('account_email')}
+              {...register('account_email', { onChange: () => { emailManuallyEdited.current = true; } })}
             />
             {errors.account_email !== undefined && (
               <p role="alert" className="text-xs text-destructive">{errors.account_email.message}</p>
@@ -642,11 +654,21 @@ function StudentDetailDialog({ studentId, onClose }: { studentId: number | strin
 function CreateEmployeeDialog({ onClose }: { onClose: () => void }) {
   const create = useCreateEmployee();
   const [createdAccount, setCreatedAccount] = useState<{ identifier: string; account: PortalAccount } | null>(null);
-  const { register, handleSubmit, formState: { errors }, reset } =
+  const { register, handleSubmit, formState: { errors }, reset, setValue, watch } =
     useForm<CreateEmployeeInput>({
       resolver: zodResolver(createEmployeeSchema),
       defaultValues: { employment_status: 'active' },
     });
+
+  // Same account-email pre-fill as the student dialog: university address
+  // from the name, released to the user the moment they edit it.
+  const emailManuallyEdited = useRef(false);
+  const derivedEmail = deriveUniversityEmail(watch('first_name'), watch('last_name'));
+  useEffect(() => {
+    if (!emailManuallyEdited.current) {
+      setValue('account_email', derivedEmail ?? '');
+    }
+  }, [derivedEmail, setValue]);
 
   const onSubmit = handleSubmit((values) => {
     create.mutate(values, {
@@ -709,17 +731,18 @@ function CreateEmployeeDialog({ onClose }: { onClose: () => void }) {
         {/* Identity-consolidated: a portal account is ALWAYS created. */}
         <div className="col-span-2 rounded-lg border bg-muted/30 p-3">
           <p className="text-xs text-muted-foreground">
-            A portal login is created automatically for this employee. Account email defaults to{' '}
-            <code>{`<employee_number>@synapse.dev`}</code>.
+            A portal login is created automatically for this employee. The account email pre-fills
+            with the university address (<code>first.last@foundationu.com</code>) from the name
+            above — correct it before submitting if the person's address differs.
           </p>
           <div className="mt-3 space-y-1.5">
-            <Label htmlFor="employee-account-email">Account email (optional)</Label>
+            <Label htmlFor="employee-account-email">Account email (pre-filled)</Label>
             <Input
               id="employee-account-email"
               type="email"
-              placeholder="employee@synapse.dev"
+              placeholder="first.last@foundationu.com"
               aria-invalid={errors.account_email !== undefined}
-              {...register('account_email')}
+              {...register('account_email', { onChange: () => { emailManuallyEdited.current = true; } })}
             />
             {errors.account_email !== undefined && (
               <p role="alert" className="text-xs text-destructive">{errors.account_email.message}</p>
