@@ -59,18 +59,56 @@ final class AppointmentService extends BaseService
     }
 
     /**
+     * The appointment book, read chronologically (2026-09-25 staff
+     * meeting): the display order is the SCHEDULED time, never the
+     * booking time — `created_at` ordering made a booking made today
+     * for three weeks out float above tomorrow's clinic.
+     *
+     * `$scope` slices the book along the schedule axis so the frontend
+     * tabs are server-scoped (client-side filtering over a paged list
+     * could not put the earliest upcoming appointment on page 1):
+     *
+     *   - `upcoming` — scheduled at/after now, ASC (earliest first)
+     *   - `past`     — scheduled before now, DESC (most recent first)
+     *   - `all`      — the whole book, ASC (default)
+     *
+     * `$provider` filters the approval state (2026-09-23 convention:
+     * a NULL provider is a portal booking awaiting staff approval):
+     *
+     *   - `unassigned` — only unapproved bookings (status `scheduled`,
+     *     no provider) — the "Needs Action" queue
+     *   - `assigned`   — only approved bookings
+     *   - `any`        — no approval filter (default)
+     *
      * @return array{data: array<int, array<string, mixed>>, next: ?string, count: int}
      */
-    public function list(?string $cursor, int $limit, ?string $status, ?string $q = null): array
+    public function list(?string $cursor, int $limit, ?string $status, ?string $q = null, string $scope = 'all', string $provider = 'any'): array
     {
         $this->policy->check('appointmentsRead');
 
+        // "Now" as a naive UTC string, matching how `scheduled_at` is
+        // stored — the split between upcoming/past is the same instant
+        // the frontend's live-state helpers compute from.
+        $nowUtc = gmdate('Y-m-d H:i:s');
+
+        $ascending = $scope !== 'past';
         $builder = $this->db->table('clinic_appointments AS a')
             ->where('a.tenant_id', CurrentTenant::id())
             ->select('a.id, a.patient_user_id, a.patient_school_id, a.provider_user_id, a.scheduled_at, a.status, a.reason, a.created_at')
-            ->where('a.archived_at', null)
-            ->orderBy('a.created_at', 'DESC')
-            ->orderBy('a.id', 'DESC');
+            ->where('a.archived_at', null);
+
+        if ($scope === 'upcoming') {
+            $builder->where('a.scheduled_at >=', $nowUtc);
+        } elseif ($scope === 'past') {
+            $builder->where('a.scheduled_at <', $nowUtc);
+        }
+        $builder->orderBy('a.scheduled_at', $ascending ? 'ASC' : 'DESC')->orderBy('a.id', $ascending ? 'ASC' : 'DESC');
+
+        if ($provider === 'unassigned') {
+            $builder->where('a.provider_user_id', null)->where('a.status', 'scheduled');
+        } elseif ($provider === 'assigned') {
+            $builder->where('a.provider_user_id IS NOT NULL', null, false);
+        }
 
         if ($status !== null && $status !== '') {
             $builder->where('a.status', $status);
@@ -136,10 +174,10 @@ final class AppointmentService extends BaseService
                 ->groupEnd();
         }
 
-        KeysetPaginator::apply($builder, $cursor, $limit, 'a.created_at', 'a.id');
+        KeysetPaginator::apply($builder, $cursor, $limit, 'a.scheduled_at', 'a.id', 100, $ascending);
 
         $rows = $builder->get()->getResultArray();
-        $final = KeysetPaginator::finalize($rows, $limit);
+        $final = KeysetPaginator::finalize($rows, $limit, 'scheduled_at');
         $decorated = $this->decorate($final['rows']);
 
         return [
@@ -694,6 +732,27 @@ final class AppointmentService extends BaseService
                 throw StateMachineException::invalidTransition((string) $row['status'], $nextStatus, 'appointment');
             }
 
+            if ($nextStatus === 'completed') {
+                // The record comes first (2026-09-25 staff meeting): an
+                // appointment completes through its encounter — assessment
+                // recorded, visit closed — never by flipping the book row
+                // directly. The encounter-completion cascade (the only
+                // writer that reaches here legitimately) updates the
+                // appointment itself, so a direct API call can only pass
+                // once the encounter is already closed.
+                $encounter = $this->db->table('clinic_encounters')
+                    ->where('clinic_encounters.tenant_id', CurrentTenant::id())
+                    ->select('id, status')
+                    ->where('appointment_id', $appointmentId)
+                    ->orderBy('id', 'DESC')
+                    ->get()->getRowArray();
+                if ($encounter === null || (string) $encounter['status'] !== 'closed') {
+                    throw new ApiException('validation.assessment_required', 422, [
+                        ['code' => 'validation.assessment_required', 'message' => "Complete the visit — assessment recorded and encounter closed — before completing appointment #{$appointmentId}.", 'field' => 'status'],
+                    ]);
+                }
+            }
+
             $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
 
             $update = ['status' => $nextStatus, 'updated_at' => $now];
@@ -968,192 +1027,11 @@ final class AppointmentService extends BaseService
     }
 
     /**
-     * Lazy auto-check-in sweep (panel revision, August 2026): every
-     * `scheduled` appointment whose `scheduled_at` falls on today's
-     * UTC window is opened + queued. Idempotent against kiosk / staff
-     * races — re-running on a row whose encounter already exists
-     * short-circuits in `openEncounterForAppointment()`, and the
-     * status re-check inside the transaction guarantees we never
-     * re-fire `checked_in` on an appointment a parallel kiosk / staff
-     * path already advanced.
-     *
-     * Best-effort, per-row: a single failure (e.g. lock contention,
-     * row vanished mid-sweep) is logged and skipped so the staff
-     * `today()` read still succeeds.
-     *
-     * Runs WITHOUT the `appointmentsWrite` policy guard — this is the
-     * system-level sweep that backs the staff queue page and is
-     * invoked after `queueRead` has already cleared.
-     *
-     * @return int number of appointments actually advanced
+     * Manual lifecycle only (2026-09-25 staff meeting). The August 2026
+     * lazy auto-check-in sweep (T-15) and the no-show aging sweep both
+     * lived here; they are gone — attendance is a staff decision made
+     * from the appointments page or the kiosk, never a timer. An
+     * appointment whose slot has passed stays `scheduled` until a human
+     * confirms, checks in, cancels, or marks it no-show.
      */
-    public function autoCheckInTodaysPending(): int
-    {
-        $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
-        $dueAt = (new DateTimeImmutable('now', new DateTimeZone('UTC')))
-            ->modify('+15 minutes')->format('Y-m-d H:i:s');
-        $localStartUtc = (new DateTimeImmutable('today', new DateTimeZone('Asia/Manila')))
-            ->setTimezone(new DateTimeZone('UTC'))->format('Y-m-d H:i:s');
-
-        $ids = $this->db->table('clinic_appointments')
-            ->where('clinic_appointments.tenant_id', CurrentTenant::id())
-            ->select('id')
-            ->where('status', 'scheduled')
-            ->where('archived_at', null)
-            ->where('scheduled_at >=', $localStartUtc)
-            ->where('scheduled_at <=', $dueAt)
-            ->orderBy('id', 'ASC')
-            ->get()
-            ->getResultArray();
-
-        $advanced = 0;
-        foreach ($ids as $r) {
-            $id = (int) $r['id'];
-            try {
-                $advanced += $this->txn(function () use ($id, $now): int {
-                    $row = $this->selectForUpdate('clinic_appointments', [
-                        'tenant_id'   => CurrentTenant::id(),
-                        'id'          => $id,
-                        'archived_at' => null,
-                    ]);
-                    if ($row === null || (string) $row['status'] !== 'scheduled') {
-                        // Lost the race — a kiosk / staff path already
-                        // advanced or cancelled this row. Skip silently.
-                        return 0;
-                    }
-                    // An unapproved appointment has no provider, and the
-                    // encounter's `attending_user_id` is NOT NULL — there is
-                    // literally nobody to attend this visit. Leave it scheduled
-                    // until someone approves it, or until the patient scans in
-                    // at the kiosk, which assigns the acting staff member.
-                    if ($row['provider_user_id'] === null) {
-                        return 0;
-                    }
-
-                    $userId = (int) $row['provider_user_id'];
-
-                    $this->db->table('clinic_appointments')
-                        ->where('clinic_appointments.tenant_id', CurrentTenant::id())
-                        ->where('id', $id)
-                        ->update(['status' => 'checked_in', 'updated_at' => $now]);
-
-                    // Mirrors the `transition('checked_in')` cascade —
-                    // opens the encounter, queues it under today's
-                    // row-locked MAX(position) discipline, fires the
-                    // encounter audit.
-                    $this->openEncounterForAppointment($row, $userId, $now);
-
-                    $this->audit->enqueue(
-                        'clinic.appointment_checked_in',
-                        'clinic_appointments',
-                        $id,
-                        $userId,
-                        [
-                            'previous_status' => 'scheduled',
-                            'next_status'     => 'checked_in',
-                            'source'          => 'queue_lazy_sweep',
-                        ],
-                    );
-
-                    return 1;
-                });
-            } catch (Throwable $t) {
-                log_message('warning', sprintf(
-                    'AppointmentService::autoCheckInTodaysPending: id=%d skipped (%s)',
-                    $id,
-                    $t->getMessage(),
-                ));
-            }
-        }
-        return $advanced;
-    }
-
-    /**
-     * No-show aging sweep (2026-09 audit): every `scheduled`
-     * appointment whose slot lies BEFORE today's Manila business day
-     * can never be honoured — transition it to `no_show` so the staff
-     * list stops accumulating ghost "Scheduled" rows and the Counselling
-     * three-strike counter analogue has an input signal. Idempotent and
-     * race-safe: each row is re-locked and status-re-checked inside its
-     * transaction. Run from `synapse:appointments-enqueue-due`.
-     */
-    public function agePastDueNoShows(): int
-    {
-        $now = $this->utcNow();
-        $localStartUtc = ManilaDay::startOfDayUtcSql();
-
-        $ids = $this->db->table('clinic_appointments')
-            ->where('clinic_appointments.tenant_id', CurrentTenant::id())
-            ->select('id')
-            ->where('status', 'scheduled')
-            ->where('archived_at', null)
-            ->where('scheduled_at <', $localStartUtc)
-            ->orderBy('id', 'ASC')
-            ->get()
-            ->getResultArray();
-
-        $aged = 0;
-        foreach ($ids as $r) {
-            $id = (int) $r['id'];
-            try {
-                $aged += $this->txn(function () use ($id, $now): int {
-                    $row = $this->selectForUpdate('clinic_appointments', [
-                        'tenant_id'   => CurrentTenant::id(),
-                        'id'          => $id,
-                        'archived_at' => null,
-                    ]);
-                    if ($row === null || (string) $row['status'] !== 'scheduled') {
-                        return 0; // lost the race
-                    }
-                    // Nobody ever approved this appointment, so the clinic never
-                    // committed to it. Striking the patient as a no-show for the
-                    // clinic's own inaction would be wrong, and it would feed the
-                    // three-strike counter. Leave it for a human to resolve.
-                    if ($row['provider_user_id'] === null) {
-                        return 0;
-                    }
-
-                    $this->db->table('clinic_appointments')
-                        ->where('clinic_appointments.tenant_id', CurrentTenant::id())
-                        ->where('id', $id)
-                        ->update(['status' => 'no_show', 'updated_at' => $now]);
-
-                    // No queue-entry cascade is needed here: queue rows
-                    // hang off `encounter_id`, and an appointment that
-                    // aged out never opened an encounter.
-
-                    $providerId = (int) $row['provider_user_id'];
-                    $this->audit->enqueue(
-                        'clinic.appointment_no_show',
-                        'clinic_appointments',
-                        $id,
-                        $providerId,
-                        [
-                            'previous_status' => 'scheduled',
-                            'next_status'     => 'no_show',
-                            'source'          => 'aging_sweep',
-                        ],
-                    );
-                    $this->notify->enqueue(
-                        $providerId,
-                        'appointment.no_show',
-                        ['resource_code' => 'appointment#' . $id, 'appointment_status' => 'no_show', 'destination' => 'clinic'],
-                    );
-                    $patientId = (int) ($row['patient_user_id'] ?? 0);
-                    if ($patientId > 0) {
-                        $this->notify->enqueue($patientId, 'appointment.no_show', ['resource_code' => 'appointment#' . $id, 'appointment_status' => 'no_show', 'destination' => 'clinic']);
-                    }
-
-                    return 1;
-                });
-            } catch (Throwable $t) {
-                log_message('warning', sprintf(
-                    'AppointmentService::agePastDueNoShows: id=%d skipped (%s)',
-                    $id,
-                    $t->getMessage(),
-                ));
-            }
-        }
-        return $aged;
-    }
 }

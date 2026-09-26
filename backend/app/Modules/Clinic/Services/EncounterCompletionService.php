@@ -32,6 +32,20 @@ final class EncounterCompletionService extends BaseService
             ]]);
         }
 
+        // Hard gate (2026-09-25 staff meeting): an encounter completes only
+        // once its clinical record exists — the assessment/diagnosis note.
+        // Missing vitals stay a UI warning; the assessment is the one field
+        // the meeting made blocking. No-show closures bypass this service,
+        // so a visit nobody attended is never asked for a diagnosis.
+        $diagnosis = trim((string) ($encounter['diagnosis'] ?? ''));
+        if ($diagnosis === '') {
+            throw new ApiException('validation.assessment_required', 422, [[
+                'code' => 'validation.assessment_required',
+                'message' => "Record the assessment for encounter #{$encounterId} before completing it.",
+                'field' => 'diagnosis',
+            ]]);
+        }
+
         if ((string) $encounter['status'] === 'open') {
             $this->db->table('clinic_encounters')->where('clinic_encounters.tenant_id', CurrentTenant::id())->where('id', $encounterId)->update([
                 'status' => 'closed', 'closed_at' => $now, 'updated_at' => $now,

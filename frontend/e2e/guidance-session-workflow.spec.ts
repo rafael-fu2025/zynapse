@@ -304,17 +304,18 @@ test('Complete Session sits in the outcome menu for a booked row and in Actions 
   await mockAppointmentScopes(page, { today: [booked] });
 
   // Two open sessions: one booked (it has an appointment, so the menu can reach
-  // it) and one walk-in (it has none, so the menu cannot).
+  // it) and one walk-in (it has none, so the menu cannot). Both carry notes —
+  // a session without notes cannot complete (2026-09-25 meeting gate).
   await page.route('**/api/v1/counselling/queue', (route) => route.fulfill({
     contentType: 'application/json',
     body: JSON.stringify({
       success: true,
       data: [
         { ...session, id: 4, position: 4, status: 'in_session', display_name: 'Maria',
-          counselling_session_id: 127, counselling_appointment_id: 22, referral_id: null,
+          counselling_session_id: 127, counselling_appointment_id: 22, referral_id: null, note_count: 2,
           called_at: '2026-08-14 01:04:00', started_at: '2026-08-14 01:05:00', finished_at: null },
         { ...session, id: 9, position: 9, status: 'in_session', queue_number: 'G-009', display_name: 'Walk In',
-          counselling_session_id: 130, counselling_appointment_id: null, referral_id: null,
+          counselling_session_id: 130, counselling_appointment_id: null, referral_id: null, note_count: 1,
           called_at: '2026-08-14 01:10:00', started_at: '2026-08-14 01:11:00', finished_at: null },
       ],
       errors: [],

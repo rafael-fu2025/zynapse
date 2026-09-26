@@ -75,7 +75,7 @@ export function AvailabilityCalendar({
             {hours.map((h, i) => (
               <p
                 key={h}
-                className="absolute right-1.5 text-[10px] text-muted-foreground"
+                className="absolute right-1.5 text-[0.625rem] text-muted-foreground"
                 style={{ top: i * HOUR_PX + 2 }}
               >
                 {fmtClock(`${h}:00`)}
@@ -111,7 +111,7 @@ export function AvailabilityCalendar({
                     }}
                   >
                     <div className="flex items-start justify-between gap-1">
-                      <p className="truncate text-[10px] leading-tight text-foreground">
+                      <p className="truncate text-[0.625rem] leading-tight text-foreground">
                         {fmtTimeRange(s.start_time, s.end_time)}
                       </p>
                       <button

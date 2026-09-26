@@ -23,8 +23,16 @@ const LONG_POSITIONS = Array.from(
 /** A short facet list — must keep its natural height. */
 const SHORT_POSITIONS = ['Dean', 'University Nurse', 'Security and Safety Staff'];
 
-/** The Select ceiling declared in `components/ui/select.tsx`. */
-const MAX_PANEL_HEIGHT = 320; // 20rem
+/**
+ * The Select ceiling declared in `components/ui/select.tsx` — `20rem`.
+ * Measured from the live root font size rather than hard-coded: the root
+ * is 125% since the 2026-09-25 readability change, so the same 20rem
+ * panel renders 400px, and any future root-size tuning keeps this test
+ * honest without edits.
+ */
+function maxPanelHeightPx(rootFontSize: number): number {
+  return 20 * rootFontSize;
+}
 
 async function openEmployeesTab(page: Page, positions: string[]): Promise<void> {
   const session = {
@@ -101,6 +109,9 @@ async function measurePanel(page: Page) {
       height: Math.round(rect.height),
       bottom: Math.round(rect.bottom),
       viewportHeight: window.innerHeight,
+      // The root font size, so rem-based ceilings are measured in the
+      // same units the CSS uses (the root is 125% since 2026-09-25).
+      rootFontSize: parseFloat(getComputedStyle(document.documentElement).fontSize),
       maxHeight: getComputedStyle(content).maxHeight,
       optionCount: content.querySelectorAll('[role="option"]').length,
       scrollClientHeight: scroller === null ? null : scroller.clientHeight,
@@ -120,7 +131,7 @@ test('a long option list stays inside the viewport and scrolls internally', asyn
   // The regression: `max-height` computed to `none`, so the panel was as
   // tall as its content.
   expect(m.maxHeight).not.toBe('none');
-  expect(m.height).toBeLessThanOrEqual(MAX_PANEL_HEIGHT);
+  expect(m.height).toBeLessThanOrEqual(maxPanelHeightPx(m.rootFontSize));
   expect(m.bottom).toBeLessThanOrEqual(m.viewportHeight);
 
   // ...and there must be a real internal scroll container.
@@ -154,7 +165,7 @@ test('a short option list keeps its natural height', async ({ page }) => {
 
   expect(m.optionCount).toBe(SHORT_POSITIONS.length + 1);
   // Sized to content, not stretched to the ceiling...
-  expect(m.height).toBeLessThan(MAX_PANEL_HEIGHT);
+  expect(m.height).toBeLessThan(maxPanelHeightPx(m.rootFontSize));
   // ...and no needless scrollbar.
   expect(m.scrollHeight).toBeNull();
 });
@@ -167,7 +178,7 @@ test('the panel shrinks to fit a short viewport', async ({ page }) => {
 
   // The ceiling is min(available space, 20rem) — a short viewport must
   // lower it rather than overflow.
-  expect(m.height).toBeLessThanOrEqual(MAX_PANEL_HEIGHT);
+  expect(m.height).toBeLessThanOrEqual(maxPanelHeightPx(m.rootFontSize));
   expect(m.bottom).toBeLessThanOrEqual(m.viewportHeight);
   expect(m.scrollHeight as number).toBeGreaterThan(m.scrollClientHeight as number);
 });

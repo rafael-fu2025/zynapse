@@ -153,7 +153,7 @@ describe('deriveAppointmentLiveState — the queue entry outranks the clock', ()
   it('reads In session while the window is still running', () => {
     const state = derive({
       appointment: appointment(),
-      queue: queue({ status: 'in_session', started_at: '2026-09-23 00:10:00', counselling_session_id: 12 }),
+      queue: queue({ status: 'in_session', started_at: '2026-09-23 00:10:00', counselling_session_id: 12, note_count: 1 }),
       now: MANILA_0800,
     });
 
@@ -258,20 +258,28 @@ describe('deriveAppointmentLiveState — walk-ins and empty input', () => {
     expect(state.actions.canMarkNoShow).toBe(false);
   });
 
-  it('offers Complete only when a session is actually linked', () => {
+  it('offers Complete only when a session is linked AND carries notes', () => {
+    // 2026-09-25 staff meeting: a session cannot complete without its
+    // notes — the record of the visit is the point.
     const unlinked = derive({
       appointment: appointment(),
       queue: queue({ status: 'in_session', started_at: '2026-09-23 00:10:00' }),
       now: MANILA_0800,
     });
-    const linked = derive({
+    const linkedNoNotes = derive({
       appointment: appointment(),
-      queue: queue({ status: 'in_session', started_at: '2026-09-23 00:10:00', counselling_session_id: 7 }),
+      queue: queue({ status: 'in_session', started_at: '2026-09-23 00:10:00', counselling_session_id: 7, note_count: 0 }),
+      now: MANILA_0800,
+    });
+    const linkedWithNotes = derive({
+      appointment: appointment(),
+      queue: queue({ status: 'in_session', started_at: '2026-09-23 00:10:00', counselling_session_id: 7, note_count: 2 }),
       now: MANILA_0800,
     });
 
     expect(unlinked.actions.canComplete).toBe(false);
-    expect(linked.actions.canComplete).toBe(true);
+    expect(linkedNoNotes.actions.canComplete).toBe(false);
+    expect(linkedWithNotes.actions.canComplete).toBe(true);
   });
 
   it('returns a neutral state for an empty row instead of throwing', () => {

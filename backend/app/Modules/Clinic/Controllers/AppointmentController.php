@@ -29,16 +29,31 @@ final class AppointmentController extends ApiController
 
     public function list(): ResponseInterface
     {
-        $cursor = (string) ($this->request->getGet('cursor') ?? '');
-        $limit  = (int)    ($this->request->getGet('limit')  ?? 25);
-        $status = $this->request->getGet('status');
-        $q      = $this->request->getGet('q');
+        $cursor  = (string) ($this->request->getGet('cursor') ?? '');
+        $limit   = (int)    ($this->request->getGet('limit')  ?? 25);
+        $status  = $this->request->getGet('status');
+        $q       = $this->request->getGet('q');
+        $scope   = (string) ($this->request->getGet('scope') ?? 'all');
+        $provider = (string) ($this->request->getGet('provider') ?? 'any');
+
+        // Unknown scope/provider values fall back to the defaults rather
+        // than erroring: an old bookmark with a typo must not break the
+        // page. The named scopes (`upcoming`, `past`) and the approval
+        // filter (`provider=unassigned`) drive the Appointments page tabs.
+        if (! in_array($scope, ['all', 'upcoming', 'past'], true)) {
+            $scope = 'all';
+        }
+        if (! in_array($provider, ['any', 'assigned', 'unassigned'], true)) {
+            $provider = 'any';
+        }
 
         $page = $this->service->list(
             $cursor !== '' ? $cursor : null,
             $limit,
             is_string($status) ? $status : null,
             is_string($q) ? $q : null,
+            $scope,
+            $provider,
         );
 
         return $this->ok(

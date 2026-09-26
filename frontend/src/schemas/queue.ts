@@ -53,6 +53,9 @@ export const guidanceQueueEntrySchema = z.object({
   patient_school_id: z.string(),
   purpose: z.string(),
   counselling_session_id: z.number().int().positive().nullable().optional(),
+  // Notes on the linked session — drives the Complete gate (a session
+  // cannot complete without notes, 2026-09-25).
+  note_count: z.number().int().min(0).optional(),
   assigned_counsellor_user_id: z.number().int().positive().nullable().optional(),
   counselling_appointment_id: z.number().int().positive().nullable().optional(),
   referral_id: z.number().int().positive().nullable().optional(),

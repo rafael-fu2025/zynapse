@@ -50,7 +50,7 @@ function ScaleRow({
           onClick={() => onChange(i + 1)}
         >
           <span>{i + 1}</span>
-          <span className="text-[10px] font-normal">{label}</span>
+          <span className="text-[0.625rem] font-normal">{label}</span>
         </Button>
       ))}
     </div>

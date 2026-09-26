@@ -14,11 +14,20 @@ final class AppointmentQueueParityContractTest extends TestCase
         foreach(['appointments','appointment-slots','queues'] as $path)$this->assertStringContainsString("'{$path}'",$routes);
         foreach(['portal.appointments.read','portal.appointments.manage','portal.queue.read'] as $permission){$this->assertGreaterThanOrEqual(2,substr_count($groups,$permission));}
     }
-    public function testDuePolicyUsesManilaAndFifteenMinutes(): void
+    public function testDuePolicyIsManualForClinicAndManilaAwareEverywhere(): void
     {
-        $clinic=$this->read('app/Modules/Clinic/Services/AppointmentService.php');$guidance=$this->read('app/Modules/Counselling/Services/QueueService.php');
-        $this->assertStringContainsString("modify('+15 minutes')",$clinic);$this->assertStringContainsString("modify('+15 minutes')",$guidance);
-        $this->assertStringContainsString('Asia/Manila',$clinic);$this->assertStringContainsString('Asia/Manila',$guidance);
+        // 2026-09-25 staff meeting: clinic attendance is staff-actioned —
+        // the T-15 auto-check-in and the no-show aging sweep are GONE.
+        // The clinic service must not carry either sweep any more.
+        $clinic=$this->read('app/Modules/Clinic/Services/AppointmentService.php');
+        $this->assertStringNotContainsString('autoCheckInTodaysPending',$clinic);
+        $this->assertStringNotContainsString('agePastDueNoShows',$clinic);
+        $this->assertStringContainsString('Asia/Manila',$clinic);
+        // Guidance still enqueues due appointments at T-15 (queue rows,
+        // not status transitions) on the Manila clock.
+        $guidance=$this->read('app/Modules/Counselling/Services/QueueService.php');
+        $this->assertStringContainsString("modify('+15 minutes')",$guidance);
+        $this->assertStringContainsString('Asia/Manila',$guidance);
     }
     public function testGuidanceMigrationAndServiceUseAssignedParallelLanes(): void
     {

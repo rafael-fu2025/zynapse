@@ -22,6 +22,19 @@ import { Label } from '@/components/ui/label';
 import { useLogin } from '@/hooks/useAuth';
 import { loginSchema, type LoginInput } from '@/schemas/auth';
 
+/**
+ * The two services this portal fronts, shown as a branding strip under
+ * the card. The artwork is supplied as circular seals on transparent
+ * PNG, so it keeps its own colours (maroon/navy and teal) rather than
+ * following the theme — only the caption is themed. `alt` stays empty
+ * because the caption beside each mark already names it; giving the
+ * image the same text would announce the service twice.
+ */
+const SERVICE_MARKS = [
+  { src: '/guidance-center.png', label: 'Guidance Center' },
+  { src: '/health-services.png', label: 'Health Services' },
+] as const;
+
 export default function LoginPage() {
   const {
     register,
@@ -80,17 +93,27 @@ export default function LoginPage() {
     });
   });
 
-  // Block the right-click / context menu and drag-start on the background
-  // image. This is a UX deterrent, not real protection — the asset is
-  // still fetchable from /FU-Social-Garden.jpg. For real protection, put
-  // a hotlink rule + signed URLs in the web server (see README).
+  // Block the right-click / context menu and drag-start on this page's
+  // artwork — the background photo, the SYNAPSE mark and the service
+  // seals. This is a UX deterrent, not real protection: the assets are
+  // still fetchable from /FU-Social-Garden.jpg and friends. For real
+  // protection, put a hotlink rule + signed URLs in the web server
+  // (see README).
   const swallow = (e: React.SyntheticEvent) => {
     e.preventDefault();
     e.stopPropagation();
   };
 
   return (
-    <main className="relative grid min-h-dvh place-items-center overflow-hidden bg-background p-6">
+    /*
+      Column layout rather than `place-items-center`: the branding strip
+      below is a real flow child, so on short viewports the card and the
+      strip push apart and the page scrolls instead of overlapping.
+      `overflow-x-hidden` (not `overflow-hidden`) leaves that vertical
+      scroll reachable; the background layers are `fixed`, so nothing
+      needs clipping here to contain them.
+    */
+    <main className="relative flex min-h-dvh flex-col items-center overflow-x-hidden bg-background p-6">
       {/*
         Background image. The img is `pointer-events-none` and the
         transparent shield above it absorbs right-click / long-press /
@@ -123,7 +146,12 @@ export default function LoginPage() {
       />
 
       <Card
-        className="relative w-full max-w-sm shadow-lg ring-1 ring-black/5 backdrop-blur-sm"
+        /*
+          `my-auto shrink-0` centres the card in the space left above the
+          branding strip, and refuses the vertical squash a column flex
+          would otherwise apply on short viewports.
+        */
+        className="relative my-auto w-full max-w-sm shrink-0 shadow-lg ring-1 ring-black/5 backdrop-blur-sm"
         style={{ zIndex: 2 }}
         aria-labelledby="login-title"
       >
@@ -235,6 +263,39 @@ export default function LoginPage() {
           </p>
         </CardFooter>
       </Card>
+
+      {/*
+        Service branding. Fixed dark glass rather than a bare overlay on
+        purpose: the photo is the same asset in both colour schemes, and
+        on an ultra-wide viewport `object-cover` crops it to its bright
+        mid-band, where the captions lose contrast. Measured over the
+        real backdrop at 2560x800, a 40% scrim left the worst pixel at
+        3.0:1 against white; 60% holds 6.0:1 there even if
+        `backdrop-filter` is unavailable, and ~10:1 with the blur
+        applied. Don't lighten it back toward 40% without re-measuring.
+      */}
+      <footer
+        onContextMenu={swallow}
+        onDragStart={swallow}
+        className="no-copy relative mt-6 flex flex-wrap items-center justify-center gap-x-5 gap-y-3 rounded-2xl bg-black/60 px-5 py-3 ring-1 ring-white/15 backdrop-blur-md"
+        style={{ zIndex: 2 }}
+      >
+        {SERVICE_MARKS.map((mark) => (
+          <div key={mark.label} className="flex items-center gap-2.5">
+            <img
+              src={mark.src}
+              alt=""
+              draggable={false}
+              onDragStart={swallow}
+              onContextMenu={swallow}
+              className="size-12 shrink-0 select-none object-contain sm:size-14"
+            />
+            <span className="text-xs font-semibold leading-tight text-white sm:text-sm">
+              {mark.label}
+            </span>
+          </div>
+        ))}
+      </footer>
     </main>
   );
 }

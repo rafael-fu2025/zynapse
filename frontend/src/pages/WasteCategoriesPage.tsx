@@ -94,7 +94,7 @@ function WasteCategoryRow({ cat }: { cat: WasteCategory }) {
           <div className="flex items-center gap-2">
             <span className="font-medium">{cat.name}</span>
             <span className="tabular-nums text-xs text-muted-foreground">({cat.code})</span>
-            {!cat.is_active && <Badge variant="secondary">archived</Badge>}
+            {!cat.is_active && <Badge variant="secondary">Archived</Badge>}
           </div>
         </div>
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
@@ -141,7 +141,7 @@ function WasteCategoryRow({ cat }: { cat: WasteCategory }) {
       <div className="flex min-w-0 flex-1 items-center gap-2">
         <span className="truncate font-medium">{cat.name}</span>
         <span className="shrink-0 tabular-nums text-xs text-muted-foreground">({cat.code})</span>
-        {!cat.is_active && <Badge variant="secondary" className="shrink-0">archived</Badge>}
+        {!cat.is_active && <Badge variant="secondary" className="shrink-0">Archived</Badge>}
         <span className="ml-auto shrink-0 text-xs text-muted-foreground">
           {cat.expected_yield_pct !== null ? `${cat.expected_yield_pct}% Yield` : '—'}
           {' · '}

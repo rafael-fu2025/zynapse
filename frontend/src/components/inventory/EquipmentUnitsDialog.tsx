@@ -119,7 +119,7 @@ function UnitRow({
         {unit.condition_note !== null && (
           <span className="text-xs text-muted-foreground">{unit.condition_note}</span>
         )}
-        <span className="ml-auto text-[11px] text-muted-foreground">
+        <span className="ml-auto text-[0.6875rem] text-muted-foreground">
           {unit.status_changed_at !== '' && `status set ${fmtRelativeFromNow(unit.status_changed_at)}`}
         </span>
       </div>
@@ -175,7 +175,7 @@ function UnitRow({
           </summary>
           <ul className="mt-1 space-y-1 border-l pl-3">
             {log.map((entry) => (
-              <li key={entry.id} className="text-[11px] text-muted-foreground">
+              <li key={entry.id} className="text-[0.6875rem] text-muted-foreground">
                 <span className="tabular-nums">{fmtRelativeFromNow(entry.created_at)}</span>
                 {' — '}
                 {entry.from_status !== null ? EQUIPMENT_STATUS_LABEL[entry.from_status] : 'added'}

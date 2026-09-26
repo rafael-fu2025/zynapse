@@ -15,6 +15,10 @@ export type AnnouncementAudience = z.infer<typeof announcementAudienceSchema>;
 
 export const announcementStatusSchema = z.enum(['live', 'scheduled', 'expired']);
 
+/** How loud a post is: `urgent` renders with the red (destructive) treatment. */
+export const announcementSeveritySchema = z.enum(['normal', 'urgent']);
+export type AnnouncementSeverity = z.infer<typeof announcementSeveritySchema>;
+
 export const announcementSchema = z.object({
   id: z.number().int().positive(),
   title: z.string().min(1),
@@ -23,6 +27,7 @@ export const announcementSchema = z.object({
   action_url: z.string().nullable(),
   action_label: z.string().nullable(),
   is_required: z.boolean(),
+  severity: announcementSeveritySchema.default('normal'),
   publish_at: z.string().nullable(),
   unpublish_at: z.string().nullable(),
   created_at: z.string(),
@@ -52,6 +57,7 @@ export const announcementInputSchema = z.object({
   action_url: z.string().max(500).optional(),
   action_label: z.string().max(60).optional(),
   is_required: z.boolean(),
+  severity: announcementSeveritySchema,
   publish_at: z.string().optional(),
   unpublish_at: z.string().optional(),
 });

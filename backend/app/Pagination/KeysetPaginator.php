@@ -10,8 +10,9 @@ use InvalidArgumentException;
 /**
  * KeysetPaginator — cursor-based, O(1) pagination built on indexed columns.
  *
- * Per directive: NEVER use OFFSET. Identifiers are `(created_at, id)` ordered
- * descending; cursors encode both values opaquely as base64url JSON.
+ * Per directive: NEVER use OFFSET. Identifiers are a `(timestamp, id)` tuple
+ * ordered DESC or ASC (callers choose; `apply()` must match); cursors encode
+ * both values opaquely as base64url JSON.
  */
 final class KeysetPaginator
 {
@@ -66,11 +67,15 @@ final class KeysetPaginator
 
     /**
      * Apply keyset constraints to a query builder. The order MUST already
-     * be `ORDER BY {tsColumn} DESC, {idColumn} DESC`; both columns indexed.
+     * be `ORDER BY {tsColumn} DESC, {idColumn} DESC` (or ASC when
+     * `$ascending` is true); both columns indexed.
      *
      * `$tsColumn` / `$idColumn` accept alias-qualified names (`u.created_at`)
      * so joined queries stay unambiguous. `$maxLimit` is 100 for API pages;
-     * bulk surfaces (CSV export) may raise it explicitly.
+     * bulk surfaces (CSV export) may raise it explicitly. `$ascending`
+     * flips the keyset comparison to match an ASC-ordered query (2026-09-25:
+     * the appointment book reads chronologically, so it pages forward in
+     * time); callers must pass the same value the ORDER BY uses.
      */
     public static function apply(
         BaseBuilder $builder,
@@ -79,6 +84,7 @@ final class KeysetPaginator
         string $tsColumn = 'created_at',
         string $idColumn = 'id',
         int $maxLimit = 100,
+        bool $ascending = false,
     ): BaseBuilder {
         if ($limit < 1 || $limit > $maxLimit) {
             throw new InvalidArgumentException("Keyset limit must be between 1 and {$maxLimit}.");
@@ -87,13 +93,15 @@ final class KeysetPaginator
         $builder->limit($limit + 1); // +1 = sentinel to detect "has next"
 
         if (($decoded = self::decode($cursor)) !== null) {
-            // Strict less-than comparison on (tsColumn, idColumn).
+            // Strict comparison on (tsColumn, idColumn) — `<` walking down a
+            // DESC order, `>` walking up an ASC one.
+            $op = $ascending ? '>' : '<';
             $builder
                 ->groupStart()
-                    ->where($tsColumn . ' <', $decoded['created_at'])
+                    ->where($tsColumn . ' ' . $op, $decoded['created_at'])
                     ->orGroupStart()
                         ->where($tsColumn, $decoded['created_at'])
-                        ->where($idColumn . ' <', $decoded['id'])
+                        ->where($idColumn . ' ' . $op, $decoded['id'])
                     ->groupEnd()
                 ->groupEnd();
         }

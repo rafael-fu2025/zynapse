@@ -13,20 +13,17 @@ final class AppointmentsEnqueueDue extends BaseCommand
 {
     protected $group = 'SYNAPSE';
     protected $name = 'synapse:appointments-enqueue-due';
-    protected $description = 'Enqueue Clinic and Guidance appointments at T-15.';
+    protected $description = 'Enqueue Guidance appointments at T-15 (clinic check-in is staff-actioned as of 2026-09-25).';
     protected $usage = 'synapse:appointments-enqueue-due';
 
     public function run(array $params): int
     {
-        $svc = \Config\Services::appointmentService();
-        $clinic = $svc->autoCheckInTodaysPending();
-        $aged = $svc->agePastDueNoShows();
         $guidance = (new GuidanceQueueService(
             new CounsellingPolicy(),
             \Config\Services::auditOutbox(),
             \Config\Services::notificationOutbox(),
         ))->enqueueDueAppointments();
-        CLI::write("Due appointment enqueue complete. Clinic: {$clinic}; aged no-shows: {$aged}; Guidance: {$guidance}.", 'green');
+        CLI::write("Due appointment enqueue complete. Guidance: {$guidance}.", 'green');
         return 0;
     }
 }

@@ -7,11 +7,10 @@
  * encounters view. Action buttons (Care, Record vitals, Close encounter,
  * Mark no-show) live on each queue row.
  *
- * Lazy side effects on `/clinic/queue` staff read:
- *   1. Auto-check-in today's `scheduled` appointments
- *   2. Auto-close stale `open` encounters from prior days
- * Both run server-side in `QueueService::today()`; the page does not
- * trigger them directly.
+ * Lazy side effect on `/clinic/queue` staff read: stale `open`
+ * encounters from prior days are auto-closed (their linked appointments
+ * are left for staff to resolve). Check-ins are staff-actioned — from
+ * the Appointments page or the kiosk — never a timer (2026-09-25).
  */
 import { zodResolver } from '@hookform/resolvers/zod';
 import {
@@ -892,7 +891,7 @@ function QueueTab({ onOpenEncounter }: QueueTabProps) {
                 </div>
               </div>
               <p className="text-sm font-medium text-foreground">{q.display_name}</p>
-              <p className="tabular-nums text-[10px] text-muted-foreground"><PatientIdCell id={q.patient_school_id} name={q.patient_name} /></p>
+              <p className="tabular-nums text-[0.625rem] text-muted-foreground"><PatientIdCell id={q.patient_school_id} name={q.patient_name} /></p>
               <MobileCardField label="Complaint"><span className="text-xs">{q.chief_complaint}</span></MobileCardField>
               <MobileCardField label="Station"><StationBadge station={q.station_id} /></MobileCardField>
               <MobileCardActions>
@@ -1032,7 +1031,7 @@ function StaffSchedulesTab({
                   </Badge>
                   {!s.is_active && <Badge variant="secondary" className="ml-1.5">Archived</Badge>}
                   {s.effective_from !== null && (
-                    <span className="ml-1.5 tabular-nums text-[10px] text-muted-foreground">
+                    <span className="ml-1.5 tabular-nums text-[0.625rem] text-muted-foreground">
                       {s.effective_from.slice(0, 10)}{s.effective_to !== null ? ` → ${s.effective_to.slice(0, 10)}` : ' →'}
                     </span>
                   )}

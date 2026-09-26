@@ -39,7 +39,7 @@ import {
   useUpdateGuidanceAnnouncement,
 } from '@/hooks/useGuidanceContent';
 import type { GuidanceAnnouncement } from '@/schemas/guidanceContent';
-import { announcementInputSchema, type AnnouncementAudience, type AnnouncementInput } from '@/schemas/guidanceContent';
+import { announcementInputSchema, type AnnouncementAudience, type AnnouncementInput, type AnnouncementSeverity } from '@/schemas/guidanceContent';
 import { fmtUtcToApp } from '@/utils/date';
 
 const AUDIENCE_LABELS: Record<AnnouncementAudience, string> = {
@@ -81,6 +81,7 @@ function AnnouncementDialog({
           action_url: existing.action_url ?? '',
           action_label: existing.action_label ?? '',
           is_required: existing.is_required,
+          severity: existing.severity,
           publish_at: existing.publish_at ?? '',
           unpublish_at: existing.unpublish_at ?? '',
         }
@@ -91,6 +92,7 @@ function AnnouncementDialog({
           action_url: '',
           action_label: '',
           is_required: false,
+          severity: 'normal',
           publish_at: '',
           unpublish_at: '',
         },
@@ -98,6 +100,7 @@ function AnnouncementDialog({
 
   const audience = watch('audience');
   const isRequired = watch('is_required');
+  const severity = watch('severity');
 
   function submit(values: AnnouncementInput) {
     const payload = { ...values, audience: values.audience };
@@ -151,6 +154,16 @@ function AnnouncementDialog({
                 Required for clearance signing
               </Label>
             </div>
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="ann-severity">Severity</Label>
+            <Select value={severity} onValueChange={(v) => setValue('severity', v as AnnouncementSeverity)}>
+              <SelectTrigger id="ann-severity"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="normal">Normal — regular notice</SelectItem>
+                <SelectItem value="urgent">Urgent — red highlight on the portal</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-1.5">
@@ -259,9 +272,10 @@ export function AnnouncementsTab() {
               </TableHeader>
               <TableBody>
                 {rows.map((a) => (
-                  <TableRow key={a.id}>
+                  <TableRow key={a.id} className={a.severity === 'urgent' ? 'bg-destructive/5' : undefined}>
                     <TableCell className="max-w-72 px-3">
                       <p className="flex items-center gap-2 truncate text-sm font-medium">
+                        {a.severity === 'urgent' && <Badge variant="destructive">Urgent</Badge>}
                         {a.is_required && <Badge variant="warning">Required</Badge>}
                         {a.title}
                       </p>

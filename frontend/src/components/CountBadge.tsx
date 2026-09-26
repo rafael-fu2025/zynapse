@@ -33,7 +33,7 @@ export function CountBadge({
     <Badge
       variant="outline"
       className={cn(
-        'h-4 min-w-4 justify-center rounded-full border-transparent bg-muted-foreground px-1 py-0 tabular-nums text-[10px] text-background',
+        'h-4 min-w-4 justify-center rounded-full border-transparent bg-muted-foreground px-1 py-0 tabular-nums text-[0.625rem] text-background',
         className,
       )}
     >

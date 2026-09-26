@@ -65,13 +65,12 @@ final class QueueService extends BaseService
     /**
      * Today's queue — staff view (full school ids).
      *
-     * Side effects (panel revision, August 2026):
-     *   1. Lazy auto-check-in: every `scheduled` appointment whose
-     *      `scheduled_at` falls on today's UTC window is opened +
-     *      queued. Idempotent against kiosk / staff races.
-     *   2. Lazy end-of-day cleanup: stale `open` encounters whose
-     *      `started_at` predates today are auto-closed with
-     *      `outcome='auto_closed'`.
+     * Side effect (2026-09-25): lazy end-of-day cleanup only — stale
+     * `open` encounters whose `started_at` predates today are
+     * auto-closed with `outcome='auto_closed'`, WITHOUT touching their
+     * appointment's status (staff resolve those). The August 2026
+     * lazy auto-check-in sweep was removed: attendance is a staff
+     * action, never a timer.
      *
      * @return array<int, array<string, mixed>>
      */
@@ -79,9 +78,6 @@ final class QueueService extends BaseService
     {
         $this->policy->check('queueRead');
 
-        // Sweep before the fetch so the staff view shows the freshly
-        // opened + queued appointments immediately.
-        $this->appointments->autoCheckInTodaysPending();
         $this->autoCloseEarlierOpenEncounters();
 
         return array_map(

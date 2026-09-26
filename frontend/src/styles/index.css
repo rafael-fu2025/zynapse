@@ -150,6 +150,15 @@
   * {
     @apply border-border outline-ring/50;
   }
+  /*
+   * Base type scale — 125% (2026-09-25 staff meeting). Every text size in
+   * the app is rem-based, so this one rule scales the whole UI; the px
+   * leftovers were migrated to rem in the same change. PDF/print output
+   * (ReportPdfView) keeps its own px sizes on purpose.
+   */
+  html {
+    font-size: 125%;
+  }
   body {
     @apply bg-background font-sans text-foreground antialiased;
   }

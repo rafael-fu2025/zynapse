@@ -540,10 +540,13 @@ final class ClinicService extends BaseService
      * fires on encounters whose `started_at` is BEFORE today's UTC
      * midnight — anything opened today is left alone.
      *
-     * Cascade mirrors `markNoShow()` minus the policy gate and minus
-     * the no-show-specific notification:
+     * Cascade (2026-09-25 staff meeting — completion is staff's call):
      *   - encounter → `closed` + `outcome='auto_closed'`
-     *   - linked appointment → `completed` (if it was `checked_in`)
+     *   - linked appointment → LEFT ALONE. It used to be forced to
+     *     `completed`, which silently finished an auto-checked-in
+     *     visit overnight and took the no-show decision away from
+     *     staff; the appointment stays `checked_in` until a human
+     *     completes or no-shows it.
      *   - queue entry → `done` + `outcome='auto_closed'`
      *
      * No-op when the encounter is no longer open (lost the race to a
@@ -572,27 +575,10 @@ final class ClinicService extends BaseService
                         'updated_at' => $now,
                     ]);
 
-                if (isset($enc['appointment_id']) && $enc['appointment_id'] !== null) {
-                    $appt = $this->selectForUpdate('clinic_appointments', [
-                        'tenant_id'   => CurrentTenant::id(),
-                        'id'          => (int) $enc['appointment_id'],
-                        'archived_at' => null,
-                    ]);
-                    if ($appt !== null && (string) $appt['status'] === 'checked_in') {
-                        $this->db->table('clinic_appointments')
-                            ->where('clinic_appointments.tenant_id', CurrentTenant::id())
-                            ->where('id', (int) $appt['id'])
-                            ->update(['status' => 'completed', 'updated_at' => $now]);
-                        $this->audit->enqueue(
-                            'clinic.appointment_completed',
-                            'clinic_appointments',
-                            (int) $appt['id'],
-                            $userId,
-                            ['previous_status' => 'checked_in', 'next_status' => 'completed',
-                             'reason_code'     => 'encounter_auto_closed'],
-                        );
-                    }
-                }
+                // The linked appointment (if any) deliberately keeps its
+                // `checked_in` status: overnight completion used to erase
+                // the staff no-show decision (2026-09-25 meeting). Staff
+                // resolve it from the appointments page.
 
                 $queueRow = $this->db->query(
                     'SELECT `id`, `status` FROM `clinic_queue_entries`'

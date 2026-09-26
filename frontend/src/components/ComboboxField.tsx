@@ -568,7 +568,7 @@ export function ComboboxField(props: ComboboxFieldProps): JSX.Element {
                 {pinnedSection !== undefined && pinnedSection.entries.length > 0 ? (
                   <li
                     role="presentation"
-                    className="px-3 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground"
+                    className="px-3 py-1 text-[0.625rem] font-semibold uppercase tracking-wide text-muted-foreground"
                   >
                     {pinnedSection.heading}
                   </li>

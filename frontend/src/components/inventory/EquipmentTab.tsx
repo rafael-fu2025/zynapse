@@ -194,7 +194,7 @@ export function EquipmentTab() {
                 <TableCell className="px-3">
                   {highlightMatch(it.name, q)}
                   {it.notes !== null && (
-                    <p className="mt-0.5 max-w-xs truncate text-[11px] text-muted-foreground">{it.notes}</p>
+                    <p className="mt-0.5 max-w-xs truncate text-[0.6875rem] text-muted-foreground">{it.notes}</p>
                   )}
                 </TableCell>
                 <TableCell className="px-3 text-sm">{it.category ?? '—'}</TableCell>

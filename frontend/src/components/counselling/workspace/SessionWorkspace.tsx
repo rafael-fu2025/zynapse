@@ -142,7 +142,11 @@ export function SessionWorkspace({ sessionId, onCloseWorkspace }: SessionWorkspa
           </dl>
         </div>
 
-        {selected.ended_at === null && progressStep === 'notes' && (
+        {/* Notes stay writable after the session closes (2026-09-25
+            meeting): the backend has no status gate and notes are
+            insert-only, so hiding the button on a closed session was
+            what made the option "disappear" once a visit completed. */}
+        {progressStep === 'notes' && (
           <div className="flex flex-wrap gap-2">
             <Button
               size="sm"

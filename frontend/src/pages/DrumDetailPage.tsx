@@ -135,7 +135,7 @@ function ProcessLogSection({ batchId }: { batchId: number }) {
           {logs.data?.map((l) => (
             <section key={l.id} className="rounded-md border p-2">
               <header className="flex items-center justify-between">
-                <p className="text-[10px] text-muted-foreground">{fmtHumanDate(l.log_date)}</p>
+                <p className="text-[0.625rem] text-muted-foreground">{fmtHumanDate(l.log_date)}</p>
                 <div className="flex flex-wrap gap-1">
                   {l.event_type !== undefined && l.event_type !== 'observation' && (
                     <Badge variant="secondary">{titleCase(l.event_type)}</Badge>
@@ -225,9 +225,9 @@ function ProcessLogSection({ batchId }: { batchId: number }) {
                   <SelectTrigger id={calibrationId}><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="unset">—</SelectItem>
-                    <SelectItem value="ok">ok</SelectItem>
-                    <SelectItem value="due">due</SelectItem>
-                    <SelectItem value="overdue">overdue</SelectItem>
+                    <SelectItem value="ok">Ok</SelectItem>
+                    <SelectItem value="due">Due</SelectItem>
+                    <SelectItem value="overdue">Overdue</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -376,7 +376,7 @@ function AlertRow({ alert, disabled, onAck }: { alert: BmgAlert; disabled: boole
             {alert.severity}
           </Badge>
           <span className="tabular-nums text-xs text-muted-foreground">{alert.code}</span>
-          <span className="text-[10px] text-muted-foreground">{fmtUtcToApp(alert.triggered_at)}</span>
+          <span className="text-[0.625rem] text-muted-foreground">{fmtUtcToApp(alert.triggered_at)}</span>
         </div>
         <p className="text-sm text-foreground">{alert.message}</p>
       </div>
@@ -436,7 +436,7 @@ function AnalyticsSection({ batchId }: { batchId: number }) {
             {a.expected_days !== null && (
               <div className="rounded-md border p-2">
                 <dt className="text-xs text-muted-foreground">Expected days</dt>
-                <dd className="tabular-nums font-semibold">{a.expected_days} days <span className="text-[10px] font-normal text-muted-foreground">(mix-weighted)</span></dd>
+                <dd className="tabular-nums font-semibold">{a.expected_days} days <span className="text-[0.625rem] font-normal text-muted-foreground">(mix-weighted)</span></dd>
               </div>
             )}
             {a.reference_duration_days !== null && (

@@ -52,7 +52,7 @@ export function StaffAvatarStack({
     return (
       <span
         className={cn(
-          'inline-flex items-center rounded-full border border-dashed border-muted-foreground/40 text-[9px] text-muted-foreground',
+          'inline-flex items-center rounded-full border border-dashed border-muted-foreground/40 text-[0.5625rem] text-muted-foreground',
           AVATAR_SIZES[size],
           'justify-center',
           className,

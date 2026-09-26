@@ -155,7 +155,7 @@ export function TabSections({
           <Fragment key={cluster.headingId ?? `flat-${clusterIndex}`}>
             {heading(
               cluster,
-              'shrink-0 pl-1.5 pr-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground',
+              'shrink-0 pl-1.5 pr-0.5 text-[0.625rem] font-semibold uppercase tracking-wide text-muted-foreground',
             )}
             {cluster.items.map((t) => (
               <TabsTrigger key={t.value} value={t.value} {...describedBy(cluster)}>
@@ -183,7 +183,7 @@ export function TabSections({
               <Fragment key={cluster.headingId ?? `flat-${clusterIndex}`}>
                 {heading(
                   cluster,
-                  'mt-3 px-2.5 pb-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground first:mt-0',
+                  'mt-3 px-2.5 pb-0.5 text-[0.625rem] font-semibold uppercase tracking-wide text-muted-foreground first:mt-0',
                 )}
                 {cluster.items.map((t) => {
                   const Icon = t.icon;

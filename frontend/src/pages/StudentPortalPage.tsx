@@ -25,7 +25,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { PageHeader } from '@/components/PageHeader';
-import { PortalCardArt } from '@/components/PortalCardArt';
+import { PortalProfileCard } from '@/components/PortalProfileCard';
 import { TableStateBlock } from '@/components/TableStates';
 import { QueryErrorState } from '@/components/QueryErrorState';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -117,50 +117,38 @@ export default function StudentPortalPage() {
             <TabsContent value="overview" className="space-y-6 pt-4">
               {/* Profile & Clinic Digital Pass */}
               <div className="grid max-w-96 gap-6 xl:max-w-none xl:grid-cols-[minmax(0,24rem)_minmax(0,1fr)]">
-                <Card className="relative aspect-[1.586] w-full self-start overflow-hidden border-primary bg-primary text-white shadow-[0_1px_2px_rgba(0,0,0,0.06),0_18px_40px_-12px_rgba(0,0,0,0.28)] dark:border-border dark:bg-card dark:text-card-foreground">
-                  <PortalCardArt />
-                  <div className="relative flex h-full flex-col p-5">
-                    <p className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wider text-white/70 dark:text-muted-foreground">
-                      <IdCard className="size-3.5" aria-hidden /> Student Profile
-                    </p>
-                    <div className="mt-3 min-w-0">
-                      <p className="truncate text-base font-semibold leading-tight text-white dark:text-foreground">
-                        {profile.data.first_name} {profile.data.middle_name !== null ? `${profile.data.middle_name} ` : ''}
-                        {profile.data.last_name}
-                      </p>
-                      <p className="mt-0.5 tabular-nums text-xs text-white/70 dark:text-muted-foreground">
-                        ID: {profile.data.student_number}
-                      </p>
-                    </div>
-
-                    <dl className="mt-auto grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1.5 text-xs">
-                      <dt className="text-white/60 dark:text-muted-foreground">Email</dt>
-                      <dd className="truncate text-white dark:text-foreground">
-                        {me.data?.email ?? <span className="text-white/60 dark:text-muted-foreground">N/A</span>}
-                      </dd>
-                      <dt className="text-white/60 dark:text-muted-foreground">Course</dt>
-                      <dd className="font-medium">{profile.data.course ?? <span className="text-white/60 dark:text-muted-foreground">N/A</span>}</dd>
-                      <dt className="text-white/60 dark:text-muted-foreground">Year level</dt>
-                      <dd>
-                        {profile.data.year_level !== null ? (
-                          profile.data.year_level
-                        ) : (
-                          <span className="text-white/60 dark:text-muted-foreground">N/A</span>
-                        )}
-                      </dd>
-                      <dt className="text-white/60 dark:text-muted-foreground">Blood type</dt>
-                      <dd>{profile.data.blood_type ?? <span className="text-white/60 dark:text-muted-foreground">N/A</span>}</dd>
-                      <dt className="text-white/60 dark:text-muted-foreground">No-shows</dt>
-                      <dd>
-                        {profile.data.consecutive_no_shows === 0 ? (
-                          <Badge variant="secondary">Clean</Badge>
-                        ) : (
-                          <Badge variant="destructive">{profile.data.consecutive_no_shows}</Badge>
-                        )}
-                      </dd>
-                    </dl>
-                  </div>
-                </Card>
+                <PortalProfileCard
+                  caption="Student Profile"
+                  name={`${profile.data.first_name} ${profile.data.middle_name !== null ? `${profile.data.middle_name} ` : ''}${profile.data.last_name}`}
+                  idValue={profile.data.student_number}
+                >
+                  <dl className="mt-auto grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1.5 text-xs">
+                    <dt className="text-white/60 dark:text-muted-foreground">Email</dt>
+                    <dd className="truncate text-white dark:text-foreground">
+                      {me.data?.email ?? <span className="text-white/60 dark:text-muted-foreground">N/A</span>}
+                    </dd>
+                    <dt className="text-white/60 dark:text-muted-foreground">Course</dt>
+                    <dd className="font-medium">{profile.data.course ?? <span className="text-white/60 dark:text-muted-foreground">N/A</span>}</dd>
+                    <dt className="text-white/60 dark:text-muted-foreground">Year level</dt>
+                    <dd>
+                      {profile.data.year_level !== null ? (
+                        profile.data.year_level
+                      ) : (
+                        <span className="text-white/60 dark:text-muted-foreground">N/A</span>
+                      )}
+                    </dd>
+                    <dt className="text-white/60 dark:text-muted-foreground">Blood type</dt>
+                    <dd>{profile.data.blood_type ?? <span className="text-white/60 dark:text-muted-foreground">N/A</span>}</dd>
+                    <dt className="text-white/60 dark:text-muted-foreground">No-shows</dt>
+                    <dd>
+                      {profile.data.consecutive_no_shows === 0 ? (
+                        <Badge variant="secondary">Clean</Badge>
+                      ) : (
+                        <Badge variant="destructive">{profile.data.consecutive_no_shows}</Badge>
+                      )}
+                    </dd>
+                  </dl>
+                </PortalProfileCard>
 
                 <Card>
                   <CardHeader>
@@ -316,7 +304,7 @@ export default function StudentPortalPage() {
                       <div className="flex-1">
                           <p className="font-medium">{notificationLabel(n.template_code, n.context)}</p>
                           {notificationDetail(n.template_code, n.context) !== null && (
-                            <p className="tabular-nums text-[10px] text-muted-foreground">
+                            <p className="tabular-nums text-[0.625rem] text-muted-foreground">
                               {notificationDetail(n.template_code, n.context)}
                             </p>
                           )}

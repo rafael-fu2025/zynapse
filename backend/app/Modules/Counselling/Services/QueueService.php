@@ -256,6 +256,21 @@ final class QueueService extends BaseService
                 $update['counselling_session_id'] = $sessionId;
                 $update['started_at'] = $now;
             } elseif ($action === 'complete') {
+                // Hard gate (2026-09-25 staff meeting): a session cannot be
+                // completed without notes — the record of what happened is
+                // the point of the session. `complete` is only reachable
+                // from `in_session`, so the linked session always exists.
+                $noteCount = $row['counselling_session_id'] !== null
+                    ? (int) $this->db->table('counselling_notes')
+                        ->where('counselling_notes.tenant_id', CurrentTenant::id())
+                        ->where('session_id', (int) $row['counselling_session_id'])
+                        ->countAllResults()
+                    : 0;
+                if ($noteCount === 0) {
+                    throw new ApiException('validation.notes_required', 422, [
+                        ['code' => 'validation.notes_required', 'message' => 'Write the session notes before completing — a completed session must carry its record.', 'field' => 'action'],
+                    ]);
+                }
                 $update['finished_at'] = $now;
                 $this->completeLinkedRecords($row, $userId, $now);
             } elseif ($action === 'skip') {
@@ -599,6 +614,16 @@ final class QueueService extends BaseService
             'purpose' => $row['purpose'] !== null ? (string) $row['purpose'] : null,
             'counselling_appointment_id' => $row['counselling_appointment_id'] !== null ? (int) $row['counselling_appointment_id'] : null,
             'counselling_session_id' => $row['counselling_session_id'] !== null ? (int) $row['counselling_session_id'] : null,
+            // Notes written on the linked session — the board uses this
+            // to keep the Complete affordance honest (2026-09-25: a
+            // session cannot complete without notes). Today's board is
+            // small, so a per-row count is fine.
+            'note_count' => $row['counselling_session_id'] !== null
+                ? (int) $this->db->table('counselling_notes')
+                    ->where('counselling_notes.tenant_id', CurrentTenant::id())
+                    ->where('session_id', (int) $row['counselling_session_id'])
+                    ->countAllResults()
+                : 0,
             'assigned_counsellor_user_id' => $row['assigned_counsellor_user_id'] !== null ? (int) $row['assigned_counsellor_user_id'] : null,
             'referral_id' => $row['referral_id'] !== null ? (int) $row['referral_id'] : null,
             'called_at' => $row['called_at'] !== null ? (string) $row['called_at'] : null,

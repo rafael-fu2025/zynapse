@@ -170,7 +170,7 @@ export function AppointmentQrDialog({
           <div className="text-xs text-muted-foreground">
             {fmtUtcToApp(scheduledAt)}
             {' · '}
-            <Badge variant="outline" className="text-[10px]">{statusLabel(status)}</Badge>
+            <Badge variant="outline" className="text-[0.625rem]">{statusLabel(status)}</Badge>
           </div>
         </div>
 
@@ -197,7 +197,7 @@ export function AppointmentQrDialog({
             <div className="flex items-center gap-2">
               {/* Mask the token — the QR already carries it, and the
                   copy button hands out the full value when needed. */}
-              <p className="tabular-nums text-[10px] text-muted-foreground" title={token}>
+              <p className="tabular-nums text-[0.625rem] text-muted-foreground" title={token}>
                 {token.slice(0, 4)}…{token.slice(-4)}
               </p>
               <CopyButton value={token} label="Copy QR token" successMessage="QR token copied." />

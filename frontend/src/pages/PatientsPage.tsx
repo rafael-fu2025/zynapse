@@ -496,9 +496,9 @@ function ManageMedicalRecordDialog({ studentId, onClose }: { studentId: number |
             <ul className="space-y-1">
               {(s.contacts ?? []).map((c) => (
                 <li key={c.id} className="flex items-center gap-2 text-sm">
-                  {c.is_primary && <Badge variant="info">primary</Badge>}
+                  {c.is_primary && <Badge variant="info">Primary</Badge>}
                   <span className="font-medium">{c.contact_name}</span>
-                  <span className="text-xs text-muted-foreground">({c.relationship})</span>
+                  <span className="text-xs text-muted-foreground capitalize">({c.relationship})</span>
                   <span className="min-w-0 flex-1 truncate tabular-nums text-xs">{c.phone}</span>
                   <span className="flex items-center gap-0.5">
                     <Button variant="ghost" size="sm" className="size-7 p-0" aria-label={`Edit contact ${c.contact_name}`} onClick={() => startEditContact(c)}>
@@ -621,9 +621,9 @@ function StudentDetailDialog({ studentId, onClose }: { studentId: number | strin
             <ul className="space-y-1">
               {(s.contacts ?? []).map((c) => (
                 <li key={c.id} className="flex items-center gap-2 text-sm">
-                  {c.is_primary && <Badge variant="info">primary</Badge>}
+                  {c.is_primary && <Badge variant="info">Primary</Badge>}
                   <span className="font-medium">{c.contact_name}</span>
-                  <span className="text-xs text-muted-foreground">({c.relationship})</span>
+                  <span className="text-xs text-muted-foreground capitalize">({c.relationship})</span>
                   <span className="min-w-0 flex-1 truncate tabular-nums text-xs">{c.phone}</span>
                 </li>
               ))}

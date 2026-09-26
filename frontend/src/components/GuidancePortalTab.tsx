@@ -74,8 +74,18 @@ export function GuidancePortalTab() {
             <p className="py-3 text-sm text-muted-foreground">No announcements for you right now.</p>
           )}
           {announcements.data !== undefined && announcements.data.map((a) => (
-            <article key={a.id} className="rounded-lg border bg-background p-4">
+            <article
+              key={a.id}
+              className={
+                a.severity === 'urgent'
+                  ? 'rounded-lg border border-destructive/60 bg-destructive/5 p-4'
+                  : 'rounded-lg border bg-background p-4'
+              }
+            >
               <div className="flex flex-wrap items-center gap-2">
+                {/* Red = urgent (2026-09-25 meeting); amber stays reserved
+                    for the clearance "Required" flag. */}
+                {a.severity === 'urgent' && <Badge variant="destructive">Urgent</Badge>}
                 {a.is_required && <Badge variant="warning">Required</Badge>}
                 <h3 className="text-sm font-medium text-foreground">{a.title}</h3>
               </div>

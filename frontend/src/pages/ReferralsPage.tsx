@@ -638,7 +638,7 @@ function ReferralBookingDialog({ referral, onClose }: { referral: Referral; onCl
           </div>
         </div>
         <p className="text-xs text-muted-foreground">
-          Type: <span className="font-medium">referral-based</span> · Reason: {watch('reason') ?? ''}
+          Type: <span className="font-medium">Referral-based</span> · Reason: {watch('reason') ?? ''}
         </p>
         <DialogFooter>
           <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>

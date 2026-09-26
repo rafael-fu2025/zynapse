@@ -65,7 +65,7 @@ export function DispenseSupplyDialog({ item, onClose }: { item: InventoryItem; o
             </SelectContent>
           </Select>
           {openEncounters.length === 0 && !encounters.isLoading && (
-            <p className="text-[10px] text-muted-foreground">Open an encounter in Clinic first — dispensing must be tied to a visit.</p>
+            <p className="text-[0.625rem] text-muted-foreground">Open an encounter in Clinic first — dispensing must be tied to a visit.</p>
           )}
         </div>
         <div className="space-y-1.5">

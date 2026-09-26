@@ -61,7 +61,7 @@ export function SessionNotesList({
         <section key={n.id ?? n.created_at} className="rounded-md border bg-card p-3 shadow-xs">
           <header className="flex items-center justify-between">
             <div className="flex items-center gap-2">
-              <p className="text-[10px] text-muted-foreground">{fmtUtcToApp(n.created_at)}</p>
+              <p className="text-[0.625rem] text-muted-foreground">{fmtUtcToApp(n.created_at)}</p>
               {n.supersedes_note_id !== null && n.supersedes_note_id !== undefined && (
                 <Badge variant="warning">Amends #{n.supersedes_note_id}</Badge>
               )}

@@ -160,6 +160,9 @@ final class InventoryWorkflowTest extends FeatureTestCase
         ]);
 
         $encounterId = $this->makeOpenEncounter();
+        // Completion now requires the clinical record to exist first
+        // (2026-09-25 meeting): record a diagnosis, then close.
+        $this->postJson("api/v1/clinic/encounters/{$encounterId}/assessment", ['diagnosis' => 'Feature-test diagnosis']);
         $this->postJson("api/v1/clinic/encounters/{$encounterId}/close", []);
 
         $res = $this->authed($this->admin['token'], 'post', "api/v1/clinic/inventory/{$item['id']}/move", [

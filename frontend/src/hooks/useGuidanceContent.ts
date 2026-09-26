@@ -25,6 +25,7 @@ const announcementListSchema = z.array(
     action_url: z.string().nullable(),
     action_label: z.string().nullable(),
     is_required: z.boolean(),
+    severity: z.enum(['normal', 'urgent']).default('normal'),
     publish_at: z.string().nullable(),
     unpublish_at: z.string().nullable(),
     created_at: z.string(),
@@ -55,6 +56,7 @@ function toAnnouncementPayload(input: AnnouncementInput): Record<string, unknown
     action_url: input.action_url?.trim() || null,
     action_label: input.action_label?.trim() || null,
     is_required: input.is_required,
+    severity: input.severity,
     // datetime-local values are wall-clock; the backend stores UTC —
     // send as-is and let staff treat windows in app time for now
     // (documented in the parity plan; Phase B adds proper tz inputs).
@@ -200,12 +202,13 @@ const feedAnnouncementSchema = z.object({
   action_url: z.string().nullable(),
   action_label: z.string().nullable(),
   is_required: z.boolean(),
+  severity: z.enum(['normal', 'urgent']).default('normal'),
   publish_at: z.string().nullable(),
 });
 
 export function useMyGuidanceAnnouncements() {
   return useQuery<
-    Array<{ id: number; title: string; body: string; action_url: string | null; action_label: string | null; is_required: boolean; publish_at: string | null }>,
+    Array<{ id: number; title: string; body: string; action_url: string | null; action_label: string | null; is_required: boolean; severity: 'normal' | 'urgent'; publish_at: string | null }>,
     ApiEnvelopeError
   >({
     queryKey: ['me', 'guidance', 'announcements'],

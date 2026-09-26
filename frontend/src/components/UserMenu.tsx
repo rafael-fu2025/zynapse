@@ -135,7 +135,7 @@ export function UserMenu() {
         >
           <span
             aria-hidden
-            className="grid size-7 shrink-0 place-items-center rounded-full bg-primary text-[11px] font-semibold tracking-wide text-primary-foreground"
+            className="grid size-7 shrink-0 place-items-center rounded-full bg-primary text-[0.6875rem] font-semibold tracking-wide text-primary-foreground"
           >
             {initials}
           </span>
@@ -166,11 +166,11 @@ export function UserMenu() {
             !me.data.username.startsWith('stu-') &&
             !me.data.username.startsWith('emp-') &&
             me.data.username !== me.data.identifier && (
-              <p className="truncate text-[11px] text-muted-foreground">
+              <p className="truncate text-[0.6875rem] text-muted-foreground">
                 @{me.data.username}
               </p>
             )}
-          <div className="mt-1 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+          <div className="mt-1 flex items-center gap-1.5 text-[0.6875rem] text-muted-foreground">
             <span>{kindLabel(personKind)}</span>
             {me.data?.identifier && (
               <>

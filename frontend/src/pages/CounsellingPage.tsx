@@ -9,8 +9,9 @@
  * a second sub-tab). What remains is the working set:
  *   - Queue: the day board. Upcoming, today's live sessions (appointments
  *     plus kiosk check-ins), and archived/completed.
- *   - Appointments: the booking book — book and confirm. It deliberately
- *     offers **no** route into a session.
+ *   - Appointments: the booking book — book and confirm, with unapproved
+ *     bookings grouped under a Needs action divider (2026-09-25). Rows
+ *     whose session has started deep-link to it via `?session=`.
  *   - Follow-ups: WHO-5 aftercare loop, with the follow-up appointment list.
  *   - Scheduling: availability windows (list/calendar).
  *

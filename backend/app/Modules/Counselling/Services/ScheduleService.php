@@ -650,6 +650,35 @@ final class ScheduleService extends BaseService
                 throw StateMachineException::invalidTransition($current, self::RESULT[$action], 'schedule');
             }
 
+            if ($action === 'complete') {
+                // Hard gate (2026-09-25 staff meeting): an appointment
+                // completes only once the session that served it carries
+                // notes. Sessions reach the appointment through the queue
+                // entry (same resolution as listSessions), so an
+                // appointment never started on the board cannot complete
+                // here either — the record of the visit is the point.
+                $sessionIds = array_map(
+                    static fn (array $r): int => (int) $r['counselling_session_id'],
+                    $this->db->table('counselling_queue_entries')
+                        ->select('counselling_session_id')
+                        ->where('tenant_id', CurrentTenant::id())
+                        ->where('counselling_appointment_id', $id)
+                        ->where('counselling_session_id IS NOT NULL', null, false)
+                        ->get()->getResultArray(),
+                );
+                $noteCount = $sessionIds === []
+                    ? 0
+                    : (int) $this->db->table('counselling_notes')
+                        ->where('counselling_notes.tenant_id', CurrentTenant::id())
+                        ->whereIn('session_id', $sessionIds)
+                        ->countAllResults();
+                if ($noteCount === 0) {
+                    throw new ApiException('validation.notes_required', 422, [
+                        ['code' => 'validation.notes_required', 'message' => 'Write the session notes before completing this appointment.', 'field' => 'action'],
+                    ]);
+                }
+            }
+
             $now    = $this->utcNow();
             $update = ['status' => self::RESULT[$action], 'updated_at' => $now];
             if ($action === 'cancel' && $cancellationReason !== null && $cancellationReason !== '') {

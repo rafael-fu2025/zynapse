@@ -26,9 +26,9 @@ export const AVATAR_TONES = [
 
 export const AVATAR_SIZES = {
   /** Calendar blocks. */
-  xs: 'size-4 text-[8px]',
+  xs: 'size-4 text-[0.5rem]',
   /** Table rows. */
-  sm: 'size-5 text-[9px]',
+  sm: 'size-5 text-[0.5625rem]',
 } as const;
 
 /**

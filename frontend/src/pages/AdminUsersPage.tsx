@@ -131,7 +131,7 @@ function RoleChecklist({
                 <span className="block text-sm font-medium text-foreground">
                   {role.name}
                   {role.wildcard && (
-                    <span className="ml-1.5 rounded bg-amber-200 px-1 py-0.5 align-middle text-[10px] font-semibold uppercase text-amber-900 dark:bg-amber-900 dark:text-amber-200">
+                    <span className="ml-1.5 rounded bg-amber-200 px-1 py-0.5 align-middle text-[0.625rem] font-semibold uppercase text-amber-900 dark:bg-amber-900 dark:text-amber-200">
                       All permissions
                     </span>
                   )}
@@ -801,7 +801,7 @@ export default function AdminUsersPage() {
                         <div className="flex items-center gap-1.5">
                           <p className="truncate text-sm font-medium">{highlightMatch(user.email ?? 'No email', filters.search)}</p>
                           {user.is_directory_record && (
-                            <Badge variant="outline" className="border-sky-300 bg-sky-50 px-1 py-0 text-[9px] font-normal leading-tight text-sky-700 dark:border-sky-800 dark:bg-sky-950/40 dark:text-sky-300">
+                            <Badge variant="outline" className="border-sky-300 bg-sky-50 px-1 py-0 text-[0.5625rem] font-normal leading-tight text-sky-700 dark:border-sky-800 dark:bg-sky-950/40 dark:text-sky-300">
                               Directory
                             </Badge>
                           )}
@@ -815,7 +815,7 @@ export default function AdminUsersPage() {
                           <div className="flex flex-col gap-0.5">
                             <span className="truncate text-sm">{user.person_name}</span>
                             {user.person_kind !== null && (
-                              <span className="text-[10px] uppercase tracking-wide text-muted-foreground">{user.person_kind}</span>
+                              <span className="text-[0.625rem] uppercase tracking-wide text-muted-foreground">{user.person_kind}</span>
                             )}
                           </div>
                         ) : (

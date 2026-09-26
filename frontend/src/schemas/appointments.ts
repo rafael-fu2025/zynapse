@@ -65,5 +65,8 @@ export const updateAppointmentSchema = z.object({
 });
 export type UpdateAppointmentInput = z.infer<typeof updateAppointmentSchema>;
 
-export const appointmentTransitions = ['checked_in', 'completed', 'cancelled', 'no_show'] as const;
+// `confirmed` is the staff approval step (assigns the acting staff
+// member to a portal booking); the backend state machine accepts it
+// from `scheduled`.
+export const appointmentTransitions = ['confirmed', 'checked_in', 'completed', 'cancelled', 'no_show'] as const;
 export type AppointmentTransition = (typeof appointmentTransitions)[number];

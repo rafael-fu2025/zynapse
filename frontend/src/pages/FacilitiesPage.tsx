@@ -226,7 +226,7 @@ function StartBatchDialog({ unit, onClose }: { unit: BmgUnit; onClose: () => voi
           <div className="text-right">
             <span id={totalId} className="tabular-nums text-sm font-semibold">{total.toFixed(2)} kg</span>
             {unit.spec_capacity_kg !== null && unit.spec_capacity_kg > 0 && (
-              <p className={`text-[11px] ${total > unit.spec_capacity_kg ? 'font-medium text-destructive' : 'text-muted-foreground'}`}>
+              <p className={`text-[0.6875rem] ${total > unit.spec_capacity_kg ? 'font-medium text-destructive' : 'text-muted-foreground'}`}>
                 Drum capacity: {unit.spec_capacity_kg} kg
               </p>
             )}
@@ -605,7 +605,7 @@ function ProcessLogsDialog({ unit, batchId, onClose }: { unit: BmgUnit; batchId:
         {logs.data?.map((l) => (
           <section key={l.id} className="rounded-md border p-2">
             <header className="flex items-center justify-between">
-              <p className="text-[10px] text-muted-foreground">{fmtHumanDate(l.log_date)}</p>
+              <p className="text-[0.625rem] text-muted-foreground">{fmtHumanDate(l.log_date)}</p>
               <div className="flex flex-wrap gap-1">
                 {l.event_type !== undefined && l.event_type !== 'observation' && (
                   <Badge variant="secondary">{titleCase(l.event_type)}</Badge>
@@ -885,7 +885,7 @@ function DrumCard({ batch }: { batch: ActiveBatch }) {
         </Badge>
       </header>
 
-      <dl className="space-y-1 text-[13px]">
+      <dl className="space-y-1 text-[0.8125rem]">
         <div className="flex items-center justify-between">
           <dt className="text-muted-foreground">Batch</dt>
           <dd className="tabular-nums font-semibold text-foreground">{batch.batch_code}</dd>
@@ -908,8 +908,8 @@ function DrumCard({ batch }: { batch: ActiveBatch }) {
               <p
                 className={
                   overdue
-                    ? 'mt-0.5 text-[11px] font-medium text-destructive'
-                    : 'mt-0.5 text-[11px] font-medium text-muted-foreground'
+                    ? 'mt-0.5 text-[0.6875rem] font-medium text-destructive'
+                    : 'mt-0.5 text-[0.6875rem] font-medium text-muted-foreground'
                 }
               >
                 {overdue
@@ -1068,7 +1068,7 @@ function CreateUnitDialog({ onClose, existingCodes }: { onClose: () => void; exi
             {errors['code'] !== undefined ? (
               <p role="alert" className="text-xs text-destructive">{errors['code']}</p>
             ) : (
-              <p className="text-[10px] text-muted-foreground">URL-safe slug — lowercase, hyphen-separated (e.g. drum-01). Auto-filled from the name; appends a -2 suffix if the slug is taken. Read-only after creation.</p>
+              <p className="text-[0.625rem] text-muted-foreground">URL-safe slug — lowercase, hyphen-separated (e.g. drum-01). Auto-filled from the name; appends a -2 suffix if the slug is taken. Read-only after creation.</p>
             )}
           </div>
           <div className="space-y-1.5">
@@ -1103,7 +1103,7 @@ function CreateUnitDialog({ onClose, existingCodes }: { onClose: () => void; exi
                 ))}
               </SelectContent>
             </Select>
-            <p className="text-[10px] text-muted-foreground">Pre-fills the category on new batches started on this drum.</p>
+            <p className="text-[0.625rem] text-muted-foreground">Pre-fills the category on new batches started on this drum.</p>
           </div>
         </div>
         <div className="space-y-1.5">
@@ -1179,7 +1179,7 @@ function EditUnitDialog({ unit, onClose }: { unit: BmgUnit; onClose: () => void 
         <div className="space-y-1.5">
           <Label>Drum code</Label>
           <Input value={unit.code} disabled className="tabular-nums" />
-          <p className="text-[10px] text-muted-foreground">Drum code cannot be changed.</p>
+          <p className="text-[0.625rem] text-muted-foreground">Drum code cannot be changed.</p>
         </div>
         <div className="space-y-1.5">
           <Label htmlFor={nameId}>Name *</Label>
@@ -1212,7 +1212,7 @@ function EditUnitDialog({ unit, onClose }: { unit: BmgUnit; onClose: () => void 
                 ))}
               </SelectContent>
             </Select>
-            <p className="text-[10px] text-muted-foreground">Pre-fills the category on new batches started on this drum.</p>
+            <p className="text-[0.625rem] text-muted-foreground">Pre-fills the category on new batches started on this drum.</p>
           </div>
         </div>
         <div className="space-y-1.5">
@@ -1794,7 +1794,7 @@ export default function FacilitiesPage() {
                     <div className="flex flex-col gap-0.5">
                       <span>{u.location_code ?? '—'}</span>
                       {u.default_category_name !== null && u.default_category_name !== undefined && (
-                        <span className="inline-flex w-fit items-center gap-1 rounded-md bg-secondary px-1.5 py-0.5 text-[10px] font-medium text-secondary-foreground">
+                        <span className="inline-flex w-fit items-center gap-1 rounded-md bg-secondary px-1.5 py-0.5 text-[0.625rem] font-medium text-secondary-foreground">
                           <Boxes className="size-2.5" /> {u.default_category_name}
                         </span>
                       )}

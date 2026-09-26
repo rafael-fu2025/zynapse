@@ -22,18 +22,34 @@ interface AppointmentPage {
   next: string | null;
 }
 
+/**
+ * Server-side book scopes (2026-09-25 staff meeting — the list is the
+ * SCHEDULED order, never the booking order):
+ *   - `upcoming` — at/after now, ascending (earliest upcoming first)
+ *   - `past`     — before now, descending (most recent first)
+ *   - `all`      — the whole book, ascending
+ */
+export type AppointmentScope = 'upcoming' | 'past' | 'all';
+
+/** Approval-state filter: portal bookings start with no provider. */
+export type AppointmentProviderFilter = 'any' | 'assigned' | 'unassigned';
+
 export function useAppointments(
   cursor: string | null,
   limit = 25,
   status: Appointment['status'] | null = null,
+  scope: AppointmentScope = 'all',
+  provider: AppointmentProviderFilter = 'any',
 ) {
   return useQuery<AppointmentPage, ApiEnvelopeError>({
     // The status filter is part of the cache key so toggling it
     // triggers a fresh fetch (and a future "All" query does not
-    // accidentally render the previously-filtered list).
-    queryKey: ['appointments', { cursor, limit, status }],
-    // Appointments are auto-checked-in server-side (the queue sweep +
-    // the kiosk station), so poll to keep statuses current without a
+    // accidentally render the previously-filtered list). Scope and
+    // provider participate too: each tab owns its own slice of the
+    // book.
+    queryKey: ['appointments', { cursor, limit, status, scope, provider }],
+    // Appointments change server-side all day (staff transitions, the
+    // kiosk station), so poll to keep statuses current without a
     // manual refresh.
     refetchInterval: 30_000,
     queryFn: async () => {
@@ -41,6 +57,8 @@ export function useAppointments(
       if (cursor !== null) params.set('cursor', cursor);
       params.set('limit', String(limit));
       if (status !== null) params.set('status', status);
+      params.set('scope', scope);
+      params.set('provider', provider);
       const res = await apiClient.get<unknown[]>(`/clinic/appointments?${params.toString()}`);
       const data = z.array(appointmentSchema).parse(res.data);
       // The envelope interceptor unwraps `data` to the bare rows and
@@ -48,6 +66,28 @@ export function useAppointments(
       // the shared helper (2026-09 audit: reading `res.data.next` here
       // always yielded null and pagination never advanced).
       return { data, next: getNextCursor(res) };
+    },
+  });
+}
+
+/**
+ * The "Needs Action" tally — unapproved portal bookings (`scheduled`
+ * with no provider), server-filtered. Rendered as the tab badge so an
+ * approval waiting on the desk is visible from every tab; the badge
+ * caps at 25 like the page size it counts.
+ */
+export function useNeedsActionAppointments(status: Appointment['status'] | null = null) {
+  return useQuery<Appointment[], ApiEnvelopeError>({
+    queryKey: ['appointments', { needsAction: true, status }],
+    refetchInterval: 30_000,
+    queryFn: async () => {
+      const params = new URLSearchParams();
+      params.set('limit', '25');
+      params.set('scope', 'upcoming');
+      params.set('provider', 'unassigned');
+      if (status !== null) params.set('status', status);
+      const res = await apiClient.get<unknown[]>(`/clinic/appointments?${params.toString()}`);
+      return z.array(appointmentSchema).parse(res.data);
     },
   });
 }

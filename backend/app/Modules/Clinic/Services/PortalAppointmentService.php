@@ -156,7 +156,8 @@ final class PortalAppointmentService extends BaseService
     /** @return list<array<string,mixed>> */
     public function queues(int $userId): array
     {
-        $this->clinicAppointments->autoCheckInTodaysPending();
+        // The clinic auto-check-in sweep that used to run here was
+        // removed (2026-09-25): attendance is staff-actioned.
         $guidance = $this->guidanceQueue();
         $guidance->enqueueDueAppointments();
         $rows = [];

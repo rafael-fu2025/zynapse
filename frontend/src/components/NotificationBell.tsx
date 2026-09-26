@@ -61,7 +61,7 @@ export function NotificationBell() {
           {unread > 0 && (
             <span
               aria-hidden
-              className="absolute -right-0.5 -top-0.5 grid size-4 place-items-center rounded-full bg-destructive text-[10px] font-semibold text-destructive-foreground"
+              className="absolute -right-0.5 -top-0.5 grid size-4 place-items-center rounded-full bg-destructive text-[0.625rem] font-semibold text-destructive-foreground"
             >
               {unread > 9 ? '9+' : unread}
             </span>
@@ -77,7 +77,7 @@ export function NotificationBell() {
             <Button
               size="sm"
               variant="ghost"
-              className="h-6 px-2 text-[11px]"
+              className="h-6 px-2 text-[0.6875rem]"
               disabled={markAll.isPending}
               onClick={() => markAll.mutate()}
             >
@@ -114,7 +114,7 @@ export function NotificationBell() {
                 <span className="block font-medium text-foreground">
                   {notificationLabel(n.template_code, n.context)}
                 </span>
-                <span className="mt-0.5 block text-[10px] text-muted-foreground">
+                <span className="mt-0.5 block text-[0.625rem] text-muted-foreground">
                   {fmtRelative(n.created_at)}
                   {n.read_at === null ? ' · unread' : ''}
                 </span>
@@ -123,7 +123,7 @@ export function NotificationBell() {
           ))}
         </ul>
         <div className="mt-1 border-t pt-1">
-          <Button asChild size="sm" variant="ghost" className="h-8 w-full justify-between px-2 text-[11px]">
+          <Button asChild size="sm" variant="ghost" className="h-8 w-full justify-between px-2 text-[0.6875rem]">
             <Link to="/notifications" onClick={() => setOpen(false)}>
               View all notifications <ChevronRight className="size-3.5" aria-hidden />
             </Link>

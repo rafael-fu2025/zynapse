@@ -222,7 +222,7 @@ function LiveStateCell({ live }: { live: LiveStateDescriptor }) {
         </Badge>
         {live.derived && (
           <>
-            <span className="text-[10px] uppercase tracking-wide text-muted-foreground">unconfirmed</span>
+            <span className="text-[0.625rem] uppercase tracking-wide text-muted-foreground">unconfirmed</span>
             {/* `title` is not reliably announced, so the reason is also in the
                 accessibility tree — the qualifier alone reads as a doubt. */}
             <span className="sr-only">{live.hint}</span>
@@ -309,7 +309,9 @@ function OutcomeMenu({
           <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">
             {live.actions.canComplete
               ? 'Completing a session needs the Guidance queue permission.'
-              : 'Complete is offered while a session is open for this patient.'}
+              : live.state === 'in_session' || live.state === 'checked_out'
+                ? 'Write the session notes before completing — the visit record comes first.'
+                : 'Complete is offered while a session is open for this patient.'}
           </DropdownMenuLabel>
         )}
         <DropdownMenuItem disabled={!completeOffered || pending} onSelect={onComplete}>

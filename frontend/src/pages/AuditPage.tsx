@@ -540,10 +540,10 @@ function ActorLabel({ actor }: { actor: AuditActor | null }) {
   const initial = primary.slice(0, 1).toUpperCase();
   return (
     <span className="flex min-w-0 items-center gap-2">
-      <span className="grid size-7 shrink-0 place-items-center rounded-full bg-muted text-[11px] font-semibold text-muted-foreground" aria-hidden>{initial}</span>
+      <span className="grid size-7 shrink-0 place-items-center rounded-full bg-muted text-[0.6875rem] font-semibold text-muted-foreground" aria-hidden>{initial}</span>
       <span className="min-w-0">
         <span className="block max-w-44 truncate text-xs font-medium text-foreground" title={primary}>{primary}</span>
-        {actor.display_name !== null && actor.email !== null && <span className="block text-[11px] text-muted-foreground">{actor.display_name}</span>}
+        {actor.display_name !== null && actor.email !== null && <span className="block text-[0.6875rem] text-muted-foreground">{actor.display_name}</span>}
       </span>
     </span>
   );
@@ -560,7 +560,7 @@ function EntityLabel({ event }: { event: AuditEvent }) {
 
 function ShortCode({ value }: { value: string | null }) {
   if (value === null) return <span className="text-xs text-muted-foreground">Not captured</span>;
-  return <span className="tabular-nums text-[11px] text-muted-foreground" title={value}>{value.slice(0, 10)}…</span>;
+  return <span className="tabular-nums text-[0.6875rem] text-muted-foreground" title={value}>{value.slice(0, 10)}…</span>;
 }
 
 function VerificationStatus({ verification }: { verification: ReturnType<typeof useVerifyAuditChain> }) {
@@ -630,7 +630,7 @@ function EventDetailDialog({ id, detail, onClose }: { id: number | null; detail:
                     <Clipboard /> Copy
                   </Button>
                 </div>
-                <pre className="max-h-[45dvh] overflow-auto border bg-muted/40 p-3 tabular-nums text-[11px] leading-5 text-foreground">
+                <pre className="max-h-[45dvh] overflow-auto border bg-muted/40 p-3 tabular-nums text-[0.6875rem] leading-5 text-foreground">
                   {JSON.stringify(event.payload, null, 2)}
                 </pre>
               </div>
@@ -646,7 +646,7 @@ function CopyableCode({ value }: { value: string | null }) {
   if (value === null) return <span className="text-muted-foreground">Not captured</span>;
   return (
     <span className="flex min-w-0 items-start gap-1">
-      <code className="min-w-0 break-all text-[11px] text-foreground">{value}</code>
+      <code className="min-w-0 break-all text-[0.6875rem] text-foreground">{value}</code>
       <button type="button" className="shrink-0 rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring" onClick={() => copyText(value, 'Value copied')} aria-label="Copy value">
         <Clipboard className="size-3.5" />
       </button>

@@ -456,14 +456,14 @@ function AggregateSummary({ survey }: { survey: Survey }) {
           {q.scale_counts !== undefined && (
             <div className="mt-1 flex gap-1.5">
               {Object.entries(q.scale_counts).map(([score, count]) => (
-                <Badge key={score} variant="secondary" className="text-[10px]">{score}: {count}</Badge>
+                <Badge key={score} variant="secondary" className="text-[0.625rem]">{score}: {count}</Badge>
               ))}
             </div>
           )}
           {q.option_counts !== undefined && (
             <div className="mt-1 flex flex-wrap gap-1.5">
               {Object.entries(q.option_counts).map(([text, count]) => (
-                <Badge key={text} variant="secondary" className="text-[10px]">{text}: {count}</Badge>
+                <Badge key={text} variant="secondary" className="text-[0.625rem]">{text}: {count}</Badge>
               ))}
             </div>
           )}

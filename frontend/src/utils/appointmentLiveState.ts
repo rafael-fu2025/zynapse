@@ -83,6 +83,8 @@ export interface LiveStateQueueEntry {
   started_at?: string | null | undefined;
   finished_at?: string | null | undefined;
   counselling_session_id?: number | null | undefined;
+  /** Notes on the linked session — the Complete gate reads this. */
+  note_count?: number | null | undefined;
 }
 
 export interface LiveStateInput {
@@ -269,10 +271,14 @@ export function deriveAppointmentLiveState(input: LiveStateInput = {}): LiveStat
         // exact condition the badge is claiming. Staff confirm; we never write.
         canMarkNoShow: actionable && isLiveAppointment && windowElapsed && !hasActivity,
         canCancel: actionable && isLiveAppointment,
+        // Notes gate (2026-09-25 staff meeting): a session cannot complete
+        // until its record exists. The server enforces this too — this just
+        // keeps the button honest.
         canComplete:
           queue !== null &&
           queue.status === 'in_session' &&
-          queue.counselling_session_id != null,
+          queue.counselling_session_id != null &&
+          (queue.note_count ?? 0) > 0,
       },
     };
   }

@@ -449,7 +449,7 @@ export function CommandPalette() {
             if (items.length === 0) return null;
             return (
               <div key={category} className="py-1">
-                <div className="px-3 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                <div className="px-3 py-1 text-[0.625rem] font-semibold uppercase tracking-wide text-muted-foreground">
                   {category}
                 </div>
                 <ul>
@@ -491,7 +491,7 @@ export function CommandPalette() {
         </div>
 
         {/* Footer — keyboard hint so first-time users discover ↑↓⏎. */}
-        <div className="flex items-center justify-between border-t bg-muted/40 px-3 py-2 text-[10px] text-muted-foreground">
+        <div className="flex items-center justify-between border-t bg-muted/40 px-3 py-2 text-[0.625rem] text-muted-foreground">
           <span>{flat.length} command{flat.length === 1 ? '' : 's'}</span>
           <span className="flex items-center gap-2">
             <Kbd>↑</Kbd>
@@ -520,7 +520,7 @@ export function CommandPalette() {
 
 function Kbd({ children }: { children: ReactNode }): JSX.Element {
   return (
-    <kbd className="inline-flex min-w-[1.25rem] items-center justify-center rounded border bg-background px-1 tabular-nums text-[10px]">
+    <kbd className="inline-flex min-w-[1.25rem] items-center justify-center rounded border bg-background px-1 tabular-nums text-[0.625rem]">
       {children}
     </kbd>
   );

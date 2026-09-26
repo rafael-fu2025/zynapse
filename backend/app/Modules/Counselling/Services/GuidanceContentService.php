@@ -293,6 +293,7 @@ final class GuidanceContentService extends BaseService
             'action_url'   => $r['action_url'] !== null ? (string) $r['action_url'] : null,
             'action_label' => $r['action_label'] !== null ? (string) $r['action_label'] : null,
             'is_required'  => (bool) $r['is_required'],
+            'severity'     => ($r['severity'] ?? 'normal') === 'urgent' ? 'urgent' : 'normal',
             'publish_at'   => $r['publish_at'] !== null ? (string) $r['publish_at'] : null,
             'unpublish_at' => $r['unpublish_at'] !== null ? (string) $r['unpublish_at'] : null,
         ], $rows);
@@ -365,6 +366,13 @@ final class GuidanceContentService extends BaseService
             ]);
         }
 
+        $severity = (string) ($input['severity'] ?? 'normal');
+        if (! in_array($severity, ['normal', 'urgent'], true)) {
+            throw ApiException::validationFailure([
+                ['code' => 'validation.field', 'message' => 'Severity must be normal or urgent.', 'field' => 'severity'],
+            ]);
+        }
+
         return [
             'title'        => $title,
             'body'         => $body,
@@ -374,6 +382,7 @@ final class GuidanceContentService extends BaseService
                 ? mb_substr(trim((string) $input['action_label']), 0, 60)
                 : null,
             'is_required'  => ($input['is_required'] ?? false) === true ? 1 : 0,
+            'severity'     => $severity,
             'publish_at'   => isset($input['publish_at']) && $input['publish_at'] !== '' ? (string) $input['publish_at'] : null,
             'unpublish_at' => isset($input['unpublish_at']) && $input['unpublish_at'] !== '' ? (string) $input['unpublish_at'] : null,
         ];
@@ -442,6 +451,7 @@ final class GuidanceContentService extends BaseService
             'action_url'   => $r['action_url'] !== null ? (string) $r['action_url'] : null,
             'action_label' => $r['action_label'] !== null ? (string) $r['action_label'] : null,
             'is_required'  => (bool) $r['is_required'],
+            'severity'     => ($r['severity'] ?? 'normal') === 'urgent' ? 'urgent' : 'normal',
             'publish_at'   => $r['publish_at'] !== null ? (string) $r['publish_at'] : null,
             'unpublish_at' => $r['unpublish_at'] !== null ? (string) $r['unpublish_at'] : null,
             'created_at'   => (string) $r['created_at'],

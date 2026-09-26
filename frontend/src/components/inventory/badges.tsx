@@ -75,7 +75,7 @@ export function LastMovementHint({
     ? `by ${initialsFromEmail(movement.user_email)}`
     : '';
   return (
-    <p className={cn('mt-0.5 text-[11px] tabular-nums', tone)}>
+    <p className={cn('mt-0.5 text-[0.6875rem] tabular-nums', tone)}>
       {movement.type === 'received' ? '↑ ' : movement.type === 'dispensed' ? '↓ ' : isWriteOff ? '· ' : '· '}
       {sign}{movement.quantity} {unit}
       {userText !== '' && <> · {userText}</>}
@@ -106,7 +106,7 @@ export function SupplyLastMovementHint({
     ? `by ${initialsFromEmail(movement.user_email)}`
     : '';
   return (
-    <p className={cn('mt-0.5 text-[11px] tabular-nums', tone)}>
+    <p className={cn('mt-0.5 text-[0.6875rem] tabular-nums', tone)}>
       {movement.qty_delta < 0 ? '↓ ' : movement.reason_code === 'receive' ? '↑ ' : '· '}
       {sign}{Math.abs(movement.qty_delta)} {unit}
       {userText !== '' && <> · {userText}</>}
@@ -124,7 +124,7 @@ export function SupplyLastMovementHint({
 export function ExpiryChip({ days }: { days: number | null }): JSX.Element | null {
   if (days === null) return null;
   if (days > 30) return null;
-  if (days <= 0) return <Badge variant="destructive" className="ml-1.5">expired</Badge>;
+  if (days <= 0) return <Badge variant="destructive" className="ml-1.5">Expired</Badge>;
   if (days <= 7) return <Badge variant="destructive" className="ml-1.5">{days}d</Badge>;
   return <Badge variant="warning" className="ml-1.5">{days}d</Badge>;
 }
@@ -182,9 +182,9 @@ export function EtaBadge({ status, expected }: { status: Reorder['status']; expe
   if (expected === null) return null;
   if (status === 'completed' || status === 'cancelled') return null;
   const days = daysUntil(expected);
-  if (days < 0) return <Badge variant="destructive" className="ml-1.5">overdue {Math.abs(days)}d</Badge>;
-  if (days === 0) return <Badge variant="destructive" className="ml-1.5">due today</Badge>;
-  if (days === 1) return <Badge variant="warning" className="ml-1.5">due tomorrow</Badge>;
+  if (days < 0) return <Badge variant="destructive" className="ml-1.5">Overdue {Math.abs(days)}d</Badge>;
+  if (days === 0) return <Badge variant="destructive" className="ml-1.5">Due today</Badge>;
+  if (days === 1) return <Badge variant="warning" className="ml-1.5">Due tomorrow</Badge>;
   if (days <= 7) return <Badge variant="warning" className="ml-1.5">in {days}d</Badge>;
   return <Badge variant="info" className="ml-1.5">in {days}d</Badge>;
 }

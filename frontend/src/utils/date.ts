@@ -26,6 +26,22 @@ export function nowInAppTz(): string {
 }
 
 /**
+ * Wall-clock parts in the app timezone (Manila), for day-boundary logic:
+ * `date` is `yyyy-MM-dd` and `time` is `HH:mm`. Comparisons against
+ * DATE/TIME columns (counselling stores Manila wall time) must use these,
+ * never the host clock — the raw `new Date()` day boundary is wrong for
+ * anyone east of Manila.
+ */
+export function appNowParts(): { date: string; time: string } {
+  const tz = useAuthStore.getState().timezone ?? DEFAULT_TZ;
+  const now = new Date();
+  return {
+    date: formatInTimeZone(now, tz, 'yyyy-MM-dd'),
+    time: formatInTimeZone(now, tz, 'HH:mm'),
+  };
+}
+
+/**
  * Single display contract for date-times surfaced to end-users
  * (panel revision: non-IT staff found `yyyy-MM-dd HH:mm` unreadable).
  * Default renders in the app's timezone as e.g. `Aug 1, 2026 · 6:37 AM`

@@ -16,7 +16,7 @@
  *     empty backlog shows no dot at all.
  *
  * Colour matches {@see NotificationBell}: `--destructive`, which resolves
- * to a red in both themes. The numeral uses `tabular-nums text-[10px]` so it
+ * to a red in both themes. The numeral uses `tabular-nums text-[0.625rem]` so it
  * stays legible inside a 16px chip.
  */
 import { cn } from '@/lib/utils';
@@ -47,7 +47,7 @@ export function NotificationDot({
   return (
     <span
       className={cn(
-        'grid h-4 min-w-4 shrink-0 place-items-center rounded-full bg-destructive px-1 tabular-nums text-[10px] font-semibold text-destructive-foreground',
+        'grid h-4 min-w-4 shrink-0 place-items-center rounded-full bg-destructive px-1 tabular-nums text-[0.625rem] font-semibold text-destructive-foreground',
         className,
       )}
       role="img"

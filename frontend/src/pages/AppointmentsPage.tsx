@@ -2,21 +2,24 @@
  * AppointmentsPage — clinic scheduling grid (Phase 9, extended).
  *
  * Keyset-paginated appointment table (shadcn Table) with status
- * badges, lifecycle actions (Complete / Cancel), and a CRUD dialog
- * (Schedule / Edit / View).
+ * badges, lifecycle actions (Confirm / Check in / Complete / Cancel /
+ * Mark no-show), and a CRUD dialog (Schedule / Edit / View).
  *
- * Panel revision (August 2026): today's `scheduled` appointments
- * auto-check-in on the first staff read of the queue / appointment
- * list, so the inline "Check in" button was removed. "Mark no-show"
- * moved off the appointment dropdown and onto the encounter action
- * menu inside the clinic queue tab, where it cascades the encounter
- * + queue + appointment atomically.
+ * Chronological book (2026-09-25 staff meeting): the list is ordered
+ * by SCHEDULED time — the earliest upcoming appointment is at the top
+ * of the Upcoming tab — never by booking time, and the queue number is
+ * only an identifier. The tabs are server-scoped slices of the book
+ * (`scope=` + `provider=` on the appointments endpoint), so each tab
+ * refetches its own page; the badge on "Needs action" counts unapproved
+ * portal bookings regardless of the active tab.
  *
- * Filters: All / Upcoming / Past tabs + a status dropdown for finer
- * filtering. The status filter pushes a `?status=` query param to
- * the backend; the tabs are client-side (derive from the loaded
- * rows' status + scheduled_at) so navigating Upcoming/Past does
- * not refetch the list.
+ * Tabs: Upcoming (default, approved) / Needs action (unapproved portal
+ * bookings: `scheduled`, no provider — confirming here assigns the
+ * acting staff member and moves the row into Upcoming) / Past / All.
+ * A status dropdown refines further via `?status=`.
+ *
+ * Rows past their slot, or completed/cancelled/no-show, render grayed;
+ * active rows stay on the card surface.
  *
  * Names: the table shows the patient school_id (with a hover
  * tooltip carrying the cached student name when we have it) and
@@ -34,17 +37,20 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  ClipboardList,
   Eye,
   History,
   Inbox,
   Loader2,
+  LogIn,
   Pencil,
   QrCode,
   Search,
   Stethoscope,
+  UserX,
   X,
 } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import { AppointmentQrDialog } from '@/components/AppointmentQrDialog';
@@ -98,9 +104,12 @@ import {
   useAppointment,
   useAppointments,
   useAppointmentSearch,
+  useNeedsActionAppointments,
   useScheduleAppointment,
   useTransitionAppointment,
   useUpdateAppointment,
+  type AppointmentProviderFilter,
+  type AppointmentScope,
 } from '@/hooks/useAppointments';
 import { useEmployees } from '@/hooks/usePatients';
 import {
@@ -114,14 +123,36 @@ import { appDateTimeToUtcSql, fmtUtcToApp, parseUtc, utcSqlToAppParts } from '@/
 import { statusLabel } from '@/utils/status';
 import { titleCase } from '@/lib/utils';
 
-const STATUS_VARIANT: Record<Appointment['status'], 'info' | 'success' | 'warning' | 'destructive'> = {
+/**
+ * Status → badge tone. Shared semantics with the counselling board
+ * (`components/counselling/constants.ts`): `scheduled` is the *unapproved*
+ * waiting state (info), `confirmed` the approved one (muted secondary) —
+ * the two modules used to contradict each other here.
+ */
+const STATUS_VARIANT: Record<Appointment['status'], 'info' | 'success' | 'warning' | 'destructive' | 'secondary'> = {
   scheduled: 'info',
-  confirmed: 'info',
+  confirmed: 'secondary',
   checked_in: 'warning',
   completed: 'success',
   cancelled: 'destructive',
   no_show: 'destructive',
 };
+
+/**
+ * Row treatment per the 2026-09-25 meeting: a row whose scheduled slot
+ * has already passed — or that is finished/cancelled/no-show — renders
+ * grayed; current and upcoming rows stay on the card surface. Deriving
+ * "past" from the parsed instant (not a raw date string) keeps the
+ * Manila boundary honest. `checked_in` stays active even after the slot
+ * time: the patient is in the room.
+ */
+function isRowMuted(a: Appointment, now: number): boolean {
+  if (a.status === 'completed' || a.status === 'cancelled' || a.status === 'no_show') return true;
+  if (a.status === 'scheduled' || a.status === 'confirmed') {
+    return parseUtc(a.scheduled_at).getTime() < now;
+  }
+  return false;
+}
 
 const STATUS_OPTIONS: ReadonlyArray<{ value: Appointment['status'] | 'all'; label: string }> = [
   { value: 'all',        label: 'All statuses' },
@@ -313,7 +344,7 @@ function ScheduleDialog({
             />
           </div>
           {schedDate !== '' && schedTime !== '' && (
-            <p className="text-[11px] text-muted-foreground">
+            <p className="text-[0.6875rem] text-muted-foreground">
               Stored as {appDateTimeToUtcSql(schedDate, schedTime)} UTC.
             </p>
           )}
@@ -377,11 +408,11 @@ function AppointmentDetailDialog({ appointmentId, onClose }: { appointmentId: nu
                 <span>
                   {a.patient_name}
                   {a.patient_kind !== undefined && a.patient_kind !== null ? (
-                    <Badge variant="outline" className="ml-2 align-middle text-[10px]">
+                    <Badge variant="outline" className="ml-2 align-middle text-[0.625rem]">
                       {a.patient_kind}
                     </Badge>
                   ) : null}
-                  <span className="block tabular-nums text-[10px] text-muted-foreground">
+                  <span className="block tabular-nums text-[0.625rem] text-muted-foreground">
                     {a.patient_school_id}
                   </span>
                 </span>
@@ -445,21 +476,33 @@ interface AppointmentActionProps {
 /**
  * AppointmentActions — the lifecycle button cluster, shared by the
  * desktop table row and the mobile card so both surfaces stay in sync.
+ *
+ * Manual lifecycle (2026-09-25 staff meeting): nothing advances an
+ * appointment on a timer any more — staff confirm the booking, check
+ * the patient in, and mark a missed visit no-show themselves.
  */
 function AppointmentActions({ a, onView, onEdit, onQr, transition, onConfirm, transitionPending, canEdit }: AppointmentActionProps) {
   return (
     <>
-      {/* Panel revision (August 2026): today's `scheduled` appointments
-          are auto-checked-in on the first staff read of the queue /
-          appointment list, so the inline "Check in" button is gone.
-          For `checked_in`, the only meaningful single-click advance
-          is to "Complete" — that's where staff land after they wrap
-          up the encounter. */}
-      {a.status === 'checked_in' && (
-        <Button className="min-h-11" size="sm" variant="secondary" disabled={transitionPending} onClick={() => transition({ id: a.id, status: 'completed' })}>
-          <Check /> Complete
+      {/* Approval step: confirming a portal booking assigns the acting
+          staff member and moves the row out of "Needs action". */}
+      {a.status === 'scheduled' && (
+        <Button className="min-h-11" size="sm" variant="secondary" disabled={transitionPending} onClick={() => transition({ id: a.id, status: 'confirmed' })}>
+          <Check /> Confirm
         </Button>
       )}
+      {/* Check in hands the patient to the clinic flow (opens the
+          encounter + queue entry server-side). The kiosk does the same
+          for self-service. */}
+      {(a.status === 'scheduled' || a.status === 'confirmed') && (
+        <Button className="min-h-11" size="sm" variant="secondary" disabled={transitionPending} onClick={() => transition({ id: a.id, status: 'checked_in' })}>
+          <LogIn /> Check in
+        </Button>
+      )}
+      {/* A checked-in appointment has no Complete button here on
+          purpose (2026-09-25 meeting): the visit completes through its
+          encounter — assessment first, then close — and the encounter
+          cascade marks the appointment. Follow the Visit # link. */}
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button className="min-h-11" size="sm" variant="outline" aria-label={`Actions for appointment #${a.id}`}>
@@ -478,10 +521,7 @@ function AppointmentActions({ a, onView, onEdit, onQr, transition, onConfirm, tr
               <Pencil /> Edit appointment
             </DropdownMenuItem>
           )}
-          {/* Panel revision (August 2026): "Mark no-show" moved off
-              the appointment surface and onto the encounter row in
-              the queue tab. From here it's only ever a cancel. */}
-          {(a.status === 'scheduled' || a.status === 'checked_in') && (
+          {(a.status === 'scheduled' || a.status === 'confirmed' || a.status === 'checked_in') && (
             <DropdownMenuItem
               className="min-h-11 text-destructive focus:text-destructive"
               disabled={transitionPending}
@@ -493,6 +533,21 @@ function AppointmentActions({ a, onView, onEdit, onQr, transition, onConfirm, tr
               })}
             >
               <X /> Cancel appointment
+            </DropdownMenuItem>
+          )}
+          {/* Missed visit — recorded by staff, never by a timer. */}
+          {(a.status === 'scheduled' || a.status === 'confirmed') && (
+            <DropdownMenuItem
+              className="min-h-11 text-destructive focus:text-destructive"
+              disabled={transitionPending}
+              onSelect={() => onConfirm({
+                title: `Mark appointment #${a.id} as no-show?`,
+                description: 'Records that the patient did not show up. This cannot be undone.',
+                confirmLabel: 'Mark no-show',
+                run: () => transition({ id: a.id, status: 'no_show' }),
+              })}
+            >
+              <UserX /> Mark no-show
             </DropdownMenuItem>
           )}
         </DropdownMenuContent>
@@ -510,7 +565,10 @@ function AppointmentCard(props: AppointmentActionProps & { providerName: string 
     : providerName;
 
   return (
-    <MobileCard aria-label={`Appointment ${a.id}`}>
+    <MobileCard
+      aria-label={`Appointment ${a.id}`}
+      className={isRowMuted(a, Date.now()) ? 'bg-muted/40 text-muted-foreground' : undefined}
+    >
       <div className="mb-1 flex items-center justify-between gap-2">
         <span className="tabular-nums text-xs text-muted-foreground">#{a.id}</span>
         <Badge variant={STATUS_VARIANT[a.status]}>{statusLabel(a.status)}</Badge>
@@ -519,7 +577,7 @@ function AppointmentCard(props: AppointmentActionProps & { providerName: string 
         {a.patient_name !== undefined && a.patient_name !== null ? a.patient_name : a.patient_school_id}
       </p>
       {a.patient_name !== undefined && a.patient_name !== null && (
-        <p className="tabular-nums text-[10px] text-muted-foreground">
+        <p className="tabular-nums text-[0.625rem] text-muted-foreground">
           <PatientIdCell id={a.patient_school_id} name={a.patient_name} />
           {a.patient_kind !== undefined && a.patient_kind !== null ? ` · ${a.patient_kind}` : ''}
         </p>
@@ -578,14 +636,18 @@ function AppointmentRow({
     ? (a.provider_name ?? providerName)
     : providerName;
 
+  // Gray for past-slot / finished rows (2026-09-25 meeting) — active
+  // rows stay on the card surface.
+  const muted = isRowMuted(a, Date.now());
+
   return (
-    <TableRow>
+    <TableRow className={muted ? 'bg-muted/40 text-muted-foreground' : undefined}>
       <TableCell className="px-3 tabular-nums text-xs">#{a.id}</TableCell>
       <TableCell className="px-3">
         {a.patient_name !== undefined && a.patient_name !== null ? (
           <div className="leading-tight">
             <p className="text-sm font-medium">{a.patient_name}</p>
-            <p className="tabular-nums text-[10px] text-muted-foreground">
+            <p className="tabular-nums text-[0.625rem] text-muted-foreground">
               <PatientIdCell id={a.patient_school_id} name={a.patient_name} />
               {a.patient_kind !== undefined && a.patient_kind !== null ? ` · ${a.patient_kind}` : ''}
             </p>
@@ -632,12 +694,25 @@ function AppointmentRow({
   );
 }
 
+/**
+ * Tab → server slice. `upcoming` splits by approval state: assigned rows
+ * are the confirmed schedule; unassigned ones (portal bookings awaiting
+ * approval) are the "Needs action" queue. `past` and `all` carry no
+ * approval filter. Unknown `?tab=` values fall back to Upcoming.
+ */
+const TAB_PARAMS: Record<string, { scope: AppointmentScope; provider: AppointmentProviderFilter }> = {
+  upcoming: { scope: 'upcoming', provider: 'assigned' },
+  'needs-action': { scope: 'upcoming', provider: 'unassigned' },
+  past: { scope: 'past', provider: 'any' },
+  all: { scope: 'all', provider: 'any' },
+};
+
 export default function AppointmentsPage() {
   const [cursor, setCursor] = useState<string | null>(null);
   const [history, setHistory] = useState<Array<string | null>>([null]);
   // Filters live in the URL (PRODUCT principle 5): ?tab=, ?status= and
   // the debounced ?q= survive a refresh and can be shared as links.
-  const [tab, setTab] = useTabParam('all');
+  const [tab, setTab] = useTabParam('upcoming');
   const [statusFilter, setStatusFilter] = useUrlFilter('status', { default: 'all' });
   // Scheduling and editing need `clinic.appointments.write` — read-only
   // holders previously saw (and 403'd on) every write affordance
@@ -654,18 +729,31 @@ export default function AppointmentsPage() {
   const [debouncedSearch, setSearch, searchDraft] = useUrlFilter('q', { debounceMs: 300 });
   const searching = debouncedSearch.trim().length >= 2;
 
-  // Status filter pushes a `?status=` query param to the backend;
-  // the tabs are client-side over the loaded rows. This keeps the
-  // list stable as the user clicks between Upcoming / Past without
-  // a refetch, while a status change does refetch the canonical list.
+  // Status filter pushes a `?status=` query param to the backend and
+  // composes with the tab's scope; the tab switch itself refetches
+  // because each tab is a different server-side slice of the book.
+  const { scope, provider } = TAB_PARAMS[tab] ?? TAB_PARAMS.upcoming!;
   const list = useAppointments(
     cursor,
     25,
     statusFilter === 'all' ? null : (statusFilter as Appointment['status']),
+    scope,
+    provider,
   );
+  // Needs-action tally for the tab badge — polled independently so an
+  // approval waiting on the desk is visible from every tab. Capped at
+  // the 25-row page size, like every other count on the page.
+  const needsAction = useNeedsActionAppointments();
   const searchQuery = useAppointmentSearch(debouncedSearch, statusFilter as Appointment['status'] | 'all');
   const transition = useTransitionAppointment();
   const providerName = useProviderNameLookup();
+
+  // Reset pagination whenever the tab (data slice) changes — cursors
+  // are only meaningful within the slice that issued them.
+  useEffect(() => {
+    setCursor(null);
+    setHistory([null]);
+  }, [tab]);
 
   function nextPage() {
     if (list.data?.next !== null && list.data?.next !== undefined) {
@@ -681,10 +769,7 @@ export default function AppointmentsPage() {
     setCursor(next[next.length - 1] ?? null);
   }
 
-  // Derive tab buckets client-side. Tabs do NOT refetch.
-  // `now` is captured per render; the memo deps include it so the
-  // buckets refresh when the rows refresh (poll cadence dominates).
-  const now = Date.now();
+  // The rows ARE the active tab's slice — no client-side bucketing.
   const rows = useMemo<Appointment[]>(
     () => (searching ? (searchQuery.data ?? []) : (list.data?.data ?? [])),
     [searching, searchQuery.data, list.data],
@@ -694,35 +779,15 @@ export default function AppointmentsPage() {
   const loading = searching ? searchQuery.isLoading : list.isLoading;
   const errored = searching ? searchQuery.isError : list.isError;
   const retry = () => void (searching ? searchQuery.refetch() : list.refetch());
-  // `scheduled_at` is a zone-less UTC MySQL string; `Date.parse` would
-  // read it as LOCAL time and skew every bucket by the tz offset
-  // (8h in Manila, NaN on Safari). Parse to the real instant first.
-  const openAndUpcoming = (a: Appointment): boolean =>
-    (a.status === 'scheduled' || a.status === 'checked_in') && parseUtc(a.scheduled_at).getTime() >= now;
-  const counts = useMemo(() => {
-    let upcoming = 0;
-    let past = 0;
-    for (const a of rows) {
-      if (openAndUpcoming(a)) upcoming += 1;
-      else past += 1;
-    }
-    return { all: rows.length, upcoming, past };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- openAndUpcoming closes over `now`
-  }, [rows, now]);
-  const visibleRows = useMemo(() => {
-    if (tab === 'all') return rows;
-    if (tab === 'upcoming') return rows.filter(openAndUpcoming);
-    return rows.filter((a) => !openAndUpcoming(a));
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- openAndUpcoming closes over `now`
-  }, [rows, tab, now]);
+  const visibleRows = rows;
 
-  // Filter buckets with live counts — client-side views of the loaded
-  // rows, so the counts update as data arrives. Zero counts hide the
-  // badge (CountBadge suppression), matching the other tabs.
+  // Server-scoped tabs; the Needs-action badge counts unapproved portal
+  // bookings regardless of the active tab (zero hides the badge).
   const tabs: readonly TabSection[] = [
-    { value: 'all', label: 'All', icon: Inbox, badge: <CountBadge count={counts.all} /> },
-    { value: 'upcoming', label: 'Upcoming', icon: CalendarClock, badge: <CountBadge count={counts.upcoming} /> },
-    { value: 'past', label: 'Past', icon: History, badge: <CountBadge count={counts.past} /> },
+    { value: 'upcoming', label: 'Upcoming', icon: CalendarClock },
+    { value: 'needs-action', label: 'Needs action', icon: ClipboardList, badge: <CountBadge count={needsAction.data?.length ?? 0} /> },
+    { value: 'past', label: 'Past', icon: History },
+    { value: 'all', label: 'All', icon: Inbox },
   ];
 
   return (
@@ -821,7 +886,7 @@ export default function AppointmentsPage() {
                     title: searching ? 'No matches.' : 'No appointments in this tab.',
                     description: 'Try a different search term, status, or tab.',
                   }}
-                  hasFilters={searching || tab !== 'all'}
+                  hasFilters={searching || tab !== 'upcoming'}
                 />
                 {visibleRows.map((a) => (
                   <AppointmentRow

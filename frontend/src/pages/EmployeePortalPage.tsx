@@ -24,7 +24,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { PageHeader } from '@/components/PageHeader';
-import { PortalCardArt } from '@/components/PortalCardArt';
+import { PortalProfileCard } from '@/components/PortalProfileCard';
 import { TableStateBlock } from '@/components/TableStates';
 import { QueryErrorState } from '@/components/QueryErrorState';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -97,44 +97,32 @@ export default function EmployeePortalPage() {
         <>
           {/* Profile & Clinic Digital Pass */}
           <div className="grid max-w-96 gap-6 xl:max-w-none xl:grid-cols-[minmax(0,24rem)_minmax(0,1fr)]">
-            <Card className="relative aspect-[1.586] w-full self-start overflow-hidden border-primary bg-primary text-white shadow-[0_1px_2px_rgba(0,0,0,0.06),0_18px_40px_-12px_rgba(0,0,0,0.28)] dark:border-border dark:bg-card dark:text-card-foreground">
-              <PortalCardArt />
-              <div className="relative flex h-full flex-col p-5">
-                <p className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wider text-white/70 dark:text-muted-foreground">
-                  <IdCard className="size-3.5" aria-hidden /> Employee Profile
-                </p>
-                <div className="mt-3 min-w-0">
-                  <p className="truncate text-base font-semibold leading-tight text-white dark:text-foreground">
-                    {profile.data.first_name} {profile.data.middle_name !== null ? `${profile.data.middle_name} ` : ''}
-                    {profile.data.last_name}
-                  </p>
-                  <p className="mt-0.5 tabular-nums text-xs text-white/70 dark:text-muted-foreground">
-                    ID: {profile.data.employee_number}
-                  </p>
-                </div>
-
-                <dl className="mt-auto grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1.5 text-xs">
-                  <dt className="text-white/60 dark:text-muted-foreground">Email</dt>
-                  <dd className="truncate text-white dark:text-foreground">
-                    {me.data?.email ?? <span className="text-white/60 dark:text-muted-foreground">N/A</span>}
-                  </dd>
-                  <dt className="text-white/60 dark:text-muted-foreground">Department</dt>
-                  <dd className="truncate font-medium">{profile.data.department ?? <span className="text-white/60 dark:text-muted-foreground">N/A</span>}</dd>
-                  <dt className="text-white/60 dark:text-muted-foreground">Position</dt>
-                  <dd className="truncate">{profile.data.position ?? <span className="text-white/60 dark:text-muted-foreground">N/A</span>}</dd>
-                  <dt className="text-white/60 dark:text-muted-foreground">Status</dt>
-                  <dd className="capitalize">{(profile.data.employment_status ?? 'active').replace('_', ' ')}</dd>
-                  <dt className="text-white/60 dark:text-muted-foreground">Type</dt>
-                  <dd>
-                    {profile.data.is_teaching ? (
-                      <Badge variant="outline">Teaching</Badge>
-                    ) : (
-                      <Badge variant="secondary">Non-teaching</Badge>
-                    )}
-                  </dd>
-                </dl>
-              </div>
-            </Card>
+            <PortalProfileCard
+              caption="Employee Profile"
+              name={`${profile.data.first_name} ${profile.data.middle_name !== null ? `${profile.data.middle_name} ` : ''}${profile.data.last_name}`}
+              idValue={profile.data.employee_number}
+            >
+              <dl className="mt-auto grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1.5 text-xs">
+                <dt className="text-white/60 dark:text-muted-foreground">Email</dt>
+                <dd className="truncate text-white dark:text-foreground">
+                  {me.data?.email ?? <span className="text-white/60 dark:text-muted-foreground">N/A</span>}
+                </dd>
+                <dt className="text-white/60 dark:text-muted-foreground">Department</dt>
+                <dd className="truncate font-medium">{profile.data.department ?? <span className="text-white/60 dark:text-muted-foreground">N/A</span>}</dd>
+                <dt className="text-white/60 dark:text-muted-foreground">Position</dt>
+                <dd className="truncate">{profile.data.position ?? <span className="text-white/60 dark:text-muted-foreground">N/A</span>}</dd>
+                <dt className="text-white/60 dark:text-muted-foreground">Status</dt>
+                <dd className="capitalize">{(profile.data.employment_status ?? 'active').replace('_', ' ')}</dd>
+                <dt className="text-white/60 dark:text-muted-foreground">Type</dt>
+                <dd>
+                  {profile.data.is_teaching ? (
+                    <Badge variant="outline">Teaching</Badge>
+                  ) : (
+                    <Badge variant="secondary">Non-teaching</Badge>
+                  )}
+                </dd>
+              </dl>
+            </PortalProfileCard>
 
             <Card>
               <CardHeader>
@@ -303,7 +291,7 @@ export default function EmployeePortalPage() {
                         <div className="flex-1">
                           <p className="font-medium">{notificationLabel(n.template_code, n.context)}</p>
                           {notificationDetail(n.template_code, n.context) !== null && (
-                            <p className="tabular-nums text-[10px] text-muted-foreground">
+                            <p className="tabular-nums text-[0.625rem] text-muted-foreground">
                               {notificationDetail(n.template_code, n.context)}
                             </p>
                           )}
