@@ -44,7 +44,7 @@ cp .env.example .env
 composer install
 php spark migrate --all
 php spark db:seed App\\Database\\Seeds\\PermissionsAndGroupsSeeder
-php spark db:seed App\\Database\\Seeds\\DevUserSeeder      # admin@synapse.dev, dev only
+php spark db:seed App\\Database\\Seeds\\DevUserSeeder      # 13 dev accounts (one per role), dev only
 php spark serve --port 8090
 
 # 3. Frontend (Vite proxies /api -> :8090)

@@ -51,7 +51,7 @@ php spark synapse:smoke
 php spark serve --port 8090
 ```
 
-`DevUserSeeder` creates `admin@synapse.dev` / `DevPassw0rd!` (username `synapse-admin`) and **refuses to run when `ENVIRONMENT=production`**. Always seed `PermissionsAndGroupsSeeder` first — it creates the groups and permission codes everything else depends on, and it's also the feature-suite seed. The remaining data seeders are reference/catalog data: `FacilitiesSeeder` (BMG waste categories + drums) and `InventoryItemsSeeder` (clinic inventory + equipment). The demo student/employee dataset was removed 2026-09-16 — real accounts JIT-provision from the university MIS on first ID-number login (see [`../CREDENTIALS.md`](../CREDENTIALS.md)), and older dev databases can purge leftover demo rows with `php spark synapse:purge-demo`.
+`DevUserSeeder` creates the 13-account dev roster — one account per role in `Config\AuthGroups`, password `DevPassw0rd!` (see [`../CREDENTIALS.md`](../CREDENTIALS.md) for the matrix) — and **refuses to run when `ENVIRONMENT=production`**. Always seed `PermissionsAndGroupsSeeder` first — it creates the groups and permission codes everything else depends on, and it's also the feature-suite seed. The remaining data seeders are reference/catalog data: `FacilitiesSeeder` (BMG waste categories + drums) and `InventoryItemsSeeder` (clinic inventory + equipment). The demo student/employee dataset was removed 2026-09-16 — real accounts JIT-provision from the university MIS on first ID-number login (see [`../CREDENTIALS.md`](../CREDENTIALS.md)), and older dev databases can purge leftover demo rows with `php spark synapse:purge-demo`.
 
 ## Environment
 

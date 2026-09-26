@@ -12,11 +12,36 @@
 
 ## 1. Dev machine accounts (`DevUserSeeder`)
 
-| Email | Username | Groups | Password |
-|---|---|---|---|
-| `admin@synapse.dev` | `synapse-admin` | `superadmin` + `clinic_admin` | `DevPassw0rd!` |
-| `nurse@synapse.dev` | `synapse-nurse` | `clinic_staff` | `DevPassw0rd!` |
-| `report_viewer@synapse.dev` | `synapse-report-viewer` | `report_viewer` | `DevPassw0rd!` |
+One account per role — 13 accounts mirroring the 13-role catalog in
+`backend/app/Config/AuthGroups.php`. Every account uses the same dev
+password, `DevPassw0rd!` (override with `SYNAPSE_DEV_PASSWORD`).
+
+| Email | Username | Group (role) |
+|---|---|---|
+| `admin@synapse.dev` | `synapse-admin` | `superadmin` — Platform Owner |
+| `clinic_admin@synapse.dev` | `synapse-clinic-admin` | `clinic_admin` |
+| `nurse@synapse.dev` | `synapse-nurse` | `clinic_staff` |
+| `kiosk@synapse.dev` | `synapse-kiosk` | `kiosk` |
+| `guidance_admin@synapse.dev` | `synapse-guidance-admin` | `guidance_admin` |
+| `supervisor@synapse.dev` | `synapse-supervisor` | `guidance_supervisor` |
+| `counsellor@synapse.dev` | `synapse-counsellor` | `counsellor` |
+| `bmg_admin@synapse.dev` | `synapse-bmg-admin` | `bmg_admin` |
+| `bmg_op@synapse.dev` | `synapse-bmg-op` | `facilities_op` |
+| `audit@synapse.dev` | `synapse-audit` | `audit_reader` |
+| `report_viewer@synapse.dev` | `synapse-report-viewer` | `report_viewer` |
+| `student@synapse.dev` | `synapse-student` | `student` |
+| `employee@synapse.dev` | `synapse-employee` | `employee` |
+
+The seeder is self-converging: re-running adopts existing identities and
+prunes memberships the roster no longer maps (e.g. the `clinic_admin`
+group the former dual-group `admin@synapse.dev` used to carry).
+
+Notes:
+
+- The `student`/`employee` accounts are self-scoped portal logins; they
+  are not linked to a `patients_students`/employee record, so their
+  self-service surfaces render empty. Good for RBAC/UI testing only.
+- The `kiosk` account holds check-in submission only, by design.
 
 Seed order matters — groups/permissions first:
 
