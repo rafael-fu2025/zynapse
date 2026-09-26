@@ -41,19 +41,15 @@
  * explicit request for that session, so it is not held to the on-going-only
  * rule that governs a row click). When no row matches, the Queue renders the
  * session in a panel above the board rather than dead-ending the link.
- *
- * Every remaining section carries a red notification dot when it has pending
- * work — a counted dot where a backlog can be tallied, a bare dot where the
- * signal is not a number.
+ * The four sections render as an accordion under "Guidance Center" in the
+ * main sidebar (2026-09-27 trial) instead of an in-content tab strip — the
+ * `?tab=` URL contract is unchanged, so existing deep links keep working.
  *
  * Subcomponents, dialogs, and workspace live under `src/components/counselling/`.
  */
-import { BellRing, CalendarCheck, CalendarDays, ListOrdered } from 'lucide-react';
 import { useEffect } from 'react';
 import { Navigate, useSearchParams } from 'react-router-dom';
-import { NotificationDot } from '@/components/NotificationDot';
 import { PageHeader } from '@/components/PageHeader';
-import { TabSections, type TabSection } from '@/components/TabSections';
 import { Tabs, TabsContent } from '@/components/ui/tabs';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import {
@@ -62,13 +58,7 @@ import {
   GuidanceQueueTab,
   SchedulingTab,
 } from '@/components/counselling/tabs';
-import { useGuidanceFollowups } from '@/hooks/useGuidanceFollowups';
-import { useGuidanceQueueToday } from '@/hooks/useQueue';
-import { useAppointments, useAvailability } from '@/hooks/useSchedule';
 import { hasPermission, useAuthStore } from '@/store/auth';
-
-/** Queue entry states that count as work still in front of the desk. */
-const QUEUE_OPEN_STATUSES = ['waiting', 'called', 'in_session'];
 
 /**
  * `?tab=` values that used to select one of the four content surfaces which now
@@ -87,12 +77,6 @@ const MOVED_TABS: Readonly<Record<string, string>> = {
 export default function CounsellingPage() {
   const [params, setParams] = useSearchParams();
   const canReadQueue = useAuthStore((state) => hasPermission(state, 'counselling.queue.read'));
-  const canReadSchedule = useAuthStore((state) => hasPermission(state, 'counselling.schedule.read'));
-  const canMutateSchedule = useAuthStore(
-    (state) =>
-      hasPermission(state, 'counselling.schedule.manage') ||
-      hasPermission(state, 'counselling.schedule.team_manage'),
-  );
   const canSeeFollowups = useAuthStore((state) => hasPermission(state, 'counselling.responses.read_any'));
 
   const allowedTabs = [
@@ -131,62 +115,6 @@ export default function CounsellingPage() {
   // An old `?tab=surveys`-style link redirects to the surface's own route
   // rather than silently landing on the default section.
   const movedTo = MOVED_TABS[requestedTab] ?? null;
-
-  const queue = useGuidanceQueueToday(canReadQueue);
-  const openQueue = queue.data?.filter((entry) => QUEUE_OPEN_STATUSES.includes(entry.status)).length ?? 0;
-  // Lifted unfiltered caseload for the tab dot — mirrors the sidebar
-  // counter's tenant-wide view, independent of the tab's status/mine
-  // filters (same query key, so the tab itself dedupes into this cache).
-  const followups = useGuidanceFollowups('all', false, canSeeFollowups);
-  const openFollowups =
-    followups.data?.filter((r) => r.status === 'new' || r.status === 'in_review').length ?? 0;
-  // Same query key the Queue board's Today bucket reads, so an open board
-  // shares this request rather than issuing a second one.
-  const todayAppointments = useAppointments({ scope: 'today', enabled: canReadSchedule });
-  const todayCount = todayAppointments.data?.data.length ?? 0;
-  const availability = useAvailability({ enabled: canReadSchedule && canMutateSchedule });
-  // A desk that cannot accept bookings is the one thing Scheduling can be
-  // "notified" about; it has no numeric backlog of its own.
-  const needsAvailability = canMutateSchedule && availability.data !== undefined && availability.data.length === 0;
-
-  // Section nav — permission-filtered, order matches the sidebar. Indicators
-  // mirror the sidebar counters so the module number is traceable to the tab it
-  // belongs to; each is a red dot (see NotificationDot).
-  //
-  // Flat since 2026-09-24: this strip used to hold three named clusters, and the
-  // four content surfaces that made up two of them now live in the sidebar. One
-  // group over every remaining section would say nothing, so no `group` is
-  // passed and `TabSections` renders the plain strip the other pages use.
-  const tabs: readonly TabSection[] = [
-    ...(canReadQueue ? [{
-      value: 'queue',
-      label: 'Queue',
-      icon: ListOrdered,
-      notify: <NotificationDot count={openQueue} label={`${openQueue} Guidance patients in play today`} />,
-    }] : []),
-    {
-      value: 'appointments',
-      label: 'Appointments',
-      icon: CalendarCheck,
-      notify: (
-        <NotificationDot count={todayCount} label={`${todayCount} Guidance appointments today`} />
-      ),
-    },
-    ...(canSeeFollowups ? [{
-      value: 'followups',
-      label: 'Follow-ups',
-      icon: BellRing,
-      notify: <NotificationDot count={openFollowups} label={`${openFollowups} open follow-ups`} />,
-    }] : []),
-    {
-      value: 'scheduling',
-      label: 'Scheduling',
-      icon: CalendarDays,
-      ...(needsAvailability
-        ? { notify: <NotificationDot label="No availability windows configured" /> }
-        : {}),
-    },
-  ];
 
   useEffect(() => {
     // A redirect is in flight for a moved tab: rewriting the URL here would
@@ -252,31 +180,32 @@ export default function CounsellingPage() {
             description="Session notes are encrypted at rest (AES-256-GCM). Bookings must fall inside an availability window; repeated no-shows follow the three-strike policy."
           />
 
-          <TabSections tabs={tabs} ariaLabel="Counselling sections">
-            {canReadQueue && (
-              <TabsContent value="queue">
-                <GuidanceQueueTab
-                  selectedSessionId={selectedId}
-                  onCloseSession={() => selectSession(null)}
-                  onViewAllAppointments={() => setTab('appointments')}
-                />
-              </TabsContent>
-            )}
-
-            <TabsContent value="appointments">
-              <AppointmentsTab />
+          {/* Section navigation lives in the main sidebar as an accordion
+              under Guidance Center (2026-09-27 trial) — this page renders
+              only the selected section, driven by the same ?tab= URL. */}
+          {canReadQueue && (
+            <TabsContent value="queue">
+              <GuidanceQueueTab
+                selectedSessionId={selectedId}
+                onCloseSession={() => selectSession(null)}
+                onViewAllAppointments={() => setTab('appointments')}
+              />
             </TabsContent>
+          )}
 
-            {canSeeFollowups && (
-              <TabsContent value="followups">
-                <FollowupsTab />
-              </TabsContent>
-            )}
+          <TabsContent value="appointments">
+            <AppointmentsTab />
+          </TabsContent>
 
-            <TabsContent value="scheduling">
-              <SchedulingTab />
+          {canSeeFollowups && (
+            <TabsContent value="followups">
+              <FollowupsTab />
             </TabsContent>
-          </TabSections>
+          )}
+
+          <TabsContent value="scheduling">
+            <SchedulingTab />
+          </TabsContent>
         </Tabs>
       </main>
     </TooltipProvider>

@@ -16,7 +16,7 @@
 import { expect, test } from '@playwright/test';
 import { signInMocked, type MockSession } from './helpers/auth';
 
-/** A guidance administrator: the five codes the Guidance Center group reads. */
+/** A guidance administrator: the six codes the Guidance Center group reads. */
 const SESSION: MockSession = {
   id: 9001,
   email: 'guidance-admin@synapse.test',
@@ -30,6 +30,7 @@ const SESSION: MockSession = {
     'counselling.surveys.manage',
     'counselling.announcements.manage',
     'counselling.services.manage',
+    'counselling.responses.read_any',
   ],
 };
 
@@ -56,7 +57,10 @@ test('the Guidance Center group carries the four moved surfaces', async ({ page 
   const sidebar = page.getByRole('navigation', { name: /primary/i });
   await expect(sidebar).toBeVisible({ timeout: 20_000 });
 
-  for (const label of ['Counselling', 'Surveys', 'Announcements', 'Analytics', 'Services']) {
+  // Counselling is an accordion trigger now (button, not a link); the four
+  // moved surfaces remain flat link rows beside it.
+  await expect(sidebar.getByRole('button', { name: 'Counselling' })).toBeVisible();
+  for (const label of ['Surveys', 'Announcements', 'Analytics', 'Services']) {
     await expect(sidebar.getByRole('link', { name: label, exact: true })).toBeVisible();
   }
 });
@@ -86,9 +90,41 @@ test('an old ?tab= link redirects to the route that replaced it', async ({ page 
 
 test('the sections that did not move still resolve from the URL', async ({ page }) => {
   await page.goto('/counselling?tab=queue');
+  const sidebar = page.getByRole('navigation', { name: /primary/i });
 
   // The tab param survives (it is not the default for a queue-capable user, so
-  // it must not be stripped) and the Queue section is the selected one.
+  // it must not be stripped). Navigation now lives in the sidebar accordion —
+  // the Queue child is the active one and the Queue board is what renders.
   await expect(page).toHaveURL(/tab=queue/);
-  await expect(page.getByRole('tab', { name: 'Queue', selected: true })).toBeVisible();
+  const counselling = sidebar.getByRole('button', { name: 'Counselling' });
+  await expect(counselling).toHaveAttribute('aria-expanded', 'true');
+  await expect(sidebar.getByRole('link', { name: 'Queue', exact: true })).toHaveAttribute(
+    'data-active',
+    'true',
+  );
+});
+
+test('the four counselling sections are an accordion under the Counselling row', async ({ page }) => {
+  const sidebar = page.getByRole('navigation', { name: /primary/i });
+  const trigger = sidebar.getByRole('button', { name: 'Counselling' });
+
+  // On /counselling the accordion starts open and lists the four sections.
+  await page.goto('/counselling?tab=appointments');
+  await expect(trigger).toHaveAttribute('aria-expanded', 'true');
+  for (const label of ['Queue', 'Appointments', 'Follow-ups', 'Scheduling']) {
+    await expect(sidebar.getByRole('link', { name: label, exact: true })).toBeVisible();
+  }
+
+  // Collapsing hides the children; expanding brings them back.
+  await trigger.click();
+  await expect(trigger).toHaveAttribute('aria-expanded', 'false');
+  await expect(sidebar.getByRole('link', { name: 'Follow-ups', exact: true })).toBeHidden();
+  await trigger.click();
+  await expect(sidebar.getByRole('link', { name: 'Follow-ups', exact: true })).toBeVisible();
+
+  // A child navigates: clicking Appointments lands the page on the book
+  // (its URL carries ?tab=appointments, the AppointmentsTab content shows).
+  await sidebar.getByRole('link', { name: 'Appointments', exact: true }).click();
+  await expect(page).toHaveURL(/\/counselling\?tab=appointments$/);
+  await expect(page.getByRole('heading', { name: 'Counselling', exact: true })).toBeVisible();
 });

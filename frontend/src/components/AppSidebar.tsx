@@ -4,8 +4,12 @@
  * Links are permission-gated with the same codes the router guards
  * use, so users only ever see modules they can open. Collapses to an
  * icon rail on desktop (Ctrl/Cmd+B or the header trigger) with
- * tooltips; renders as a Sheet on mobile.
+ * tooltips; renders as a Sheet on mobile. Modules may declare child
+ * sections, which render as an accordion expanding under the parent
+ * row (trial: Counselling, 2026-09-27) instead of an in-content tab
+ * strip.
  */
+import { useState } from 'react';
 import {
   BarChart3,
   Boxes,
@@ -26,7 +30,7 @@ import {
   Users,
   type LucideIcon,
 } from 'lucide-react';
-import { NavLink, useLocation } from 'react-router-dom';
+import { NavLink, useLocation, useSearchParams } from 'react-router-dom';
 import { CountBadge } from '@/components/CountBadge';
 import {
   Sidebar,
@@ -38,12 +42,22 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
+  SidebarMenuSub,
+  SidebarMenuSubButton,
+  SidebarMenuSubItem,
   SidebarRail,
   useSidebar,
 } from '@/components/ui/sidebar';
 import { prefetchRoute } from '@/lib/routeChunks';
 import { useDashboardCounters } from '@/hooks/useDashboard';
 import { hasPermission, useAuthStore } from '@/store/auth';
+
+interface NavChild {
+  label: string;
+  /** Tab value the target page reads from its `?tab=` URL param. */
+  tab: string;
+  permission: string | string[] | null;
+}
 
 interface NavItem {
   label: string;
@@ -67,6 +81,13 @@ interface NavItem {
    * CountBadge (adaptive tint) — call sites only supply the number.
    */
   badge?: (c: ReturnType<typeof useDashboardCounters>['data']) => { count: number } | null;
+  /**
+   * Child sections rendered as an accordion under this row instead of
+   * an in-content tab strip (trial: Counselling, 2026-09-27). Each
+   * child navigates to `href?tab=<tab>`; visibility is gated
+   * independently, mirroring the page's own allowedTabs.
+   */
+  children?: ReadonlyArray<NavChild>;
 }
 
 function hasAnyPermission(state: ReturnType<typeof useAuthStore.getState>, perm: string | string[] | null): boolean {
@@ -124,6 +145,16 @@ const NAV_SECTIONS: ReadonlyArray<{ title: string; items: ReadonlyArray<NavItem>
           const n = c?.counselling?.open_sessions ?? 0;
           return n > 0 ? { count: n } : null;
         },
+        // Trial (2026-09-27): the page's tab strip moved here as an
+        // accordion. Children gate and order-match the page's own
+        // allowedTabs; Appointments and Scheduling stay ungated on the
+        // page for everyone who passes the module gate.
+        children: [
+          { label: 'Queue', tab: 'queue', permission: 'counselling.queue.read' },
+          { label: 'Appointments', tab: 'appointments', permission: null },
+          { label: 'Follow-ups', tab: 'followups', permission: 'counselling.responses.read_any' },
+          { label: 'Scheduling', tab: 'scheduling', permission: null },
+        ],
       },
       // The four content surfaces moved here from the Counselling page's tab
       // strip (2026-09-24). Flat sibling rows, following the Facilities →
@@ -204,6 +235,82 @@ export function AppSidebar() {
     );
   };
 
+  /** One parent row with an expanding child list (the accordion). */
+  function AccordionNavItem({ item }: { item: NavItem }) {
+    const [params] = useSearchParams();
+    const auth = useAuthStore();
+    // A child is active when its tab is the one the target page would
+    // render: the explicit `?tab=` when present, otherwise the page's
+    // default (Queue for queue-capable staff, else the appointment book).
+    const canReadQueue = hasPermission(auth, 'counselling.queue.read');
+    const activeTab = params.get('tab') ?? (canReadQueue ? 'queue' : 'appointments');
+    const childActive = item.children?.some(
+      (ch) => ch.tab === activeTab && hasAnyPermission(auth, ch.permission),
+    ) === true;
+
+    // Open by default when the module is the one on screen; the user can
+    // collapse it afterwards (state survives navigation within the
+    // session since the sidebar never unmounts).
+    const [open, setOpen] = useState(() => pathname.startsWith(item.href));
+
+    return (
+      <SidebarMenuItem>
+        <SidebarMenuButton
+          tooltip={item.label}
+          isActive={isActive(item.href) || childActive}
+          onClick={() => setOpen((o) => !o)}
+          aria-expanded={open}
+        >
+          <item.icon aria-hidden />
+          <span className="flex-1 truncate">{item.label}</span>
+          {item.badge !== undefined && counters.data !== undefined && (() => {
+            const b = item.badge(counters.data);
+            if (!b || b.count <= 0) return null;
+            return (
+              <CountBadge
+                count={b.count}
+                className="ml-auto group-data-[collapsible=icon]:hidden"
+              />
+            );
+          })()}
+          <svg
+            aria-hidden
+            viewBox="0 0 24 24"
+            className={`size-4 shrink-0 transition-transform ${open ? 'rotate-90' : ''} ${item.badge !== undefined ? '' : 'ml-auto'}`}
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <path d="m9 18 6-6-6-6" />
+          </svg>
+        </SidebarMenuButton>
+        {open && (
+          <SidebarMenuSub>
+            {(item.children ?? []).filter((ch) => hasAnyPermission(auth, ch.permission)).map((ch) => (
+              <SidebarMenuSubItem key={ch.tab}>
+                <SidebarMenuSubButton
+                  asChild
+                  isActive={pathname.startsWith(item.href) && activeTab === ch.tab}
+                >
+                  <NavLink
+                    to={`${item.href}?tab=${ch.tab}`}
+                    onClick={closeMobile}
+                    onMouseEnter={() => void prefetchRoute(item.href)}
+                    onFocus={() => void prefetchRoute(item.href)}
+                  >
+                    <span className="truncate">{ch.label}</span>
+                  </NavLink>
+                </SidebarMenuSubButton>
+              </SidebarMenuSubItem>
+            ))}
+          </SidebarMenuSub>
+        )}
+      </SidebarMenuItem>
+    );
+  }
+
   return (
     <Sidebar collapsible="icon">
       <SidebarHeader>
@@ -249,7 +356,10 @@ export function AppSidebar() {
                 <SidebarMenu>
                   {items.map((item) => (
                     <SidebarMenuItem key={item.href}>
-                      <SidebarMenuButton asChild isActive={isActive(item.href)} tooltip={item.label}>
+                      {item.children !== undefined ? (
+                        <AccordionNavItem item={item} />
+                      ) : (
+                        <SidebarMenuButton asChild isActive={isActive(item.href)} tooltip={item.label}>
                         {/*
                           Intent-based chunk prefetch. Fires on the
                           earliest signal a user might be heading
@@ -286,6 +396,7 @@ export function AppSidebar() {
                           })()}
                         </NavLink>
                       </SidebarMenuButton>
+                      )}
                     </SidebarMenuItem>
                   ))}
                 </SidebarMenu>
