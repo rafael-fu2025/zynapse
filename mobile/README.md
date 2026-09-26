@@ -2,8 +2,6 @@
 
 The Flutter client. It consumes the existing CodeIgniter 4 backend (`../backend`) over the same `/api/v1` endpoints as the React SPA (`../frontend`) — no backend changes required. Every request/response shape mirrors `frontend/src/schemas/*` (Zod) and the backend DTOs (`backend/app/Modules/*/DTOs`); most methods carry a comment citing the SPA file or backend route they mirror, which keeps the two clients honest against each other.
 
-Kiosk check-in and kiosk stations intentionally stay on the web app — everything else is here.
-
 ## What it covers
 
 | Feature | Endpoint(s) | Notes |
@@ -24,7 +22,6 @@ Kiosk check-in and kiosk stations intentionally stay on the web app — everythi
 | Audit trail | `GET /audit/events` | search + keyset pagination |
 | Notifications | `GET /notifications`, `POST /notifications/{id}/read` | bell in the app bar + module tile |
 | Admin users | `GET /admin/users` | role badges + active status |
-| Kiosk media admin (admin only) | `GET/POST /kiosk-*` | settings + media library upload |
 
 ## How it's built
 
@@ -33,7 +30,7 @@ Kiosk check-in and kiosk stations intentionally stay on the web app — everythi
 - **Three-layer API stack** — `core/config.dart` (URL resolution) → `core/api/api_client.dart` (Dio + interceptors) → `core/services/api_service.dart` (one method per endpoint) → typed models in `core/models/` mirroring the SPA schemas.
 - **Navigation** — auth gate in `RootGate`, bottom-nav `IndexedStack` shell, imperative pushes for module screens. Permission gating mirrors the SPA sidebar (wildcard `*` for admins, student-vs-staff variants).
 
-Stack: Flutter (Dart ≥ 3.6, tested on 3.44) · dio 5 + cookie_jar · flutter_secure_storage · provider · Material 3 with a hand-tuned maroon theme and Figtree variable font · pdf + share_plus · image_picker (kiosk media upload) · qr_flutter.
+Stack: Flutter (Dart ≥ 3.6, tested on 3.44) · dio 5 + cookie_jar · flutter_secure_storage · provider · Material 3 with a hand-tuned maroon theme and Figtree variable font · pdf + share_plus · qr_flutter.
 
 ```
 lib/
@@ -51,7 +48,7 @@ lib/
 └── features/
     ├── auth/login_screen.dart
     ├── home/                     home_shell (bottom nav) + home_tab (staff vs student)
-    ├── modules/module_hub_screen.dart   grid of all other modules (kiosk excluded)
+    ├── modules/module_hub_screen.dart   grid of all other modules
     ├── dashboard/ · appointments/ · queue/ · notifications/ · portal/
     ├── patients/ · inventory/ · medicines/ · counselling/
     ├── referrals/ · facilities/ · reports/ · audit/ · admin/
@@ -95,7 +92,7 @@ Model JSON-parsing tests (session, appointment, queue, notification) plus `Sessi
 ## Platform notes
 
 - **Android** — dev builds allow cleartext HTTP to the dev backend only. `MainActivity` pins a high refresh rate and applies the maroon edge-to-edge treatment (ColorOS-specific workarounds). Release signing is still debug-key with a placeholder `com.example.*` applicationId — **do not distribute release builds as-is**.
-- **iOS** — stock template; add photo/camera usage strings before using kiosk media upload.
+- **iOS** — stock template; add photo/camera usage strings before using image upload features.
 - **Web / Windows** — supported run targets; the web target is an uncustomized template shell.
 
 ## Troubleshooting

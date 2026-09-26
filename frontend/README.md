@@ -1,6 +1,6 @@
 # SYNAPSE Frontend
 
-The React 18 admin portal — every SYNAPSE persona (administrators, clinic staff, counsellors, facilities operators, students) plus the chromeless web kiosk check-in station and the public lobby queue display, all in one Vite + TypeScript (strict) SPA.
+The React 18 admin portal — every SYNAPSE persona (administrators, clinic staff, counsellors, facilities operators, students) in one Vite + TypeScript (strict) SPA.
 
 ## How it's built
 
@@ -43,7 +43,6 @@ Prerequisite: the backend running on `http://localhost:8090` ([`../backend/READM
 | Var | Purpose |
 |---|---|
 | `VITE_API_BASE_URL` | Backend base path (default `/api/v1`); the dev server proxies it to the upstream |
-| `VITE_KIOSK_UPLOAD_BASE_URL` | Direct backend base for large kiosk-media uploads (bypasses Vite's file relay) |
 | `VITE_APP_TZ` | Display timezone (default `Asia/Manila`) |
 
 ## Notable behaviors
