@@ -8,7 +8,6 @@
  */
 import {
   BarChart3,
-  Bell,
   Boxes,
   CalendarClock,
   ClipboardList,
@@ -90,7 +89,9 @@ const NAV_SECTIONS: ReadonlyArray<{ title: string; items: ReadonlyArray<NavItem>
       // accept anyOf permission predicates. Hidden for admin: the
       // wildcard would route them to the (empty) student portal.
       { label: 'My portal', href: '/me', icon: IdCard, permission: ['employee.portal.read', 'student.portal.read'], hideForAdmin: true },
-      { label: 'Notifications', href: '/notifications', icon: Bell, permission: 'notifications.read' },
+      // Notifications live in the topbar bell (NotificationBell) — no
+      // sidebar entry, so the inbox stays one click from every screen
+      // without a second navigation surface.
     ],
   },
   {
