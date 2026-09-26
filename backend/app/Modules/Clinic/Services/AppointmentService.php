@@ -28,7 +28,7 @@ use Throwable;
  * Panel revision (July 2026): appointments are ONLY the scheduling
  * layer — checking in auto-opens the linked clinic ENCOUNTER (the
  * anchor for vitals, treatments and dispensing) and enqueues it into
- * today's walk-in queue, mirroring the kiosk flow in CheckinService.
+ * today's walk-in queue.
  *
  * Every state change runs under `selectForUpdate`; the audit AND
  * notification outbox rows are written in the SAME transaction.
@@ -849,8 +849,8 @@ final class AppointmentService extends BaseService
         ]);
         $encounterId = (int) $this->db->insertID();
 
-        // Row-locked MAX(position) — same discipline as QueueService /
-        // CheckinService so kiosk and desk check-ins never collide.
+        // Row-locked MAX(position) — same discipline as QueueService so
+        // desk check-ins never collide.
         // The patient is standing at the desk NOW, so the queue row
         // must land on today's Manila queue — not the appointment's
         // original day (2026-09 audit: checking in a stale appointment

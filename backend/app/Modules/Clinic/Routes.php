@@ -11,15 +11,6 @@ final class Routes implements BaseRoutes
 {
     public static function register(RouteCollection $routes): void
     {
-        // PUBLIC waiting-room feed (Phase 14) — no auth by design: the
-        // lobby TV / kiosk poll it. Minimum disclosure enforced in the
-        // service (position + display name only). Global api/* rate
-        // limiting still applies.
-        $routes->get(
-            'api/v1/clinic/queue/state',
-            '\\Modules\\Clinic\\Controllers\\QueueController::state',
-        );
-
         // PUBLIC minimum-disclosure appointment QR verify — explicitly NOT
         // under api_auth (mirrors the referrals verify endpoint).
         $routes->post('api/v1/appointments/verify', '\\Modules\\Clinic\\Controllers\\AppointmentController::verify');
@@ -166,15 +157,11 @@ final class Routes implements BaseRoutes
             $r->post('reorders/auto-check',                  'ReorderController::autoCheck');
             $r->post('reorders/(:num)/transition',           'ReorderController::transition/$1');
 
-            // Queue (Phase 14 — walk-in queue; `state` is public above).
+            // Queue (Phase 14 — appointment-fed staff queue).
             $r->get('queue',                                 'QueueController::today');
             $r->post('queue',                                'QueueController::enqueue');
             $r->post('queue/call-next',                      'QueueController::callNext');
             $r->post('queue/(:num)/transition',              'QueueController::transition/$1');
-
-            // Check-in kiosk (Phase 17 — recycled from synapse_ag IoT).
-            $r->get('checkins',                              'CheckinController::listToday');
-            $r->post('checkins',                             'CheckinController::scan');
         });
     }
 }

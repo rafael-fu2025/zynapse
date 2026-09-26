@@ -11,7 +11,6 @@ import '../equipment/equipment_screen.dart';
 import '../facilities/facilities_screen.dart';
 import '../facilities/waste_categories_screen.dart';
 import '../inventory/inventory_screen.dart';
-import '../kiosk/kiosk_admin_screen.dart';
 import '../medicines/medicines_screen.dart';
 import '../notifications/notifications_screen.dart';
 import '../patients/patients_screen.dart';
@@ -63,12 +62,10 @@ const _modules = <_Module>[
       Color(0xFF8A5A00), NotificationsScreen(), ['notifications.read']),
   _Module('Users', HugeIcons.strokeRoundedUserGroup, Color(0xFF6A1B9A),
       AdminUsersScreen(), ['rbac.manage']),
-  _Module('Kiosk', Icons.tv_outlined, Color(0xFF800000), KioskAdminScreen(),
-      ['kiosk.content.manage']),
 ];
 
 /// The "More / Modules" tab — a permission-gated grid of every module
-/// surface (kiosk check-in / stations intentionally stay on the web app).
+/// surface.
 class ModuleHubScreen extends StatelessWidget {
   const ModuleHubScreen({super.key});
 
@@ -93,7 +90,7 @@ class ModuleHubScreen extends StatelessWidget {
         ),
         const SizedBox(height: 4),
         Text(
-          'Kiosk check-in and the public display stay web-only; administrators can manage display content here.',
+          'Administrators can manage users and review the audit trail here.',
           style: Theme.of(context)
               .textTheme
               .bodySmall

@@ -21,7 +21,6 @@ final class RbacRoleCatalogTest extends TestCase
         'superadmin',
         'clinic_admin',
         'clinic_staff',
-        'kiosk',
         'guidance_admin',
         'guidance_supervisor',
         'counsellor',
@@ -96,14 +95,13 @@ final class RbacRoleCatalogTest extends TestCase
     {
         $gp = $this->groupPermissions();
 
-        // kiosk.content.manage: clinic_admin ONLY (moved off clinic_staff).
+        // kiosk.content.manage: REMOVED with the kiosk surface (2026-09-26) —
+        // no group may hold it.
         foreach ($gp as $group => $codes) {
-            $holds = in_array('kiosk.content.manage', $codes, true);
-            if ($group === 'clinic_admin') {
-                $this->assertTrue($holds, 'clinic_admin must hold kiosk.content.manage');
-            } else {
-                $this->assertFalse($holds, "'{$group}' must NOT hold kiosk.content.manage (clinic_admin only)");
-            }
+            $this->assertFalse(
+                in_array('kiosk.content.manage', $codes, true),
+                "'{$group}' must NOT hold kiosk.content.manage (removed)",
+            );
         }
 
         // facilities configuration: bmg_admin ONLY (moved off facilities_op).

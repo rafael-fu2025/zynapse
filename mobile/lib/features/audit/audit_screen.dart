@@ -34,7 +34,6 @@ String auditActionLabel(String code) {
     'clinic.encounter_closed': 'Encounter closed',
     'clinic.appointment_booked': 'Appointment booked',
     'clinic.appointment_completed': 'Appointment completed',
-    'clinic.checkin': 'Kiosk check-in',
     'clinic.reorder_created': 'Reorder created',
     'referral.created': 'Referral created',
     'referral.acknowledged': 'Referral acknowledged',

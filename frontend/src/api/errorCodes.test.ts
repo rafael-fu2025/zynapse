@@ -29,6 +29,7 @@ describe('variantForCode', () => {
 
   it('defaults unknown codes to error, not warning', () => {
     expect(variantForCode('kiosk.media.upload_failed')).toBe('error');
+    expect(variantForCode('totally.unknown_code')).toBe('error');
   });
 });
 

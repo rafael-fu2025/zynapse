@@ -28,8 +28,6 @@ use CodeIgniter\Shield\Config\AuthGroups as ShieldAuthGroups;
  *   - Granting/revoking any privileged role requires
  *     `rbac.privileged.manage` (superadmin only).
  *   - No user can revoke their own last privileged role.
- *   - Kiosk machine accounts are created/reset only by clinic_admin
- *     or superadmin.
  */
 class AuthGroups extends ShieldAuthGroups
 {
@@ -42,7 +40,6 @@ class AuthGroups extends ShieldAuthGroups
         // CLINIC UNIT
         'clinic_admin'        => 'Clinic Administrator',
         'clinic_staff'        => 'Clinic Staff',
-        'kiosk'               => 'Kiosk Station',
 
         // GUIDANCE UNIT
         'guidance_admin'      => 'Guidance Administrator',
@@ -92,8 +89,8 @@ class AuthGroups extends ShieldAuthGroups
         'superadmin' => [],
 
         // Clinic unit administrator — explicit matrix, NO wildcard.
-        // Full clinic + referrals lifecycle, kiosk content, user
-        // provisioning for non-privileged roles, saved-report authoring.
+        // Full clinic + referrals lifecycle, user provisioning for
+        // non-privileged roles, saved-report authoring.
         // NOT: audit.*, rbac.privileged.manage,
         // counselling.*, facilities.*. (`clinic.encounters.soft_delete`
         // is deliberately NOT in this matrix — it stays superadmin-only.)
@@ -107,8 +104,6 @@ class AuthGroups extends ShieldAuthGroups
             'clinic.patients.write',
             'clinic.queue.read',
             'clinic.queue.manage',
-            'clinic.checkin.record',
-            'clinic.checkin.read',
             'clinic.triage.use',
             'clinic.treatments.read',
             'clinic.inventory.read',
@@ -125,7 +120,6 @@ class AuthGroups extends ShieldAuthGroups
             'referrals.review',
             'referrals.close',
             'referrals.issue_qr',
-            'kiosk.content.manage',
             'rbac.manage',
             'rbac.read',
             'reports.read',
@@ -149,8 +143,6 @@ class AuthGroups extends ShieldAuthGroups
             'clinic.reorders.manage',
             'clinic.queue.read',
             'clinic.queue.manage',
-            'clinic.checkin.record',
-            'clinic.checkin.read',
             'clinic.treatments.read',
             'clinic.triage.use',
             'clinic.inventory.forecast',
@@ -173,11 +165,6 @@ class AuthGroups extends ShieldAuthGroups
             'notifications.read',
             'employee.portal.read',
         ],
-        'kiosk' => [
-            // Can submit either destination through the destination-aware
-            // kiosk orchestrator. No record-read or queue-management grants.
-            'kiosk.checkin.submit',
-        ],
 
         // Guidance unit administrator — all counselling permissions
         // (including the records.read_any oversight break-glass and
@@ -196,8 +183,7 @@ class AuthGroups extends ShieldAuthGroups
             'counselling.schedule.team_manage',
             'counselling.queue.read',
             'counselling.queue.manage',
-            // Guidance content (2026-09 parity plan, Phase A): kiosk
-            // announcements + CMO service catalogue.
+            // Guidance content (2026-09 parity plan, Phase A): announcements + CMO service catalogue.
             'counselling.announcements.manage',
             'counselling.services.manage',
             // Surveys engine (Phase B): builder/publish + response access.

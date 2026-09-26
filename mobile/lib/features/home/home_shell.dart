@@ -80,7 +80,6 @@ class HomeShell extends StatelessWidget {
             PortalScreen(), ['employee.portal.read', 'student.portal.read'],
             true),
         const _Tab('Queue', HugeIcons.strokeRoundedUserGroup, QueueScreen()),
-        // All other modules (kiosk stays web-only).
         const _Tab('Modules', HugeIcons.strokeRoundedLayout02, ModuleHubScreen()),
       ],
     ];

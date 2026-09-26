@@ -37,20 +37,8 @@ final class EmployeeSelfController extends ApiController
     public function profile(): ResponseInterface
     {
         $this->authorize('employee.portal.read');
-        $dto = $this->service->getMyProfile();
 
-        // Flatten to array; we ALSO expose a `kiosk_identifier`
-        // convenience field so the SPA doesn't have to know which
-        // of `qr_code` / `rfid_tag` / `employee_number` is the
-        // kiosk's preferred scan payload.
-        $row = $dto->toArray();
-        $row['kiosk_identifier'] = $row['has_qr']
-            ? 'qr:' . $this->kioskPayload($row)
-            : ($row['has_rfid']
-                ? 'rfid:' . $this->kioskPayload($row)
-                : 'emp:' . $this->kioskPayload($row));
-
-        return $this->ok($row);
+        return $this->ok($this->service->getMyProfile()->toArray());
     }
 
     public function clinicVisits(): ResponseInterface
@@ -102,36 +90,6 @@ final class EmployeeSelfController extends ApiController
             throw ApiException::validationFailure($this->collectErrors());
         }
 
-        $dto = $this->service->updateMyProfile($payload);
-
-        // Re-derive the kiosk_identifier so the SPA doesn't have
-        // to re-fetch after a successful PATCH.
-        $row = $dto->toArray();
-        $row['kiosk_identifier'] = $row['has_qr']
-            ? 'qr:' . $this->kioskPayload($row)
-            : ($row['has_rfid']
-                ? 'rfid:' . $this->kioskPayload($row)
-                : 'emp:' . $this->kioskPayload($row));
-
-        return $this->ok($row);
-    }
-
-    /**
-     * The kiosk can scan a QR, an RFID, or read the 8-digit
-     * employee number off an ID card. We hand the strongest
-     * available identifier back so the SPA renders the right
-     * one to the user.
-     */
-    private function kioskPayload(array $row): string
-    {
-        if (! empty($row['has_qr'])) {
-            // EmployeeDto doesn't expose qr_code (it's a sensitive
-            // handle). The SPA can use the employee_number as a
-            // human-typed fallback at the kiosk. The actual qr_code
-            // is rendered into a QR image by the SPA using
-            // qrcode.react on the employee_number + a `me.` prefix.
-            return (string) $row['employee_number'];
-        }
-        return (string) $row['employee_number'];
+        return $this->ok($this->service->updateMyProfile($payload)->toArray());
     }
 }

@@ -41,7 +41,6 @@ export const reportSummarySchema = z.object({
     encounters: z.number().int(),
     previous_encounters: z.number().int(),
     encounters_delta_pct: deltaSchema,
-    checkins: z.number().int(),
   }),
   counselling: z.object({
     appointments: z.number().int(),
@@ -75,7 +74,6 @@ export const clinicReportSchema = z.object({
   status_breakdown: z.array(countRow.extend({ status: z.string() })),
   daily_trend: z.array(countRow.extend({ day: z.string() })),
   complaint_categories: z.array(countRow.extend({ category: z.string() })),
-  checkin_outcomes: z.array(countRow.extend({ outcome: z.string() })),
   referral_flows: z.array(
     countRow.extend({ source_module: z.string(), target_module: z.string(), status: z.string() }),
   ),

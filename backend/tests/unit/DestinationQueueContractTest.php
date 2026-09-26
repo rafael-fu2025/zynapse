@@ -17,34 +17,12 @@ final class DestinationQueueContractTest extends TestCase
         $this->assertStringNotContainsString('clinic_queue_entries', $source);
     }
 
-    public function testKioskDispatchHasExclusiveDestinationBranch(): void
-    {
-        $source = $this->read('app/Modules/Clinic/Services/CheckinService.php');
-        $guidanceBranch = strpos($source, "if (\$destination === 'counselling')");
-        $clinicLookup = strpos($source, "FROM `clinic_appointments`");
-        $this->assertNotFalse($guidanceBranch);
-        $this->assertNotFalse($clinicLookup);
-        $this->assertLessThan($clinicLookup, $guidanceBranch);
-        $this->assertStringContainsString('WHERE `tenant_id` = ? AND `destination` = ? AND `patient_school_id` = ?', $source);
-    }
-
-    public function testQueueNumbersAndPublicGroupingAreExplicit(): void
+    public function testQueueNumbersAreExplicit(): void
     {
         $guidance = $this->read('app/Modules/Counselling/Services/QueueService.php');
         $clinic = $this->read('app/Modules/Clinic/Services/QueueService.php');
-        $controller = $this->read('app/Modules/Clinic/Controllers/QueueController.php');
         $this->assertStringContainsString("sprintf('G-%03d'", $guidance);
         $this->assertStringContainsString("sprintf('C-%03d'", $clinic);
-        $this->assertStringContainsString("'guidance' => \$guidance->publicState()", $controller);
-        $this->assertStringContainsString("'clinic' => \$this->service->publicState()", $controller);
-    }
-
-    public function testKioskRoleHasNoQueueOrRecordPermissions(): void
-    {
-        $config = $this->read('app/Config/AuthGroups.php');
-        $this->assertMatchesRegularExpression("/'kiosk'\s*=>\s*\[\s*[^\]]*'kiosk\.checkin\.submit'\s*,?\s*\]/s", $config);
-        $patientService = $this->read('app/Modules/Clinic/Services/PatientService.php');
-        $this->assertStringContainsString("check('kioskPatientLookup')", $patientService);
     }
 
     public function testStaffRolesDoNotCrossGrantQueueOwnership(): void
@@ -74,20 +52,6 @@ final class DestinationQueueContractTest extends TestCase
         $this->assertStringContainsString('uq_cqe_active_service_slot', $migration);
         $this->assertStringContainsString("dropTable('counselling_queue_entries'", $migration);
         $this->assertStringNotContainsString("dropTable('clinic_queue_entries'", $migration);
-    }
-
-    public function testFrontendOfflineAndCallIndicatorsAreDestinationScoped(): void
-    {
-        $checkin = file_get_contents(__DIR__ . '/../../../frontend/src/components/KioskCheckin.tsx');
-        $schema = file_get_contents(__DIR__ . '/../../../frontend/src/schemas/checkin.ts');
-        $display = file_get_contents(__DIR__ . '/../../../frontend/src/pages/QueueDisplayPage.tsx');
-        $this->assertIsString($checkin);
-        $this->assertIsString($schema);
-        $this->assertIsString($display);
-        $this->assertStringContainsString("destination: row.destination ?? 'clinic'", $checkin);
-        $this->assertStringContainsString('destination: CheckinDestination', $schema);
-        $this->assertStringContainsString("{ guidance: null, clinic: null }", $display);
-        $this->assertStringContainsString("(['guidance', 'clinic'] as const)", $display);
     }
 
     private function read(string $path): string

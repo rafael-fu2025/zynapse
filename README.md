@@ -15,15 +15,15 @@ SYNAPSE is a university health-services platform in three parts: a stateless RES
 | Path | What it is |
 |---|---|
 | [`backend/`](backend/README.md) | CodeIgniter 4 REST API — the source of truth. 5 domain modules over a shared kernel, JWT auth, RBAC, audit hash chain, 96 migrations. |
-| [`frontend/`](frontend/README.md) | React 18 + Vite SPA — staff and student portal, web kiosk check-in, public lobby queue display. Strict TypeScript, Zod-validated responses. |
-| [`mobile/`](mobile/README.md) | Flutter client — every module except kiosk check-in, with PDF report export and the same hardened token flow as the browser. |
+| [`frontend/`](frontend/README.md) | React 18 + Vite SPA — staff and student portals over the appointment-driven clinic workflow. Strict TypeScript, Zod-validated responses. |
+| [`mobile/`](mobile/README.md) | Flutter client — every module, with PDF report export and the same hardened token flow as the browser. |
 | [`docs/`](docs/) | Compliance & operations: external-API data-sharing terms (RA 10173) and the RBAC/key-rotation runbook. |
 | [`CREDENTIALS.md`](CREDENTIALS.md) | Dev/staging demo account matrix. Never production. |
 | [`PRODUCT.md`](PRODUCT.md) | Product context, design principles, accessibility targets. |
 
 ## The domain
 
-- **Clinic** — student/employee registry, encounter workflow (vitals → care → outcome), medicines and supplies inventory, appointments with destination-queue promotion, live waiting-room queue and kiosk self check-in.
+- **Clinic** — student/employee registry, encounter workflow (vitals → care → outcome), medicines and supplies inventory, appointment-driven queue management.
 - **Counselling (Guidance)** — session notes encrypted with AES-256-GCM (tag-verified, key rotation supported), availability scheduling, no-show analytics, its own queue.
 - **Referrals** — the only bridge between Clinic and Counselling (no cross-module SQL JOINs, ever). QR artifact issuance plus a public minimum-disclosure verify endpoint.
 - **Facilities (BMG)** — aerobic composting operations: batch state machine (`idle → processing → awaiting_output → curing`), C:N blending, curing and quality-graded release, EPA 40 CFR 503 sanitation compliance, alerting, and a DB-enforced mass invariant.
@@ -67,7 +67,7 @@ zynapse/
 │   │   ├── Auth/                  # JwtService, refresh rotation, throttling, account state
 │   │   ├── Commands/              # 12 spark workers: audit drain/verify, reports, queues…
 │   │   ├── Config/                # root Routes.php, Filters, Constants
-│   │   ├── Controllers/Api/       # Auth, Rbac, Admin, Audit, Dashboard, Notify, Kiosk
+│   │   ├── Controllers/Api/       # Auth, Rbac, Admin, Audit, Dashboard, Notify
 │   │   ├── Database/              # 96 migrations, 5 seeders
 │   │   ├── Filters/               # api_auth, rate limit, exception envelope, CORS
 │   │   ├── Modules/               # Clinic · Counselling · Facilities · Referrals · Reports
@@ -86,7 +86,7 @@ zynapse/
 │       └── store/                 # Zustand (auth in memory only)
 ├── mobile/
 │   ├── lib/core/                  # config, Dio client, models, AuthController, ApiService
-│   └── lib/features/              # screens per module (kiosk check-in stays web-only)
+│   └── lib/features/              # screens per module
 └── .github/workflows/ci.yml       # backend · frontend · mobile jobs
 ```
 
@@ -96,7 +96,7 @@ Base URL in development: `http://localhost:8090/api/v1` (the SPA dev server prox
 
 - **Auth** — `Authorization: Bearer <access-token>`; the access token is short-lived (15 min) and lives in memory (SPA) or secure storage (mobile). The refresh token is an `HttpOnly; Secure; SameSite=Strict` cookie, rotated on every use, with replay detection.
 - **Envelope** — every response is `{ success, data, errors, meta }`. Errors carry stable codes (`resource.not_found`, `auth.login_locked`, …); 5xx bodies are redacted to `internal.error` and never leak messages or traces.
-- **Public endpoints (deliberate, leak-tested)** — `/health`, `/auth/login`, `/auth/refresh`, `/clinic/queue/state` (lobby TV), `/appointments/verify` and `/referrals/verify` (QR, minimum disclosure), kiosk media/settings reads.
+- **Public endpoints (deliberate, leak-tested)** — `/health`, `/auth/login`, `/auth/refresh`, `/appointments/verify` and `/referrals/verify` (QR, minimum disclosure).
 - **Pagination** — keyset cursors only; OFFSET pagination is banned.
 
 ## Configuration
@@ -112,9 +112,8 @@ Backend `.env` (from `backend/.env.example`, never committed):
 | `RATELIMIT_GLOBAL_PER_MIN` · `RATELIMIT_AUTH_PER_MIN` | Fixed-window buckets (600 / 30) |
 | `EXTERNAL_AUDIT_SAMPLE_LIVE` · `EXTERNAL_AUDIT_SAMPLE_TEST` | External-API `external.request` audit sampling per key env (1.0 / 0.2) |
 | `LOGIN_LOCKOUT_MAX_FAILURES` · `LOGIN_LOCKOUT_WINDOW_SECONDS` | Per-account lockout (5 failures / 15 min) |
-| `FFMPEG_BINARY` | Kiosk video thumbnails |
 
-Frontend vars (`frontend/.env.example`): `VITE_API_BASE_URL`, `VITE_KIOSK_UPLOAD_BASE_URL`, `VITE_APP_TZ`. Mobile: `API_BASE_URL` via `--dart-define` (release builds refuse to start without it).
+Frontend vars (`frontend/.env.example`): `VITE_API_BASE_URL`, `VITE_APP_TZ`. Mobile: `API_BASE_URL` via `--dart-define` (release builds refuse to start without it).
 
 ## Background workers
 

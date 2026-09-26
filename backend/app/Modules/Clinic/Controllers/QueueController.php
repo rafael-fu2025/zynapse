@@ -12,12 +12,10 @@ use Modules\Clinic\Policies\ClinicPolicy;
 use Modules\Clinic\Services\AppointmentService;
 use Modules\Clinic\Services\ClinicService;
 use Modules\Clinic\Services\QueueService;
-use Modules\Counselling\Policies\CounsellingPolicy;
-use Modules\Counselling\Services\QueueService as CounsellingQueueService;
 
 /**
- * QueueController — walk-in queue endpoints (Phase 14, recycled from
- * legacy synapse_ag). `state` is PUBLIC (waiting-room TV / kiosk).
+ * QueueController — staff queue endpoints (Phase 14, recycled from
+ * legacy synapse_ag).
  */
 final class QueueController extends ApiController
 {
@@ -61,21 +59,6 @@ final class QueueController extends ApiController
         }
 
         return $this->ok($this->service->transition($id, (string) $payload['action']));
-    }
-
-    /** PUBLIC — minimum-disclosure waiting-room feed. */
-    public function state(): ResponseInterface
-    {
-        $guidance = new CounsellingQueueService(
-            new CounsellingPolicy(),
-            Services::auditOutbox(),
-            Services::notificationOutbox(),
-        );
-        return $this->ok([
-            'guidance' => $guidance->publicState(),
-            'clinic' => $this->service->publicState(),
-            'updated_at' => gmdate('Y-m-d H:i:s'),
-        ]);
     }
 
     private function collectErrors(): array

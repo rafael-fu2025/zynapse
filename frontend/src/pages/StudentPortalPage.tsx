@@ -18,7 +18,6 @@ import {
   LayoutDashboard,
   Mail,
 } from 'lucide-react';
-import { QRCodeCanvas } from 'qrcode.react';
 import { Link } from 'react-router-dom';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -153,31 +152,24 @@ export default function StudentPortalPage() {
                 <Card>
                   <CardHeader>
                     <CardTitle className="flex items-center gap-2">
-                      <IdCard className="size-4" aria-hidden /> Clinic Check-in Pass
+                      <IdCard className="size-4" aria-hidden /> Account access
                     </CardTitle>
                     <CardDescription>
-                      Present this QR pass at the clinic kiosk scanner to self-admit without typing.
+                      Book clinic appointments online and check in at the desk — no pass or scanner needed.
                     </CardDescription>
                   </CardHeader>
                   <CardContent className="space-y-4">
                     <div className="flex flex-col items-center gap-4 sm:flex-row sm:items-start">
-                      <div className="shrink-0 rounded-xl border bg-white p-3 shadow-sm">
-                        <QRCodeCanvas value={profile.data.kiosk_identifier} size={136} includeMargin />
-                      </div>
                       <div className="min-w-0 flex-1 space-y-2.5 text-center sm:text-left">
                         <p className="text-sm font-medium text-foreground">
-                          Quick Admission QR
+                          Book, then check in at the desk
                         </p>
                         <p className="text-xs text-muted-foreground leading-relaxed">
-                          Hold your screen in front of the kiosk scanner at the clinic reception to automatically queue or check in for your appointment.
+                          Your appointment check-in is handled by clinic staff at the reception desk.
                         </p>
-                        {profile.data.has_qr ? (
+                        {profile.data.has_qr && (
                           <p className="flex items-center justify-center gap-1.5 text-xs text-emerald-600 dark:text-emerald-400 sm:justify-start">
                             <CheckCircle2 className="size-3.5 shrink-0" /> Verified clinic QR pass active
-                          </p>
-                        ) : (
-                          <p className="text-xs text-muted-foreground">
-                            Standard student pass linked to your account.
                           </p>
                         )}
                         <div className="pt-1">

@@ -12,7 +12,7 @@
 
 ## 1. Dev machine accounts (`DevUserSeeder`)
 
-One account per role — 13 accounts mirroring the 13-role catalog in
+One account per role — 12 accounts mirroring the 12-role catalog in
 `backend/app/Config/AuthGroups.php`. Every account uses the same dev
 password, `DevPassw0rd!` (override with `SYNAPSE_DEV_PASSWORD`).
 
@@ -21,7 +21,6 @@ password, `DevPassw0rd!` (override with `SYNAPSE_DEV_PASSWORD`).
 | `admin@synapse.dev` | `synapse-admin` | `superadmin` — Platform Owner |
 | `clinic_admin@synapse.dev` | `synapse-clinic-admin` | `clinic_admin` |
 | `nurse@synapse.dev` | `synapse-nurse` | `clinic_staff` |
-| `kiosk@synapse.dev` | `synapse-kiosk` | `kiosk` |
 | `guidance_admin@synapse.dev` | `synapse-guidance-admin` | `guidance_admin` |
 | `supervisor@synapse.dev` | `synapse-supervisor` | `guidance_supervisor` |
 | `counsellor@synapse.dev` | `synapse-counsellor` | `counsellor` |
@@ -41,7 +40,6 @@ Notes:
 - The `student`/`employee` accounts are self-scoped portal logins; they
   are not linked to a `patients_students`/employee record, so their
   self-service surfaces render empty. Good for RBAC/UI testing only.
-- The `kiosk` account holds check-in submission only, by design.
 
 Seed order matters — groups/permissions first:
 

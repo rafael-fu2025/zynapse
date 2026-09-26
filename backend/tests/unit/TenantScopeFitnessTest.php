@@ -22,8 +22,7 @@ use PHPUnit\Framework\TestCase;
  * fail CI immediately. When you scope a file, update the baseline
  * downward in the same commit — the numbers only ever shrink.
  *
- * Scan methodology (deliberately heuristic, like
- * KioskMediaSecurityTest's source assertions):
+ * Scan methodology (deliberately heuristic):
  *   - a "site" is each `->table('name')` / `->table("name")` occurrence;
  *   - a site is "scoped" if the text from that occurrence to the end of
  *     the statement (next `;` outside the call chain, capped) contains
@@ -42,7 +41,6 @@ final class TenantScopeFitnessTest extends TestCase
      */
     private const TENANT_TABLES = [
         'clinic_appointments',
-        'clinic_checkins',
         'clinic_encounters',
         'clinic_equipment',
         'clinic_equipment_status_log',

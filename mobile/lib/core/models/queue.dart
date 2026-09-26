@@ -2,8 +2,6 @@
 ///
 /// * [MyQueueStatus] — mirrors `QueueService::myStatus()` (the portal
 ///   "Your queue" card). Null when the caller is not queued today.
-/// * [PublicQueueState] — mirrors the public waiting-room feed
-///   `GET /clinic/queue/state` (no auth — same feed as the lobby TV).
 class MyQueueStatus {
   MyQueueStatus({
     this.destination = 'clinic',
@@ -75,71 +73,6 @@ class GuidanceQueueEntry {
   final int id;
   final String queueNumber, displayName, purpose, status;
   final int? assignedCounsellorUserId, counsellingSessionId;
-}
-
-class NowServing {
-  NowServing({
-    required this.position,
-    required this.displayName,
-    required this.patientSchoolId,
-  });
-
-  factory NowServing.fromJson(Map<String, dynamic> json) => NowServing(
-        position: (json['position'] ?? 0) as int,
-        displayName: (json['display_name'] ?? '') as String,
-        patientSchoolId: (json['patient_school_id'] ?? '') as String,
-      );
-
-  final int position;
-  final String displayName;
-  final String patientSchoolId;
-}
-
-class QueueWaiter {
-  QueueWaiter({
-    required this.position,
-    required this.displayName,
-    required this.patientSchoolId,
-    this.estWaitMinutes,
-  });
-
-  factory QueueWaiter.fromJson(Map<String, dynamic> json) => QueueWaiter(
-        position: (json['position'] ?? 0) as int,
-        displayName: (json['display_name'] ?? '') as String,
-        patientSchoolId: (json['patient_school_id'] ?? '') as String,
-        estWaitMinutes: json['est_wait_minutes'] as int?,
-      );
-
-  final int position;
-  final String displayName;
-  final String patientSchoolId;
-  final int? estWaitMinutes;
-}
-
-class PublicQueueState {
-  PublicQueueState({this.nowServing, required this.waiting, this.updatedAt});
-
-  factory PublicQueueState.fromJson(Map<String, dynamic>? json) {
-    if (json == null) {
-      return PublicQueueState(waiting: const []);
-    }
-    return PublicQueueState(
-      nowServing: json['now_serving'] is Map<String, dynamic>
-          ? NowServing.fromJson(json['now_serving'] as Map<String, dynamic>)
-          : null,
-      waiting: (json['waiting'] as List<dynamic>? ?? [])
-          .whereType<Map<String, dynamic>>()
-          .map(QueueWaiter.fromJson)
-          .toList(),
-      updatedAt: json['updated_at'] as String?,
-    );
-  }
-
-  final NowServing? nowServing;
-  final List<QueueWaiter> waiting;
-  final String? updatedAt;
-
-  bool get isEmpty => nowServing == null && waiting.isEmpty;
 }
 
 /// A staff-facing today's-queue row — mirrors `queueEntrySchema` in the

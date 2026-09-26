@@ -1,10 +1,10 @@
 # SYNAPSE Backend
 
-The CodeIgniter 4.7 REST API behind everything — React SPA, Flutter app, and web kiosk all consume these endpoints. PHP 8.3+, MariaDB 10.4+ / MySQL 8 (`synapse_zcode`), stateless JWT auth, DB-driven RBAC, hash-chained audit log.
+The CodeIgniter 4.7 REST API behind everything — the React SPA and Flutter app both consume these endpoints. PHP 8.3+, MariaDB 10.4+ / MySQL 8 (`synapse_zcode`), stateless JWT auth, DB-driven RBAC, hash-chained audit log.
 
 ## How it's built
 
-Five domain modules — **Clinic**, **Counselling**, **Facilities (BMG)**, **Referrals**, **Reports** — each owning its own `Controllers/ Services/ DTOs/ Policies/ Routes.php`, over a `Modules\Shared` kernel (`BaseService`, `BasePolicy`, `BaseRoutes`, `BaseDTO`). Cross-cutting surfaces (auth, RBAC, admin, audit, dashboard, notifications, kiosk) live in root `Controllers/Api`. Modules register their own routes via `Routes::register()`, so root `Config/Routes.php` stays small.
+Five domain modules — **Clinic**, **Counselling**, **Facilities (BMG)**, **Referrals**, **Reports** — each owning its own `Controllers/ Services/ DTOs/ Policies/ Routes.php`, over a `Modules\Shared` kernel (`BaseService`, `BasePolicy`, `BaseRoutes`, `BaseDTO`). Cross-cutting surfaces (auth, RBAC, admin, audit, dashboard, notifications) live in root `Controllers/Api`. Modules register their own routes via `Routes::register()`, so root `Config/Routes.php` stays small.
 
 Two deliberate design choices worth knowing before you contribute:
 
@@ -19,7 +19,7 @@ app/
 │                            LoginThrottleService, AccountStateService, CurrentUser
 ├── Commands/                12 spark workers (see below)
 ├── Config/                  root Routes.php, Filters, Constants
-├── Controllers/Api/         Auth · Rbac · Admin · Audit · Dashboard · Notify · Kiosk
+├── Controllers/Api/         Auth · Rbac · Admin · Audit · Dashboard · Notify
 ├── Database/
 │   ├── Migrations/          96 timestamped migrations (2026-01 → 2026-09)
 │   └── Seeds/               5 seeders — PermissionsAndGroupsSeeder is load-bearing
@@ -66,7 +66,6 @@ Key `.env` variables (full annotated template in `.env.example`):
 | `CORS_ALLOWED_ORIGINS` | Strict origin allowlist — no wildcards in production (enforced by `Config\Boot`) |
 | `RATELIMIT_GLOBAL_PER_MIN` / `RATELIMIT_AUTH_PER_MIN` | Fixed-window buckets (600 / 30) |
 | `LOGIN_LOCKOUT_MAX_FAILURES` / `LOGIN_LOCKOUT_WINDOW_SECONDS` | Per-account lockout (5 failures / 900 s) |
-| `FFMPEG_BINARY` | Kiosk video thumbnails |
 
 Note: the Database config reads collation from `database.default.DBCollat` (not `collation`) — setting `database.default.collation` is a no-op.
 
@@ -89,7 +88,7 @@ Authorization is two-stage: `ApiController::authorize()` checks the permission c
 
 - **Envelope** — `{ success, data, errors, meta }` on every response; stable error codes; 5xx redacted to `internal.error` with no message/trace leakage; logs keep only exception class + object id.
 - **Pagination** — keyset cursors only (`KeysetPaginator`); OFFSET is banned.
-- **Public endpoints (deliberate)** — `/health`, `/auth/login`, `/auth/refresh`, `/clinic/queue/state` (lobby TV, minimum disclosure), `/appointments/verify` + `/referrals/verify` (QR; returns only `{ status, artifact_type, issuer }`), kiosk media/settings reads (unguessable-UUID bearer). All locked open *and* leak-free by `PublicRoutesTest`.
+- **Public endpoints (deliberate)** — `/health`, `/auth/login`, `/auth/refresh`, `/appointments/verify` + `/referrals/verify` (QR; returns only `{ status, artifact_type, issuer }`). All locked open *and* leak-free by `PublicRoutesTest`.
 - **Rate limits** — `api_ratelimit` across `api/*`; a strict `auth` bucket (30/min) on login/refresh; per-account lockout after 5 failures in 15 min (HMAC-keyed counters — attempted emails are never stored, logged, or audited).
 
 ## Background workers

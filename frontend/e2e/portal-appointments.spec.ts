@@ -21,8 +21,8 @@ async function signIn(page: Page, role: 'student' | 'employee'): Promise<void> {
   await page.route(`**/api/v1/me/${role}-profile`, (route) => route.fulfill({
     contentType: 'application/json',
     body: JSON.stringify({ success: true, data: role === 'student'
-      ? { id: 1, kind: 'student', student_number: '2026-1', first_name: 'Test', middle_name: null, last_name: 'User', course: null, year_level: null, section: null, date_of_birth: null, gender: null, blood_type: null, has_rfid: false, has_qr: false, consecutive_no_shows: 0, archived: false, created_at: '2026-01-01 00:00:00', kiosk_identifier: 'stu:2026-1' }
-      : { id: 1, kind: 'employee', employee_number: 'E-1', first_name: 'Test', middle_name: null, last_name: 'User', department: null, position: null, date_hired: null, employment_status: null, hr_synced_at: null, emergency_contact_name: null, emergency_contact_phone: null, date_of_birth: null, gender: null, has_rfid: false, has_qr: false, kiosk_identifier: 'emp:E-1', is_teaching: false, archived: false, created_at: '2026-01-01 00:00:00' } }),
+      ? { id: 1, kind: 'student', student_number: '2026-1', first_name: 'Test', middle_name: null, last_name: 'User', course: null, year_level: null, section: null, date_of_birth: null, gender: null, blood_type: null, has_rfid: false, has_qr: false, consecutive_no_shows: 0, archived: false, created_at: '2026-01-01 00:00:00' }
+      : { id: 1, kind: 'employee', employee_number: 'E-1', first_name: 'Test', middle_name: null, last_name: 'User', department: null, position: null, date_hired: null, employment_status: null, hr_synced_at: null, emergency_contact_name: null, emergency_contact_phone: null, date_of_birth: null, gender: null, has_rfid: false, has_qr: false, is_teaching: false, archived: false, created_at: '2026-01-01 00:00:00' } }),
   }));
   await page.route('**/api/v1/me/*clinic-visits**', (route) => route.fulfill({
     contentType: 'application/json', body: JSON.stringify({ success: true, data: [] }),

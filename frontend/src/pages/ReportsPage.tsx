@@ -129,7 +129,7 @@ function Metric({
 }: {
   label: string;
   value: number;
-  detail: string;
+  detail?: string;
   delta: number | null;
   prior?: number;
 }) {
@@ -137,7 +137,7 @@ function Metric({
     <div className="min-w-0 px-4 py-3">
       <dt className="text-xs font-medium text-muted-foreground">{label}</dt>
       <dd className="mt-1 text-xl font-semibold tabular-nums text-foreground">{value.toLocaleString()}</dd>
-      <p className="mt-1 text-xs text-muted-foreground">{detail}</p>
+      {detail !== undefined && <p className="mt-1 text-xs text-muted-foreground">{detail}</p>}
       <Delta value={delta} {...(prior !== undefined ? { prior } : {})} />
     </div>
   );
@@ -365,7 +365,7 @@ export default function ReportsPage() {
         ) : summary.data !== undefined ? (
           <>
             <dl className="grid divide-y sm:grid-cols-2 sm:divide-x sm:divide-y-0 xl:grid-cols-5">
-              <Metric label="Clinic Encounters" value={summary.data.clinic.encounters} detail={summary.data.clinic.checkins + ' kiosk check-ins'} delta={summary.data.clinic.encounters_delta_pct} prior={summary.data.clinic.previous_encounters} />
+              <Metric label="Clinic Encounters" value={summary.data.clinic.encounters} delta={summary.data.clinic.encounters_delta_pct} prior={summary.data.clinic.previous_encounters} />
               <Metric label="Counselling Appointments" value={summary.data.counselling.appointments} detail={summary.data.counselling.sessions + ' sessions opened'} delta={summary.data.counselling.appointments_delta_pct} prior={summary.data.counselling.previous_appointments} />
               <Metric label="Units Dispensed" value={summary.data.inventory.dispensed_qty} detail={summary.data.inventory.active_batches + ' active batches'} delta={summary.data.inventory.dispensed_delta_pct} prior={summary.data.inventory.previous_dispensed_qty} />
               <Metric label="Referrals Created" value={summary.data.referrals.created} detail="New referral activity" delta={summary.data.referrals.created_delta_pct} prior={summary.data.referrals.previous_created} />

@@ -201,7 +201,6 @@ function ClinicReportView({ data }: { data: ClinicReport }) {
         headers={['Medicine', 'Quantity']}
         rows={(data.most_common_medications ?? []).map((m) => [m.generic_name + (m.brand_name !== null ? ' (' + m.brand_name + ')' : ''), m.qty + ' ' + m.unit])}
       />
-      <Breakdown title="Kiosk Check-In Outcomes" data={data.checkin_outcomes.map((p) => ({ label: p.outcome, value: p.cnt }))} />
     </>
   );
 }

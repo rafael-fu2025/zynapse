@@ -16,8 +16,6 @@ namespace App\Services\Rbac;
  *   - Granting or revoking any role in SET_P requires
  *     `rbac.privileged.manage` (superadmin only).
  *   - No user can revoke their own last privileged role.
- *   - Kiosk machine accounts are created/reset only by clinic_admin
- *     or superadmin.
  *
  * These are the ONLY sanctioned role-name references in server logic —
  * every authorization CHECK still goes through permission codes.
@@ -34,10 +32,4 @@ final class PrivilegedRoles
 
     /** The wildcard holder ('*') — the Platform Owner. */
     public const WILDCARD_GROUP = 'superadmin';
-
-    /** Kiosk machine accounts (created/reset only by clinic_admin or superadmin). */
-    public const KIOSK_GROUP = 'kiosk';
-
-    /** Clinic unit administrator — the kiosk machine-account owner. */
-    public const CLINIC_ADMIN_GROUP = 'clinic_admin';
 }

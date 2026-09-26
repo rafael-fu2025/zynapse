@@ -81,7 +81,7 @@ final class QueueService extends BaseService
         $this->autoCloseEarlierOpenEncounters();
 
         return array_map(
-            fn (array $r): array => $this->row($r, false),
+            fn (array $r): array => $this->row($r),
             $this->todayRows(),
         );
     }
@@ -288,7 +288,7 @@ final class QueueService extends BaseService
         $status  = (string) $row['status'];
         $waiting = $status === 'waiting';
         // People ahead = those in an earlier position still waiting or
-        // being served (mirrors the publicState estimate).
+        // being served.
         $ahead = $waiting ? (int) $this->db->table('clinic_queue_entries')
             ->where('clinic_queue_entries.tenant_id', CurrentTenant::id())
             ->where('queue_date', $this->manilaToday())
@@ -368,55 +368,6 @@ final class QueueService extends BaseService
     }
 
     /**
-     * PUBLIC waiting-room feed — minimum disclosure: position + display
-     * name only (legacy TV/kiosk contract). No policy check by design;
-     * the route is unauthenticated.
-     *
-     * Each waiting entry carries an indicative wait (people ahead ×
-     * today's rolling average service time) — kiosk gap #3.
-     *
-     * The PUBLIC lobby feed exposes the queue number, full name in
-     * `Last, First` format, and the school id — enough for the patient
-     * to recognise themselves when their number is called, without
-     * disclosing address, contact, or clinical detail.
-     *
-     * @return array{now_serving: ?array{position: int, display_name: string, patient_school_id: string}, waiting: array<int, array{position: int, display_name: string, patient_school_id: string, est_wait_minutes: int}>, updated_at: string}
-     */
-    public function publicState(): array
-    {
-        $nowServing = null;
-        $waiting    = [];
-
-        foreach ($this->todayRows() as $r) {
-            $status = (string) $r['status'];
-            $item   = [
-                'position'           => (int) $r['position'],
-                'queue_number'       => sprintf('C-%03d', (int) $r['position']),
-                'display_name'       => $this->displayName($r, true),
-                'patient_school_id'  => (string) $r['patient_school_id'],
-            ];
-            if ($status === 'called' || $status === 'in_session') {
-                // Highest-progress entry wins the "now serving" board.
-                $nowServing = $item;
-            } elseif ($status === 'waiting') {
-                $waiting[] = $item;
-            }
-        }
-
-        $avg = $this->avgServiceMinutes();
-        foreach ($waiting as $i => $item) {
-            $ahead = $i + ($nowServing !== null ? 1 : 0);
-            $waiting[$i]['est_wait_minutes'] = (int) round($ahead * $avg);
-        }
-
-        return [
-            'now_serving' => $nowServing,
-            'waiting'     => $waiting,
-            'updated_at'  => $this->utcNow(),
-        ];
-    }
-
-    /**
      * Same-transaction in-app notification to a called patient. Guests
      * (no linked user) and the calling staff member themselves skip.
      */
@@ -456,7 +407,7 @@ final class QueueService extends BaseService
             ->where('q.tenant_id', CurrentTenant::id())
             ->join('clinic_encounters e', 'e.id = q.encounter_id')
             // Patients are `users` (identity-consolidated) — one join
-            // covers both students and employees queueing at the kiosk.
+            // covers both students and employees.
             // When the encounter only carries a school id (legacy/demo
             // rows, patient_user_id NULL) fall back to matching the
             // registry by student/employee number so the name still
@@ -490,79 +441,55 @@ final class QueueService extends BaseService
             )
             ->where('q.id', $id)
             ->get()->getRowArray();
-        return $this->row($row, false);
+        return $this->row($row);
     }
 
     /**
      * @param array<string, mixed> $r
      * @return array<string, mixed>
      */
-    private function row(array $r, bool $public): array
+    private function row(array $r): array
     {
+            // Station that opened the visit (legacy kiosk check-ins) —
+            // null for appointments / desk-created encounters.
         $out = [
-            'id'              => (int) $r['id'],
-            'destination'     => 'clinic',
-            'queue_number'    => sprintf('C-%03d', (int) $r['position']),
-            'encounter_id'    => (int) $r['encounter_id'],
-            'position'        => (int) $r['position'],
-            'status'          => (string) $r['status'],
-            'outcome'         => $r['outcome'] !== null ? (string) $r['outcome'] : null,
-            'display_name'    => $this->displayName($r),
-            'called_at'       => $r['called_at'] !== null ? (string) $r['called_at'] : null,
-            'started_at'      => $r['started_at'] !== null ? (string) $r['started_at'] : null,
-            'finished_at'     => $r['finished_at'] !== null ? (string) $r['finished_at'] : null,
-        ];
-        if (! $public) {
-            $out['patient_school_id'] = (string) $r['patient_school_id'];
-            $out['chief_complaint']   = (string) $r['chief_complaint'];
-            // Kiosk station that opened the visit — null for
-            // appointments / desk-created encounters.
-            $out['station_id'] = $r['station_id'] !== null ? (string) $r['station_id'] : null;
+            'id'                => (int) $r['id'],
+            'destination'       => 'clinic',
+            'queue_number'      => sprintf('C-%03d', (int) $r['position']),
+            'encounter_id'      => (int) $r['encounter_id'],
+            'position'          => (int) $r['position'],
+            'status'            => (string) $r['status'],
+            'outcome'           => $r['outcome'] !== null ? (string) $r['outcome'] : null,
+            'display_name'      => $this->displayName($r),
+            'called_at'         => $r['called_at'] !== null ? (string) $r['called_at'] : null,
+            'started_at'        => $r['started_at'] !== null ? (string) $r['started_at'] : null,
+            'finished_at'       => $r['finished_at'] !== null ? (string) $r['finished_at'] : null,
+            'patient_school_id' => (string) $r['patient_school_id'],
+            'chief_complaint'   => (string) $r['chief_complaint'],
+            'station_id'        => $r['station_id'] !== null ? (string) $r['station_id'] : null,
             // Full registry name (`First Last`) for the Queue-tab id
             // tooltip; null for guests/orphans. Mirrors EncounterDto.
-            $out['patient_name'] = $this->patientFullName($r);
+            'patient_name'      => $this->patientFullName($r),
             // `encounter_status` lets the staff queue UI gate destructive
             // actions (Close / Mark no-show) on the linked encounter's
             // state without a second round-trip — panel revision, August
             // 2026.
-            $out['encounter_status']  = (string) $r['encounter_status'];
-            $out['encounter_outcome'] = $r['encounter_outcome'] !== null ? (string) $r['encounter_outcome'] : null;
-        }
+            'encounter_status'  => (string) $r['encounter_status'],
+            'encounter_outcome' => $r['encounter_outcome'] !== null ? (string) $r['encounter_outcome'] : null,
+        ];
         return $out;
     }
 
     /**
-     * Patient name from the unified registry.
-     *
-     * - `$full === false` (legacy staff view / kiosk scan result): first
-     *   name only. This matches what `CheckinService::result()` surfaces
-     *   on the kiosk modal and keeps the historical call site stable.
-     * - `$full === true` (public lobby feed, Phase 14 revision): the
-     *   full name in `Last, First` format so patients in the waiting
-     *   room can identify themselves. Falls back to the masked school
-     *   id prefix if no names are on file (e.g. an archived patient
-     *   still queued).
+     * Staff-view display name: first name only, falling back to the
+     * typed guest name or a masked school-id prefix (guest walk-in /
+     * orphaned rows).
      *
      * @param array<string, mixed> $r
      */
-    private function displayName(array $r, bool $full = false): string
+    private function displayName(array $r): string
     {
         $first = isset($r['first_name']) && $r['first_name'] !== null ? trim((string) $r['first_name']) : '';
-        $last  = isset($r['last_name'])  && $r['last_name']  !== null ? trim((string) $r['last_name'])  : '';
-
-        if ($full) {
-            if ($first !== '' || $last !== '') {
-                // `Last, First` — the conventional directory order used
-                // by the Foundation University registrar.
-                return trim($last . ($first !== '' ? ', ' . $first : ''));
-            }
-            // Guest walk-in (no registry record) — show the typed name.
-            if (isset($r['guest_name']) && $r['guest_name'] !== null && $r['guest_name'] !== '') {
-                return (string) $r['guest_name'];
-            }
-            $sid = (string) $r['patient_school_id'];
-            return mb_substr($sid, 0, 3) . '…';
-        }
 
         if ($first !== '') {
             return $first;
@@ -594,7 +521,7 @@ final class QueueService extends BaseService
     /**
      * Today's rolling average service time in minutes (started_at →
      * finished_at over completed sessions); 10-minute default while
-     * the day has no history. Mirrors CheckinService::estimatedWaitMinutes.
+     * the day has no history.
      */
     private function avgServiceMinutes(): float
     {
@@ -610,9 +537,9 @@ final class QueueService extends BaseService
 
     /**
      * The queue's business day (Asia/Manila) — what staff mean by
-     * "today". Writers (CheckinService, AppointmentService) partition
-     * `queue_date` on the same calendar via the shared ManilaDay
-     * helper; keep both sides aligned.
+     * "today". Writers (AppointmentService, referral handoff, bulk
+     * import) partition `queue_date` on the same calendar via the
+     * shared ManilaDay helper; keep both sides aligned.
      */
     private function manilaToday(): string
     {

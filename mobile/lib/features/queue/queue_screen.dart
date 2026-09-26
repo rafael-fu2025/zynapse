@@ -8,26 +8,24 @@ import '../../core/api/api_envelope.dart';
 import '../../core/models/queue.dart';
 import '../../core/services/api_service.dart';
 import '../../core/services/auth_controller.dart';
-import '../../core/utils/dates.dart';
 import '../common/auto_polling.dart';
 import '../common/crud_form.dart';
 import '../common/widgets.dart';
 import 'your_queue_section.dart';
 
 /// Format a queue position as `C-001` (zero-padded to 3 digits) — matches the
-/// web's `formatQueueNumber` (KioskCheckin.tsx) so the mobile Queue screen
-/// shows the same queue number as the web queue display.
+/// web's `formatQueueNumber` (lib/queueFormat.ts) so the mobile Queue screen
+/// shows the same queue number as the web staff queue.
 String formatQueueNumber(int position) {
   if (position <= 0) return 'C-???';
   return 'C-${position.toString().padLeft(3, '0')}';
 }
 
-/// Queue — the public waiting-room feed plus the caller's own queue status.
+/// Queue — the caller's own queue status, plus the staff today's-queue
+/// board for `clinic.queue.manage` holders.
 ///
-/// * Public state: `GET /clinic/queue/state` (no auth — the same feed the
-///   lobby TV / kiosk polls, so this tab works for every account).
-/// * My status: `GET /me/queue-status` (employee) or
-///   `/me/student-queue-status` (student) — the portal "Your queue" card.
+/// My status: `GET /me/queue-status` (employee) or
+/// `/me/student-queue-status` (student) — the portal "Your queue" card.
 class QueueScreen extends StatefulWidget {
   const QueueScreen({super.key});
 
@@ -39,7 +37,6 @@ class _QueueScreenState extends State<QueueScreen>
     with AutoPolling<QueueScreen> {
   bool _loading = true;
   String? _error;
-  PublicQueueState? _public;
   List<QueueEntry>? _today;
   bool _staffMode = false;
   bool _canQueue = false;
@@ -74,17 +71,22 @@ class _QueueScreenState extends State<QueueScreen>
   }
 
   Future<void> _load() async {
+    if (!_staffMode) {
+      if (!mounted) return;
+      setState(() {
+        _loadedOnce = true;
+        _loading = false;
+      });
+      return;
+    }
     setState(() {
       _loading = !_loadedOnce;
       _error = null;
     });
     try {
-      final public = await ApiService.I.publicQueueState();
-      List<QueueEntry>? today;
-      if (_staffMode) today = await ApiService.I.queueToday();
+      final today = await ApiService.I.queueToday();
       if (!mounted) return;
       setState(() {
-        _public = public;
         _today = today;
         _loadedOnce = true;
         _loading = false;
@@ -99,16 +101,14 @@ class _QueueScreenState extends State<QueueScreen>
   }
 
   /// Polled live update (mirrors the SPA's 10s queue polling): silently swap
-  /// both the public waiting room and (for staff) today's queue so new
-  /// patients / transitions appear without a manual refresh.
+  /// today's staff queue so new patients / transitions appear without a
+  /// manual refresh.
   Future<void> _silentRefresh() async {
+    if (!_staffMode) return;
     try {
-      final public = await ApiService.I.publicQueueState();
-      List<QueueEntry>? today;
-      if (_staffMode) today = await ApiService.I.queueToday();
+      final today = await ApiService.I.queueToday();
       if (!mounted) return;
       setState(() {
-        _public = public;
         _today = today;
       });
     } catch (e) {
@@ -180,16 +180,6 @@ class _QueueScreenState extends State<QueueScreen>
               ),
           ],
           if (_canQueue) YourQueueSection(student: _isStudent),
-          const SizedBox(height: 12),
-          if (_loading)
-            SizedBox(height: 320, child: AsyncState.loading())
-          else if (_error != null)
-            SizedBox(
-              height: 320,
-              child: AsyncState.error(_error!, onRetry: _load),
-            )
-          else
-            _PublicQueueView(state: _public ?? PublicQueueState(waiting: [])),
         ],
       ),
     );
@@ -317,137 +307,6 @@ class _QueueRow extends StatelessWidget {
             StatusBadge(label: titleCaseOption(entry.status), color: color),
         ],
       ),
-    );
-  }
-}
-
-
-class _PublicQueueView extends StatelessWidget {
-  const _PublicQueueView({required this.state});
-
-  final PublicQueueState state;
-
-  @override
-  Widget build(BuildContext context) {
-    final nowServing = state.nowServing;
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          'Waiting room',
-          style: Theme.of(context)
-              .textTheme
-              .titleMedium
-              ?.copyWith(fontWeight: FontWeight.w700),
-        ),
-        const SizedBox(height: 4),
-        Text(
-          'Updated ${state.updatedAt != null ? fmtUtcShort(state.updatedAt) : ''}'
-          ' · feeds the lobby display',
-          style: Theme.of(context)
-              .textTheme
-              .bodySmall
-              ?.copyWith(color: Colors.black45),
-        ),
-        const SizedBox(height: 12),
-
-        if (nowServing != null)
-          SectionCard(
-            title: 'Now serving',
-            icon: HugeIcons.strokeRoundedMegaphone01,
-            child: Row(
-              children: [
-                Text(
-                  formatQueueNumber(nowServing.position),
-                  style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                        fontWeight: FontWeight.w800,
-                        color: Theme.of(context).colorScheme.primary,
-                      ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        nowServing.displayName,
-                        style: const TextStyle(
-                          fontWeight: FontWeight.w600,
-                          fontSize: 16,
-                        ),
-                      ),
-                      Text(
-                        'ID ${nowServing.patientSchoolId}',
-                        style: const TextStyle(color: Colors.black45),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-
-        const SizedBox(height: 12),
-
-        if (state.waiting.isEmpty)
-          AsyncState.empty('The waiting room is empty.',
-              icon: HugeIcons.strokeRoundedCheckmarkCircle01)
-        else
-          Card(
-            elevation: 0,
-            margin: EdgeInsets.zero,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(12),
-              side: BorderSide(
-                color: Theme.of(context)
-                    .colorScheme
-                    .outlineVariant
-                    .withValues(alpha: 0.5),
-              ),
-            ),
-            child: Column(
-              children: [
-                for (final (i, w) in state.waiting.indexed) ...[
-                  if (i > 0)
-                    const Divider(height: 1, indent: 16, endIndent: 16),
-                  ListTile(
-                    leading: Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 8, vertical: 4),
-                      decoration: BoxDecoration(
-                        color: Theme.of(context)
-                            .colorScheme
-                            .primary
-                            .withValues(alpha: 0.1),
-                        borderRadius: BorderRadius.circular(999),
-                      ),
-                      child: Text(
-                        formatQueueNumber(w.position),
-                        style: const TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w700,
-                          color: Color(0xFF800000),
-                        ),
-                      ),
-                    ),
-                    title: Text(w.displayName),
-                    subtitle: Text('ID ${w.patientSchoolId}'),
-                    trailing: w.estWaitMinutes != null
-                        ? Text(
-                            '~${w.estWaitMinutes} min',
-                            style: const TextStyle(
-                              fontWeight: FontWeight.w600,
-                              color: Colors.black54,
-                            ),
-                          )
-                        : null,
-                  ),
-                ],
-              ],
-            ),
-          ),
-      ],
     );
   }
 }

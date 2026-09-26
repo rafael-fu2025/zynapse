@@ -168,8 +168,6 @@ export function ClinicAnalyticsView({
 
         <ReportDataTable title="Monthly Summary" columns={['Month', 'Visits']} loading={isLoading} rows={rows((report?.monthly_visits ?? []).map((item) => [monthLabel(item.month), item.cnt]), 'clinic-monthly')} />
 
-        <ReportDataTable title="Kiosk Outcomes" columns={['Outcome', 'Count']} loading={isLoading} rows={rows((report?.checkin_outcomes ?? []).map((item) => [titleCase(item.outcome), item.cnt]), 'clinic-checkin')} />
-
         <ReportDataTable title="Referral Flows" columns={['Source', 'Target', 'Status', 'Count']} loading={isLoading} rows={rows((report?.referral_flows ?? []).map((item) => [titleCase(item.source_module), titleCase(item.target_module), titleCase(item.status), item.cnt]), 'clinic-referral')} />
       </div>
     </div>

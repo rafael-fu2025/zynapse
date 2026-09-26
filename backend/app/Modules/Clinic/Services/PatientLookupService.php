@@ -8,7 +8,7 @@
  * legacy fallback and no patient_identifiers/persons join: `id` in the
  * returned row is the `users.id` (the canonical patient_user_id).
  *
- * Used by CheckinService, AppointmentService, ClinicService, QueueService,
+ * Used by AppointmentService, ClinicService, QueueService,
  * ReferralService, CounsellingService, ScheduleService.
  *
  * @phpstan-type PatientRow array<string, mixed>

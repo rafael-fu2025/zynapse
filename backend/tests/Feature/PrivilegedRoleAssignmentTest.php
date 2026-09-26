@@ -13,9 +13,7 @@ namespace Tests\Feature;
  *   - granting/revoking any privileged role (set P: superadmin,
  *     clinic_admin, guidance_admin, bmg_admin) requires
  *     `rbac.privileged.manage` → 403 otherwise;
- *   - no user can revoke their own LAST privileged role → 422;
- *   - kiosk machine accounts are created/reset only by clinic_admin
- *     or superadmin → 403 rbac.kiosk_restricted otherwise.
+ *   - no user can revoke their own LAST privileged role → 422.
  *
  * Fixtures are created directly in the DB (FeatureTestCase::createUser),
  * bypassing the service — so these tests pin the SERVICE-side guards,
@@ -144,51 +142,5 @@ final class PrivilegedRoleAssignmentTest extends FeatureTestCase
         $result->assertStatus(422);
         $body = $this->envelope($result);
         $this->assertFalse($body['success']);
-    }
-
-    public function testUnitAdminCannotCreateKioskAccount(): void
-    {
-        $actor = $this->login(['guidance_admin']);
-
-        $result = $this->authed($actor['token'], 'post', 'api/v1/admin/users', [
-            'email'  => $this->uniqueEmail('kiosk-denied'),
-            'groups' => ['kiosk'],
-        ]);
-
-        $result->assertStatus(403);
-        $this->assertErrorCode('rbac.kiosk_restricted', $result);
-    }
-
-    public function testClinicAdminCanCreateKioskAccount(): void
-    {
-        $actor = $this->login(['clinic_admin']);
-
-        $result = $this->authed($actor['token'], 'post', 'api/v1/admin/users', [
-            'email'  => $this->uniqueEmail('kiosk-allowed'),
-            'groups' => ['kiosk'],
-        ]);
-
-        $result->assertStatus(201);
-        $body = $this->envelope($result);
-        $this->assertSame(['kiosk'], $body['data']['groups'] ?? null);
-    }
-
-    public function testUnitAdminCannotResetKioskPassword(): void
-    {
-        $guidance = $this->login(['guidance_admin']);
-        $clinic   = $this->login(['clinic_admin']);
-
-        $kiosk = $this->authed($clinic['token'], 'post', 'api/v1/admin/users', [
-            'email'  => $this->uniqueEmail('kiosk-reset'),
-            'groups' => ['kiosk'],
-        ]);
-        $kiosk->assertStatus(201);
-        $kioskId = (int) ($this->envelope($kiosk)['data']['id'] ?? 0);
-        $this->assertGreaterThan(0, $kioskId);
-
-        $result = $this->authed($guidance['token'], 'post', 'api/v1/admin/users/' . $kioskId . '/reset-password');
-
-        $result->assertStatus(403);
-        $this->assertErrorCode('rbac.kiosk_restricted', $result);
     }
 }

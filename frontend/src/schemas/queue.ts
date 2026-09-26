@@ -65,29 +65,4 @@ export const guidanceQueueEntrySchema = z.object({
 });
 export type GuidanceQueueEntry = z.infer<typeof guidanceQueueEntrySchema>;
 
-// Public lobby rows: identity fields are present only where the
-// destination's public branch still discloses them. Guidance rows
-// carry the queue-number abstraction ONLY (audit 2026-09-05, F16);
-// clinic rows keep name + school ID.
-const publicQueueRowSchema = z.object({
-  position: z.number().int(),
-  queue_number: z.string(),
-  display_name: z.string().optional(),
-  patient_school_id: z.string().optional(),
-  est_wait_minutes: z.number().int().min(0).optional(),
-});
-
-const publicQueueColumnSchema = z.object({
-  active: z.array(publicQueueRowSchema).optional(),
-  now_serving: publicQueueRowSchema.nullable(),
-  waiting: z.array(publicQueueRowSchema),
-});
-
-export const publicQueueStateSchema = z.object({
-  guidance: publicQueueColumnSchema,
-  clinic: publicQueueColumnSchema,
-  updated_at: z.string(),
-});
-export type PublicQueueState = z.infer<typeof publicQueueStateSchema>;
-
 export type QueueAction = 'start' | 'skip' | 'complete';

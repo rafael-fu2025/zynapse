@@ -55,7 +55,6 @@ final class ReportService extends BaseService
             $previousBounds,
             ['archived_at' => null],
         );
-        $checkins = $this->summaryCounts('clinic_checkins', 'scanned_at', $currentBounds, $previousBounds);
         $appointments = $this->dateSummaryCounts('counselling_appointments', 'appointment_date', $range, $previous);
         $sessions = $this->summaryCounts('counselling_sessions', 'started_at', $currentBounds, $previousBounds);
         $dispensed = $this->sumSummaryCounts(
@@ -89,7 +88,6 @@ final class ReportService extends BaseService
                 'encounters' => $clinic['current'],
                 'previous_encounters' => $clinic['previous'],
                 'encounters_delta_pct' => $this->deltaPct($clinic['current'], $clinic['previous']),
-                'checkins' => $checkins['current'],
             ],
             'counselling' => [
                 'appointments' => $appointments['current'],
@@ -153,10 +151,6 @@ final class ReportService extends BaseService
             ->where('archived_at', null)
             ->groupBy('category')->orderBy('cnt', 'DESC')->get()->getResultArray();
 
-        $checkinOutcomes = $this->timestampBuilder('clinic_checkins', 'scanned_at', $bounds)
-            ->select('outcome, COUNT(*) AS cnt')
-            ->groupBy('outcome')->orderBy('cnt', 'DESC')->get()->getResultArray();
-
         $referralFlows = $this->timestampBuilder('referral_referrals', 'created_at', $bounds)
             ->select('source_module, target_module, status, COUNT(*) AS cnt')
             ->where('archived_at', null)
@@ -205,7 +199,6 @@ final class ReportService extends BaseService
             'status_breakdown' => $this->intify($statusBreakdown),
             'daily_trend' => $this->intify($this->fillDailyBuckets($range, $dailyTrend)),
             'complaint_categories' => $this->intify($complaintCategories),
-            'checkin_outcomes' => $this->intify($checkinOutcomes),
             'referral_flows' => $this->intify($referralFlows),
             'monthly_visits' => $this->intify($this->fillMonthlyBuckets($range, $monthlyVisits)),
             'most_common_medications' => $this->intify($mostCommonMedications),

@@ -21,9 +21,7 @@ import {
   Megaphone,
   MessagesSquare,
   Recycle,
-  ScanLine,
   ScrollText,
-  Settings,
   Share2,
   ShieldCheck,
   Users,
@@ -111,7 +109,6 @@ const NAV_SECTIONS: ReadonlyArray<{ title: string; items: ReadonlyArray<NavItem>
       { label: 'Appointments', href: '/appointments', icon: CalendarClock, permission: 'clinic.appointments.read' },
       { label: 'Patients', href: '/patients', icon: ContactRound, permission: 'clinic.patients.read' },
       { label: 'Inventory', href: '/inventory', icon: Boxes, permission: 'clinic.inventory.read' },
-      { label: 'Check-in Kiosk', href: '/kiosk', icon: ScanLine, permission: 'clinic.checkin.record' },
     ],
   },
   {
@@ -180,7 +177,6 @@ const NAV_SECTIONS: ReadonlyArray<{ title: string; items: ReadonlyArray<NavItem>
       { label: 'Audit', href: '/audit', icon: ScrollText, permission: 'audit.read' },
       { label: 'Users', href: '/admin/users', icon: Users, permission: 'rbac.manage' },
       { label: 'Roles', href: '/admin/roles', icon: ShieldCheck, permission: 'rbac.read' },
-      { label: 'Kiosk Settings', href: '/admin/kiosk-settings', icon: Settings, permission: 'kiosk.content.manage' },
     ],
   },
 ];

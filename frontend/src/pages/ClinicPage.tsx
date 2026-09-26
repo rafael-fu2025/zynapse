@@ -50,7 +50,7 @@ import { SessionProgressTracker, type SessionProgressStep } from '@/components/S
 import { MobileCardList, MobileCard, MobileCardField, MobileCardActions } from '@/components/MobileCardList';
 import { PatientIdCell } from '@/components/PatientIdCell';
 import { WeekdayCheckboxes } from '@/components/WeekdayCheckboxes';
-import { formatQueueNumber } from '@/components/KioskCheckin';
+import { formatQueueNumber } from '@/lib/queueFormat';
 import { DatePicker } from '@/components/ui/date-picker';
 import { TimePicker } from '@/components/ui/time-picker';
 import {

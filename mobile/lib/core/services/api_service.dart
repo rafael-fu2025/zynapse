@@ -11,7 +11,6 @@ import '../models/dashboard.dart';
 import '../models/facilities.dart';
 import '../models/equipment.dart';
 import '../models/inventory.dart';
-import '../models/kiosk.dart';
 import '../models/medicine.dart';
 import '../models/notification.dart';
 import '../models/profile.dart';
@@ -131,45 +130,6 @@ class ApiService {
     return DashboardCounters();
   }
 
-  // ---------------------------------------------------------------------
-  // Shared kiosk configuration and admin media library
-  // ---------------------------------------------------------------------
-
-  Future<KioskSettingsSnapshot> kioskSettings() async {
-    final res = await _dio.get<Map<String, dynamic>>('/kiosk-settings');
-    return KioskSettingsSnapshot.fromJson(_unwrapObject(res));
-  }
-
-  Future<KioskSettingsSnapshot> updateKioskSettings(
-    Map<String, dynamic> settings,
-    int revision,
-  ) async {
-    final res = await _dio.post<Map<String, dynamic>>(
-      '/admin/kiosk-settings',
-      data: {'settings': settings, 'revision': revision},
-    );
-    return KioskSettingsSnapshot.fromJson(_unwrapObject(res));
-  }
-
-  Future<List<KioskMediaAsset>> kioskMedia({
-    bool includeArchived = true,
-    String? search,
-  }) async {
-    final res = await _dio.get<Map<String, dynamic>>(
-      '/admin/kiosk-media',
-      queryParameters: {
-        'limit': 100,
-        if (includeArchived) 'include_archived': 'true',
-        if (search?.trim().isNotEmpty == true) 'search': search!.trim(),
-      },
-    );
-    final data = _unwrapObject(res);
-    return (data['items'] as List? ?? [])
-        .whereType<Map<String, dynamic>>()
-        .map(KioskMediaAsset.fromJson)
-        .toList();
-  }
-
   Future<List<StockTransaction>> inventoryTransactions(int itemId) async {
     final res = await _dio.get<Map<String, dynamic>>(
       '/clinic/inventory/$itemId/movements',
@@ -188,35 +148,6 @@ class ApiService {
         .whereType<Map<String, dynamic>>()
         .map(StockTransaction.fromJson)
         .toList();
-  }
-
-  Future<KioskMediaAsset> uploadKioskMedia({
-    required String filename,
-    String? path,
-    List<int>? bytes,
-    String? label,
-    ProgressCallback? onProgress,
-  }) async {
-    final file = path != null
-        ? await MultipartFile.fromFile(path, filename: filename)
-        : MultipartFile.fromBytes(bytes ?? const [], filename: filename);
-    final res = await _dio.post<Map<String, dynamic>>(
-      '/admin/kiosk-media',
-      data: FormData.fromMap({
-        'file': file,
-        if (label?.trim().isNotEmpty == true) 'label': label!.trim(),
-      }),
-      options: Options(contentType: 'multipart/form-data'),
-      onSendProgress: onProgress,
-    );
-    return KioskMediaAsset.fromJson(_unwrapObject(res));
-  }
-
-  Future<KioskMediaAsset> setKioskMediaArchived(int id, bool archived) async {
-    final res = await _dio.post<Map<String, dynamic>>(
-      '/admin/kiosk-media/$id/${archived ? 'archive' : 'unarchive'}',
-    );
-    return KioskMediaAsset.fromJson(_unwrapObject(res));
   }
 
   // ---------------------------------------------------------------------
@@ -307,13 +238,6 @@ class ApiService {
   // ---------------------------------------------------------------------
   // Queue
   // ---------------------------------------------------------------------
-
-  /// `GET /clinic/queue/state` — public waiting-room feed (no auth).
-  Future<PublicQueueState> publicQueueState() async {
-    final res = await _dio.get<Map<String, dynamic>>('/clinic/queue/state');
-    final body = res.data;
-    return PublicQueueState.fromJson(body?['data'] as Map<String, dynamic>?);
-  }
 
   /// `GET /me/queue-status` (employee) or `/me/student-queue-status` (student).
   Future<List<MyQueueStatus>> myQueues() async {
@@ -1020,8 +944,8 @@ class ApiService {
     );
   }
 
-  /// `POST /clinic/encounters` — desk "New encounter" (walk-in without the
-  /// kiosk). Body `{ patient_school_id, chief_complaint }`.
+  /// `POST /clinic/encounters` — desk "New encounter".
+  /// Body `{ patient_school_id, chief_complaint }`.
   Future<void> createEncounter({
     required String patientSchoolId,
     required String chiefComplaint,

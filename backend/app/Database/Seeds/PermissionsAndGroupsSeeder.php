@@ -34,7 +34,6 @@ final class PermissionsAndGroupsSeeder extends Seeder
         'portal.appointments.read'                   => 'core',
         'portal.appointments.manage'                 => 'core',
         'portal.queue.read'                          => 'core',
-        'kiosk.content.manage'                       => 'core',
 
         // Clinic
         'clinic.encounters.create'                   => 'clinic',
@@ -52,9 +51,6 @@ final class PermissionsAndGroupsSeeder extends Seeder
         'clinic.reorders.manage'                     => 'clinic',
         'clinic.queue.read'                          => 'clinic',
         'clinic.queue.manage'                        => 'clinic',
-        'clinic.checkin.record'                      => 'clinic',
-        'clinic.checkin.read'                        => 'clinic',
-        'kiosk.checkin.submit'                       => 'core',
         'clinic.treatments.read'                     => 'clinic',
         'clinic.triage.use'                          => 'clinic',
         'clinic.inventory.forecast'                  => 'clinic',
@@ -79,7 +75,7 @@ final class PermissionsAndGroupsSeeder extends Seeder
         'counselling.schedule.team_manage'           => 'counselling',
         'counselling.queue.read'                     => 'counselling',
         'counselling.queue.manage'                   => 'counselling',
-        // 2026-09 guidance parity (Phase A): kiosk content ownership.
+        // 2026-09 guidance parity (Phase A): announcements + CMO service catalogue.
         'counselling.announcements.manage'           => 'counselling',
         'counselling.services.manage'                => 'counselling',
         // 2026-09 guidance parity (Phase B): surveys engine.
@@ -194,8 +190,7 @@ final class PermissionsAndGroupsSeeder extends Seeder
                 $existing[(string) $row['permission_code']] = true;
             }
 
-            // Prune rows the tightened matrix no longer maps (e.g.
-            // kiosk.content.manage off clinic_staff, units/categories
+            // Prune rows the tightened matrix no longer maps (units/categories
             // manage off facilities_op — 2026-09 RBAC rework).
             $toDelete = array_keys(array_diff_key($existing, $desired));
             if ($toDelete !== []) {

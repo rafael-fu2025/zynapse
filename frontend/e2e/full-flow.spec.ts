@@ -68,23 +68,25 @@ test('login → dashboard → clinic → audit (screenshots)', async ({ page, re
 
   // Clinic — client-side navigation (a hard reload would drop the
   // in-memory access token by design; tokens never touch localStorage).
-  // Self-sufficient precondition: a kiosk walk-in for the same student
-  // guarantees today's queue has a row (purpose becomes the complaint).
-  const checkin = await request.post(`${apiOrigin()}/api/v1/clinic/checkins`, {
+  // Self-sufficient precondition: a staff check-in transition on the
+  // scheduled appointment opens the encounter AND queues it for today.
+  const appointmentsList = await request.get(
+    `${apiOrigin()}/api/v1/clinic/appointments?q=${encodeURIComponent(studentNumber)}`,
+    { headers: { authorization: `Bearer ${bearer}` } },
+  );
+  expect(appointmentsList.ok(), 'appointments search status').toBeTruthy();
+  const found = ((await appointmentsList.json()).data ?? []).find(
+    (a: { patient_school_id?: string }) => a.patient_school_id === studentNumber,
+  );
+  expect(found, 'appointment for the fullflow student').toBeTruthy();
+  const checkedIn = await request.post(`${apiOrigin()}/api/v1/clinic/appointments/${found.id}/transition`, {
     headers: { authorization: `Bearer ${bearer}` },
-    data: {
-      identifier: studentNumber,
-      method: 'manual',
-      destination: 'clinic',
-      purpose: 'Consultation',
-      station_id: 'E2E-FullFlow',
-    },
+    data: { status: 'checked_in' },
   });
-  expect([200, 201], 'check-in precondition status').toContain(checkin.status());
+  expect(checkedIn.ok(), 'appointment check-in transition status').toBeTruthy();
   await page.getByRole('link', { name: /clinic/i }).first().click();
   await page.waitForURL(/\/clinic$/);
-  // The queue row identifies by patient identifier + station (the
-  // purpose lives on the encounter, not the queue row).
+  // The queue row identifies by patient identifier.
   await expect(page.getByText(studentNumber).first()).toBeVisible({ timeout: 15_000 });
   await page.screenshot({ path: 'e2e/artifacts/03-clinic.png', fullPage: true });
 

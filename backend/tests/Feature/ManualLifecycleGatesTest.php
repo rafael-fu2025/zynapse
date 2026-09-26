@@ -190,10 +190,11 @@ final class ManualLifecycleGatesTest extends FeatureTestCase
         $this->assertNotContains($ids[1], $needsAction);
 
         // The whole book reads chronologically, never by booking time —
-        // the book may carry other rows (seed data), so pin the relative
-        // order of ours instead of the full list. limit=100 (the cap)
-        // keeps every row on one page.
-        $all = $get($this, $this->admin['token'], '?scope=all&limit=100');
+        // the book may carry other rows (accumulated test data), so pin
+        // the relative order of OURS. The `q` term scopes the read to
+        // this test's unique student number, so all three rows always
+        // sit on one page regardless of book size.
+        $all = $get($this, $this->admin['token'], '?scope=all&limit=100&q=' . urlencode($student['schoolId']));
         $posPast = array_search($pastId, $all, true);
         $posUnassigned = array_search($unassignedId, $all, true);
         $posFuture = array_search($ids[1], $all, true);

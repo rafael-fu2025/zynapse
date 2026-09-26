@@ -86,7 +86,6 @@ class UserProfile {
     this.emergencyContactName,
     this.emergencyContactPhone,
     this.isTeaching,
-    this.kioskIdentifier,
     this.allergies = const [],
     this.contacts = const [],
   });
@@ -120,7 +119,6 @@ class UserProfile {
         emergencyContactName: json['emergency_contact_name'] as String?,
         emergencyContactPhone: json['emergency_contact_phone'] as String?,
         isTeaching: json['is_teaching'] as bool?,
-        kioskIdentifier: json['kiosk_identifier'] as String?,
         allergies: (json['allergies'] as List? ?? [])
             .whereType<Map<String, dynamic>>()
             .map(PatientAllergy.fromJson)
@@ -163,10 +161,6 @@ class UserProfile {
   final String? emergencyContactName;
   final String? emergencyContactPhone;
   final bool? isTeaching;
-
-  /// `qr:<num>` / `rfid:<num>` / `emp:<num>` / `stu:<num>` — the identity
-  /// value the kiosk scanner understands.
-  final String? kioskIdentifier;
 
   /// Student detail only: allergies (safety-critical health data).
   final List<PatientAllergy> allergies;

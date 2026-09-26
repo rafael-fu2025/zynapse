@@ -18,8 +18,6 @@ export const ApiErrorCode = {
 
   RBAC_FORBIDDEN: 'rbac.forbidden',
   RBAC_PERMISSION_DENIED: 'rbac.permission_denied',
-  // 2026-09 RBAC rework: kiosk machine accounts are clinic_admin/superadmin-only.
-  RBAC_KIOSK_RESTRICTED: 'rbac.kiosk_restricted',
   REFERRAL_TEACHING_REQUIRED: 'referral.teaching_required',
 
   // 2026-09 external API surface (D4): key states + app suspension.
@@ -101,8 +99,6 @@ export function humanizeCode(code: string): string {
     case ApiErrorCode.RBAC_FORBIDDEN:
     case ApiErrorCode.RBAC_PERMISSION_DENIED:
       return 'You do not have permission for this action.';
-    case ApiErrorCode.RBAC_KIOSK_RESTRICTED:
-      return 'Kiosk station accounts are managed by the Clinic Administrator.';
     case ApiErrorCode.AUTH_API_KEY_MISSING:
     case ApiErrorCode.AUTH_API_KEY_INVALID:
       return 'A valid API key is required (X-Api-Key header).';

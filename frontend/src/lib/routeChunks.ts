@@ -21,7 +21,7 @@ type LazyComponent = ReturnType<typeof lazyWithRetry>;
 type ChunkLoader = () => Promise<{ default: unknown }>;
 
 interface RouteEntry {
-  /** Path as registered in the router, e.g. `/admin/kiosk-settings`. */
+  /** Path as registered in the router, e.g. `/admin/users`. */
   path: string;
   /** Lazy chunk loader. Throws on the import only if Vite is broken. */
   load: ChunkLoader;
@@ -45,8 +45,6 @@ export const ROUTE_CHUNKS: ReadonlyArray<RouteEntry> = [
   route('/patients', () => import('@/pages/PatientsPage')),
   route('/appointments', () => import('@/pages/AppointmentsPage')),
   route('/inventory', () => import('@/pages/InventoryPage')),
-  route('/kiosk', () => import('@/pages/KioskPage')),
-  route('/kiosk-station', () => import('@/pages/KioskStationPage')),
   route('/counselling', () => import('@/pages/CounsellingPage')),
   route('/counselling/surveys', () => import('@/pages/SurveysPage')),
   route('/counselling/announcements', () => import('@/pages/AnnouncementsPage')),
@@ -59,7 +57,6 @@ export const ROUTE_CHUNKS: ReadonlyArray<RouteEntry> = [
   route('/reports', () => import('@/pages/ReportsPage')),
   route('/audit', () => import('@/pages/AuditPage')),
   route('/admin/users', () => import('@/pages/AdminUsersPage')),
-  route('/admin/kiosk-settings', () => import('@/pages/AdminKioskSettingsPage')),
 ];
 
 const BY_PATH = new Map<string, RouteEntry>(

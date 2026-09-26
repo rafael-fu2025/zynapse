@@ -117,11 +117,8 @@ describe('getNotificationDestination', () => {
       expect(getNotificationDestination('admin.user_created', null, auth)).toBe('/admin/users');
     });
 
-    it('routes kiosk.* to /admin/kiosk-settings when user has kiosk.content.manage', () => {
-      const auth = mockAuth(['kiosk.content.manage']);
-      expect(getNotificationDestination('kiosk.settings_updated', null, auth)).toBe(
-        '/admin/kiosk-settings',
-      );
+    it('returns null for templates with no reachable destination', () => {
+      expect(getNotificationDestination('kiosk.settings_updated', null, mockAuth(['*']))).toBeNull();
     });
 
     it('supports superadmin wildcard * permission', () => {

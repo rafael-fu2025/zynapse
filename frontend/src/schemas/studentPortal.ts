@@ -25,10 +25,6 @@ export const studentPortalProfileSchema = z.object({
   consecutive_no_shows: z.number().int().nonnegative(),
   archived: z.boolean(),
   created_at: z.string(),
-  // Convenience: `stu:20266239` / `qr:20266239` / `rfid:20266239`.
-  // The kiosk reads the prefix to know which scan payload to
-  // expect; the SPA renders this string directly into a QR.
-  kiosk_identifier: z.string(),
 });
 export type StudentPortalProfile = z.infer<typeof studentPortalProfileSchema>;
 

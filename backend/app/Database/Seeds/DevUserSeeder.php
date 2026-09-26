@@ -8,7 +8,7 @@ use CodeIgniter\Database\Seeder;
 
 /**
  * DevUserSeeder — DEV/STAGING ONLY. Creates the canonical dev account
- * roster — one account per role in Config\AuthGroups' 13-role catalog,
+ * roster — one account per role in Config\AuthGroups' 12-role catalog,
  * each holding exactly its own group — with password `DevPassw0rd!`
  * (override with SYNAPSE_DEV_PASSWORD). CREDENTIALS.md carries the
  * sign-in matrix.
@@ -49,7 +49,6 @@ final class DevUserSeeder extends Seeder
         'admin@synapse.dev'          => ['username' => 'synapse-admin', 'groups' => ['superadmin']],
         'clinic_admin@synapse.dev'   => ['username' => 'synapse-clinic-admin', 'groups' => ['clinic_admin']],
         'nurse@synapse.dev'          => ['username' => 'synapse-nurse', 'groups' => ['clinic_staff']],
-        'kiosk@synapse.dev'          => ['username' => 'synapse-kiosk', 'groups' => ['kiosk']],
         'guidance_admin@synapse.dev' => ['username' => 'synapse-guidance-admin', 'groups' => ['guidance_admin']],
         'supervisor@synapse.dev'     => ['username' => 'synapse-supervisor', 'groups' => ['guidance_supervisor']],
         'counsellor@synapse.dev'     => ['username' => 'synapse-counsellor', 'groups' => ['counsellor']],

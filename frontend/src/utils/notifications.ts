@@ -70,14 +70,6 @@ export function notificationLabel(
       return `Guidance session reassigned to you ${suffix}`.trim();
     case 'counselling.appointment_booked':
       return `Guidance appointment booked ${suffix}`.trim();
-    case 'kiosk.media_uploaded':
-      return `Kiosk media uploaded ${suffix}`.trim();
-    case 'kiosk.media_archived':
-      return `Kiosk media archived ${suffix}`.trim();
-    case 'kiosk.media_restored':
-      return `Kiosk media restored ${suffix}`.trim();
-    case 'kiosk.settings_updated':
-      return `Kiosk settings updated ${suffix}`.trim();
     case 'admin.user_created':
       return 'New user account created';
     case 'admin.user_groups_changed':
@@ -170,9 +162,6 @@ export function getNotificationDestination(
   }
   if (template.startsWith('admin.') && hasPermission(auth, 'rbac.manage')) {
     return '/admin/users';
-  }
-  if (template.startsWith('kiosk.') && hasPermission(auth, 'kiosk.content.manage')) {
-    return '/admin/kiosk-settings';
   }
   return null;
 }

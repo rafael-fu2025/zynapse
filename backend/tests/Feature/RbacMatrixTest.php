@@ -83,7 +83,7 @@ final class RbacMatrixTest extends FeatureTestCase
         // clinic unit (queue read) survives the move to an explicit matrix.
         $session = $this->login(['clinic_admin']);
 
-        $result = $this->authed($session['token'], 'get', 'api/v1/clinic/queue/state');
+        $result = $this->authed($session['token'], 'get', 'api/v1/clinic/queue');
 
         $result->assertStatus(200);
     }

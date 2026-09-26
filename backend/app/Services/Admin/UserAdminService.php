@@ -26,8 +26,6 @@ use DateTimeZone;
  * 2026-09 RBAC rework governance (D2, see PrivilegedRoles):
  *   - Granting/revoking a privileged role (set P) requires
  *     `rbac.privileged.manage` — superadmin only.
- *   - Kiosk machine accounts are created/reset only by clinic_admin
- *     or superadmin.
  *   - No user can revoke their own last privileged role; the last
  *     holder of any privileged role is irremovable.
  *   - Every privileged grant/revoke is audited.
@@ -290,7 +288,7 @@ final class UserAdminService extends BaseService
      *
      * Ordering is the safety property: `rbac.manage`, the strict
      * identifier/kind shape check, known-role validation and the
-     * privileged-grant + kiosk gates all run BEFORE any MIS lookup or
+     * privileged-grant gate all run BEFORE any MIS lookup or
      * local write. An unauthorized or malformed request therefore never
      * creates a user and never grants a role. Resolve/provision, the
      * membership inserts and the audit rows share ONE transaction, so a
@@ -318,12 +316,11 @@ final class UserAdminService extends BaseService
             static fn ($group): string => trim((string) $group),
             $groups,
         )));
-        // Known roles + privileged grant + kiosk gates on the REQUESTED
+        // Known roles + privileged grant gate on the REQUESTED
         // roles, before any MIS work. `rbac.privileged.manage` is never
         // relaxed: the superadmin wildcard is the only way to satisfy it.
         $this->assertKnownGroups($groups);
         $this->assertMayAssignGroups($actorId, $groups);
-        $this->assertKioskAccountAccess($actorId, $groups);
         // An identifier already owned by another tenant is a conflict —
         // never adopt (or leak) another tenant's person.
         $this->assertNoCrossTenantIdentity($identifier, $kind);
@@ -405,7 +402,6 @@ final class UserAdminService extends BaseService
         $actorId = \App\Auth\CurrentUser::assert();
         $this->assertAtLeastOneGroup($groups);
         $this->assertMayAssignGroups($actorId, $groups);
-        $this->assertKioskAccountAccess($actorId, $groups);
         $email = strtolower(trim($email));
         $temporaryPassword = $password !== null && $password !== ''
             ? $password
@@ -528,7 +524,6 @@ final class UserAdminService extends BaseService
             // role is the same authorization problem as a grant, so the
             // desired list alone is not enough.
             $this->assertMayChangePrivilegedGroups($actorId, $previousGroups, $groups);
-            $this->assertKioskAccountAccess($actorId, $groups);
 
             $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
             $this->replaceGroupsInTxn($userId, $groups, $now);
@@ -547,10 +542,6 @@ final class UserAdminService extends BaseService
         $actorId = \App\Auth\CurrentUser::assert();
 
         return $this->txn(function () use ($userId, $actorId): array {
-            // Kiosk machine accounts: reset restricted to clinic_admin
-            // or superadmin (D2).
-            $this->assertKioskAccountAccess($actorId, $this->groupsFor([$userId])[$userId] ?? []);
-
             $identity = $this->selectForUpdate('auth_identities', ['user_id' => $userId, 'type' => 'email_password']);
             if ($identity === null) {
                 throw ApiException::notFound('resource.not_found');
@@ -727,29 +718,6 @@ final class UserAdminService extends BaseService
         if (! $this->permissions->userHas($actorId, 'rbac.privileged.manage')) {
             throw ApiException::forbidden('rbac.escalation_forbidden');
         }
-    }
-
-    /**
-     * Kiosk accounts are MACHINE accounts: creation/reset is restricted
-     * to the clinic unit administrator (or superadmin) per D2.
-     *
-     * @param list<string> $groups the kiosk-bearing group set being
-     *                             created/assigned (or the target's
-     *                             current groups when resetting)
-     */
-    private function assertKioskAccountAccess(int $actorId, array $groups): void
-    {
-        if (! in_array(PrivilegedRoles::KIOSK_GROUP, $groups, true)) {
-            return;
-        }
-        if ($this->permissions->userHas($actorId, 'rbac.privileged.manage')) {
-            return; // superadmin (wildcard) or an explicit platform grant.
-        }
-        $actorGroups = $this->groupsFor([$actorId])[$actorId] ?? [];
-        if (in_array(PrivilegedRoles::CLINIC_ADMIN_GROUP, $actorGroups, true)) {
-            return;
-        }
-        throw ApiException::forbidden('rbac.kiosk_restricted');
     }
 
     /**

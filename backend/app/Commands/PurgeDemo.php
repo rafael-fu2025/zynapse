@@ -84,8 +84,6 @@ final class PurgeDemo extends BaseCommand
             ['notification outbox', 'notification_outbox', $in('recipient_user_id')],
             ['clinic queue entries', 'clinic_queue_entries',
                 $in('called_by_user_id') . " OR encounter_id IN ($demoEncounters) OR referral_id IN ($demoReferrals)"],
-            ['clinic check-ins', 'clinic_checkins',
-                $in('patient_user_id', 'recorded_by_user_id') . " OR encounter_id IN ($demoEncounters)"],
             ['clinic vitals', 'clinic_vitals', $in('recorded_by_user_id') . " OR encounter_id IN ($demoEncounters)"],
             ['clinic triage', 'clinic_triage_predictions', $in('decided_by_user_id') . " OR encounter_id IN ($demoEncounters)"],
             ['clinic treatments', 'clinic_treatments', $in('administered_by_user_id') . " OR encounter_id IN ($demoEncounters)"],
@@ -118,7 +116,6 @@ final class PurgeDemo extends BaseCommand
             ['generated reports', 'generated_reports', $in('generated_by_user_id')],
             ['report summaries', 'report_summaries', $in('generated_by_user_id')],
             ['report configurations', 'report_configurations', $in('created_by_user_id')],
-            ['kiosk media assets', 'kiosk_media_assets', $in('uploaded_by_user_id')],
             ['audit outbox (demo actors)', 'audit_outbox', $in('actor_user_id')],
             ['auth logins', 'auth_logins', $in('user_id')],
             ['auth refresh tokens', 'auth_refresh_tokens', $in('user_id')],
@@ -145,7 +142,6 @@ final class PurgeDemo extends BaseCommand
         $db->query('SET FOREIGN_KEY_CHECKS = 0');
         $db->transBegin();
         try {
-            $this->reassignKioskSettingsActor($db, $idList);
             foreach ($steps as [$label, $table, $where]) {
                 $db->query("DELETE FROM {$table} WHERE {$where}");
                 $affected = $db->affectedRows();
@@ -196,27 +192,5 @@ final class PurgeDemo extends BaseCommand
             ->whereNotIn('u.id', $ids)
             ->get()->getRowArray()['n'] ?? 0;
         CLI::write("Users kept: {$kept} (MIS-provisioned + @synapse.dev machine accounts).");
-    }
-
-    /**
-     * kiosk_settings.updated_by_user_id is NOT NULL and FK'd to users —
-     * reassign the actor to the superadmin rather than deleting settings.
-     */
-    private function reassignKioskSettingsActor(\CodeIgniter\Database\BaseConnection $db, string $idList): void
-    {
-        $superadmin = $db->table('auth_groups_users agu')
-            ->select('agu.user_id')
-            ->join('auth_groups ag', 'ag.id = agu.group_id')
-            ->where('ag.name', 'superadmin')
-            ->orderBy('agu.user_id', 'ASC')
-            ->limit(1)
-            ->get()->getRowArray();
-        if ($superadmin === null) {
-            return; // No superadmin to hand the settings to; the FK is then moot in dev.
-        }
-        $db->query(
-            'UPDATE kiosk_settings SET updated_by_user_id = ' . (int) $superadmin['user_id']
-            . ' WHERE updated_by_user_id IN (' . $idList . ')',
-        );
     }
 }

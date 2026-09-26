@@ -3,7 +3,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:synapse_mobile/core/models/clinic.dart';
 import 'package:synapse_mobile/core/models/counselling.dart';
 import 'package:synapse_mobile/core/models/inventory.dart';
-import 'package:synapse_mobile/core/models/kiosk.dart';
 import 'package:synapse_mobile/features/common/session_progress_tracker.dart';
 
 void main() {
@@ -104,26 +103,6 @@ void main() {
     await tester.tap(find.text('Referral'));
     await tester.pumpAndSettle();
     expect(selected, 'referral');
-  });
-
-  test('kiosk media parses static poster and archive state', () {
-    final asset = KioskMediaAsset.fromJson({
-      'id': 3,
-      'public_id': '123e4567-e89b-42d3-a456-426614174000',
-      'kind': 'video',
-      'label': 'Welcome',
-      'original_name': 'welcome.mp4',
-      'mime_type': 'video/mp4',
-      'size_bytes': 2048,
-      'url': '/api/v1/kiosk-media/id/content',
-      'thumbnail_url': '/kiosk-thumbnails/id.jpg',
-      'archived': false,
-      'created_at': '2026-08-15 04:00:00',
-    });
-
-    expect(asset.kind, 'video');
-    expect(asset.thumbnailUrl, startsWith('/kiosk-thumbnails/'));
-    expect(asset.archived, isFalse);
   });
 
   test('stock transaction preserves in/out and running stock', () {

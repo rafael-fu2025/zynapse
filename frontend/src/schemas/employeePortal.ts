@@ -28,10 +28,6 @@ export const employeePortalProfileSchema = z.object({
   is_teaching: z.boolean().nullable(),
   archived: z.boolean(),
   created_at: z.string(),
-  // Convenience: `qr:20266839` / `rfid:20266839` / `emp:20266839`.
-  // The SPA renders this directly into a QR code; the kiosk
-  // understands the `kind:` prefix.
-  kiosk_identifier: z.string(),
 });
 export type EmployeePortalProfile = z.infer<typeof employeePortalProfileSchema>;
 

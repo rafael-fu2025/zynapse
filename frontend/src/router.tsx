@@ -25,7 +25,6 @@ import { hasPermission, useAuthStore } from '@/store/auth';
 const AuditPage = lazyWithRetry(() => import('@/pages/AuditPage'));
 const AdminUsersPage = lazyWithRetry(() => import('@/pages/AdminUsersPage'));
 const AdminRolesPage = lazyWithRetry(() => import('@/pages/AdminRolesPage'));
-const AdminKioskSettingsPage = lazyWithRetry(() => import('@/pages/AdminKioskSettingsPage'));
 const AnalyticsPage = lazyWithRetry(() => import('@/pages/AnalyticsPage'));
 const AnnouncementsPage = lazyWithRetry(() => import('@/pages/AnnouncementsPage'));
 const AppointmentsPage = lazyWithRetry(() => import('@/pages/AppointmentsPage'));
@@ -40,12 +39,9 @@ const WasteCategoriesPage = lazyWithRetry(() => import('@/pages/WasteCategoriesP
 const DrumDetailPage = lazyWithRetry(() => import('@/pages/DrumDetailPage'));
 const ForbiddenPage = lazyWithRetry(() => import('@/pages/ForbiddenPage'));
 const InventoryPage = lazyWithRetry(() => import('@/pages/InventoryPage'));
-const KioskPage = lazyWithRetry(() => import('@/pages/KioskPage'));
-const KioskStationPage = lazyWithRetry(() => import('@/pages/KioskStationPage'));
 const LoginPage = lazyWithRetry(() => import('@/pages/LoginPage'));
 const NotificationsPage = lazyWithRetry(() => import('@/pages/NotificationsPage'));
 const PatientsPage = lazyWithRetry(() => import('@/pages/PatientsPage'));
-const QueueDisplayPage = lazyWithRetry(() => import('@/pages/QueueDisplayPage'));
 const ReferralsPage = lazyWithRetry(() => import('@/pages/ReferralsPage'));
 const ReportsPage = lazyWithRetry(() => import('@/pages/ReportsPage'));
 const ServicesPage = lazyWithRetry(() => import('@/pages/ServicesPage'));
@@ -176,21 +172,6 @@ function HomeDispatcher() {
 
 const router = createBrowserRouter([
   { path: '/login', element: <LoginPage /> },
-  // PUBLIC lobby-TV board — intentionally outside the protected shell.
-  { path: '/queue-display', element: <QueueDisplayPage /> },
-  // Fullscreen kiosk station — authenticated but OUTSIDE the shell
-  // chrome (no sidebar/topbar on lobby hardware). Kiosk gap #6.
-  {
-    path: '/kiosk-station',
-    errorElement: <RouteError />,
-    element: (
-      <ProtectedShell>
-        <ProtectedRoute anyOf={['kiosk.checkin.submit', 'clinic.checkin.record']}>
-          <KioskStationPage />
-        </ProtectedRoute>
-      </ProtectedShell>
-    ),
-  },
   {
     errorElement: <RouteError />,
     element: (
@@ -249,14 +230,6 @@ const router = createBrowserRouter([
         element: (
           <ProtectedRoute anyOf={['clinic.appointments.read']}>
             <AppointmentsPage />
-          </ProtectedRoute>
-        ),
-      },
-      {
-        path: '/kiosk',
-        element: (
-          <ProtectedRoute anyOf={['clinic.checkin.record']}>
-            <KioskPage />
           </ProtectedRoute>
         ),
       },
@@ -376,14 +349,6 @@ const router = createBrowserRouter([
         element: (
           <ProtectedRoute anyOf={['rbac.read']}>
             <AdminRolesPage />
-          </ProtectedRoute>
-        ),
-      },
-      {
-        path: '/admin/kiosk-settings',
-        element: (
-          <ProtectedRoute anyOf={['kiosk.content.manage']}>
-            <AdminKioskSettingsPage />
           </ProtectedRoute>
         ),
       },

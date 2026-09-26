@@ -5,22 +5,15 @@ declare(strict_types=1);
 namespace Tests\Feature;
 
 /**
- * Covers the staff "Mark no-show" surface end to end and pins the
- * kiosk→clinic-appointment matching window.
+ * Covers the staff "Mark no-show" surface end to end.
  *
- * 1. `POST /clinic/encounters/{id}/no-show` — the route shipped in the
- *    2026-09 audit fix (controller + cascade service existed since
- *    August, but no route was registered, so the SPA button always
- *    404'd). Asserts the full cascade: encounter → closed/no_show,
- *    queue entry → done/no_show, and that a second call 409s.
- *
- * 2. `CheckinService::scan` appointment matching — `clinic_appointments.scheduled_at`
- *    is a UTC column while the kiosk reasons in Manila days. Before the
- *    fix the query compared the Manila date string directly against the
- *    UTC column, so a pre-08:00 Manila appointment was missed entirely
- *    (double walk-in) and an evening scan matched *tomorrow morning's*
- *    appointment. Both directions are pinned here through the real
- *    POST /clinic/checkins route.
+ * `POST /clinic/encounters/{id}/no-show` — the route shipped in the
+ * 2026-09 audit fix (controller + cascade service existed since August,
+ * but no route was registered, so the SPA button always 404'd). Asserts
+ * the full cascade: encounter → closed/no_show, queue entry →
+ * done/no_show, and that a second call 409s. Fixtures check an
+ * appointment in through the real transition endpoint (staff action),
+ * which opens the encounter and queues it on today's Manila date.
  */
 final class EncounterNoShowTest extends FeatureTestCase
 {
@@ -65,38 +58,33 @@ final class EncounterNoShowTest extends FeatureTestCase
         return (int) $body['data']['id'];
     }
 
-    private function checkIn(string $studentNumber, string $scannedAtUtc): array
+    /** Staff check-in transition — opens the encounter and queues it today. */
+    private function checkInAppointment(int $appointmentId): void
     {
-        $body = $this->postJson('api/v1/clinic/checkins', [
-            'identifier'  => $studentNumber,
-            'method'      => 'manual',
-            'destination' => 'clinic',
-            'purpose'     => 'Consultation',
-            'station_id'  => 'Kiosk-NoShow',
-            'scanned_at'  => $scannedAtUtc,
-        ], 201);
-        return $body['data'];
+        $this->postJson("api/v1/clinic/appointments/{$appointmentId}/transition", [
+            'status' => 'checked_in',
+        ]);
     }
 
     private function encounterIdFor(string $studentNumber): ?int
     {
-        $row = $this->db->table('clinic_checkins c')
-            ->select('e.id AS encounter_id')
-            ->join('clinic_encounters e', 'e.id = c.encounter_id')
-            ->where('c.patient_school_id', $studentNumber)
-            ->orderBy('c.id', 'DESC')
+        $row = $this->db->table('clinic_queue_entries q')
+            ->select('q.encounter_id')
+            ->join('clinic_encounters e', 'e.id = q.encounter_id')
+            ->where('e.patient_school_id', $studentNumber)
+            ->orderBy('q.id', 'DESC')
             ->get()->getRowArray();
         return $row !== null ? (int) $row['encounter_id'] : null;
     }
 
-    public function testNoShowCascadesWalkInEncounterAndQueue(): void
+    public function testNoShowCascadesEncounterAndQueue(): void
     {
         $number = $this->makeStudent();
-        $checkin = $this->checkIn($number, '2026-09-06 02:00:00');
-        $this->assertSame('clinic_queued', $checkin['outcome']);
+        $apptId = $this->makeAppointment($number, '2026-09-06 02:00:00');
+        $this->checkInAppointment($apptId);
 
         $encounterId = $this->encounterIdFor($number);
-        $this->assertNotNull($encounterId, 'walk-in must open an encounter');
+        $this->assertNotNull($encounterId, 'appointment check-in must open an encounter');
 
         $body = $this->postJson("api/v1/clinic/encounters/{$encounterId}/no-show", []);
         $this->assertSame('closed', $body['data']['status']);
@@ -116,7 +104,8 @@ final class EncounterNoShowTest extends FeatureTestCase
     public function testNoShowTwiceReturnsConflict(): void
     {
         $number = $this->makeStudent();
-        $this->checkIn($number, '2026-09-06 02:10:00');
+        $apptId = $this->makeAppointment($number, '2026-09-06 02:10:00');
+        $this->checkInAppointment($apptId);
         $encounterId = $this->encounterIdFor($number);
         $this->assertNotNull($encounterId);
 
@@ -132,54 +121,5 @@ final class EncounterNoShowTest extends FeatureTestCase
         $res = $this->authed($this->admin['token'], 'post', 'api/v1/clinic/encounters/999999/no-show', []);
         $res->assertStatus(404);
         $this->assertErrorCode('resource.not_found', $res);
-    }
-
-    /**
-     * Manila 2026-09-07 07:00 (UTC 09-06 23:00) appointment; patient
-     * scans at Manila 07:30 (UTC 23:30). The scan's Manila day is
-     * 09-07, whose UTC bounds are [09-06 16:00, 09-07 16:00) — the
-     * appointment sits inside and must be honoured, not double-queued.
-     * (Old code compared against [09-07 00:00, 09-07 23:59:59] UTC and
-     * missed it.)
-     */
-    public function testPre08ManilaAppointmentIsMatchedOnEarlyScan(): void
-    {
-        $number = $this->makeStudent();
-        $apptId = $this->makeAppointment($number, '2026-09-06 23:00:00');
-
-        $checkin = $this->checkIn($number, '2026-09-06 23:30:00');
-        $this->assertSame(
-            'clinic_appointment_confirmed',
-            $checkin['outcome'],
-            'pre-08:00 Manila scan must find the same-Manila-day appointment',
-        );
-
-        $appt = $this->db->table('clinic_appointments')->where('id', $apptId)->get()->getRowArray();
-        $this->assertSame('checked_in', $appt['status']);
-    }
-
-    /**
-     * Manila 09-06 02:30 scan (UTC 09-05 18:30). The appointment is
-     * Manila 09-07 07:00 (UTC 09-06 23:00) — the NEXT Manila morning.
-     * The old UTC-string bounds [09-06 00:00, 09-06 23:59:59] contained
-     * it and the evening scan checked it in a day early; the corrected
-     * Manila-day bounds end at UTC 09-06 16:00, so this scan must fall
-     * through to a plain walk-in and leave the appointment untouched.
-     */
-    public function testEveningManilaScanDoesNotHijackNextMorningAppointment(): void
-    {
-        $number = $this->makeStudent();
-        $apptId = $this->makeAppointment($number, '2026-09-06 23:00:00');
-
-        $checkin = $this->checkIn($number, '2026-09-05 18:30:00');
-        $this->assertNotSame(
-            'clinic_appointment_confirmed',
-            $checkin['outcome'],
-            'a next-morning appointment must not be checked in by an evening scan',
-        );
-        $this->assertSame('clinic_queued', $checkin['outcome']);
-
-        $appt = $this->db->table('clinic_appointments')->where('id', $apptId)->get()->getRowArray();
-        $this->assertSame('scheduled', $appt['status']);
     }
 }

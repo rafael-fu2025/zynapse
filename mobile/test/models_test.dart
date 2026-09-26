@@ -96,29 +96,6 @@ void main() {
   });
 
   group('Queue', () {
-    test('parses the public waiting-room state', () {
-      final state = PublicQueueState.fromJson(const {
-        'now_serving': {
-          'position': 1,
-          'display_name': 'Hannah Rivera',
-          'patient_school_id': '20269617',
-        },
-        'waiting': [
-          {
-            'position': 2,
-            'display_name': 'Andrei Santos',
-            'patient_school_id': '20266239',
-            'est_wait_minutes': 5,
-          },
-        ],
-        'updated_at': '2026-08-05 00:05:00',
-      });
-      expect(state.nowServing?.displayName, 'Hannah Rivera');
-      expect(state.waiting, hasLength(1));
-      expect(state.waiting.first.estWaitMinutes, 5);
-      expect(state.isEmpty, isFalse);
-    });
-
     test('parses a my-queue-status payload', () {
       final status = MyQueueStatus.fromJson(const {
         'queue_entry_id': 7,

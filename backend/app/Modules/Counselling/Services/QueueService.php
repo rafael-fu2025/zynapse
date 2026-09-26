@@ -31,11 +31,8 @@ final class QueueService extends BaseService
      *
      * The Guidance console no longer surfaces **Call next** — the desk reads
      * its day from the appointment board and serves the patient whose slot is
-     * now, not the FIFO head. Without this widening every kiosk walk-in would
-     * sit at `waiting` with no reachable transition, since `callNext()` was
-     * the only writer of `called`. `callNext()` itself is unchanged and still
-     * available (the public board's FIFO contract depends on it); `called`
-     * stays valid so the existing flow is untouched.
+     * now, not the FIFO head. `callNext()` itself is unchanged and still
+     * available; `called` stays valid so the existing flow is untouched.
      */
     private const TRANSITIONS = [
         'start' => ['waiting', 'called'],
@@ -136,22 +133,6 @@ final class QueueService extends BaseService
             'appointment_id' => $row['counselling_appointment_id'] !== null ? (int) $row['counselling_appointment_id'] : null,
             'session_id' => $row['counselling_session_id'] !== null ? (int) $row['counselling_session_id'] : null,
         ];
-    }
-
-    /**
-     * Enqueue from the already-authorized kiosk transaction.
-     *
-     * @return array<string, mixed>
-     */
-    public function enqueueFromKiosk(
-        int $patientUserId,
-        string $patientSchoolId,
-        ?int $appointmentId,
-        ?int $checkinId,
-        string $purpose,
-        ?int $assignedCounsellorUserId = null,
-    ): array {
-        return $this->enqueue($patientUserId, $patientSchoolId, $appointmentId, null, $checkinId, $purpose, $assignedCounsellorUserId);
     }
 
     /** @return array<string, mixed> */
@@ -437,28 +418,6 @@ final class QueueService extends BaseService
         });
     }
 
-    /** @return array{active:list<array<string,mixed>>,now_serving:?array<string,mixed>,waiting:list<array<string,mixed>>} */
-    public function publicState(): array
-    {
-        $active = [];
-        $waiting = [];
-        foreach ($this->todayRows() as $row) {
-            $item = $this->publicRow($row);
-            if (in_array((string) $row['status'], ['called', 'in_session'], true)) {
-                $active[] = $item;
-            } elseif ((string) $row['status'] === 'waiting') {
-                $waiting[] = $item;
-            }
-        }
-        $average = $this->averageServiceMinutes();
-        foreach ($waiting as $index => &$item) {
-            $ahead = $index + count($active);
-            $item['est_wait_minutes'] = (int) round($ahead * $average);
-        }
-        unset($item);
-        return ['active' => $active, 'now_serving' => $active[0] ?? null, 'waiting' => $waiting];
-    }
-
     /** @return array<string, mixed> */
     private function enqueue(
         int $patientUserId,
@@ -632,29 +591,10 @@ final class QueueService extends BaseService
         ];
     }
 
-    /**
-     * Public lobby feed row. Deliberately minimal: the queue-number
-     * abstraction is the ONLY identity the unauthenticated lobby TV
-     * gets — guidance attendance is materially more sensitive than a
-     * clinic visit, so no names or school IDs (audit 2026-09-05, F16).
-     *
-     * @return array<string, mixed>
-     */
-    private function publicRow(array $row): array
-    {
-        return [
-            'position' => (int) $row['position'],
-            'queue_number' => sprintf('G-%03d', (int) $row['position']),
-        ];
-    }
-
-    private function displayName(array $row, bool $full = false): string
+    private function displayName(array $row): string
     {
         $first = trim((string) ($row['first_name'] ?? ''));
         $last = trim((string) ($row['last_name'] ?? ''));
-        if ($full && ($first !== '' || $last !== '')) {
-            return trim($last . ($first !== '' ? ', ' . $first : ''));
-        }
         return $first !== '' ? $first : mb_substr((string) $row['patient_school_id'], 0, 3) . '…';
     }
 

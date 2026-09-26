@@ -35,16 +35,8 @@ final class StudentSelfController extends ApiController
     public function profile(): ResponseInterface
     {
         $this->authorize('student.portal.read');
-        $dto = $this->service->getMyProfile();
 
-        $row = $dto->toArray();
-        $row['kiosk_identifier'] = $row['has_qr']
-            ? 'qr:' . (string) $row['student_number']
-            : ($row['has_rfid']
-                ? 'rfid:' . (string) $row['student_number']
-                : 'stu:' . (string) $row['student_number']);
-
-        return $this->ok($row);
+        return $this->ok($this->service->getMyProfile()->toArray());
     }
 
     public function clinicVisits(): ResponseInterface

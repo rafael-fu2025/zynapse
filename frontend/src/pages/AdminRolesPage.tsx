@@ -29,7 +29,6 @@ const MODULE_GROUPS: ReadonlyArray<{ id: string; label: string; prefixes: readon
   { id: 'guidance', label: 'Guidance', prefixes: ['counselling.'] },
   { id: 'bmg', label: 'BMG / Facilities', prefixes: ['facilities.'] },
   { id: 'referrals', label: 'Referrals', prefixes: ['referrals.'] },
-  { id: 'kiosk', label: 'Kiosk', prefixes: ['kiosk.'] },
   { id: 'portal', label: 'Portal', prefixes: ['portal.', 'notifications.', 'student.portal.', 'employee.portal.'] },
   { id: 'reports', label: 'Reports', prefixes: ['reports.'] },
   { id: 'audit', label: 'Audit', prefixes: ['audit.'] },

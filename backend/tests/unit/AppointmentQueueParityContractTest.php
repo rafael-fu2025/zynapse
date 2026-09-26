@@ -33,16 +33,13 @@ final class AppointmentQueueParityContractTest extends TestCase
     {
         $migration=$this->read('app/Database/Migrations/2026-08-21-000010_GuidanceAssignedLanes.php');$queue=$this->read('app/Modules/Counselling/Services/QueueService.php');
         $this->assertStringContainsString('assigned_counsellor_user_id',$migration);$this->assertStringContainsString('uq_cqe_active_service_counsellor',$migration);
-        $this->assertStringContainsString("'active' => \$active",$queue);$this->assertStringContainsString("'now_serving' => \$active[0] ?? null",$queue);
+        $this->assertStringContainsString('assigned_counsellor_user_id',$queue);
     }
-    public function testKioskContentPermissionDoesNotGrantUserAdministration(): void
+    public function testStaffRoleDoesNotGrantUserAdministration(): void
     {
         $groups=$this->read('app/Config/AuthGroups.php');preg_match("/'clinic_staff'\s*=>\s*\[(.*?)\n\s*\],/s",$groups,$clinic);
         preg_match("/'clinic_admin'\s*=>\s*\[(.*?)\n\s*\],/s",$groups,$admin);
-        // 2026-09 RBAC rework: kiosk content is clinic_admin-only
-        // configuration; clinic_staff holds no user-administration code.
-        $this->assertStringNotContainsString('kiosk.content.manage',$clinic[1]??'');
-        $this->assertStringContainsString('kiosk.content.manage',$admin[1]??'');
+        // 2026-09 RBAC rework: clinic_staff holds no user-administration code.
         $this->assertStringNotContainsString('rbac.manage',$clinic[1]??'');
         $this->assertStringContainsString('rbac.manage',$admin[1]??'');
     }

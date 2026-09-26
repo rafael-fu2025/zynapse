@@ -1,6 +1,5 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:hugeicons/hugeicons.dart';
 import 'package:provider/provider.dart';
 
@@ -383,57 +382,6 @@ class _ProfileCard extends StatelessWidget {
                       : 'Employee #${profile.employeeNumber ?? '—'}',
                   style: const TextStyle(color: Colors.black54),
                 ),
-                if (profile.kioskIdentifier != null) ...[
-                  const SizedBox(height: 6),
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 10, vertical: 4),
-                    decoration: BoxDecoration(
-                      color: scheme.primary.withValues(alpha: 0.08),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(HugeIcons.strokeRoundedQrCode01,
-                            size: 14, color: scheme.primary),
-                        const SizedBox(width: 6),
-                        Text(
-                          profile.kioskIdentifier!,
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: scheme.primary,
-                          ),
-                        ),
-                        const SizedBox(width: 2),
-                        InkWell(
-                          onTap: () {
-                            Clipboard.setData(
-                              ClipboardData(text: profile.kioskIdentifier!),
-                            );
-                            ScaffoldMessenger.of(context)
-                              ..hideCurrentSnackBar()
-                              ..showSnackBar(
-                                const SnackBar(
-                                  content: Text('Kiosk identifier copied'),
-                                  duration: Duration(seconds: 1),
-                                ),
-                              );
-                          },
-                          borderRadius: BorderRadius.circular(4),
-                          child: const Padding(
-                            padding: EdgeInsets.all(2),
-                            child: Icon(
-                              HugeIcons.strokeRoundedCopy01,
-                              size: 14,
-                              color: Color(0xFF800000),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
               ],
             ),
           ),

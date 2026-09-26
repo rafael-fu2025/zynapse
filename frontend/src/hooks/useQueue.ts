@@ -1,15 +1,11 @@
 /**
- * Queue hooks — walk-in queue (Phase 14).
+ * Queue hooks — appointment-fed staff queue (Phase 14).
  *
  * Panel revision (August 2026): manual enqueue is gone. Today's
- * scheduled appointments auto-queue themselves via the lazy
- * auto-check-in sweep, and walk-in encounters are queued atomically
- * inside `useCreateEncounter`. The `useEnqueue()` mutation was
- * removed; the `POST /clinic/queue` endpoint no longer exists.
- *
- * `usePublicQueueState` uses a RAW fetch (no auth, no interceptors):
- * the endpoint is public by design and the display board must work
- * on a logged-out lobby TV.
+ * scheduled appointments auto-queue themselves when checked in, and
+ * walk-in encounters are queued atomically inside `useCreateEncounter`.
+ * The `useEnqueue()` mutation was removed; the `POST /clinic/queue`
+ * endpoint no longer exists.
  */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { z } from 'zod';
@@ -17,16 +13,12 @@ import { toast } from 'sonner';
 import { apiClient } from '@/api/client';
 import type { ApiEnvelopeError } from '@/api/envelope';
 import {
-  publicQueueStateSchema,
   guidanceQueueEntrySchema,
   queueEntrySchema,
-  type PublicQueueState,
   type QueueAction,
   type QueueEntry,
   type GuidanceQueueEntry,
 } from '@/schemas/queue';
-
-const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? '/api/v1';
 
 export function useQueueToday() {
   return useQuery<QueueEntry[], ApiEnvelopeError>({
@@ -77,7 +69,6 @@ export function useGuidanceQueueTransition() {
       void qc.invalidateQueries({ queryKey: ['counselling'] });
       void qc.invalidateQueries({ queryKey: ['schedule', 'appointments'] });
       void qc.invalidateQueries({ queryKey: ['schedule', 'analytics'] });
-      void qc.invalidateQueries({ queryKey: ['queue', 'public-state'] });
     },
     onError: (err) => toast.error(err.errors[0]?.message ?? 'Queue action failed.'),
   });
@@ -135,26 +126,6 @@ export function useQueueTransition() {
     },
     onError: (err) => {
       toast.error(err.errors[0]?.message ?? 'Queue action failed.');
-    },
-  });
-}
-
-/** Public board — no auth, poll-refreshed for the lobby TV. */
-export function usePublicQueueState() {
-  return useQuery<PublicQueueState, Error>({
-    queryKey: ['queue', 'public-state'],
-    refetchInterval: 5_000,
-    // Keep the last known board on screen while a poll fails — a lobby
-    // TV must not blank out over one transient 5-second error
-    // (2026-09 audit); the error banner still shows.
-    placeholderData: (previous) => previous,
-    queryFn: async () => {
-      const res = await fetch(`${API_BASE_URL}/clinic/queue/state`);
-      if (!res.ok) {
-        throw new Error(`Queue state unavailable (${res.status}).`);
-      }
-      const body = (await res.json()) as { data?: unknown };
-      return publicQueueStateSchema.parse(body.data);
     },
   });
 }
