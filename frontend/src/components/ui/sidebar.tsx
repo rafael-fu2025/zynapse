@@ -311,7 +311,11 @@ const SidebarInset = React.forwardRef<HTMLDivElement, React.ComponentProps<'div'
     <div
       ref={ref}
       className={cn(
-        'relative flex w-full flex-1 flex-col bg-background',
+        // min-w-0: as a flex row item the inset's automatic minimum is its
+        // min-content — without it a wide topbar row propagates up to the
+        // wrapper and the document grows a horizontal scrollbar on
+        // sub-~1246px viewports.
+        'relative flex w-full min-w-0 flex-1 flex-col bg-background',
         'md:peer-data-[variant=inset]:m-2 md:peer-data-[variant=inset]:ml-0 md:peer-data-[variant=inset]:rounded-xl md:peer-data-[variant=inset]:shadow md:peer-data-[variant=inset]:peer-data-[state=collapsed]:ml-2',
         className,
       )}

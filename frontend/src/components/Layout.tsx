@@ -86,13 +86,16 @@ export default function Layout() {
             type="button"
             onClick={() => window.dispatchEvent(new Event('synapse:command-palette:open'))}
             aria-label="Open command palette"
-            className="hidden h-9 w-72 shrink-0 items-center gap-2 rounded-md border bg-background/60 px-3 py-0 text-xs text-muted-foreground transition-colors hover:bg-accent/40 hover:text-foreground sm:inline-flex sm:w-80"
+            // Shrinkable (NOT shrink-0): a fixed 400px launcher made the
+            // topbar row's min-content ~926px, overflowing sub-1246px
+            // viewports. It compresses before anything else in the row.
+            className="hidden h-9 w-72 min-w-0 items-center gap-2 overflow-hidden rounded-md border bg-background/60 px-3 py-0 text-xs text-muted-foreground transition-colors hover:bg-accent/40 hover:text-foreground sm:inline-flex sm:w-80"
           >
             <span className="flex items-center gap-2">
               <Search className="size-3.5" />
               <span>Search…</span>
             </span>
-            <kbd className="ml-auto rounded border bg-muted px-1 tabular-nums text-[10px]">⌘K</kbd>
+            <kbd className="ml-auto rounded border bg-muted px-1 tabular-nums text-[0.625rem]">⌘K</kbd>
           </button>
           <HeaderBreadcrumbs />
           {/*
