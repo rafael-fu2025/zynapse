@@ -30,6 +30,8 @@ interface DatePickerProps {
   /** Last selectable year (default: 10 years ahead). */
   toYear?: number;
   'aria-invalid'?: boolean;
+  /** For trigger buttons that stand alone without a visible label. */
+  'aria-label'?: string;
 }
 
 function parseYmd(value: string | null | undefined): Date | undefined {
@@ -51,6 +53,7 @@ export function DatePicker({
   fromYear,
   toYear,
   'aria-invalid': ariaInvalid,
+  'aria-label': ariaLabel,
 }: DatePickerProps) {
   const [open, setOpen] = useState(false);
   const selected = parseYmd(value);
@@ -67,6 +70,7 @@ export function DatePicker({
           variant="outline"
           disabled={disabled}
           aria-invalid={ariaInvalid}
+          aria-label={ariaLabel}
           onBlur={onBlur}
           className={cn(
             'w-full justify-start text-left font-normal',

@@ -46,7 +46,7 @@ import { apiClient } from '@/api/client';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Dialog } from '@/components/ui/dialog';
-import { Input } from '@/components/ui/input';
+import { DatePicker } from '@/components/ui/date-picker';
 import { TableStateRows } from '@/components/TableStates';
 import {
   Select,
@@ -243,12 +243,14 @@ export function AppointmentsTable({
       <header className="flex flex-wrap items-center justify-between gap-2 border-b px-3 py-2">
         <p className="text-sm font-semibold text-foreground">Appointments</p>
         <div className="flex flex-wrap items-center gap-2">
-          <Input
-            type="date"
+          {/* The shared calendar popover — same control as the booking dialog
+              and the rest of the app, not the native date input. */}
+          <DatePicker
             aria-label="Filter by date"
+            placeholder="Filter by date"
             className="h-8 w-40 text-xs"
             value={date}
-            onChange={(e) => { onDateChange(e.target.value); resetView(); }}
+            onChange={(v) => { onDateChange(v); resetView(); }}
           />
           {date !== '' && (
             <Button
