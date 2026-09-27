@@ -297,10 +297,15 @@ export function AppSidebar() {
                           id={`nav-${item.label.toLowerCase().replace(/\s+/g, '-')}`}
                           label={item.label}
                           icon={item.icon}
-                          active={isActive(item.href) || item.children.some(
+                          active={isActive(item.href) || (pathname === item.href && item.children.some(
                             (ch) => ch.tab === activeTab && hasAnyPermission(state, ch.permission),
-                          )}
-                          autoOpen={pathname.startsWith(item.href)}
+                          ))}
+                          // autoOpen on any /counselling/* route (sibling
+                          // surfaces included) is deliberate — but the
+                          // child highlight is NOT: it applies only on the
+                          // tabbed page itself (exact match), or moving to
+                          // Surveys would keep the last tab lit.
+                          autoOpen={pathname === item.href || pathname.startsWith(`${item.href}/`)}
                           badge={item.badge !== undefined && counters.data !== undefined
                             ? (() => {
                                 const b = item.badge(counters.data);
@@ -318,7 +323,7 @@ export function AppSidebar() {
                             <SidebarMenuSubItem key={ch.tab}>
                               <SidebarMenuSubButton
                                 asChild
-                                isActive={pathname.startsWith(item.href) && activeTab === ch.tab}
+                                isActive={pathname === item.href && activeTab === ch.tab}
                               >
                                 <NavLink
                                   to={`${item.href}?tab=${ch.tab}`}

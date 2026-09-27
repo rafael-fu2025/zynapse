@@ -151,3 +151,26 @@ test('a collapsed accordion stays collapsed across navigation', async ({ page })
   await page.goto('/counselling?tab=queue');
   await expect(trigger).toHaveAttribute('aria-expanded', 'true');
 });
+
+test('a sibling surface does not keep the tab child highlighted', async ({ page }) => {
+  const sidebar = page.getByRole('navigation', { name: /primary/i });
+  const trigger = sidebar.getByRole('button', { name: 'Counselling' });
+
+  // The tab child is active on the tabbed page itself...
+  await page.goto('/counselling?tab=queue');
+  await expect(sidebar.getByRole('link', { name: 'Queue', exact: true })).toHaveAttribute(
+    'data-active',
+    'true',
+  );
+
+  // ...but moving to a sibling surface under the same module drops the
+  // highlight — from both the child and the parent row — even though the
+  // accordion stays open for the module family.
+  await page.goto('/counselling/surveys');
+  await expect(trigger).toHaveAttribute('aria-expanded', 'true');
+  await expect(sidebar.getByRole('link', { name: 'Queue', exact: true })).not.toHaveAttribute(
+    'data-active',
+    'true',
+  );
+  await expect(trigger).not.toHaveAttribute('data-active', 'true');
+});
