@@ -414,13 +414,6 @@ export function AppSidebar() {
                 <SidebarMenu>
                   {items.map((item) => {
                     const visible = visibleChildren(item);
-                    const activeChildTab = visible.some((ch) => ch.tab === tabParam)
-                      ? tabParam
-                      : visible[0]?.tab;
-                    const childActive =
-                      visible.length > 0 &&
-                      pathname === item.href &&
-                      visible.some((ch) => ch.tab === activeChildTab);
                     return (
                     <SidebarMenuItem key={item.href}>
                       {/* Accordion only when children exist AND at least one
@@ -432,7 +425,9 @@ export function AppSidebar() {
                           label={item.label}
                           icon={item.icon}
                           href={item.href}
-                          active={isActive(item.href) || childActive}
+                          // The module row carries the bare-URL case on its
+                          // own — nothing in the child list is auto-selected.
+                          active={isActive(item.href)}
                           open={openAccordion === item.href}
                           onOpenChange={(next) =>
                             setOpenAccordion(next ? item.href : null)
@@ -455,7 +450,10 @@ export function AppSidebar() {
                             <SidebarMenuSubItem key={ch.tab}>
                               <SidebarMenuSubButton
                                 asChild
-                                isActive={pathname === item.href && activeChildTab === ch.tab}
+                                // A child lights up ONLY when its own ?tab=
+                                // value is explicit — no auto-selection of
+                                // the first entry.
+                                isActive={pathname === item.href && tabParam === ch.tab}
                               >
                                 <NavLink
                                   to={childHref(item, ch)}

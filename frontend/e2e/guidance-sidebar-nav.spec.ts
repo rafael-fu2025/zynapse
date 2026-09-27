@@ -179,6 +179,34 @@ test('a sibling surface does not keep the tab child highlighted', async ({ page 
   await expect(row).not.toHaveAttribute('data-active', 'true');
 });
 
+test('the module row is lit on a bare URL, but no child is auto-selected', async ({ page }) => {
+  const sidebar = page.getByRole('navigation', { name: /primary/i });
+  const row = sidebar.getByRole('link', { name: 'Counselling', exact: true });
+
+  // Bare module URL: the ROW carries the active state; the accordion
+  // children are listed but none is auto-selected — a child lights up
+  // only after the user taps it (explicit ?tab=).
+  await page.goto('/counselling');
+  await expect(row).toHaveAttribute('data-active', 'true');
+  for (const label of ['Queue', 'Appointments', 'Follow-ups', 'Scheduling']) {
+    await expect(sidebar.getByRole('link', { name: label, exact: true })).not.toHaveAttribute(
+      'data-active',
+      'true',
+    );
+  }
+
+  // An explicit ?tab= lights exactly that child.
+  await page.goto('/counselling?tab=appointments');
+  await expect(sidebar.getByRole('link', { name: 'Appointments', exact: true })).toHaveAttribute(
+    'data-active',
+    'true',
+  );
+  await expect(sidebar.getByRole('link', { name: 'Queue', exact: true })).not.toHaveAttribute(
+    'data-active',
+    'true',
+  );
+});
+
 test('tapping an accordion module in the collapsed rail expands the sidebar', async ({ page }) => {
   const sidebar = page.getByRole('navigation', { name: /primary/i });
   const row = sidebar.getByRole('link', { name: 'Counselling', exact: true });
