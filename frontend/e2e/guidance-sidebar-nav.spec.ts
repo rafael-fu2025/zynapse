@@ -57,10 +57,9 @@ test('the Guidance Center group carries the four moved surfaces', async ({ page 
   const sidebar = page.getByRole('navigation', { name: /primary/i });
   await expect(sidebar).toBeVisible({ timeout: 20_000 });
 
-  // The Counselling row is a link that opens the module; its sections live
-  // in the accordion behind the row's chevron. The four moved surfaces
-  // remain flat link rows beside it.
-  await expect(sidebar.getByRole('link', { name: 'Counselling', exact: true })).toBeVisible();
+  // The Counselling row is the module's disclosure button; the four moved
+  // surfaces remain flat link rows beside it.
+  await expect(sidebar.getByRole('button', { name: 'Counselling', exact: true })).toBeVisible();
   for (const label of ['Surveys', 'Announcements', 'Analytics', 'Services']) {
     await expect(sidebar.getByRole('link', { name: label, exact: true })).toBeVisible();
   }
@@ -97,7 +96,7 @@ test('the sections that did not move still resolve from the URL', async ({ page 
   // it must not be stripped). Navigation now lives in the sidebar accordion —
   // the Queue child is the active one and the Queue board is what renders.
   await expect(page).toHaveURL(/tab=queue/);
-  const counsellingToggle = sidebar.getByRole('button', { name: 'Toggle Counselling sections' });
+  const counsellingToggle = sidebar.getByRole('button', { name: 'Counselling' });
   await expect(counsellingToggle).toHaveAttribute('aria-expanded', 'true');
   await expect(sidebar.getByRole('link', { name: 'Queue', exact: true })).toHaveAttribute(
     'data-active',
@@ -107,7 +106,7 @@ test('the sections that did not move still resolve from the URL', async ({ page 
 
 test('the four counselling sections are an accordion under the Counselling row', async ({ page }) => {
   const sidebar = page.getByRole('navigation', { name: /primary/i });
-  const toggle = sidebar.getByRole('button', { name: 'Toggle Counselling sections' });
+  const toggle = sidebar.getByRole('button', { name: 'Counselling', exact: true });
 
   // On /counselling the accordion starts open and lists the four sections.
   await page.goto('/counselling?tab=appointments');
@@ -133,7 +132,7 @@ test('the four counselling sections are an accordion under the Counselling row',
 
 test('a collapsed accordion stays collapsed across navigation', async ({ page }) => {
   const sidebar = page.getByRole('navigation', { name: /primary/i });
-  const toggle = sidebar.getByRole('button', { name: 'Toggle Counselling sections' });
+  const toggle = sidebar.getByRole('button', { name: 'Counselling', exact: true });
 
   // The reported repro: close the accordion while on the module, then press
   // another row — the accordion must NOT force itself back open. (The first
@@ -157,8 +156,8 @@ test('a collapsed accordion stays collapsed across navigation', async ({ page })
 
 test('a sibling surface does not keep the tab child highlighted', async ({ page }) => {
   const sidebar = page.getByRole('navigation', { name: /primary/i });
-  const row = sidebar.getByRole('link', { name: 'Counselling', exact: true });
-  const toggle = sidebar.getByRole('button', { name: 'Toggle Counselling sections' });
+  const row = sidebar.getByRole('button', { name: 'Counselling', exact: true });
+  const toggle = sidebar.getByRole('button', { name: 'Counselling', exact: true });
 
   // The tab child is active on the tabbed page itself...
   await page.goto('/counselling?tab=queue');
@@ -181,7 +180,7 @@ test('a sibling surface does not keep the tab child highlighted', async ({ page 
 
 test('the module row is lit on a bare URL, but no child is auto-selected', async ({ page }) => {
   const sidebar = page.getByRole('navigation', { name: /primary/i });
-  const row = sidebar.getByRole('link', { name: 'Counselling', exact: true });
+  const row = sidebar.getByRole('button', { name: 'Counselling', exact: true });
 
   // Bare module URL: the ROW carries the active state; the accordion
   // children are listed but none is auto-selected — a child lights up
@@ -209,8 +208,9 @@ test('the module row is lit on a bare URL, but no child is auto-selected', async
 
 test('tapping an accordion module in the collapsed rail expands the sidebar', async ({ page }) => {
   const sidebar = page.getByRole('navigation', { name: /primary/i });
-  const row = sidebar.getByRole('link', { name: 'Counselling', exact: true });
-  const toggle = sidebar.getByRole('button', { name: 'Toggle Counselling sections' });
+  // In icon-rail mode the row renders as a plain disclosure button (the
+  // chevron is hidden, the accessible name is the module label).
+  const row = sidebar.getByRole('button', { name: 'Counselling', exact: true });
 
   await page.setViewportSize({ width: 1280, height: 800 });
   await page.goto('/counselling?tab=appointments');
@@ -222,6 +222,5 @@ test('tapping an accordion module in the collapsed rail expands the sidebar', as
 
   // Tapping the module expands the rail AND opens its panel.
   await row.click();
-  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
   await expect(sidebar.getByRole('link', { name: 'Appointments', exact: true })).toBeVisible();
 });

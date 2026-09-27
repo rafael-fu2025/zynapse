@@ -314,6 +314,15 @@ export function AppSidebar() {
     );
   };
 
+  // The last-tapped accordion label stays highlighted even though the tap
+  // deliberately does NOT navigate — the content area keeps showing the
+  // previous module until the user picks one of the newly revealed child
+  // sections. Any navigation clears it; route-derived rules take over.
+  const [selectedModule, setSelectedModule] = useState<string | null>(null);
+  useEffect(() => {
+    setSelectedModule(null);
+  }, [pathname]);
+
   // Accordions are SINGLE-EXPAND: one `openAccordion` id lives here, so
   // opening a module's section list closes the others and the sidebar never
   // becomes a wall of expanded sections.
@@ -424,15 +433,17 @@ export function AppSidebar() {
                           id={`nav-${item.label.toLowerCase().replace(/\s+/g, '-')}`}
                           label={item.label}
                           icon={item.icon}
-                          href={item.href}
+                          // Row tap: select the module (highlight moves here,
+                          // content stays put) + open its panel. Children do
+                          // the actual navigating.
+                          onOpenChange={(next) => {
+                            if (next) setSelectedModule(item.href);
+                            setOpenAccordion(next ? item.href : null);
+                          }}
                           // The module row carries the bare-URL case on its
                           // own — nothing in the child list is auto-selected.
-                          active={isActive(item.href)}
+                          active={isActive(item.href) || selectedModule === item.href}
                           open={openAccordion === item.href}
-                          onOpenChange={(next) =>
-                            setOpenAccordion(next ? item.href : null)
-                          }
-                          onPrefetch={() => void prefetchRoute(item.href)}
                           badge={item.badge !== undefined && counters.data !== undefined
                             ? (() => {
                                 const b = item.badge(counters.data);
