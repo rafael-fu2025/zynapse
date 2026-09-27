@@ -48,7 +48,8 @@ test('module failure is distinct from an empty result and can be retried', async
     await route.continue();
   });
 
-  await page.getByRole('tab', { name: /facilities/i }).click();
+  await page.getByRole('navigation', { name: /primary/i })
+    .getByRole('link', { name: 'Facilities', exact: true }).click();
   await expect(page.getByText(/failed to load facilities analytics/i)).toBeVisible();
 
   fail = false;
@@ -67,7 +68,8 @@ test('invalid report URL state is replaced with a canonical range and module', a
     window.dispatchEvent(new PopStateEvent('popstate'));
   });
 
-  await expect(page.getByRole('tab', { name: 'Clinic', exact: true })).toHaveAttribute('data-state', 'active');
+  await expect(page.getByRole('navigation', { name: /primary/i })
+    .getByRole('link', { name: 'Clinic', exact: true })).toHaveAttribute('data-active', 'true');
   await expect.poll(() => new URL(page.url()).searchParams.get('tab')).toBeNull();
   await expect.poll(() => new URL(page.url()).searchParams.get('start')).not.toBe('2026-02-30');
   await expect.poll(() => new URL(page.url()).searchParams.get('end')).not.toBe('2026-01-01');

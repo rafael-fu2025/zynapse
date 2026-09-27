@@ -31,16 +31,12 @@
  */
 import { zodResolver } from '@hookform/resolvers/zod';
 import {
-  CalendarClock,
   CalendarPlus,
   Check,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
-  ClipboardList,
   Eye,
-  History,
-  Inbox,
   Loader2,
   LogIn,
   Pencil,
@@ -95,8 +91,6 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { Tabs, TabsContent } from '@/components/ui/tabs';
-import { CountBadge } from '@/components/CountBadge';
-import { TabSections, type TabSection } from '@/components/TabSections';
 import { useTabParam } from '@/hooks/useTabParam';
 import { useCan } from '@/hooks/useCan';
 import { useUrlFilter } from '@/hooks/useUrlFilter';
@@ -104,7 +98,6 @@ import {
   useAppointment,
   useAppointments,
   useAppointmentSearch,
-  useNeedsActionAppointments,
   useScheduleAppointment,
   useTransitionAppointment,
   useUpdateAppointment,
@@ -740,10 +733,9 @@ export default function AppointmentsPage() {
     scope,
     provider,
   );
-  // Needs-action tally for the tab badge — polled independently so an
-  // approval waiting on the desk is visible from every tab. Capped at
-  // the 25-row page size, like every other count on the page.
-  const needsAction = useNeedsActionAppointments();
+  // The needs-action tally that fed the old tab-strip badge retired with
+  // the strip (2026-09-27): section navigation is an accordion in the
+  // main sidebar now.
   const searchQuery = useAppointmentSearch(debouncedSearch, statusFilter as Appointment['status'] | 'all');
   const transition = useTransitionAppointment();
   const providerName = useProviderNameLookup();
@@ -781,15 +773,6 @@ export default function AppointmentsPage() {
   const retry = () => void (searching ? searchQuery.refetch() : list.refetch());
   const visibleRows = rows;
 
-  // Server-scoped tabs; the Needs-action badge counts unapproved portal
-  // bookings regardless of the active tab (zero hides the badge).
-  const tabs: readonly TabSection[] = [
-    { value: 'upcoming', label: 'Upcoming', icon: CalendarClock },
-    { value: 'needs-action', label: 'Needs action', icon: ClipboardList, badge: <CountBadge count={needsAction.data?.length ?? 0} /> },
-    { value: 'past', label: 'Past', icon: History },
-    { value: 'all', label: 'All', icon: Inbox },
-  ];
-
   return (
     <main className="space-y-4 p-6">
       <Tabs value={tab} onValueChange={(v) => setTab(v)} className="space-y-4">
@@ -814,12 +797,11 @@ export default function AppointmentsPage() {
           }
         />
 
-        <TabSections tabs={tabs} ariaLabel="Appointment filters">
         <TabsContent value={tab} className="space-y-3">
           {/* Live-search toolbar — same layout as the Patients page: a
               bordered card with the magnifier icon INSIDE the input on the
               left and the filters on the right. It lives inside TabsContent
-              so it sits beside the TabSections secondary sidebar. Typing
+              so it sits beside the sidebar accordion. Typing
               >= 2 chars searches as you type (debounced); clearing restores
               the paged list. */}
           <PageToolbar>
@@ -957,7 +939,6 @@ export default function AppointmentsPage() {
             </nav>
           )}
         </TabsContent>
-        </TabSections>
       </Tabs>
 
       {editing !== null && (

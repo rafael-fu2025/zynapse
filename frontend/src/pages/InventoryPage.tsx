@@ -20,9 +20,8 @@
  * the keyset pagination state shared by the three list tabs is
  * `src/hooks/useKeysetPagination`.
  */
-import { BarChart3, CalendarClock, Package, Pill, ShoppingCart, Wrench } from 'lucide-react';
+import { CalendarClock } from 'lucide-react';
 import { PageHeader } from '@/components/PageHeader';
-import { TabSections, type TabSection } from '@/components/TabSections';
 import { Tabs, TabsContent } from '@/components/ui/tabs';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { useTabParam } from '@/hooks/useTabParam';
@@ -33,13 +32,6 @@ import { MedicinesTab } from '@/components/inventory/MedicinesTab';
 import { ReordersTab } from '@/components/inventory/ReordersTab';
 import { SuppliesTab } from '@/components/inventory/SuppliesTab';
 
-const TABS: readonly TabSection[] = [
-  { value: 'medicines', label: 'Medicines', icon: Pill },
-  { value: 'supplies', label: 'Supplies', icon: Package },
-  { value: 'equipment', label: 'Equipment', icon: Wrench },
-  { value: 'reorders', label: 'Purchases', icon: ShoppingCart },
-  { value: 'insights', label: 'Insights', icon: BarChart3 },
-];
 
 export default function InventoryPage() {
   const [tab, setTab] = useTabParam('medicines');
@@ -63,7 +55,6 @@ export default function InventoryPage() {
           }
         />
 
-        <TabSections tabs={TABS} ariaLabel="Inventory sections">
           <TabsContent value="medicines">
             <MedicinesTab />
           </TabsContent>
@@ -79,7 +70,6 @@ export default function InventoryPage() {
           <TabsContent value="insights">
             <InsightsTab onJumpToTab={setTab} />
           </TabsContent>
-        </TabSections>
       </Tabs>
     </main>
     </TooltipProvider>

@@ -1,14 +1,9 @@
 import {
   Download,
-  Factory,
   FileText,
   Loader2,
-  MessagesSquare,
   Minus,
-  Package,
-  Share2,
   Sparkles,
-  Stethoscope,
   TrendingDown,
   TrendingUp,
 } from 'lucide-react';
@@ -34,7 +29,6 @@ import { Label } from '@/components/ui/label';
 import { PageHeader } from '@/components/PageHeader';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Tabs, TabsContent } from '@/components/ui/tabs';
-import { TabSections, type TabSection } from '@/components/TabSections';
 import {
   useClinicReport,
   useCounsellingReport,
@@ -83,20 +77,6 @@ function isValidRange(start: string, end: string): boolean {
 export function moduleLabel(module: ReportModule): string {
   return module.charAt(0).toUpperCase() + module.slice(1);
 }
-
-/** Section nav for the analytics modules (sidebar on wide screens). */
-const MODULE_ICONS: Record<ReportModule, TabSection['icon']> = {
-  clinic: Stethoscope,
-  counselling: MessagesSquare,
-  inventory: Package,
-  referrals: Share2,
-  facilities: Factory,
-};
-const REPORT_TABS: readonly TabSection[] = REPORT_MODULES.map((module) => ({
-  value: module,
-  label: moduleLabel(module),
-  icon: MODULE_ICONS[module],
-}));
 
 function rows(input: Array<Array<string | number>>, prefix: string): ReportTableRow[] {
   return input.map((cells) => ({ id: prefix + ':' + cells.join(':'), cells }));
@@ -389,7 +369,6 @@ export default function ReportsPage() {
           </section>
         )}
 
-        <TabSections tabs={REPORT_TABS} ariaLabel="Analytics module">
           <TabsContent value="clinic" className="space-y-4">
             <ClinicAnalyticsView
               report={clinic.data}
@@ -536,7 +515,6 @@ export default function ReportsPage() {
             </>
           )}
         </TabsContent>
-        </TabSections>
       </Tabs>
 
       <SavedReportsSection start={start} end={end} canConfigure={canConfigure} canExport={canExport} />

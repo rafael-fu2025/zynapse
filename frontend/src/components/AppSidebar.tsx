@@ -76,15 +76,23 @@ interface NavItem {
    */
   hideForAdmin?: boolean;
   /**
+   * Render the item's children as student-only accordion sections. The
+   * employee portal is a single surface with no tabs, so employees and
+   * admins keep the flat row (same split as HomeDispatcher).
+   */
+  studentChildren?: boolean;
+  /**
    * Extract count badge from dashboard counters. Color is owned by
    * CountBadge (adaptive tint) — call sites only supply the number.
    */
   badge?: (c: ReturnType<typeof useDashboardCounters>['data']) => { count: number; label: string } | null;
   /**
    * Child sections rendered as an accordion under this row instead of
-   * an in-content tab strip (trial: Counselling, 2026-09-27). Each
-   * child navigates to `href?tab=<tab>`; visibility is gated
-   * independently, mirroring the page's own allowedTabs.
+   * an in-content tab strip (trial: Counselling, 2026-09-27; all
+   * tabbed modules, 2026-09-27). Each child navigates to
+   * `href?tab=<tab>`; visibility is gated independently, mirroring the
+   * page's own allowedTabs. The FIRST visible child is the page's
+   * default tab.
    */
   children?: ReadonlyArray<NavChild>;
 }
@@ -108,7 +116,24 @@ const NAV_SECTIONS: ReadonlyArray<{ title: string; items: ReadonlyArray<NavItem>
       // caller's permissions. Phase 13 extends the sidebar to
       // accept anyOf permission predicates. Hidden for admin: the
       // wildcard would route them to the (empty) student portal.
-      { label: 'My portal', href: '/me', icon: IdCard, permission: ['employee.portal.read', 'student.portal.read'], hideForAdmin: true },
+      // PURE STUDENTS get the portal's sections as an accordion — the
+      // employee portal is a single surface with no tabs, so employees
+      // (and admins) keep the flat row (same split as HomeDispatcher).
+      {
+        label: 'My portal',
+        href: '/me',
+        icon: IdCard,
+        permission: ['employee.portal.read', 'student.portal.read'],
+        hideForAdmin: true,
+        studentChildren: true,
+        children: [
+          { label: 'Overview', tab: 'overview', permission: null },
+          { label: 'Appointments', tab: 'appointments', permission: null },
+          { label: 'History', tab: 'history', permission: null },
+          { label: 'Guidance', tab: 'guidance', permission: null },
+          { label: 'Notifications', tab: 'notifications', permission: null },
+        ],
+      },
       // Notifications live in the topbar bell (NotificationBell) — no
       // sidebar entry, so the inbox stays one click from every screen
       // without a second navigation surface.
@@ -126,10 +151,49 @@ const NAV_SECTIONS: ReadonlyArray<{ title: string; items: ReadonlyArray<NavItem>
           const n = c?.clinic?.open_encounters ?? 0;
           return n > 0 ? { count: n, label: `${n} open clinic encounters` } : null;
         },
+        // The page's tab strip as an accordion (2026-09-27). Children
+        // match the page's ?tab= values and order.
+        children: [
+          { label: 'Queue', tab: 'queue', permission: null },
+          { label: 'Closed', tab: 'closed', permission: null },
+          { label: 'Staff schedules', tab: 'staff', permission: null },
+        ],
       },
-      { label: 'Appointments', href: '/appointments', icon: CalendarClock, permission: 'clinic.appointments.read' },
-      { label: 'Patients', href: '/patients', icon: ContactRound, permission: 'clinic.patients.read' },
-      { label: 'Inventory', href: '/inventory', icon: Boxes, permission: 'clinic.inventory.read' },
+      {
+        label: 'Appointments',
+        href: '/appointments',
+        icon: CalendarClock,
+        permission: 'clinic.appointments.read',
+        children: [
+          { label: 'Upcoming', tab: 'upcoming', permission: null },
+          { label: 'Needs action', tab: 'needs-action', permission: null },
+          { label: 'Past', tab: 'past', permission: null },
+          { label: 'All', tab: 'all', permission: null },
+        ],
+      },
+      {
+        label: 'Patients',
+        href: '/patients',
+        icon: ContactRound,
+        permission: 'clinic.patients.read',
+        children: [
+          { label: 'Students', tab: 'students', permission: null },
+          { label: 'Employees', tab: 'employees', permission: null },
+        ],
+      },
+      {
+        label: 'Inventory',
+        href: '/inventory',
+        icon: Boxes,
+        permission: 'clinic.inventory.read',
+        children: [
+          { label: 'Medicines', tab: 'medicines', permission: null },
+          { label: 'Supplies', tab: 'supplies', permission: null },
+          { label: 'Equipment', tab: 'equipment', permission: null },
+          { label: 'Purchases', tab: 'reorders', permission: null },
+          { label: 'Insights', tab: 'insights', permission: null },
+        ],
+      },
     ],
   },
   {
@@ -204,7 +268,22 @@ const NAV_SECTIONS: ReadonlyArray<{ title: string; items: ReadonlyArray<NavItem>
   {
     title: 'Administration',
     items: [
-      { label: 'Reports', href: '/reports', icon: BarChart3, permission: 'reports.read' },
+      {
+        label: 'Reports',
+        href: '/reports',
+        icon: BarChart3,
+        permission: 'reports.read',
+        // The five report modules as accordion children; child links
+        // preserve the current start/end range params when already on
+        // the module (see childHref).
+        children: [
+          { label: 'Clinic', tab: 'clinic', permission: null },
+          { label: 'Counselling', tab: 'counselling', permission: null },
+          { label: 'Inventory', tab: 'inventory', permission: null },
+          { label: 'Referrals', tab: 'referrals', permission: null },
+          { label: 'Facilities', tab: 'facilities', permission: null },
+        ],
+      },
       { label: 'Audit', href: '/audit', icon: ScrollText, permission: 'audit.read' },
       { label: 'Users', href: '/admin/users', icon: Users, permission: 'rbac.manage' },
       { label: 'Roles', href: '/admin/roles', icon: ShieldCheck, permission: 'rbac.read' },
@@ -234,18 +313,34 @@ export function AppSidebar() {
     );
   };
 
-  // The counselling accordion (the one item with children so far) owns its
-  // own open state inside <SidebarAccordion> — a STABLE component defined at
-  // module level. The first cut nested this component inside AppSidebar,
-  // which re-created the component type every render, remounted the subtree
-  // and reset the open state — that is why the accordion forced itself open
-  // again after being closed.
+  // Accordions (nav items with children) own their open state inside
+  // <SidebarAccordion> — a STABLE component defined at module level. The
+  // first cut nested that component inside AppSidebar, which re-created the
+  // component type every render, remounted the subtree and reset the open
+  // state — that is why the accordion forced itself open again after being
+  // closed.
+  //
+  // Per-item active tab: the explicit `?tab=` when it names one of the
+  // item's permission-visible children, otherwise the FIRST visible child —
+  // which is each page's default tab by convention (Counselling's
+  // permission-conditional default falls out of the same rule).
   const [params] = useSearchParams();
-  const canReadQueue = hasPermission(state, 'counselling.queue.read');
-  // The tab the target page would render: the explicit `?tab=` when present,
-  // otherwise the page's default (Queue for queue-capable staff, else the
-  // appointment book).
-  const activeTab = params.get('tab') ?? (canReadQueue ? 'queue' : 'appointments');
+  const tabParam = params.get('tab');
+  // Pure students get portal sections as accordion children; employees and
+  // admins see the flat row (the employee portal has no tabs to map).
+  const isPureStudent =
+    hasPermission(state, 'student.portal.read') && !hasPermission(state, 'employee.portal.read');
+  const visibleChildren = (item: NavItem): NavChild[] =>
+    (item.children ?? [])
+      .filter(() => !(item.studentChildren === true && !isPureStudent))
+      .filter((ch) => hasAnyPermission(state, ch.permission));  /** Child-link URL: on the module page, carry the current params over
+   * (Reports' start/end range survives); from elsewhere, start fresh. */
+  const childHref = (item: NavItem, ch: NavChild): string => {
+    if (pathname !== item.href) return `${item.href}?tab=${ch.tab}`;
+    const target = new URLSearchParams(params);
+    target.set('tab', ch.tab);
+    return `${item.href}?${target.toString()}`;
+  };
 
   return (
     <Sidebar collapsible="icon">
@@ -290,21 +385,31 @@ export function AppSidebar() {
               <SidebarGroupLabel>{section.title}</SidebarGroupLabel>
               <SidebarGroupContent>
                 <SidebarMenu>
-                  {items.map((item) => (
+                  {items.map((item) => {
+                    const visible = visibleChildren(item);
+                    const activeChildTab = visible.some((ch) => ch.tab === tabParam)
+                      ? tabParam
+                      : visible[0]?.tab;
+                    const childActive =
+                      visible.length > 0 &&
+                      pathname === item.href &&
+                      visible.some((ch) => ch.tab === activeChildTab);
+                    return (
                     <SidebarMenuItem key={item.href}>
-                      {item.children !== undefined ? (
+                      {/* Accordion only when children exist AND at least one
+                          is visible (My portal collapses to a flat row for
+                          employees/admins, who have no portal tabs). */}
+                      {item.children !== undefined && visible.length > 0 ? (
                         <SidebarAccordion
                           id={`nav-${item.label.toLowerCase().replace(/\s+/g, '-')}`}
                           label={item.label}
                           icon={item.icon}
-                          active={isActive(item.href) || (pathname === item.href && item.children.some(
-                            (ch) => ch.tab === activeTab && hasAnyPermission(state, ch.permission),
-                          ))}
-                          // autoOpen on any /counselling/* route (sibling
+                          active={isActive(item.href) || childActive}
+                          // autoOpen on any /clinic/*-style route (sibling
                           // surfaces included) is deliberate — but the
                           // child highlight is NOT: it applies only on the
                           // tabbed page itself (exact match), or moving to
-                          // Surveys would keep the last tab lit.
+                          // a sibling route would keep the last tab lit.
                           autoOpen={pathname === item.href || pathname.startsWith(`${item.href}/`)}
                           badge={item.badge !== undefined && counters.data !== undefined
                             ? (() => {
@@ -319,14 +424,14 @@ export function AppSidebar() {
                               })()
                             : null}
                         >
-                          {(item.children ?? []).filter((ch) => hasAnyPermission(state, ch.permission)).map((ch) => (
+                          {visible.map((ch) => (
                             <SidebarMenuSubItem key={ch.tab}>
                               <SidebarMenuSubButton
                                 asChild
-                                isActive={pathname === item.href && activeTab === ch.tab}
+                                isActive={pathname === item.href && activeChildTab === ch.tab}
                               >
                                 <NavLink
-                                  to={`${item.href}?tab=${ch.tab}`}
+                                  to={childHref(item, ch)}
                                   onClick={closeMobile}
                                   onMouseEnter={() => void prefetchRoute(item.href)}
                                   onFocus={() => void prefetchRoute(item.href)}
@@ -377,7 +482,7 @@ export function AppSidebar() {
                       </SidebarMenuButton>
                       )}
                     </SidebarMenuItem>
-                  ))}
+                  );})}
                 </SidebarMenu>
               </SidebarGroupContent>
             </SidebarGroup>

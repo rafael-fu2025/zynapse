@@ -134,9 +134,16 @@ test('Clinic page never overflows the viewport horizontally', async ({ page }) =
   for (const width of WIDTHS) {
     await page.setViewportSize({ width, height: 948 });
     await page.goto('/clinic', { waitUntil: 'networkidle' });
-    // Exactly one section nav is in the accessibility tree at any width
-    // (the horizontal strip below lg, the vertical sidebar at lg+).
-    await expect(page.getByRole('tablist')).toBeVisible({ timeout: 15_000 });
+    // Section navigation lives in the main sidebar accordion (Clinic →
+    // Encounters). The desktop rail exists at the sidebar's own
+    // hardcoded breakpoint (use-is-mobile: innerWidth >= 1024, NOT the
+    // Tailwind md); below it the sidebar is a closed mobile Sheet, so
+    // only the page content asserts.
+    if (width >= 1024) {
+      await expect(
+        page.getByRole('navigation', { name: /primary/i }).getByRole('button', { name: 'Encounters' }),
+      ).toBeVisible({ timeout: 15_000 });
+    }
     // The page action renders once the queue tab is actually mounted
     // (data-independent), so measurements never race the lazy route or
     // React Query's post-fetch renders.

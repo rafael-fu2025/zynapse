@@ -8,14 +8,9 @@
  */
 import {
   ArrowRight,
-  Bell,
-  CalendarDays,
   CheckCircle2,
   GraduationCap,
-  HeartHandshake,
-  History,
   IdCard,
-  LayoutDashboard,
   Mail,
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
@@ -29,7 +24,6 @@ import { TableStateBlock } from '@/components/TableStates';
 import { QueryErrorState } from '@/components/QueryErrorState';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tabs, TabsContent } from '@/components/ui/tabs';
-import { TabSections, type TabSection } from '@/components/TabSections';
 import { YourQueueCard } from '@/components/YourQueueCard';
 import { GuidancePortalTab } from '@/components/GuidancePortalTab';
 import { useTabParam } from '@/hooks/useTabParam';
@@ -42,13 +36,6 @@ import { fmtUtcToApp } from '@/utils/date';
 import { statusLabel } from '@/utils/status';
 
 /** Portal sections — sidebar on wide screens, pills on mobile. */
-const PORTAL_TABS: readonly TabSection[] = [
-  { value: 'overview', label: 'Overview', icon: LayoutDashboard },
-  { value: 'appointments', label: 'Appointments', icon: CalendarDays },
-  { value: 'history', label: 'History', icon: History },
-  { value: 'guidance', label: 'Guidance', icon: HeartHandshake },
-  { value: 'notifications', label: 'Notifications', icon: Bell },
-];
 
 const STATUS_VARIANT = {
   open: 'default',
@@ -111,7 +98,6 @@ export default function StudentPortalPage() {
       {profile.data !== undefined && (
         <>
           <Tabs value={tab} onValueChange={setTab}>
-            <TabSections tabs={PORTAL_TABS} ariaLabel="Student portal sections">
 
             <TabsContent value="overview" className="space-y-6 pt-4">
               {/* Profile & Clinic Digital Pass */}
@@ -309,7 +295,6 @@ export default function StudentPortalPage() {
             </CardContent>
           </Card>
           </TabsContent>
-          </TabSections>
         </Tabs>
 
           <footer className="flex flex-wrap items-center justify-between gap-3 border-t pt-4 text-xs text-muted-foreground">

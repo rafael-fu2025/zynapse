@@ -12,12 +12,10 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import {
   Archive,
   ArchiveRestore,
-  Briefcase,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
   Eye,
-  GraduationCap,
   HeartPulse,
   KeyRound,
   Loader2,
@@ -73,7 +71,6 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { Tabs, TabsContent } from '@/components/ui/tabs';
-import { TabSections, type TabSection } from '@/components/TabSections';
 import {
   useAddAllergy,
   useAddContact,
@@ -113,12 +110,6 @@ import {
 import { deriveUniversityEmail } from '@/lib/universityEmail';
 
 const SEVERITY_VARIANT = { mild: 'info', moderate: 'warning', severe: 'destructive' } as const;
-
-/** Registry sections — Students / Employees. */
-const PATIENT_TABS: readonly TabSection[] = [
-  { value: 'students', label: 'Students', icon: GraduationCap },
-  { value: 'employees', label: 'Employees', icon: Briefcase },
-];
 
 /**
  * Human label for an employee's employment status. The API stores
@@ -1188,7 +1179,6 @@ export default function PatientsPage() {
           }
         />
 
-        <TabSections tabs={PATIENT_TABS} ariaLabel="Patient registry sections">
         <TabsContent value="students" className="space-y-4">
           <PageToolbar>
             <div className="w-full space-y-1 sm:w-80 lg:flex-1 lg:max-w-md">
@@ -1632,7 +1622,6 @@ export default function PatientsPage() {
             </nav>
           )}
         </TabsContent>
-        </TabSections>
       </Tabs>
 
       {detailId !== null && (

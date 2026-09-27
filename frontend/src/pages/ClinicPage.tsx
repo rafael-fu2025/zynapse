@@ -17,12 +17,10 @@ import {
   Archive,
   ArchiveRestore,
   CalendarClock,
-  CheckCircle2,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
   ClipboardPlus,
-  ListOrdered,
   Loader2,
   Megaphone,
   MonitorSmartphone,
@@ -85,8 +83,6 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { Tabs, TabsContent } from '@/components/ui/tabs';
-import { CountBadge } from '@/components/CountBadge';
-import { TabSections, type TabSection } from '@/components/TabSections';
 import { Textarea } from '@/components/ui/textarea';
 import {
   useAddTreatment,
@@ -103,7 +99,6 @@ import {
   useTreatments,
 } from '@/hooks/useClinic';
 import { useCreateContextualReferral } from '@/hooks/useReferrals';
-import { useDashboardCounters } from '@/hooks/useDashboard';
 import { useEmployees } from '@/hooks/usePatients';
 import { hasPermission, useAuthStore } from '@/store/auth';
 import { useMedicines } from '@/hooks/useMedicines';
@@ -1385,11 +1380,9 @@ export default function ClinicPage() {
   // drives its data from the queue feed, not this list.
   const status = tab === 'closed' ? 'closed' : null;
   const list = useEncounters(cursor, 25, status);
-  // Page-level queue feed (deduped with QueueTab's own query by key)
-  // and dashboard counters — both drive the tab count badges below so
-  // the sidebar's module number is traceable to its tab.
-  const queue = useQueueToday();
-  const counters = useDashboardCounters();
+  // The page-level queue/counters instances that fed the old tab-strip
+  // badges retired with the strip (2026-09-27): section navigation is an
+  // accordion in the main sidebar now.
   // Note: encounter close / no-show mutations live inside QueueTab now
   // — staff action buttons are per-row in the queue table (panel
   // revision, August 2026). This page shell only manages dialogs.
@@ -1435,18 +1428,6 @@ export default function ClinicPage() {
 
   const rows: Encounter[] = list.data?.data ?? [];
 
-  // Section nav — Queue (today) → Closed → Staff schedules. The Closed
-  // badge uses the counters' closed-encounters total rather than the
-  // loaded page length: the encounters endpoint is keyset-paginated
-  // with no server total (client-side counts were misleading before).
-  const waiting = queue.data?.filter((q) => q.status === 'waiting').length ?? 0;
-  const closedCount = counters.data?.clinic?.closed_encounters ?? 0;
-  const tabs: readonly TabSection[] = [
-    { value: 'queue', label: 'Queue (today)', icon: ListOrdered, badge: <CountBadge count={waiting} /> },
-    { value: 'closed', label: 'Closed', icon: CheckCircle2, badge: <CountBadge count={closedCount} /> },
-    { value: 'staff', label: 'Staff schedules', icon: CalendarClock },
-  ];
-
   return (
     <main className="space-y-4 p-6">
       <Tabs value={tab} onValueChange={switchTab} className="space-y-4">
@@ -1475,52 +1456,53 @@ export default function ClinicPage() {
           }
         />
 
-        <TabSections tabs={tabs} ariaLabel="Clinic sections">
-          <TabsContent value="queue">
-            <div className="space-y-4">
-              <Dialog open={focusId !== null} onOpenChange={(o) => !o && selectEncounter(null)}>
-                {focusId !== null && (
-                  <ClinicEncounterWorkspace
-                    encounterId={focusId}
-                    onClose={() => selectEncounter(null)}
-                    onOpenCare={setOpenCare}
-                    onOpenVitals={setOpenVitals}
-                  />
-                )}
-              </Dialog>
-              <QueueTab onOpenEncounter={(encounterId) => selectEncounter(encounterId)} />
-            </div>
-          </TabsContent>
-
-          <TabsContent value="closed">
-            <EncounterTable
-              rows={rows}
-              focusId={focusId}
-              isLoading={list.isLoading}
-              isError={list.isError}
-              onRetry={() => void list.refetch()}
-              retrying={list.isFetching}
-              page={history.length}
-              onPrev={prevPage}
-              onNext={nextPage}
-              canPrev={history.length > 1}
-              canNext={list.data?.next !== null && list.data?.next !== undefined}
-              actions={(e) => (
-                <Button size="sm" variant="outline" onClick={() => setOpenView(e)}>
-                  <Stethoscope className="size-3.5" /> View
-                </Button>
+        {/* Section navigation lives in the main sidebar as an accordion
+            under Clinic → Encounters (2026-09-27) — this page renders only
+            the selected section, driven by the same ?tab= URL. */}
+        <TabsContent value="queue">
+          <div className="space-y-4">
+            <Dialog open={focusId !== null} onOpenChange={(o) => !o && selectEncounter(null)}>
+              {focusId !== null && (
+                <ClinicEncounterWorkspace
+                  encounterId={focusId}
+                  onClose={() => selectEncounter(null)}
+                  onOpenCare={setOpenCare}
+                  onOpenVitals={setOpenVitals}
+                />
               )}
-            />
-          </TabsContent>
+            </Dialog>
+            <QueueTab onOpenEncounter={(encounterId) => selectEncounter(encounterId)} />
+          </div>
+        </TabsContent>
 
-          <TabsContent value="staff">
-            <StaffSchedulesTab
-              showArchived={showArchived}
-              openAddShift={openAddShift}
-              onOpenAddShiftChange={setOpenAddShift}
-            />
-          </TabsContent>
-        </TabSections>
+        <TabsContent value="closed">
+          <EncounterTable
+            rows={rows}
+            focusId={focusId}
+            isLoading={list.isLoading}
+            isError={list.isError}
+            onRetry={() => void list.refetch()}
+            retrying={list.isFetching}
+            page={history.length}
+            onPrev={prevPage}
+            onNext={nextPage}
+            canPrev={history.length > 1}
+            canNext={list.data?.next !== null && list.data?.next !== undefined}
+            actions={(e) => (
+              <Button size="sm" variant="outline" onClick={() => setOpenView(e)}>
+                <Stethoscope className="size-3.5" /> View
+              </Button>
+            )}
+          />
+        </TabsContent>
+
+        <TabsContent value="staff">
+          <StaffSchedulesTab
+            showArchived={showArchived}
+            openAddShift={openAddShift}
+            onOpenAddShiftChange={setOpenAddShift}
+          />
+        </TabsContent>
       </Tabs>
 
       {openVitals !== null && (

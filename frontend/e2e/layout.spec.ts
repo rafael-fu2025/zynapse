@@ -15,11 +15,13 @@ test.skip(!RUN, 'SYNAPSE_E2E=1 not set — skipping live layout check.');
 test('authenticated shell shows the sidebar navigation and topbar', async ({ page }) => {
   await signInLive(page);
 
-  // Primary sidebar landmark + representative grouped links.
+  // Primary sidebar landmark + representative grouped links. Appointments
+  // is an accordion trigger (button) since its sections moved into the
+  // sidebar; Audit remains a plain link row.
   const sidebar = page.getByRole('navigation', { name: /primary/i });
   await expect(sidebar).toBeVisible({ timeout: 20_000 });
   await expect(sidebar.getByRole('link', { name: /dashboard/i })).toBeVisible();
-  await expect(sidebar.getByRole('link', { name: /appointments/i })).toBeVisible();
+  await expect(sidebar.getByRole('button', { name: /appointments/i })).toBeVisible();
   await expect(sidebar.getByRole('link', { name: /audit/i })).toBeVisible();
 
   // Topbar controls. Sign-out lives INSIDE the user menu popover, so

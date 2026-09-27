@@ -58,7 +58,10 @@ for (const role of ['student', 'employee'] as const) {
     await expect(page.getByText('C-001')).toBeVisible();
     await expect(page.getByText('G-002')).toBeVisible();
     await expect(page.getByText('Proceed to Guidance.')).toBeVisible();
-    if (role === 'student') await page.getByRole('tab', { name: 'Appointments' }).click();
+    if (role === 'student') {
+      await page.getByRole('navigation', { name: /primary/i })
+        .getByRole('link', { name: 'Appointments', exact: true }).click();
+    }
     await expect(page.getByText('Clinic Provider')).toBeVisible();
     await expect(page.getByText('Guidance Provider')).toBeVisible();
   });
@@ -113,7 +116,8 @@ test('booking modal opens from My Appointments and shows time slots without prov
     }
     return route.continue();
   });
-  await page.getByRole('tab', { name: 'Appointments' }).click();
+  await page.getByRole('navigation', { name: /primary/i })
+    .getByRole('link', { name: 'Appointments', exact: true }).click();
 
   // "Book an appointment" button is located in the upper right of "My appointments"
   const bookBtn = page.getByRole('button', { name: 'Book an appointment' });
@@ -179,7 +183,8 @@ test('slot picker disables and reports "No available time." when nothing is book
     }),
   );
 
-  await page.getByRole('tab', { name: 'Appointments' }).click();
+  await page.getByRole('navigation', { name: /primary/i })
+    .getByRole('link', { name: 'Appointments', exact: true }).click();
   await page.getByRole('button', { name: 'Book an appointment' }).click();
 
   const dialog = page.getByRole('dialog');

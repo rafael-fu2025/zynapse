@@ -111,9 +111,10 @@ test('login → dashboard → clinic → audit (screenshots)', async ({ page, re
   await page.waitForURL(/\/$/);
   await page.getByRole('link', { name: /inventory/i }).first().click();
   await page.waitForURL(/\/inventory$/);
-  // The precondition item is a SUPPLY — switch to the supplies tab,
-  // then search its debounced box.
-  await page.getByRole('tab', { name: /supplies/i }).click();
+  // The precondition item is a SUPPLY — switch to the supplies section
+  // (sidebar accordion child under Inventory), then search its debounced box.
+  await page.getByRole('navigation', { name: /primary/i })
+    .getByRole('link', { name: 'Supplies', exact: true }).click();
   await page.getByRole('searchbox', { name: /search/i }).fill(sku);
   await expect(page.getByText(sku, { exact: false }).first()).toBeVisible({ timeout: 15_000 });
   await page.screenshot({ path: 'e2e/artifacts/05-inventory.png', fullPage: true });
