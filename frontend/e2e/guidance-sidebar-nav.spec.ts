@@ -128,3 +128,26 @@ test('the four counselling sections are an accordion under the Counselling row',
   await expect(page).toHaveURL(/\/counselling\?tab=appointments$/);
   await expect(page.getByRole('heading', { name: 'Counselling', exact: true })).toBeVisible();
 });
+
+test('a collapsed accordion stays collapsed across navigation', async ({ page }) => {
+  const sidebar = page.getByRole('navigation', { name: /primary/i });
+  const trigger = sidebar.getByRole('button', { name: 'Counselling' });
+
+  // The reported repro: close the accordion while on the module, then press
+  // another row — the accordion must NOT force itself back open. (The first
+  // cut nested its component inside AppSidebar, so every render remounted it
+  // and reset the open state.)
+  await page.goto('/counselling?tab=appointments');
+  await expect(trigger).toHaveAttribute('aria-expanded', 'true');
+  await trigger.click();
+  await expect(trigger).toHaveAttribute('aria-expanded', 'false');
+
+  await sidebar.getByRole('link', { name: 'Surveys', exact: true }).click();
+  await expect(page).toHaveURL(/\/counselling\/surveys$/);
+  await expect(trigger).toHaveAttribute('aria-expanded', 'false');
+  await expect(sidebar.getByRole('link', { name: 'Queue', exact: true })).toBeHidden();
+
+  // Landing on the module again opens it — auto-open only ever opens.
+  await page.goto('/counselling?tab=queue');
+  await expect(trigger).toHaveAttribute('aria-expanded', 'true');
+});

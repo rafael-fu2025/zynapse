@@ -9,7 +9,6 @@
  * row (trial: Counselling, 2026-09-27) instead of an in-content tab
  * strip.
  */
-import { useState } from 'react';
 import {
   BarChart3,
   Boxes,
@@ -31,6 +30,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { NavLink, useLocation, useSearchParams } from 'react-router-dom';
+import { SidebarAccordion } from '@/components/ui/sidebar-accordion';
 import { NotificationDot } from '@/components/NotificationDot';
 import {
   Sidebar,
@@ -42,7 +42,6 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
-  SidebarMenuSub,
   SidebarMenuSubButton,
   SidebarMenuSubItem,
   SidebarRail,
@@ -235,81 +234,18 @@ export function AppSidebar() {
     );
   };
 
-  /** One parent row with an expanding child list (the accordion). */
-  function AccordionNavItem({ item }: { item: NavItem }) {
-    const [params] = useSearchParams();
-    const auth = useAuthStore();
-    // A child is active when its tab is the one the target page would
-    // render: the explicit `?tab=` when present, otherwise the page's
-    // default (Queue for queue-capable staff, else the appointment book).
-    const canReadQueue = hasPermission(auth, 'counselling.queue.read');
-    const activeTab = params.get('tab') ?? (canReadQueue ? 'queue' : 'appointments');
-    const childActive = item.children?.some(
-      (ch) => ch.tab === activeTab && hasAnyPermission(auth, ch.permission),
-    ) === true;
-
-    // Open by default when the module is the one on screen; the user can
-    // collapse it afterwards (state survives navigation within the
-    // session since the sidebar never unmounts).
-    const [open, setOpen] = useState(() => pathname.startsWith(item.href));
-
-    return (
-      <SidebarMenuItem>
-        <SidebarMenuButton
-          tooltip={item.label}
-          isActive={isActive(item.href) || childActive}
-          onClick={() => setOpen((o) => !o)}
-          aria-expanded={open}
-        >
-          <item.icon aria-hidden />
-          <span className="flex-1 truncate">{item.label}</span>
-          {item.badge !== undefined && counters.data !== undefined && (() => {
-            const b = item.badge(counters.data);
-            if (!b || b.count <= 0) return null;
-            return (
-              <NotificationDot
-                label={b.label}
-                className="ml-auto group-data-[collapsible=icon]:hidden"
-              />
-            );
-          })()}
-          <svg
-            aria-hidden
-            viewBox="0 0 24 24"
-            className={`size-4 shrink-0 transition-transform ${open ? 'rotate-90' : ''} ${item.badge !== undefined ? '' : 'ml-auto'}`}
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          >
-            <path d="m9 18 6-6-6-6" />
-          </svg>
-        </SidebarMenuButton>
-        {open && (
-          <SidebarMenuSub>
-            {(item.children ?? []).filter((ch) => hasAnyPermission(auth, ch.permission)).map((ch) => (
-              <SidebarMenuSubItem key={ch.tab}>
-                <SidebarMenuSubButton
-                  asChild
-                  isActive={pathname.startsWith(item.href) && activeTab === ch.tab}
-                >
-                  <NavLink
-                    to={`${item.href}?tab=${ch.tab}`}
-                    onClick={closeMobile}
-                    onMouseEnter={() => void prefetchRoute(item.href)}
-                    onFocus={() => void prefetchRoute(item.href)}
-                  >
-                    <span className="truncate">{ch.label}</span>
-                  </NavLink>
-                </SidebarMenuSubButton>
-              </SidebarMenuSubItem>
-            ))}
-          </SidebarMenuSub>
-        )}
-      </SidebarMenuItem>
-    );
-  }
+  // The counselling accordion (the one item with children so far) owns its
+  // own open state inside <SidebarAccordion> — a STABLE component defined at
+  // module level. The first cut nested this component inside AppSidebar,
+  // which re-created the component type every render, remounted the subtree
+  // and reset the open state — that is why the accordion forced itself open
+  // again after being closed.
+  const [params] = useSearchParams();
+  const canReadQueue = hasPermission(state, 'counselling.queue.read');
+  // The tab the target page would render: the explicit `?tab=` when present,
+  // otherwise the page's default (Queue for queue-capable staff, else the
+  // appointment book).
+  const activeTab = params.get('tab') ?? (canReadQueue ? 'queue' : 'appointments');
 
   return (
     <Sidebar collapsible="icon">
@@ -357,7 +293,45 @@ export function AppSidebar() {
                   {items.map((item) => (
                     <SidebarMenuItem key={item.href}>
                       {item.children !== undefined ? (
-                        <AccordionNavItem item={item} />
+                        <SidebarAccordion
+                          id={`nav-${item.label.toLowerCase().replace(/\s+/g, '-')}`}
+                          label={item.label}
+                          icon={item.icon}
+                          active={isActive(item.href) || item.children.some(
+                            (ch) => ch.tab === activeTab && hasAnyPermission(state, ch.permission),
+                          )}
+                          autoOpen={pathname.startsWith(item.href)}
+                          badge={item.badge !== undefined && counters.data !== undefined
+                            ? (() => {
+                                const b = item.badge(counters.data);
+                                if (!b || b.count <= 0) return null;
+                                return (
+                                  <NotificationDot
+                                    label={b.label}
+                                    className="group-data-[collapsible=icon]:hidden"
+                                  />
+                                );
+                              })()
+                            : null}
+                        >
+                          {(item.children ?? []).filter((ch) => hasAnyPermission(state, ch.permission)).map((ch) => (
+                            <SidebarMenuSubItem key={ch.tab}>
+                              <SidebarMenuSubButton
+                                asChild
+                                isActive={pathname.startsWith(item.href) && activeTab === ch.tab}
+                              >
+                                <NavLink
+                                  to={`${item.href}?tab=${ch.tab}`}
+                                  onClick={closeMobile}
+                                  onMouseEnter={() => void prefetchRoute(item.href)}
+                                  onFocus={() => void prefetchRoute(item.href)}
+                                >
+                                  <span className="truncate">{ch.label}</span>
+                                </NavLink>
+                              </SidebarMenuSubButton>
+                            </SidebarMenuSubItem>
+                          ))}
+                        </SidebarAccordion>
                       ) : (
                         <SidebarMenuButton asChild isActive={isActive(item.href)} tooltip={item.label}>
                         {/*
