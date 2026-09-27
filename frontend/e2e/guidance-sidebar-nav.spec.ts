@@ -57,9 +57,10 @@ test('the Guidance Center group carries the four moved surfaces', async ({ page 
   const sidebar = page.getByRole('navigation', { name: /primary/i });
   await expect(sidebar).toBeVisible({ timeout: 20_000 });
 
-  // Counselling is an accordion trigger now (button, not a link); the four
-  // moved surfaces remain flat link rows beside it.
-  await expect(sidebar.getByRole('button', { name: 'Counselling' })).toBeVisible();
+  // The Counselling row is a link that opens the module; its sections live
+  // in the accordion behind the row's chevron. The four moved surfaces
+  // remain flat link rows beside it.
+  await expect(sidebar.getByRole('link', { name: 'Counselling', exact: true })).toBeVisible();
   for (const label of ['Surveys', 'Announcements', 'Analytics', 'Services']) {
     await expect(sidebar.getByRole('link', { name: label, exact: true })).toBeVisible();
   }
@@ -96,8 +97,8 @@ test('the sections that did not move still resolve from the URL', async ({ page 
   // it must not be stripped). Navigation now lives in the sidebar accordion —
   // the Queue child is the active one and the Queue board is what renders.
   await expect(page).toHaveURL(/tab=queue/);
-  const counselling = sidebar.getByRole('button', { name: 'Counselling' });
-  await expect(counselling).toHaveAttribute('aria-expanded', 'true');
+  const counsellingToggle = sidebar.getByRole('button', { name: 'Toggle Counselling sections' });
+  await expect(counsellingToggle).toHaveAttribute('aria-expanded', 'true');
   await expect(sidebar.getByRole('link', { name: 'Queue', exact: true })).toHaveAttribute(
     'data-active',
     'true',
@@ -106,20 +107,21 @@ test('the sections that did not move still resolve from the URL', async ({ page 
 
 test('the four counselling sections are an accordion under the Counselling row', async ({ page }) => {
   const sidebar = page.getByRole('navigation', { name: /primary/i });
-  const trigger = sidebar.getByRole('button', { name: 'Counselling' });
+  const toggle = sidebar.getByRole('button', { name: 'Toggle Counselling sections' });
 
   // On /counselling the accordion starts open and lists the four sections.
   await page.goto('/counselling?tab=appointments');
-  await expect(trigger).toHaveAttribute('aria-expanded', 'true');
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
   for (const label of ['Queue', 'Appointments', 'Follow-ups', 'Scheduling']) {
     await expect(sidebar.getByRole('link', { name: label, exact: true })).toBeVisible();
   }
 
-  // Collapsing hides the children; expanding brings them back.
-  await trigger.click();
-  await expect(trigger).toHaveAttribute('aria-expanded', 'false');
+  // Collapsing (via the row's chevron) hides the children; expanding
+  // brings them back. The row itself just navigates.
+  await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
   await expect(sidebar.getByRole('link', { name: 'Follow-ups', exact: true })).toBeHidden();
-  await trigger.click();
+  await toggle.click();
   await expect(sidebar.getByRole('link', { name: 'Follow-ups', exact: true })).toBeVisible();
 
   // A child navigates: clicking Appointments lands the page on the book
@@ -131,30 +133,32 @@ test('the four counselling sections are an accordion under the Counselling row',
 
 test('a collapsed accordion stays collapsed across navigation', async ({ page }) => {
   const sidebar = page.getByRole('navigation', { name: /primary/i });
-  const trigger = sidebar.getByRole('button', { name: 'Counselling' });
+  const toggle = sidebar.getByRole('button', { name: 'Toggle Counselling sections' });
 
   // The reported repro: close the accordion while on the module, then press
   // another row — the accordion must NOT force itself back open. (The first
   // cut nested its component inside AppSidebar, so every render remounted it
   // and reset the open state.)
   await page.goto('/counselling?tab=appointments');
-  await expect(trigger).toHaveAttribute('aria-expanded', 'true');
-  await trigger.click();
-  await expect(trigger).toHaveAttribute('aria-expanded', 'false');
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
 
   await sidebar.getByRole('link', { name: 'Surveys', exact: true }).click();
   await expect(page).toHaveURL(/\/counselling\/surveys$/);
-  await expect(trigger).toHaveAttribute('aria-expanded', 'false');
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
   await expect(sidebar.getByRole('link', { name: 'Queue', exact: true })).toBeHidden();
 
-  // Landing on the module again opens it — auto-open only ever opens.
+  // A fresh load on the module page starts with the accordion open —
+  // the mount-time default, not a forced reopen mid-session.
   await page.goto('/counselling?tab=queue');
-  await expect(trigger).toHaveAttribute('aria-expanded', 'true');
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
 });
 
 test('a sibling surface does not keep the tab child highlighted', async ({ page }) => {
   const sidebar = page.getByRole('navigation', { name: /primary/i });
-  const trigger = sidebar.getByRole('button', { name: 'Counselling' });
+  const row = sidebar.getByRole('link', { name: 'Counselling', exact: true });
+  const toggle = sidebar.getByRole('button', { name: 'Toggle Counselling sections' });
 
   // The tab child is active on the tabbed page itself...
   await page.goto('/counselling?tab=queue');
@@ -167,17 +171,18 @@ test('a sibling surface does not keep the tab child highlighted', async ({ page 
   // highlight — from both the child and the parent row — even though the
   // accordion stays open for the module family.
   await page.goto('/counselling/surveys');
-  await expect(trigger).toHaveAttribute('aria-expanded', 'true');
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
   await expect(sidebar.getByRole('link', { name: 'Queue', exact: true })).not.toHaveAttribute(
     'data-active',
     'true',
   );
-  await expect(trigger).not.toHaveAttribute('data-active', 'true');
+  await expect(row).not.toHaveAttribute('data-active', 'true');
 });
 
 test('tapping an accordion module in the collapsed rail expands the sidebar', async ({ page }) => {
   const sidebar = page.getByRole('navigation', { name: /primary/i });
-  const trigger = sidebar.getByRole('button', { name: 'Counselling' });
+  const row = sidebar.getByRole('link', { name: 'Counselling', exact: true });
+  const toggle = sidebar.getByRole('button', { name: 'Toggle Counselling sections' });
 
   await page.setViewportSize({ width: 1280, height: 800 });
   await page.goto('/counselling?tab=appointments');
@@ -185,10 +190,10 @@ test('tapping an accordion module in the collapsed rail expands the sidebar', as
   // Collapse to the icon rail. In this mode the child list is hidden
   // entirely — a bare toggle would do nothing visible.
   await page.getByRole('button', { name: 'Toggle Sidebar' }).first().click();
-  await expect(trigger).toBeVisible();
+  await expect(row).toBeVisible();
 
-  // Tapping the module expands the sidebar AND opens its panel.
-  await trigger.click();
-  await expect(trigger).toHaveAttribute('aria-expanded', 'true');
+  // Tapping the module expands the rail AND opens its panel.
+  await row.click();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
   await expect(sidebar.getByRole('link', { name: 'Appointments', exact: true })).toBeVisible();
 });

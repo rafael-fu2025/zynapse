@@ -431,11 +431,13 @@ export function AppSidebar() {
                           id={`nav-${item.label.toLowerCase().replace(/\s+/g, '-')}`}
                           label={item.label}
                           icon={item.icon}
+                          href={item.href}
                           active={isActive(item.href) || childActive}
                           open={openAccordion === item.href}
                           onOpenChange={(next) =>
                             setOpenAccordion(next ? item.href : null)
                           }
+                          onPrefetch={() => void prefetchRoute(item.href)}
                           badge={item.badge !== undefined && counters.data !== undefined
                             ? (() => {
                                 const b = item.badge(counters.data);
