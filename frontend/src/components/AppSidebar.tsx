@@ -433,8 +433,8 @@ export function AppSidebar() {
                           icon={item.icon}
                           active={isActive(item.href) || childActive}
                           open={openAccordion === item.href}
-                          onToggle={() =>
-                            setOpenAccordion((current) => (current === item.href ? null : item.href))
+                          onOpenChange={(next) =>
+                            setOpenAccordion(next ? item.href : null)
                           }
                           badge={item.badge !== undefined && counters.data !== undefined
                             ? (() => {

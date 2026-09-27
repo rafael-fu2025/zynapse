@@ -174,3 +174,21 @@ test('a sibling surface does not keep the tab child highlighted', async ({ page 
   );
   await expect(trigger).not.toHaveAttribute('data-active', 'true');
 });
+
+test('tapping an accordion module in the collapsed rail expands the sidebar', async ({ page }) => {
+  const sidebar = page.getByRole('navigation', { name: /primary/i });
+  const trigger = sidebar.getByRole('button', { name: 'Counselling' });
+
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto('/counselling?tab=appointments');
+
+  // Collapse to the icon rail. In this mode the child list is hidden
+  // entirely — a bare toggle would do nothing visible.
+  await page.getByRole('button', { name: 'Toggle Sidebar' }).first().click();
+  await expect(trigger).toBeVisible();
+
+  // Tapping the module expands the sidebar AND opens its panel.
+  await trigger.click();
+  await expect(trigger).toHaveAttribute('aria-expanded', 'true');
+  await expect(sidebar.getByRole('link', { name: 'Appointments', exact: true })).toBeVisible();
+});

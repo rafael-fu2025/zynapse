@@ -23,14 +23,14 @@
 import type { ReactNode } from 'react';
 import type { LucideIcon } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { SidebarMenuButton, SidebarMenuItem, SidebarMenuSub } from './sidebar';
+import { useSidebar, SidebarMenuButton, SidebarMenuItem, SidebarMenuSub } from './sidebar';
 
 export function SidebarAccordion({
   id,
   label,
   icon: Icon,
   open,
-  onToggle,
+  onOpenChange,
   active,
   badge = null,
   children,
@@ -40,7 +40,8 @@ export function SidebarAccordion({
   label: string;
   icon: LucideIcon;
   open: boolean;
-  onToggle: () => void;
+  /** Called with the next open state. The caller owns single-expand. */
+  onOpenChange: (open: boolean) => void;
   /** Any child of this accordion is the surface on screen. */
   active: boolean;
   /** Right-edge indicator (the red notification dot), or null. */
@@ -48,6 +49,7 @@ export function SidebarAccordion({
   /** Panel content — typically the module's child links. */
   children: ReactNode;
 }): JSX.Element {
+  const { state, setOpen, isMobile } = useSidebar();
   const panelId = `${id}-panel`;
 
   return (
@@ -55,7 +57,17 @@ export function SidebarAccordion({
       <SidebarMenuButton
         tooltip={label}
         isActive={active}
-        onClick={onToggle}
+        onClick={() => {
+          // Collapsed icon rail: the child list is hidden entirely, so a
+          // tap must EXPAND the sidebar and open this module's panel —
+          // toggling alone would do nothing visible.
+          if (state === 'collapsed' && !isMobile) {
+            setOpen(true);
+            onOpenChange(true);
+            return;
+          }
+          onOpenChange(!open);
+        }}
         aria-expanded={open}
         aria-controls={panelId}
       >
