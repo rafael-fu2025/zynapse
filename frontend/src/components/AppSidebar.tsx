@@ -31,7 +31,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { NavLink, useLocation, useSearchParams } from 'react-router-dom';
-import { CountBadge } from '@/components/CountBadge';
+import { NotificationDot } from '@/components/NotificationDot';
 import {
   Sidebar,
   SidebarContent,
@@ -80,7 +80,7 @@ interface NavItem {
    * Extract count badge from dashboard counters. Color is owned by
    * CountBadge (adaptive tint) — call sites only supply the number.
    */
-  badge?: (c: ReturnType<typeof useDashboardCounters>['data']) => { count: number } | null;
+  badge?: (c: ReturnType<typeof useDashboardCounters>['data']) => { count: number; label: string } | null;
   /**
    * Child sections rendered as an accordion under this row instead of
    * an in-content tab strip (trial: Counselling, 2026-09-27). Each
@@ -125,7 +125,7 @@ const NAV_SECTIONS: ReadonlyArray<{ title: string; items: ReadonlyArray<NavItem>
         permission: 'clinic.encounters.read',
         badge: (c) => {
           const n = c?.clinic?.open_encounters ?? 0;
-          return n > 0 ? { count: n } : null;
+          return n > 0 ? { count: n, label: `${n} open clinic encounters` } : null;
         },
       },
       { label: 'Appointments', href: '/appointments', icon: CalendarClock, permission: 'clinic.appointments.read' },
@@ -143,7 +143,7 @@ const NAV_SECTIONS: ReadonlyArray<{ title: string; items: ReadonlyArray<NavItem>
         permission: 'counselling.records.read',
         badge: (c) => {
           const n = c?.counselling?.open_sessions ?? 0;
-          return n > 0 ? { count: n } : null;
+          return n > 0 ? { count: n, label: `${n} open guidance sessions` } : null;
         },
         // Trial (2026-09-27): the page's tab strip moved here as an
         // accordion. Children gate and order-match the page's own
@@ -178,7 +178,7 @@ const NAV_SECTIONS: ReadonlyArray<{ title: string; items: ReadonlyArray<NavItem>
         permission: 'referrals.read',
         badge: (c) => {
           const n = (c?.referrals?.submitted ?? 0) + (c?.referrals?.under_review ?? 0);
-          return n > 0 ? { count: n } : null;
+          return n > 0 ? { count: n, label: `${n} referrals awaiting action` } : null;
         },
       },
     ],
@@ -193,7 +193,7 @@ const NAV_SECTIONS: ReadonlyArray<{ title: string; items: ReadonlyArray<NavItem>
         permission: 'facilities.units.read',
         badge: (c) => {
           const risk = c?.facilities?.at_risk ?? 0;
-          return risk > 0 ? { count: risk } : null;
+          return risk > 0 ? { count: risk, label: `${risk} drums at risk` } : null;
         },
       },
       // Waste categories now live on their own screen (no longer a
@@ -267,8 +267,8 @@ export function AppSidebar() {
             const b = item.badge(counters.data);
             if (!b || b.count <= 0) return null;
             return (
-              <CountBadge
-                count={b.count}
+              <NotificationDot
+                label={b.label}
                 className="ml-auto group-data-[collapsible=icon]:hidden"
               />
             );
@@ -388,8 +388,8 @@ export function AppSidebar() {
                             const b = item.badge(counters.data);
                             if (!b || b.count <= 0) return null;
                             return (
-                              <CountBadge
-                                count={b.count}
+                              <NotificationDot
+                                label={b.label}
                                 className="ml-auto group-data-[collapsible=icon]:hidden"
                               />
                             );
