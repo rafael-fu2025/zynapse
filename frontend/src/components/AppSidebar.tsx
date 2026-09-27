@@ -29,6 +29,7 @@ import {
   Users,
   type LucideIcon,
 } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
 import { NavLink, useLocation, useSearchParams } from 'react-router-dom';
 import { SidebarAccordion } from '@/components/ui/sidebar-accordion';
 import { NotificationDot } from '@/components/NotificationDot';
@@ -313,17 +314,43 @@ export function AppSidebar() {
     );
   };
 
-  // Accordions (nav items with children) own their open state inside
-  // <SidebarAccordion> — a STABLE component defined at module level. The
-  // first cut nested that component inside AppSidebar, which re-created the
-  // component type every render, remounted the subtree and reset the open
-  // state — that is why the accordion forced itself open again after being
-  // closed.
+  // Accordions are SINGLE-EXPAND: one `openAccordion` id lives here, so
+  // opening a module's section list closes the others and the sidebar never
+  // becomes a wall of expanded sections.
+  //
+  // The module whose page is on screen at mount starts open, and ENTERING a
+  // module's subtree from outside auto-opens its accordion (wayfinding —
+  // the sidebar always shows where you are). Moving BETWEEN sibling
+  // surfaces inside the same module subtree never re-opens it: a user who
+  // collapsed the accordion stays collapsed until they leave the module or
+  // open another one (the first cut forced it open on every render, and an
+  // earlier auto-open fired on every navigation; both fought the user).
   //
   // Per-item active tab: the explicit `?tab=` when it names one of the
   // item's permission-visible children, otherwise the FIRST visible child —
   // which is each page's default tab by convention (Counselling's
   // permission-conditional default falls out of the same rule).
+  const [openAccordion, setOpenAccordion] = useState<string | null>(() => {
+    const active = NAV_SECTIONS.flatMap((s) => s.items).find(
+      (i) =>
+        i.children !== undefined &&
+        (pathname === i.href || pathname.startsWith(`${i.href}/`)),
+    );
+    return active?.href ?? null;
+  });
+  const lastPathRef = useRef(pathname);
+  useEffect(() => {
+    const inside = (href: string) => pathname === href || pathname.startsWith(`${href}/`);
+    const cameFromInside = (href: string) =>
+      lastPathRef.current === href || lastPathRef.current.startsWith(`${href}/`);
+    const active = NAV_SECTIONS.flatMap((s) => s.items).find(
+      (i) => i.children !== undefined && inside(i.href),
+    );
+    if (active !== undefined && !cameFromInside(active.href)) {
+      setOpenAccordion(active.href);
+    }
+    lastPathRef.current = pathname;
+  }, [pathname]);
   const [params] = useSearchParams();
   const tabParam = params.get('tab');
   // Pure students get portal sections as accordion children; employees and
@@ -405,12 +432,10 @@ export function AppSidebar() {
                           label={item.label}
                           icon={item.icon}
                           active={isActive(item.href) || childActive}
-                          // autoOpen on any /clinic/*-style route (sibling
-                          // surfaces included) is deliberate — but the
-                          // child highlight is NOT: it applies only on the
-                          // tabbed page itself (exact match), or moving to
-                          // a sibling route would keep the last tab lit.
-                          autoOpen={pathname === item.href || pathname.startsWith(`${item.href}/`)}
+                          open={openAccordion === item.href}
+                          onToggle={() =>
+                            setOpenAccordion((current) => (current === item.href ? null : item.href))
+                          }
                           badge={item.badge !== undefined && counters.data !== undefined
                             ? (() => {
                                 const b = item.badge(counters.data);

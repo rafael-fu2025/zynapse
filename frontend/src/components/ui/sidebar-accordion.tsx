@@ -1,7 +1,6 @@
 /**
  * SidebarAccordion — a disclosure row for the main sidebar: a trigger
- * button plus an animated child panel (the accordion behavior trial,
- * 2026-09-27).
+ * button plus an animated child panel (2026-09-27).
  *
  * Behavior contract (WAI-ARIA disclosure pattern):
  *   - the trigger is a real button carrying `aria-expanded` and
@@ -12,12 +11,16 @@
  *     remaining mounted so the close animation can play;
  *   - the open/close animation is the grid-rows trick
  *     (`0fr -> 1fr`), which needs no measured heights, and disables
- *     itself under `prefers-reduced-motion`;
- *   - open state lives HERE and survives navigation — the caller may
- *     ask for the panel to open (module on screen) via `autoOpen`,
- *     which only ever opens, never force-closes.
+ *     itself under `prefers-reduced-motion`.
+ *
+ * Single-expand: the component is CONTROLLED — open state is owned by
+ * the caller (AppSidebar keeps one `openAccordion` id, so opening one
+ * module closes the others and the sidebar never becomes a wall of
+ * expanded sections). Navigation never force-changes the state; the
+ * caller initializes it from the route at mount so a deep link loads
+ * with its module's panel open.
  */
-import { useEffect, useState, type ReactNode } from 'react';
+import type { ReactNode } from 'react';
 import type { LucideIcon } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { SidebarMenuButton, SidebarMenuItem, SidebarMenuSub } from './sidebar';
@@ -26,8 +29,9 @@ export function SidebarAccordion({
   id,
   label,
   icon: Icon,
+  open,
+  onToggle,
   active,
-  autoOpen,
   badge = null,
   children,
 }: {
@@ -35,19 +39,15 @@ export function SidebarAccordion({
   id: string;
   label: string;
   icon: LucideIcon;
+  open: boolean;
+  onToggle: () => void;
   /** Any child of this accordion is the surface on screen. */
   active: boolean;
-  /** While true the panel opens (once); it is never force-closed. */
-  autoOpen: boolean;
   /** Right-edge indicator (the red notification dot), or null. */
   badge?: ReactNode;
   /** Panel content — typically the module's child links. */
   children: ReactNode;
 }): JSX.Element {
-  const [open, setOpen] = useState(autoOpen);
-  useEffect(() => {
-    if (autoOpen) setOpen(true);
-  }, [autoOpen]);
   const panelId = `${id}-panel`;
 
   return (
@@ -55,7 +55,7 @@ export function SidebarAccordion({
       <SidebarMenuButton
         tooltip={label}
         isActive={active}
-        onClick={() => setOpen((o) => !o)}
+        onClick={onToggle}
         aria-expanded={open}
         aria-controls={panelId}
       >
