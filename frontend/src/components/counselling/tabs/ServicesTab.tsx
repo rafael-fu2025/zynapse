@@ -215,9 +215,14 @@ export function ServicesTab() {
       {!services.isLoading && !services.isError && rows.length > 0 && (
         <section aria-labelledby="svc-list-heading" className="overflow-hidden rounded-xl border bg-card">
           <h2 id="svc-list-heading" className="sr-only">Service catalogue</h2>
-          <div className="overflow-x-auto">
-            <Table ariaLabel="Guidance service catalogue">
-              <TableHeader className="bg-muted/50">
+          {/* The Table's own wrapper is the scroll container — an extra
+              overflow-x-auto div here would defeat the sticky header. */}
+          <Table
+            ariaLabel="Guidance service catalogue"
+            wrapperClassName="max-h-[60vh] overflow-y-auto"
+            className="[&_td]:py-1.5"
+          >
+            <TableHeader className="sticky top-0 z-10 bg-muted shadow-[0_1px_0_0_var(--border)]">
                 <TableRow>
                   <TableHead className="px-3">Service</TableHead>
                   <TableHead className="px-3">Booking</TableHead>
@@ -252,7 +257,6 @@ export function ServicesTab() {
                 ))}
               </TableBody>
             </Table>
-          </div>
         </section>
       )}
 

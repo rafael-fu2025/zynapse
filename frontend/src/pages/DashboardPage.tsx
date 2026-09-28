@@ -44,8 +44,8 @@ interface Module {
   href: string;
   icon: LucideIcon;
   /**
-   * Second card line — live counters or the module's term list. Terms
-   * are lowercase to match the counter lines; numbers render bold via
+   * Second card line — live counters or the module's term list. Segments
+   * are pipe-divided and each starts capitalized; numbers render bold via
    * <Count>.
    */
   summary: (c: ReturnType<typeof useDashboardCounters>['data']) => ReactNode;
@@ -68,7 +68,7 @@ const MODULES: ReadonlyArray<Module> = [
       const k = c?.clinic?.closed_encounters ?? 0;
       return (
         <>
-          <Count>{o}</Count> open · <Count>{k}</Count> closed
+          <Count>{o}</Count> Open | <Count>{k}</Count> Closed
         </>
       );
     },
@@ -84,7 +84,7 @@ const MODULES: ReadonlyArray<Module> = [
       const k = c?.counselling?.closed_sessions ?? 0;
       return (
         <>
-          <Count>{o}</Count> open · <Count>{k}</Count> closed
+          <Count>{o}</Count> Open | <Count>{k}</Count> Closed
         </>
       );
     },
@@ -100,10 +100,10 @@ const MODULES: ReadonlyArray<Module> = [
       const risk = f?.at_risk ?? 0;
       return (
         <>
-          <Count>{f?.units_idle ?? 0}</Count> idle · <Count>{f?.units_processing ?? 0}</Count> processing ·{' '}
-          <Count>{f?.units_awaiting ?? 0}</Count> awaiting
+          <Count>{f?.units_idle ?? 0}</Count> Idle | <Count>{f?.units_processing ?? 0}</Count> Processing |{' '}
+          <Count>{f?.units_awaiting ?? 0}</Count> Awaiting
           {risk > 0 && (
-            <> · ⚠ <Count>{risk}</Count> at risk</>
+            <> | ⚠ <Count>{risk}</Count> At risk</>
           )}
         </>
       );
@@ -111,11 +111,11 @@ const MODULES: ReadonlyArray<Module> = [
   },
   {
     code: 'clinic.patients.read',
-    label: 'Patients',
+    label: 'Records',
     blurb: 'Student and employee registry',
     href: '/patients',
     icon: ContactRound,
-    summary: () => 'students · employees · allergies',
+    summary: () => 'Students | Employees | Allergies',
   },
   {
     code: 'clinic.inventory.read',
@@ -123,7 +123,7 @@ const MODULES: ReadonlyArray<Module> = [
     blurb: 'Supplies, medicines and stock levels',
     href: '/inventory',
     icon: Boxes,
-    summary: () => 'clinic supplies · stock transactions',
+    summary: () => 'Clinic supplies | Stock transactions',
   },
   {
     code: 'clinic.appointments.read',
@@ -131,7 +131,7 @@ const MODULES: ReadonlyArray<Module> = [
     blurb: 'Scheduling, check-in and visit history',
     href: '/appointments',
     icon: CalendarClock,
-    summary: () => 'scheduling · check-in · lifecycle',
+    summary: () => 'Scheduling | Check-in | Lifecycle',
   },
   {
     code: 'referrals.read',
@@ -143,7 +143,7 @@ const MODULES: ReadonlyArray<Module> = [
       const r = c?.referrals;
       return (
         <>
-          <Count>{r?.submitted ?? 0}</Count> submitted · <Count>{r?.under_review ?? 0}</Count> in review
+          <Count>{r?.submitted ?? 0}</Count> Submitted | <Count>{r?.under_review ?? 0}</Count> In review
         </>
       );
     },
@@ -156,7 +156,7 @@ const MODULES: ReadonlyArray<Module> = [
     icon: ScrollText,
     summary: (c) => (
       <>
-        <Count>{c?.audit?.events_last_24h ?? 0}</Count> events in 24h
+        <Count>{c?.audit?.events_last_24h ?? 0}</Count> Events in 24h
       </>
     ),
   },
@@ -166,7 +166,7 @@ const MODULES: ReadonlyArray<Module> = [
     blurb: 'Accounts, roles and password resets',
     href: '/admin/users',
     icon: Users,
-    summary: () => 'accounts · groups · password resets',
+    summary: () => 'Accounts | Groups | Password resets',
   },
 ];
 

@@ -63,11 +63,14 @@ function Pager({
   page,
   totalPages,
   total,
+  shown,
   onChange,
 }: {
   page: number;
   totalPages: number;
   total: number;
+  /** Rows rendered on THIS page. */
+  shown: number;
   onChange: (page: number) => void;
 }) {
   return (
@@ -77,7 +80,7 @@ function Pager({
         <Button size="icon-sm" variant="outline" aria-label="Previous page" disabled={page <= 1} onClick={() => onChange(page - 1)}>
           <ChevronLeft />
         </Button>
-        <span className="tabular-nums">Page {page} of {totalPages}</span>
+        <span className="tabular-nums">Page {page} of {totalPages} · {shown} shown</span>
         <Button size="icon-sm" variant="outline" aria-label="Next page" disabled={page >= totalPages} onClick={() => onChange(page + 1)}>
           <ChevronRight />
         </Button>
@@ -335,6 +338,7 @@ export function SavedReportsSection({ start, end, canConfigure, canExport }: Pro
               page={configs.data.pagination.page}
               totalPages={configs.data.pagination.total_pages}
               total={configs.data.pagination.total}
+              shown={configItems.length}
               onChange={setConfigPage}
             />
           )}
@@ -425,6 +429,7 @@ export function SavedReportsSection({ start, end, canConfigure, canExport }: Pro
               page={generated.data.pagination.page}
               totalPages={generated.data.pagination.total_pages}
               total={generated.data.pagination.total}
+              shown={generatedItems.length}
               onChange={setGeneratedPage}
             />
           )}

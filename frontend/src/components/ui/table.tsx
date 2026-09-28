@@ -17,11 +17,18 @@ import { cn } from '@/lib/utils';
 interface TableProps extends React.HTMLAttributes<HTMLTableElement> {
   /** Accessible name, rendered as a visually hidden <caption>. */
   ariaLabel?: string;
+  /**
+   * Classes for the overflow wrapper AROUND the <table>. This div is the
+   * scroll container a `sticky top-0` TableHeader binds to — a header
+   * only sticks when the max-height/overflow live HERE; an outer div
+   * would become the scrollport instead and the header would never move.
+   */
+  wrapperClassName?: string;
 }
 
 const Table = React.forwardRef<HTMLTableElement, TableProps>(
-  ({ className, ariaLabel, children, ...props }, ref) => (
-    <div className="relative w-full overflow-auto">
+  ({ className, wrapperClassName, ariaLabel, children, ...props }, ref) => (
+    <div className={cn('relative w-full overflow-auto', wrapperClassName)}>
       <table ref={ref} className={cn('w-full caption-bottom text-sm', className)} {...props}>
         {ariaLabel !== undefined && <caption className="sr-only">{ariaLabel}</caption>}
         {children}

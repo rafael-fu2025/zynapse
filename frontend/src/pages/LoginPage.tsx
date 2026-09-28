@@ -1,6 +1,12 @@
 /**
  * LoginPage — WCAG 2.2 AA, react-hook-form + zod, Sonner toasts.
- * Built from shadcn Card / Label / Input / Button primitives.
+ *
+ * Split layout after fuel.foundationu.com's login (2026-09-27): the left
+ * half is the campus-garden photo, the right half the sign-in form with
+ * the Socials row (the offices' Facebook pages) pinned at its bottom.
+ * The photo pane is hidden below `lg` and the form takes the full width
+ * there. All behaviour — validation, the mutation, error focus,
+ * autofill nudging — is unchanged; only the geometry moved.
  */
 import { zodResolver } from '@hookform/resolvers/zod';
 import { AlertCircle, Eye, EyeOff, Loader2 } from 'lucide-react';
@@ -9,30 +15,34 @@ import { useForm } from 'react-hook-form';
 import { ApiEnvelopeError } from '@/api/envelope';
 import { humanizeCode } from '@/api/errorCodes';
 import { Button } from '@/components/ui/button';
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useLogin } from '@/hooks/useAuth';
 import { loginSchema, type LoginInput } from '@/schemas/auth';
 
 /**
- * The two services this portal fronts, shown as a branding strip under
- * the card. The artwork is supplied as circular seals on transparent
- * PNG, so it keeps its own colours (maroon/navy and teal) rather than
- * following the theme — only the caption is themed. `alt` stays empty
- * because the caption beside each mark already names it; giving the
- * image the same text would announce the service twice.
+ * The offices this portal fronts, as circular seals linking to their
+ * Facebook pages, shown under the form. The artwork keeps its own
+ * colours (maroon/navy and teal) rather than following the theme.
+ * `alt` stays empty because each link carries its own aria-label;
+ * giving the image the same text would announce the service twice.
  */
-const SERVICE_MARKS = [
-  { src: '/guidance-center.png', label: 'Guidance Center' },
-  { src: '/health-services.png', label: 'Health Services' },
+const SOCIALS = [
+  {
+    src: '/guidance-center.png',
+    label: 'Guidance Center',
+    href: 'https://www.facebook.com/profile.php?id=100063778576372',
+  },
+  {
+    src: '/FoundationU.png',
+    label: 'Foundation University',
+    href: 'https://www.facebook.com/foundationu.edu',
+  },
+  {
+    src: '/health-services.png',
+    label: 'Health Services',
+    href: 'https://www.facebook.com/profile.php?id=100057107094031',
+  },
 ] as const;
 
 export default function LoginPage() {
@@ -94,90 +104,90 @@ export default function LoginPage() {
   });
 
   // Block the right-click / context menu and drag-start on this page's
-  // artwork — the background photo, the SYNAPSE mark and the service
-  // seals. This is a UX deterrent, not real protection: the assets are
-  // still fetchable from /FU-Social-Garden.jpg and friends. For real
-  // protection, put a hotlink rule + signed URLs in the web server
-  // (see README).
+  // artwork — the garden photo, the SYNAPSE mark and the service seals.
+  // This is a UX deterrent, not real protection: the assets are still
+  // fetchable from /fuel-bg.jpg and friends. For real protection, put a
+  // hotlink rule + signed URLs in the web server (see README).
   const swallow = (e: React.SyntheticEvent) => {
     e.preventDefault();
     e.stopPropagation();
   };
 
   return (
-    /*
-      Column layout rather than `place-items-center`: the branding strip
-      below is a real flow child, so on short viewports the card and the
-      strip push apart and the page scrolls instead of overlapping.
-      `overflow-x-hidden` (not `overflow-hidden`) leaves that vertical
-      scroll reachable; the background layers are `fixed`, so nothing
-      needs clipping here to contain them.
-    */
-    <main className="relative flex min-h-dvh flex-col items-center overflow-x-hidden bg-background p-6">
+    // 60/40 split (photo/form) — `3fr_2fr` rather than percentages so the
+    // columns can never overflow the grid by a rounding pixel.
+    <main className="grid min-h-dvh bg-background lg:grid-cols-[3fr_2fr]">
       {/*
-        Background image. The img is `pointer-events-none` and the
-        transparent shield above it absorbs right-click / long-press /
-        drag so users can't pull the asset out of the DOM. The shield
-        is `aria-hidden` because it carries no semantics.
+        Welcome pane — the campus garden photo over the moove theme's
+        maroon underlay, inset from the page edge inside a rounded
+        container. No overlay panel: the photo speaks for itself.
+        `hidden lg:block` mirrors the reference's d-none d-lg-flex: on
+        phones the form pane takes the whole screen.
       */}
-      <div
-        aria-hidden
-        className="no-copy pointer-events-none fixed inset-0 select-none"
-        style={{ zIndex: 0 }}
-      >
-        <img
-          src="/FU-Social-Garden.jpg"
-          alt=""
-          draggable={false}
-          onDragStart={swallow}
-          onContextMenu={swallow}
-          className="no-copy size-full select-none object-cover"
-        />
-      </div>
-      {/* Transparent shield over the image — blocks long-press context
-          menu, image-drag handles, and right-click from reaching the
-          <img> underneath. */}
-      <div
-        aria-hidden
-        onContextMenu={swallow}
-        onDragStart={swallow}
-        className="no-copy fixed inset-0 select-none"
-        style={{ zIndex: 1 }}
-      />
-
-      <Card
-        /*
-          `my-auto shrink-0` centres the card in the space left above the
-          branding strip, and refuses the vertical squash a column flex
-          would otherwise apply on short viewports.
-        */
-        className="relative my-auto w-full max-w-sm shrink-0 shadow-lg ring-1 ring-black/5 backdrop-blur-sm"
-        style={{ zIndex: 2 }}
-        aria-labelledby="login-title"
-      >
-        {/* Branded header — SYNAPSE mark on a light surface so the
-            maroon artwork reads. */}
-        <CardHeader className="items-center gap-3 text-center">
+      <aside className="relative hidden p-2 lg:block">
+        <div className="relative h-full w-full overflow-hidden rounded-xl bg-[#ac1e37]">
+          {/* Day photo on the light theme, night photo in dark mode — same
+              garden, so the swap reads as a lighting change, not a new
+              page. */}
           <img
-            src="/synapse-maroon.png"
+            src="/fuel-bg.jpg"
             alt=""
-            className="no-copy h-14 w-auto select-none object-contain"
             draggable={false}
             onDragStart={swallow}
             onContextMenu={swallow}
+            className="no-copy pointer-events-none absolute inset-0 size-full select-none object-cover dark:hidden"
           />
-          <div className="space-y-1">
-            <CardTitle id="login-title" className="text-xl">
-              Sign in to SYNAPSE
-            </CardTitle>
-            <CardDescription>
-              Use your university ID number and password. All access is audited.
-            </CardDescription>
-          </div>
-        </CardHeader>
+          <img
+            src="/FoundationU-Dark.png"
+            alt=""
+            draggable={false}
+            onDragStart={swallow}
+            onContextMenu={swallow}
+            className="no-copy pointer-events-none absolute inset-0 hidden size-full select-none object-cover dark:block"
+          />
+          {/* Shield over the photo — blocks long-press context menu, image
+              drag handles, and right-click from reaching the <img>. */}
+          <div aria-hidden onContextMenu={swallow} onDragStart={swallow} className="no-copy absolute inset-0 select-none" />
+        </div>
+      </aside>
 
-        <CardContent>
-          <form noValidate onSubmit={(e) => void onSubmit(e)} className="space-y-4">
+      {/*
+        Form pane. The form column is centred in the leftover space and
+        the Socials row sits at the bottom; short viewports scroll
+        instead of overlapping. Every accessible name the form had is
+        unchanged.
+      */}
+      <section className="flex flex-col items-center p-6 sm:p-10">
+        <div className="flex w-full max-w-sm flex-1 flex-col items-center justify-center">
+          <div className="mb-8 flex flex-col items-center gap-3 text-center">
+            {/* Maroon mark on the light surface, white mark in dark mode. */}
+            <img
+              src="/synapse-maroon.png"
+              alt=""
+              className="no-copy h-14 w-auto select-none object-contain dark:hidden"
+              draggable={false}
+              onDragStart={swallow}
+              onContextMenu={swallow}
+            />
+            <img
+              src="/synapse-white.png"
+              alt=""
+              className="no-copy hidden h-14 w-auto select-none object-contain dark:block"
+              draggable={false}
+              onDragStart={swallow}
+              onContextMenu={swallow}
+            />
+            <div className="space-y-1">
+              <h1 id="login-title" className="text-2xl font-semibold">
+                Welcome back
+              </h1>
+              <p className="text-sm text-muted-foreground">
+                Log in to the university health &amp; guidance portal.
+              </p>
+            </div>
+          </div>
+
+          <form noValidate onSubmit={(e) => void onSubmit(e)} className="w-full space-y-4">
             {loginError !== null && (
               <div
                 ref={loginErrorRef}
@@ -191,28 +201,23 @@ export default function LoginPage() {
               </div>
             )}
             <div className="space-y-1.5">
-              <Label htmlFor="identifier">Student / Employee number</Label>
+              <Label htmlFor="identifier">ID Number</Label>
               <Input
                 id="identifier"
                 type="text"
+                placeholder="Enter your ID number"
                 // Autofill stores the admin email here — the wire payload
                 // splitter (loginWirePayload) sends emails as `email`,
                 // so both credential kinds work through one field.
                 autoComplete="username"
                 inputMode="text"
                 aria-invalid={errors.identifier !== undefined}
-                aria-describedby={
-                  errors.identifier !== undefined ? 'identifier-err' : 'identifier-hint'
-                }
+                aria-describedby={errors.identifier !== undefined ? 'identifier-err' : undefined}
                 {...register('identifier', { onChange: () => setLoginError(null) })}
               />
-              {errors.identifier !== undefined ? (
+              {errors.identifier !== undefined && (
                 <p id="identifier-err" role="alert" className="text-xs text-destructive">
                   {errors.identifier.message}
-                </p>
-              ) : (
-                <p id="identifier-hint" className="text-xs text-muted-foreground">
-                  Administrators: sign in with your email address.
                 </p>
               )}
             </div>
@@ -223,6 +228,7 @@ export default function LoginPage() {
                 <Input
                   id="password"
                   type={showPassword ? 'text' : 'password'}
+                  placeholder="Enter your password"
                   autoComplete="current-password"
                   className="pr-10"
                   aria-invalid={errors.password !== undefined}
@@ -255,47 +261,49 @@ export default function LoginPage() {
               Sign in
             </Button>
           </form>
-        </CardContent>
 
-        <CardFooter>
-          <p className="text-xs text-muted-foreground">
+          <p className="mt-6 text-center text-xs text-muted-foreground">
             Trouble signing in? Contact your system administrator.
           </p>
-        </CardFooter>
-      </Card>
+        </div>
 
-      {/*
-        Service branding. Fixed dark glass rather than a bare overlay on
-        purpose: the photo is the same asset in both colour schemes, and
-        on an ultra-wide viewport `object-cover` crops it to its bright
-        mid-band, where the captions lose contrast. Measured over the
-        real backdrop at 2560x800, a 40% scrim left the worst pixel at
-        3.0:1 against white; 60% holds 6.0:1 there even if
-        `backdrop-filter` is unavailable, and ~10:1 with the blur
-        applied. Don't lighten it back toward 40% without re-measuring.
-      */}
-      <footer
-        onContextMenu={swallow}
-        onDragStart={swallow}
-        className="no-copy relative mt-6 flex flex-wrap items-center justify-center gap-x-5 gap-y-3 rounded-2xl bg-black/60 px-5 py-3 ring-1 ring-white/15 backdrop-blur-md"
-        style={{ zIndex: 2 }}
-      >
-        {SERVICE_MARKS.map((mark) => (
-          <div key={mark.label} className="flex items-center gap-2.5">
-            <img
-              src={mark.src}
-              alt=""
-              draggable={false}
-              onDragStart={swallow}
-              onContextMenu={swallow}
-              className="size-12 shrink-0 select-none object-contain sm:size-14"
-            />
-            <span className="text-xs font-semibold leading-tight text-white sm:text-sm">
-              {mark.label}
-            </span>
+        {/*
+          Socials — the offices behind the portal, each seal a link to
+          its Facebook page. Deliberately small and quiet: branding, not
+          navigation.
+        */}
+        <nav aria-label="Socials" className="flex flex-col items-center gap-2 pt-10">
+          <span className="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">
+            Socials
+          </span>
+          {/* Same pill language as the header's profile pill
+              (UserMenu): full round, primary-tinted border, translucent
+              fill. */}
+          <div className="flex items-center gap-4 rounded-full border border-primary/60 bg-background/60 px-4 py-1.5">
+            {SOCIALS.map((social) => (
+              <a
+                key={social.label}
+                href={social.href}
+                target="_blank"
+                rel="noreferrer"
+                aria-label={`${social.label} on Facebook`}
+                onContextMenu={swallow}
+                onDragStart={swallow}
+                className="rounded-full opacity-90 transition-opacity hover:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+              >
+                <img
+                  src={social.src}
+                  alt=""
+                  draggable={false}
+                  onDragStart={swallow}
+                  onContextMenu={swallow}
+                  className="no-copy size-9 select-none object-contain"
+                />
+              </a>
+            ))}
           </div>
-        ))}
-      </footer>
+        </nav>
+      </section>
     </main>
   );
 }

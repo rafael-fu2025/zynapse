@@ -480,7 +480,7 @@ function AppointmentActions({ a, onView, onEdit, onQr, transition, onConfirm, tr
       {/* Approval step: confirming a portal booking assigns the acting
           staff member and moves the row out of "Needs action". */}
       {a.status === 'scheduled' && (
-        <Button className="min-h-11" size="sm" variant="secondary" disabled={transitionPending} onClick={() => transition({ id: a.id, status: 'confirmed' })}>
+        <Button className="min-h-11 md:min-h-0" size="sm" variant="secondary" disabled={transitionPending} onClick={() => transition({ id: a.id, status: 'confirmed' })}>
           <Check /> Confirm
         </Button>
       )}
@@ -488,7 +488,7 @@ function AppointmentActions({ a, onView, onEdit, onQr, transition, onConfirm, tr
           encounter + queue entry server-side). The kiosk does the same
           for self-service. */}
       {(a.status === 'scheduled' || a.status === 'confirmed') && (
-        <Button className="min-h-11" size="sm" variant="secondary" disabled={transitionPending} onClick={() => transition({ id: a.id, status: 'checked_in' })}>
+        <Button className="min-h-11 md:min-h-0" size="sm" variant="secondary" disabled={transitionPending} onClick={() => transition({ id: a.id, status: 'checked_in' })}>
           <LogIn /> Check in
         </Button>
       )}
@@ -498,7 +498,7 @@ function AppointmentActions({ a, onView, onEdit, onQr, transition, onConfirm, tr
           cascade marks the appointment. Follow the Visit # link. */}
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button className="min-h-11" size="sm" variant="outline" aria-label={`Actions for appointment #${a.id}`}>
+          <Button className="min-h-11 md:min-h-0" size="sm" variant="outline" aria-label={`Actions for appointment #${a.id}`}>
             Actions <ChevronDown className="size-3.5" aria-hidden />
           </Button>
         </DropdownMenuTrigger>
@@ -774,8 +774,12 @@ export default function AppointmentsPage() {
   const visibleRows = rows;
 
   return (
-    <main className="space-y-4 p-6">
-      <Tabs value={tab} onValueChange={(v) => setTab(v)} className="space-y-4">
+    // md+: one-viewport flex column (topbar h-14 excluded) — the clinic
+    // appointments table flexes to the leftover space and the pager stays
+    // in view.
+    <main className="space-y-4 p-6 md:flex md:h-[calc(100dvh-3.5rem)] md:flex-col md:overflow-hidden">
+      <Tabs value={tab} onValueChange={(v) => setTab(v)} className="space-y-4 md:min-h-0 md:flex-1 md:flex md:flex-col">
+        <div className="md:shrink-0">
         <PageHeader
           title="Appointments"
           description="Times shown in Asia/Manila; stored in UTC."
@@ -796,15 +800,16 @@ export default function AppointmentsPage() {
             </Dialog>
           }
         />
+        </div>
 
-        <TabsContent value={tab} className="space-y-3">
+        <TabsContent value={tab} className="space-y-3 md:min-h-0 md:flex-1 md:flex md:flex-col">
           {/* Live-search toolbar — same layout as the Patients page: a
               bordered card with the magnifier icon INSIDE the input on the
               left and the filters on the right. It lives inside TabsContent
               so it sits beside the sidebar accordion. Typing
               >= 2 chars searches as you type (debounced); clearing restores
               the paged list. */}
-          <PageToolbar>
+          <PageToolbar className="md:shrink-0">
             <div className="w-full space-y-1 sm:w-80 lg:flex-1 lg:max-w-md">
               <Label htmlFor="appt-search" className="text-xs">Search</Label>
               <div className="relative">
@@ -837,9 +842,13 @@ export default function AppointmentsPage() {
             </div>
           </PageToolbar>
 
-          <section className="hidden overflow-hidden rounded-xl border bg-card md:block">
-            <Table ariaLabel="Clinic appointments">
-              <TableHeader className="bg-muted/50">
+          <section className="hidden overflow-hidden rounded-xl border bg-card md:block md:min-h-0 md:flex-1">
+            <Table
+              ariaLabel="Clinic appointments"
+              wrapperClassName="h-full overflow-y-auto"
+              className="[&_td]:py-1.5"
+            >
+              <TableHeader className="sticky top-0 z-10 bg-muted shadow-[0_1px_0_0_var(--border)]">
                 <TableRow>
                   <TableHead className="px-3">#</TableHead>
                   <TableHead className="px-3">Patient</TableHead>
@@ -921,8 +930,8 @@ export default function AppointmentsPage() {
           </MobileCardList>
 
           {!searching && (
-            <nav className="flex items-center justify-between" aria-label="pagination">
-              <p className="text-xs text-muted-foreground">Page {history.length}</p>
+            <nav className="flex items-center justify-between md:shrink-0" aria-label="pagination">
+              <p className="text-xs text-muted-foreground">Page {history.length} · {rows.length} appointment{rows.length === 1 ? '' : 's'} shown</p>
               <div className="flex gap-2">
                 <Button variant="outline" size="sm" onClick={prevPage} disabled={history.length < 2}>
                   <ChevronLeft /> Prev

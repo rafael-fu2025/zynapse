@@ -730,7 +730,10 @@ export default function ReferralsPage() {
   const rows = useMemo(() => list.data?.data ?? [], [list.data]);
 
   return (
-    <main className="space-y-4 p-6">
+    // md+: one-viewport flex column (topbar h-14 excluded) — the referral
+    // table flexes to the leftover space and the pager stays in view.
+    <main className="space-y-4 p-6 md:flex md:h-[calc(100dvh-3.5rem)] md:flex-col md:overflow-hidden">
+      <div className="md:shrink-0">
       <PageHeader
         title="Referrals"
         description="Referrals hand off care between Clinic and Counselling — each side keeps its own records."
@@ -772,10 +775,15 @@ export default function ReferralsPage() {
           </div>
         }
       />
+      </div>
 
-      <section className="overflow-hidden rounded-xl border bg-card">
-        <Table ariaLabel="Referrals between Clinic and Guidance">
-          <TableHeader className="bg-muted/50">
+      <section className="overflow-hidden rounded-xl border bg-card md:min-h-0 md:flex-1">
+        <Table
+          ariaLabel="Referrals between Clinic and Guidance"
+          wrapperClassName="h-full overflow-y-auto"
+          className="[&_td]:py-1.5"
+        >
+          <TableHeader className="sticky top-0 z-10 bg-muted shadow-[0_1px_0_0_var(--border)]">
             <TableRow>
               <TableHead className="px-3">#</TableHead>
               <TableHead className="px-3">Patient</TableHead>
@@ -906,8 +914,8 @@ export default function ReferralsPage() {
         </Table>
       </section>
 
-      <nav className="flex items-center justify-between" aria-label="pagination">
-        <p className="text-xs text-muted-foreground">Page {history.length}</p>
+      <nav className="flex items-center justify-between md:shrink-0" aria-label="pagination">
+        <p className="text-xs text-muted-foreground">Page {history.length} · {rows.length} referral{rows.length === 1 ? '' : 's'} shown</p>
         <div className="flex gap-2">
           <Button variant="outline" size="sm" onClick={prevPage} disabled={history.length < 2}>
             <ChevronLeft /> Prev

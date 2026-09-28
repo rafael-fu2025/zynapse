@@ -102,8 +102,12 @@ export function AvailabilityView({ view, onViewChange }: AvailabilityViewProps) 
       </header>
 
       {view === 'list' && (
-        <Table ariaLabel="Weekly availability windows">
-          <TableHeader className="bg-muted/50">
+        <Table
+          ariaLabel="Weekly availability windows"
+          wrapperClassName="max-h-[60vh] overflow-y-auto"
+          className="[&_td]:py-1.5"
+        >
+          <TableHeader className="sticky top-0 z-10 bg-muted shadow-[0_1px_0_0_var(--border)]">
             <TableRow>
               <TableHead className="px-3">Day</TableHead>
               <TableHead className="px-3">Window</TableHead>

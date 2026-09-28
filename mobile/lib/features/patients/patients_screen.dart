@@ -130,6 +130,18 @@ class _PatientsScreenState extends State<PatientsScreen> {
           ?.hasPermission('clinic.patients.write') ??
       false;
 
+  /// Guidance-side action (2026-09-27): clinic records and guidance
+  /// records carry different actions — a viewer without registry write
+  /// but with `referrals.create` (guidance staff) refers a student to
+  /// the clinic. Mirrors the web's guidance-side Records.
+  bool get _canRefer =>
+      !_canWrite &&
+      (context
+              .read<AuthController>()
+              .session
+              ?.hasPermission('referrals.create') ??
+          false);
+
   List<CrudField> _studentFields([UserProfile? p]) => [
         CrudField.text('first_name', 'First name', initial: p?.firstName),
         CrudField.text('last_name', 'Last name', initial: p?.lastName),
@@ -193,7 +205,7 @@ class _PatientsScreenState extends State<PatientsScreen> {
     final isEmployee = p.isStudent == false;
     final payload = await showCrudForm(
       context,
-      title: 'Edit ${p.fullName}',
+      title: 'Edit ${p.displayName}',
       fields: isEmployee ? _employeeFields(p) : _studentFields(p),
     );
     if (payload == null || !mounted) return;
@@ -202,7 +214,7 @@ class _PatientsScreenState extends State<PatientsScreen> {
       () => isEmployee
           ? ApiService.I.updateEmployee(p.id, payload)
           : ApiService.I.updateStudent(p.id, payload),
-      successMessage: '${p.fullName} updated.',
+      successMessage: '${p.displayName} updated.',
     );
     if (ok) _load();
   }
@@ -212,8 +224,8 @@ class _PatientsScreenState extends State<PatientsScreen> {
       context,
       title: p.archived ? 'Restore patient?' : 'Archive patient?',
       message: p.archived
-          ? 'Restore ${p.fullName}?'
-          : 'Archive ${p.fullName}? The account stays, but they leave the registry view.',
+          ? 'Restore ${p.displayName}?'
+          : 'Archive ${p.displayName}? The account stays, but they leave the registry view.',
       confirmLabel: p.archived ? 'Restore' : 'Archive',
       destructive: !p.archived,
     );
@@ -224,6 +236,29 @@ class _PatientsScreenState extends State<PatientsScreen> {
           ? ApiService.I.setStudentArchived(p.id, !p.archived)
           : ApiService.I.setEmployeeArchived(p.id, !p.archived),
       successMessage: p.archived ? 'Patient restored.' : 'Patient archived.',
+    );
+    if (ok) _load();
+  }
+
+  /// Opens the guidance refer sheet — fixed direction (Counselling →
+  /// Clinic), fixed patient, artifact + optional reason/notes. Posts
+  /// through the same `POST /referrals` pipeline the Referrals module
+  /// uses. Mirrors the web `ReferStudentDialog`.
+  Future<void> _refer(UserProfile person) async {
+    final payload = await showModalBottomSheet<Map<String, dynamic>>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (_) => _ReferSheet(person: person),
+    );
+    if (payload == null || !mounted) return;
+    final ok = await runCrudAction(
+      context,
+      () => ApiService.I.createReferral(payload),
+      successMessage: 'Referral created.',
     );
     if (ok) _load();
   }
@@ -248,7 +283,7 @@ class _PatientsScreenState extends State<PatientsScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Patients')),
+      appBar: AppBar(title: const Text('Records')),
       floatingActionButton: _canWrite
           ? FloatingActionButton.extended(
               backgroundColor: const Color(0xFF800000),
@@ -384,9 +419,11 @@ class _PatientsScreenState extends State<PatientsScreen> {
         return _PatientTile(
           person: _items[i],
           canWrite: _canWrite,
+          canRefer: _canRefer,
           onView: () => _viewDetail(_items[i]),
           onEdit: () => _edit(_items[i]),
           onArchive: () => _archive(_items[i]),
+          onRefer: () => _refer(_items[i]),
         );
       },
     );
@@ -411,20 +448,28 @@ class _PatientTile extends StatelessWidget {
   const _PatientTile({
     required this.person,
     required this.canWrite,
+    required this.canRefer,
     this.onView,
     this.onEdit,
     this.onArchive,
+    this.onRefer,
   });
 
   final UserProfile person;
   final bool canWrite;
+
+  /// Guidance-side refer action — students only, matching the web's
+  /// guidance Records surface (`referrals.create`, no registry write).
+  final bool canRefer;
   final VoidCallback? onView;
   final VoidCallback? onEdit;
   final VoidCallback? onArchive;
+  final VoidCallback? onRefer;
 
   /// Opens the patient action sheet — a modern replacement for the default
-  /// popup menu: Edit + Archive/Restore as tinted icon rows, with the
-  /// patient's name + ID in the header.
+  /// popup menu: View + Refer (guidance) or Edit + Archive/Restore
+  /// (clinic) as tinted icon rows, with the patient's name + ID in the
+  /// header.
   void _openActions(BuildContext context) {
     showSynapseSheet<void>(
       context,
@@ -436,7 +481,7 @@ class _PatientTile extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               SheetHeader(
-                title: person.fullName,
+                title: person.displayName,
                 subtitle: person.isStudent
                     ? (person.studentNumber ?? 'Student')
                     : (person.employeeNumber ?? 'Employee'),
@@ -453,37 +498,50 @@ class _PatientTile extends StatelessWidget {
                   onView?.call();
                 },
               ),
-              const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 12),
-                child: Divider(height: 1),
-              ),
-              _ActionRow(
-                icon: HugeIcons.strokeRoundedPencilEdit01,
-                label: 'Edit',
-                description: 'Update profile details',
-                onTap: () {
-                  Navigator.of(sheetContext).pop();
-                  onEdit?.call();
-                },
-              ),
-              const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 12),
-                child: Divider(height: 1),
-              ),
-              _ActionRow(
-                icon: person.archived
-                    ? HugeIcons.strokeRoundedRefresh
-                    : HugeIcons.strokeRoundedArchive01,
-                label: person.archived ? 'Restore' : 'Archive',
-                description: person.archived
-                    ? 'Put the patient back on the registry'
-                    : 'Remove from the registry view',
-                color: person.archived ? null : const Color(0xFFB3261E),
-                onTap: () {
-                  Navigator.of(sheetContext).pop();
-                  onArchive?.call();
-                },
-              ),
+              if (canRefer && person.isStudent) ...[
+                _ActionRow(
+                  icon: HugeIcons.strokeRoundedShare01,
+                  label: 'Refer to clinic',
+                  description: 'Counselling → Clinic referral for this student',
+                  onTap: () {
+                    Navigator.of(sheetContext).pop();
+                    onRefer?.call();
+                  },
+                ),
+              ],
+              if (canWrite) ...[
+                const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 12),
+                  child: Divider(height: 1),
+                ),
+                _ActionRow(
+                  icon: HugeIcons.strokeRoundedPencilEdit01,
+                  label: 'Edit',
+                  description: 'Update profile details',
+                  onTap: () {
+                    Navigator.of(sheetContext).pop();
+                    onEdit?.call();
+                  },
+                ),
+                const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 12),
+                  child: Divider(height: 1),
+                ),
+                _ActionRow(
+                  icon: person.archived
+                      ? HugeIcons.strokeRoundedRefresh
+                      : HugeIcons.strokeRoundedArchive01,
+                  label: person.archived ? 'Restore' : 'Archive',
+                  description: person.archived
+                      ? 'Put the patient back on the registry'
+                      : 'Remove from the registry view',
+                  color: person.archived ? null : const Color(0xFFB3261E),
+                  onTap: () {
+                    Navigator.of(sheetContext).pop();
+                    onArchive?.call();
+                  },
+                ),
+              ],
             ],
           ),
         ),
@@ -500,7 +558,9 @@ class _PatientTile extends StatelessWidget {
     final accentBg =
         isStudent ? const Color(0xFFE8F0FE) : const Color(0xFFE6F4F1);
 
-    // Line 1 — registry ID + academic/organisational context.
+    // Line 1 — registry ID + academic/organisational context. The
+    // department mirrors the web Records table's Department column
+    // (MIS supplies it; hand-registered rows read "—"/absent).
     final line1 = isStudent
         ? [
             if (person.studentNumber?.isNotEmpty ?? false)
@@ -508,6 +568,7 @@ class _PatientTile extends StatelessWidget {
             else
               'No ID',
             if (person.course?.isNotEmpty ?? false) person.course!,
+            if (person.department?.isNotEmpty ?? false) person.department!,
           ].join(' · ')
         : [
             if (person.employeeNumber?.isNotEmpty ?? false)
@@ -578,7 +639,7 @@ class _PatientTile extends StatelessWidget {
           ),
         ),
         title: Text(
-          person.fullName,
+          person.displayName,
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
           style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15),
@@ -621,7 +682,7 @@ class _PatientTile extends StatelessWidget {
             if (tag != null) StatusBadge(label: tag, color: tagColor),
             if (person.archived)
               const StatusBadge(label: 'Archived', color: Colors.black45),
-            if (canWrite) ...[
+            if (canWrite || (canRefer && person.isStudent)) ...[
               const SizedBox(width: 4),
               IconButton(
                 icon: const Icon(HugeIcons.strokeRoundedMore),
@@ -631,6 +692,179 @@ class _PatientTile extends StatelessWidget {
             ],
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// Guidance refer sheet — fixed direction (Counselling → Clinic) and
+/// fixed patient; the operator picks the artifact and may add a reason
+/// or notes. Pops the same payload shape `_ReferralCreateSheet` produces
+/// so `ApiService.I.createReferral` consumes it unchanged. Mirrors the
+/// web `ReferStudentDialog`.
+class _ReferSheet extends StatefulWidget {
+  const _ReferSheet({required this.person});
+
+  final UserProfile person;
+
+  @override
+  State<_ReferSheet> createState() => _ReferSheetState();
+}
+
+class _ReferSheetState extends State<_ReferSheet> {
+  final _artifactController =
+      TextEditingController(text: 'referral_letter');
+  final _reasonController = TextEditingController();
+  final _notesController = TextEditingController();
+  bool _customArtifact = false;
+  String? _submitError;
+
+  @override
+  void dispose() {
+    _artifactController.dispose();
+    _reasonController.dispose();
+    _notesController.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    final studentNumber = widget.person.studentNumber ?? '';
+    final artifact = _artifactController.text.trim();
+    if (studentNumber.isEmpty) {
+      setState(() => _submitError =
+          'This record has no student number and cannot be referred.');
+      return;
+    }
+    if (artifact.isEmpty) {
+      setState(() => _submitError = 'Artifact type is required.');
+      return;
+    }
+    final reason = _reasonController.text.trim();
+    final notes = _notesController.text.trim();
+    Navigator.of(context).pop(<String, dynamic>{
+      'patient_school_id': studentNumber,
+      'source_module': 'counselling',
+      'target_module': 'clinic',
+      'artifact_type': artifact,
+      if (reason.isNotEmpty) 'reason_code': reason,
+      if (notes.isNotEmpty) 'notes_plaintext': notes,
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.fromLTRB(
+        20,
+        12,
+        20,
+        20 + MediaQuery.of(context).viewInsets.bottom,
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          SheetHeader(
+            title: 'Refer to clinic',
+            subtitle:
+                '${widget.person.displayName} · ${widget.person.studentNumber ?? 'Student'}',
+          ),
+          const SizedBox(height: 4),
+          const Text(
+            'Direction: Counselling → Clinic (fixed)',
+            style: TextStyle(color: Colors.black54, fontSize: 12.5),
+          ),
+          const SizedBox(height: 12),
+          const Text(
+            'Artifact type',
+            style: TextStyle(
+              fontSize: 12.5,
+              fontWeight: FontWeight.w600,
+              color: Colors.black87,
+            ),
+          ),
+          const SizedBox(height: 6),
+          if (_customArtifact) ...[
+            TextField(
+              controller: _artifactController,
+              autofocus: true,
+              decoration: const InputDecoration(
+                hintText: 'e.g. clearance, school_letter',
+                border: OutlineInputBorder(),
+                isDense: true,
+              ),
+            ),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton(
+                onPressed: () => setState(() {
+                  _customArtifact = false;
+                  _artifactController.text = 'referral_letter';
+                }),
+                child: const Text('Use preset'),
+              ),
+            ),
+          ] else
+            Wrap(
+              spacing: 8,
+              children: [
+                ChoiceChip(
+                  label: const Text('Referral letter'),
+                  selected: _artifactController.text == 'referral_letter',
+                  onSelected: (_) =>
+                      setState(() => _artifactController.text = 'referral_letter'),
+                ),
+                ChoiceChip(
+                  label: const Text('Intake pass'),
+                  selected: _artifactController.text == 'intake_pass',
+                  onSelected: (_) =>
+                      setState(() => _artifactController.text = 'intake_pass'),
+                ),
+                ChoiceChip(
+                  label: const Text('Custom…'),
+                  selected: false,
+                  onSelected: (_) => setState(() => _customArtifact = true),
+                ),
+              ],
+            ),
+          const SizedBox(height: 10),
+          TextField(
+            controller: _reasonController,
+            decoration: const InputDecoration(
+              labelText: 'Reason code (optional)',
+              border: OutlineInputBorder(),
+              isDense: true,
+            ),
+          ),
+          const SizedBox(height: 10),
+          TextField(
+            controller: _notesController,
+            maxLines: 3,
+            decoration: const InputDecoration(
+              labelText: 'Notes (optional)',
+              border: OutlineInputBorder(),
+            ),
+          ),
+          if (_submitError != null) ...[
+            const SizedBox(height: 8),
+            Text(
+              _submitError!,
+              style: TextStyle(
+                color: Theme.of(context).colorScheme.error,
+                fontSize: 13,
+              ),
+            ),
+          ],
+          const SizedBox(height: 12),
+          FilledButton(
+            onPressed: _submit,
+            style: FilledButton.styleFrom(
+              backgroundColor: const Color(0xFF800000),
+              padding: const EdgeInsets.symmetric(vertical: 14),
+            ),
+            child: const Text('Create referral'),
+          ),
+        ],
       ),
     );
   }

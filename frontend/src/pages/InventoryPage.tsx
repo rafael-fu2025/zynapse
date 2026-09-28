@@ -41,10 +41,15 @@ export default function InventoryPage() {
     // is short enough to feel snappy on a desktop click; skipDelayDuration
     // makes back-to-back hovers (moving from one row to the next) instant.
     <TooltipProvider delayDuration={150} skipDelayDuration={300}>
-    <main className="space-y-4 p-6">
+    {/* md+: one-viewport flex column (topbar h-14 excluded) — each stock
+        table flexes to the leftover space and its pager stays in view. */}
+    <main className="space-y-4 p-6 md:flex md:h-[calc(100dvh-3.5rem)] md:flex-col md:overflow-hidden">
+      <div className="md:shrink-0">
       <InventoryStockAlertBanner onJumpToTab={setTab} />
+      </div>
 
-      <Tabs value={tab} onValueChange={setTab} className="space-y-4">
+      <Tabs value={tab} onValueChange={setTab} className="space-y-4 md:min-h-0 md:flex-1 md:flex md:flex-col">
+        <div className="md:shrink-0">
         <PageHeader
           title="Inventory"
           description={
@@ -54,17 +59,18 @@ export default function InventoryPage() {
             </span>
           }
         />
+        </div>
 
-          <TabsContent value="medicines">
+          <TabsContent value="medicines" className="md:min-h-0 md:flex-1 md:flex md:flex-col">
             <MedicinesTab />
           </TabsContent>
-          <TabsContent value="supplies">
+          <TabsContent value="supplies" className="md:min-h-0 md:flex-1 md:flex md:flex-col">
             <SuppliesTab />
           </TabsContent>
-          <TabsContent value="equipment">
+          <TabsContent value="equipment" className="md:min-h-0 md:flex-1 md:flex md:flex-col">
             <EquipmentTab />
           </TabsContent>
-          <TabsContent value="reorders">
+          <TabsContent value="reorders" className="md:min-h-0 md:flex-1 md:flex md:flex-col">
             <ReordersTab />
           </TabsContent>
           <TabsContent value="insights">

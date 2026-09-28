@@ -239,8 +239,10 @@ export function AppointmentsTable({
   );
 
   return (
-    <article className="flex flex-col overflow-hidden rounded-xl border bg-card">
-      <header className="flex flex-wrap items-center justify-between gap-2 border-b px-3 py-2">
+    // md+: flexes to the Counselling tab's leftover space — the pager
+    // (mt-auto) pins to the card bottom and the table scrolls inside.
+    <article className="flex flex-col overflow-hidden rounded-xl border bg-card md:min-h-0 md:flex-1">
+      <header className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b px-3 py-2">
         <p className="text-sm font-semibold text-foreground">Appointments</p>
         <div className="flex flex-wrap items-center gap-2">
           {/* The shared calendar popover — same control as the booking dialog
@@ -284,8 +286,12 @@ export function AppointmentsTable({
         </div>
       </header>
 
-      <Table ariaLabel="Counselling appointments">
-        <TableHeader className="bg-muted/50">
+      <Table
+        ariaLabel="Counselling appointments"
+        wrapperClassName="min-h-0 flex-1 overflow-y-auto"
+        className="[&_td]:py-1.5"
+      >
+        <TableHeader className="sticky top-0 z-10 bg-muted shadow-[0_1px_0_0_var(--border)]">
           <TableRow>
             <TableHead className="px-3">#</TableHead>
             <TableHead className="px-3">Patient</TableHead>
@@ -353,9 +359,9 @@ export function AppointmentsTable({
         </TableBody>
       </Table>
 
-      <nav className="mt-auto flex items-center justify-between border-t px-3 py-2">
+      <nav className="mt-auto flex shrink-0 items-center justify-between border-t px-3 py-2">
         <p className="text-xs text-muted-foreground">
-          {rows.length} appointment{rows.length === 1 ? '' : 's'}
+          {rows.length} appointment{rows.length === 1 ? '' : 's'} shown
           {needsActionRows.length > 0 && ` · ${needsActionRows.length} need${needsActionRows.length === 1 ? 's' : ''} action`}
         </p>
         <div className="flex gap-2">

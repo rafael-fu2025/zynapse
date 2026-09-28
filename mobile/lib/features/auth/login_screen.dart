@@ -105,16 +105,14 @@ class _LoginScreenState extends State<LoginScreen> {
                           autofillHints: const [AutofillHints.username],
                           textInputAction: TextInputAction.next,
                           decoration: const InputDecoration(
-                            labelText: 'Student / Employee number',
-                            helperText:
-                                'Administrators: sign in with your email address.',
+                            labelText: 'ID Number',
                             border: OutlineInputBorder(
                               borderRadius:
                                   BorderRadius.all(Radius.circular(12)),
                             ),
                           ),
                           validator: (v) => (v == null || v.trim().isEmpty)
-                              ? 'Enter your student or employee number'
+                              ? 'Enter your ID number'
                               : null,
                         ),
                       const SizedBox(height: 16),

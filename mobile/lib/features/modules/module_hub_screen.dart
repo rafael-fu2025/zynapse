@@ -38,7 +38,7 @@ class _Module {
 const _modules = <_Module>[
   _Module('Clinic', HugeIcons.strokeRoundedStethoscope, Color(0xFF0F766E),
       ClinicScreen(), ['clinic.encounters.read']),
-  _Module('Patients', HugeIcons.strokeRoundedUserMultiple, Color(0xFF1E6FD9),
+  _Module('Records', HugeIcons.strokeRoundedUserMultiple, Color(0xFF1E6FD9),
       PatientsScreen(), ['clinic.patients.read']),
   _Module('Inventory', HugeIcons.strokeRoundedPackage02, Color(0xFFB45309),
       InventoryScreen(), ['clinic.inventory.read']),

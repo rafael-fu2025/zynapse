@@ -367,8 +367,12 @@ function ScheduleTable({
 }) {
   return (
     <>
-      <Table ariaLabel={ariaLabel}>
-        <TableHeader className="bg-muted/50">
+      <Table
+        ariaLabel={ariaLabel}
+        wrapperClassName="max-h-[60vh] overflow-y-auto"
+        className="[&_td]:py-1.5"
+      >
+        <TableHeader className="sticky top-0 z-10 bg-muted shadow-[0_1px_0_0_var(--border)]">
           <TableRow>
             <TableHead className="px-3">When</TableHead>
             <TableHead className="px-3">Patient</TableHead>
@@ -576,8 +580,12 @@ export function GuidanceQueueTab({
           </p>
         </header>
 
-        <Table ariaLabel="Today's Guidance sessions">
-          <TableHeader className="bg-muted/50">
+        <Table
+          ariaLabel="Today's Guidance sessions"
+          wrapperClassName="max-h-[60vh] overflow-y-auto"
+          className="[&_td]:py-1.5"
+        >
+          <TableHeader className="sticky top-0 z-10 bg-muted shadow-[0_1px_0_0_var(--border)]">
             <TableRow>
               <TableHead className="px-3">Time</TableHead>
               <TableHead className="px-3">Patient</TableHead>

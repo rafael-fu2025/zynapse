@@ -119,8 +119,8 @@ export function EquipmentTab() {
   );
 
   return (
-    <div className="space-y-4">
-      <section className="flex flex-wrap items-end justify-between gap-3 rounded-xl border bg-card p-3">
+    <div className="space-y-4 md:min-h-0 md:flex-1 md:flex md:flex-col">
+      <section className="flex flex-wrap items-end justify-between gap-3 rounded-xl border bg-card p-3 md:shrink-0">
         <div className="flex flex-1 flex-wrap items-end gap-3">
           <SearchBox
             value={qDraft}
@@ -152,9 +152,13 @@ export function EquipmentTab() {
         </div>
       </section>
 
-      <section className="hidden overflow-hidden rounded-xl border bg-card md:block">
-        <Table ariaLabel="Equipment items with location and unit counts">
-          <TableHeader className="bg-muted/50">
+      <section className="hidden overflow-hidden rounded-xl border bg-card md:block md:min-h-0 md:flex-1">
+        <Table
+          ariaLabel="Equipment items with location and unit counts"
+          wrapperClassName="h-full overflow-y-auto"
+          className="[&_td]:py-1.5"
+        >
+          <TableHeader className="sticky top-0 z-10 bg-muted shadow-[0_1px_0_0_var(--border)]">
             <TableRow>
               <TableHead className="px-3">Name</TableHead>
               <TableHead className="px-3">Category</TableHead>
@@ -246,8 +250,8 @@ export function EquipmentTab() {
         ))}
       </MobileCardList>
 
-      <nav className="flex items-center justify-between" aria-label="pagination">
-        <p className="text-xs text-muted-foreground">Page {history.length}</p>
+      <nav className="flex items-center justify-between md:shrink-0" aria-label="pagination">
+        <p className="text-xs text-muted-foreground">Page {history.length} · {rows.length} unit{rows.length === 1 ? '' : 's'} shown</p>
         <div className="flex gap-2">
           <Button variant="outline" size="sm" onClick={prevPage} disabled={history.length < 2}>
             <ChevronLeft /> Prev

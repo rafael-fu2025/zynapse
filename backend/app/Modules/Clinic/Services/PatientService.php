@@ -355,10 +355,12 @@ final class PatientService extends BaseService
      * AND its portal account (auth_identities with temporary password +
      * `student` role) in one transaction. There is no `create_account`
      * flag — it is always on. Returns the UserDto and the portal-account
-     * envelope so the admin can share the temporary password once.
+     * envelope so the admin can share the temporary password once; the
+     * envelope is NULL when an existing account shell was adopted (see
+     * insertOrAdoptPatient) — the login keeps its own credentials.
      *
      * @param array<string, mixed> $input validated payload
-     * @return array{0: UserDto, 1: array{email: string, temporary_password: string, user_id: int}}
+     * @return array{0: UserDto, 1: array{email: string, temporary_password: string, user_id: int}|null}
      */
     public function createStudent(array $input): array
     {
@@ -372,8 +374,11 @@ final class PatientService extends BaseService
 
             $now = $this->utcNow();
 
-            $this->db->table('users')->insert([
-                'tenant_id'           => CurrentTenant::id(),
+            $accountEmail = isset($input['account_email']) && $input['account_email'] !== ''
+                ? strtolower(trim((string) $input['account_email']))
+                : strtolower((string) $input['student_number']) . '@synapse.dev';
+
+            [$id, $linked] = $this->insertOrAdoptPatient([
                 'kind'                => 'student',
                 'student_number'      => (string) $input['student_number'],
                 'first_name'          => (string) $input['first_name'],
@@ -393,21 +398,23 @@ final class PatientService extends BaseService
                 'active'              => 1,
                 'created_at'          => $now,
                 'updated_at'          => $now,
-            ]);
-            $id = (int) $this->db->insertID();
+            ], $accountEmail, 'student_number');
 
             $this->audit->enqueue(
                 'clinic.patient_student_created',
                 'users',
                 $id,
                 $userId,
-                ['resource_code' => 'student#' . (string) $input['student_number']],
+                ['resource_code' => 'student#' . (string) $input['student_number']]
+                    + ($linked ? ['account_linked' => true] : []),
             );
 
-            $accountEmail = isset($input['account_email']) && $input['account_email'] !== ''
-                ? strtolower(trim((string) $input['account_email']))
-                : strtolower((string) $input['student_number']) . '@synapse.dev';
-            $portalAccount = $this->createAccount($id, 'student', $accountEmail, $userId);
+            // Fresh email: mint the portal login. Adopted shell: the email
+            // identity already exists with the user's own credentials —
+            // nothing to share, so no portal_account envelope.
+            $portalAccount = $linked
+                ? null
+                : $this->createAccount($id, 'student', $accountEmail, $userId);
 
             return [$this->getUserRowDto($id), $portalAccount];
         });
@@ -852,7 +859,7 @@ final class PatientService extends BaseService
      * `employee` role) in one transaction.
      *
      * @param array<string, mixed> $input
-     * @return array{0: UserDto, 1: array{email: string, temporary_password: string, user_id: int}}
+     * @return array{0: UserDto, 1: array{email: string, temporary_password: string, user_id: int}|null}
      */
     public function createEmployee(array $input): array
     {
@@ -866,8 +873,11 @@ final class PatientService extends BaseService
 
             $now = $this->utcNow();
 
-            $this->db->table('users')->insert([
-                'tenant_id'              => CurrentTenant::id(),
+            $accountEmail = isset($input['account_email']) && $input['account_email'] !== ''
+                ? strtolower(trim((string) $input['account_email']))
+                : strtolower((string) $input['employee_number']) . '@synapse.dev';
+
+            [$id, $linked] = $this->insertOrAdoptPatient([
                 'kind'                   => 'employee',
                 'employee_number'        => (string) $input['employee_number'],
                 'first_name'             => (string) $input['first_name'],
@@ -889,24 +899,105 @@ final class PatientService extends BaseService
                 'active'                 => 1,
                 'created_at'             => $now,
                 'updated_at'             => $now,
-            ]);
-            $id = (int) $this->db->insertID();
+            ], $accountEmail, 'employee_number');
 
             $this->audit->enqueue(
                 'clinic.patient_employee_created',
                 'users',
                 $id,
                 $userId,
-                ['resource_code' => 'employee#' . (string) $input['employee_number']],
+                ['resource_code' => 'employee#' . (string) $input['employee_number']]
+                    + ($linked ? ['account_linked' => true] : []),
             );
 
-            $accountEmail = isset($input['account_email']) && $input['account_email'] !== ''
-                ? strtolower(trim((string) $input['account_email']))
-                : strtolower((string) $input['employee_number']) . '@synapse.dev';
-            $portalAccount = $this->createAccount($id, 'employee', $accountEmail, $userId);
+            $portalAccount = $linked
+                ? null
+                : $this->createAccount($id, 'employee', $accountEmail, $userId);
 
             return [$this->getUserRowDto($id), $portalAccount];
         });
+    }
+
+    /**
+     * Write a new patient row, or adopt the account the requested portal
+     * email already belongs to. `auth_identities` (type=email_password,
+     * secret=email) is globally unique, so a taken email means the row
+     * already exists somewhere — without this branch the identity insert
+     * would die on the unique index and txn() would surface it as an
+     * opaque "Database transaction failed" 409.
+     *
+     *   - no identity        → fresh insert, caller mints the account;
+     *   - kind IS NULL shell → ADOPT: the patient fields are written onto
+     *     the existing row (same convention as FuMisIdentityService, which
+     *     fills in kind-less pre-provisioned logins). No temporary
+     *     password is minted — the account keeps its own credentials;
+     *   - kind set           → a real record already owns the email: a
+     *     clean, field-level 409 naming the owner.
+     *
+     * @param array<string, mixed> $row Full insert payload, `kind` included.
+     * @param string $identifierColumn 'student_number'|'employee_number' —
+     *        a shell must carry neither kind NOR this identifier to be
+     *        adoptable.
+     * @return array{0: int, 1: bool} [users.id, adoptedExisting]
+     */
+    private function insertOrAdoptPatient(array $row, string $accountEmail, string $identifierColumn): array
+    {
+        $identity = $this->db->table('auth_identities')
+            ->where('type', 'email_password')
+            ->where('secret', $accountEmail)
+            ->get()->getRowArray();
+
+        if ($identity === null) {
+            $this->db->table('users')->insert($row + ['tenant_id' => CurrentTenant::id()]);
+            return [(int) $this->db->insertID(), false];
+        }
+
+        $userId = (int) $identity['user_id'];
+        $shell = $this->selectForUpdate('users', ['id' => $userId]);
+        if ($shell === null) {
+            throw new ApiException('resource.conflict', 409, [
+                ['code' => 'resource.conflict', 'field' => 'account_email',
+                    'message' => "account_email '{$accountEmail}' points at a missing user row; reconcile the account manually."],
+            ]);
+        }
+        // Locked-row validation mirrors FuMisIdentityService::upsert: the
+        // tenant/identity verdict comes AFTER the lock, never before.
+        if ($shell['kind'] !== null || ($shell[$identifierColumn] ?? null) !== null) {
+            $owner = match ($shell['kind']) {
+                'student'  => "student {$shell['student_number']}",
+                'employee' => "employee {$shell['employee_number']}",
+                default    => 'another account',
+            };
+            throw new ApiException('resource.conflict', 409, [
+                ['code' => 'resource.conflict', 'field' => 'account_email',
+                    'message' => "account_email '{$accountEmail}' is already linked to {$owner}. Use a different email or edit the existing record."],
+            ]);
+        }
+        if ($shell['tenant_id'] !== null && (int) $shell['tenant_id'] !== CurrentTenant::id()) {
+            throw new ApiException('resource.conflict', 409, [
+                ['code' => 'resource.conflict', 'field' => 'account_email',
+                    'message' => "account_email '{$accountEmail}' belongs to another tenant's account."],
+            ]);
+        }
+
+        // Identity-only shell: adopt it as the new patient. The shell keeps
+        // its original creation date; it gains the current tenant and the
+        // kind's role group (idempotent — shells usually already hold it).
+        // The scope admits tenant-less shells and this tenant's own rows
+        // only — a foreign tenant's row can never be rewritten here.
+        $fields = $row;
+        unset($fields['created_at']);
+        $fields['tenant_id'] = CurrentTenant::id();
+        $this->db->table('users')
+            ->where('id', $userId)
+            ->groupStart()
+                ->where('tenant_id', CurrentTenant::id())
+                ->orWhere('tenant_id', null)
+            ->groupEnd()
+            ->update($fields);
+        $this->assignGroup($userId, (string) $row['kind']);
+
+        return [$userId, true];
     }
 
     /**

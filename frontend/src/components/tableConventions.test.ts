@@ -48,6 +48,10 @@ const PRIMITIVE_FILE = join('components', 'ui', 'table.tsx');
  */
 const DYNAMIC_COLSPAN_EXEMPT = new Map<string, string>([
   ['pages/AuditPage.tsx', 'colSpan={columns.length} is derived from the TanStack column defs'],
+  [
+    'pages/PatientsPage.tsx',
+    'students table colSpan is side-aware (8 clinic / 7 guidance — the Blood column is clinic-only); both branches hand-verified',
+  ],
 ]);
 
 function walk(dir: string, out: string[] = []): string[] {

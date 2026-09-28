@@ -1429,8 +1429,12 @@ export default function ClinicPage() {
   const rows: Encounter[] = list.data?.data ?? [];
 
   return (
-    <main className="space-y-4 p-6">
-      <Tabs value={tab} onValueChange={switchTab} className="space-y-4">
+    // md+: one-viewport flex column (topbar h-14 excluded). The closed-
+    // encounters table flexes to the leftover space; the queue and staff
+    // boards scroll internally instead of stretching the page.
+    <main className="space-y-4 p-6 md:flex md:h-[calc(100dvh-3.5rem)] md:flex-col md:overflow-hidden">
+      <Tabs value={tab} onValueChange={switchTab} className="space-y-4 md:min-h-0 md:flex-1 md:flex md:flex-col">
+        <div className="md:shrink-0">
         <PageHeader
           title="Clinic"
           description="Encounters are the anchor for clinic actions — isolated from counselling."
@@ -1455,11 +1459,12 @@ export default function ClinicPage() {
             </>
           }
         />
+        </div>
 
         {/* Section navigation lives in the main sidebar as an accordion
             under Clinic → Encounters (2026-09-27) — this page renders only
             the selected section, driven by the same ?tab= URL. */}
-        <TabsContent value="queue">
+        <TabsContent value="queue" className="md:flex-1 md:min-h-0 md:overflow-y-auto">
           <div className="space-y-4">
             <Dialog open={focusId !== null} onOpenChange={(o) => !o && selectEncounter(null)}>
               {focusId !== null && (
@@ -1475,7 +1480,7 @@ export default function ClinicPage() {
           </div>
         </TabsContent>
 
-        <TabsContent value="closed">
+        <TabsContent value="closed" className="md:min-h-0 md:flex-1 md:flex md:flex-col">
           <EncounterTable
             rows={rows}
             focusId={focusId}
@@ -1496,7 +1501,7 @@ export default function ClinicPage() {
           />
         </TabsContent>
 
-        <TabsContent value="staff">
+        <TabsContent value="staff" className="md:flex-1 md:min-h-0 md:overflow-y-auto">
           <StaffSchedulesTab
             showArchived={showArchived}
             openAddShift={openAddShift}
@@ -1546,9 +1551,13 @@ function EncounterTable(props: EncounterTableProps) {
   const showEmpty = !props.isLoading && props.isError !== true && props.rows.length === 0;
   return (
     <>
-      <section className="hidden overflow-hidden rounded-xl border bg-card md:block">
-        <Table ariaLabel="Closed clinic encounters">
-          <TableHeader className="bg-muted/50">
+      <section className="hidden overflow-hidden rounded-xl border bg-card md:block md:min-h-0 md:flex-1">
+        <Table
+          ariaLabel="Closed clinic encounters"
+          wrapperClassName="h-full overflow-y-auto"
+          className="[&_td]:py-1.5"
+        >
+          <TableHeader className="sticky top-0 z-10 bg-muted shadow-[0_1px_0_0_var(--border)]">
             <TableRow>
               <TableHead className="px-3">#</TableHead>
               <TableHead className="px-3">Patient</TableHead>
@@ -1672,8 +1681,8 @@ function EncounterTable(props: EncounterTableProps) {
         })}
       </MobileCardList>
 
-      <nav className="mt-4 flex items-center justify-between" aria-label="pagination">
-        <p className="text-xs text-muted-foreground">Page {props.page}</p>
+      <nav className="mt-4 flex items-center justify-between md:shrink-0" aria-label="pagination">
+        <p className="text-xs text-muted-foreground">Page {props.page} · {props.rows.length} encounter{props.rows.length === 1 ? '' : 's'} shown</p>
         <div className="flex gap-2">
           <Button variant="outline" size="sm" onClick={props.onPrev} disabled={!props.canPrev}>
             <ChevronLeft /> Prev

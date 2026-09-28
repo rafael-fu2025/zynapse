@@ -120,9 +120,13 @@ export default function CounsellingPage() {
     // A redirect is in flight for a moved tab: rewriting the URL here would
     // race the navigation and strip the tab before the redirect reads it.
     if (movedTo !== null) return;
+    // NOTE: an explicit `?tab=queue` is deliberately KEPT even though queue
+    // is the default — the sidebar accordion lights a child only from its
+    // own ?tab= value, so stripping it would leave the Queue row unlit
+    // right after the user selects it. Only an INVALID tab value rewrites
+    // (via requestedTab !== tab) back to the canonical bare URL.
     if (
       requestedTab !== tab ||
-      (tab === defaultTab && params.get('tab') !== null) ||
       (rawSessionId !== null && selectedId === null) ||
       (tab !== 'queue' && rawSessionId !== null) ||
       rawSubTab !== null
@@ -173,18 +177,23 @@ export default function CounsellingPage() {
 
   return (
     <TooltipProvider delayDuration={150} skipDelayDuration={300}>
-      <main className="space-y-4 p-6">
-        <Tabs value={tab} onValueChange={setTab} className="space-y-4">
+      <main className="space-y-4 p-6 md:flex md:h-[calc(100dvh-3.5rem)] md:flex-col md:overflow-hidden">
+        <Tabs value={tab} onValueChange={setTab} className="space-y-4 md:min-h-0 md:flex-1 md:flex md:flex-col">
+          <div className="md:shrink-0">
           <PageHeader
             title="Counselling"
             description="Session notes are encrypted at rest (AES-256-GCM). Bookings must fall inside an availability window; repeated no-shows follow the three-strike policy."
           />
+          </div>
 
           {/* Section navigation lives in the main sidebar as an accordion
               under Guidance Center (2026-09-27 trial) — this page renders
-              only the selected section, driven by the same ?tab= URL. */}
+              only the selected section, driven by the same ?tab= URL.
+              The queue/followups/scheduling boards scroll internally
+              (their sections are stacked and bounded); the appointments
+              book flexes so its pager stays in view. */}
           {canReadQueue && (
-            <TabsContent value="queue">
+            <TabsContent value="queue" className="md:flex-1 md:min-h-0 md:overflow-y-auto">
               <GuidanceQueueTab
                 selectedSessionId={selectedId}
                 onCloseSession={() => selectSession(null)}
@@ -193,17 +202,17 @@ export default function CounsellingPage() {
             </TabsContent>
           )}
 
-          <TabsContent value="appointments">
+          <TabsContent value="appointments" className="md:min-h-0 md:flex-1 md:flex md:flex-col">
             <AppointmentsTab />
           </TabsContent>
 
           {canSeeFollowups && (
-            <TabsContent value="followups">
+            <TabsContent value="followups" className="md:flex-1 md:min-h-0 md:overflow-y-auto">
               <FollowupsTab />
             </TabsContent>
           )}
 
-          <TabsContent value="scheduling">
+          <TabsContent value="scheduling" className="md:flex-1 md:min-h-0 md:overflow-y-auto">
             <SchedulingTab />
           </TabsContent>
         </Tabs>

@@ -191,9 +191,9 @@ const COMMANDS: ReadonlyArray<CommandDef> = [
   },
   {
     id: 'go-patients',
-    label: 'Patients',
+    label: 'Records',
     category: 'Navigate',
-    keywords: ['students', 'employees', 'registry'],
+    keywords: ['students', 'employees', 'registry', 'patients'],
     icon: <Users className="size-4" />,
     permission: 'clinic.patients.read',
     prefetch: '/patients',

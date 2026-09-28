@@ -646,9 +646,14 @@ export function SurveysTab() {
       {!surveys.isLoading && !surveys.isError && rows.length > 0 && (
         <section aria-labelledby="survey-list-heading" className="overflow-hidden rounded-xl border bg-card">
           <h2 id="survey-list-heading" className="sr-only">Surveys</h2>
-          <div className="overflow-x-auto">
-            <Table ariaLabel="Surveys and their response counts">
-              <TableHeader className="bg-muted/50">
+          {/* The Table's own wrapper is the scroll container — an extra
+              overflow-x-auto div here would defeat the sticky header. */}
+          <Table
+            ariaLabel="Surveys and their response counts"
+            wrapperClassName="max-h-[60vh] overflow-y-auto"
+            className="[&_td]:py-1.5"
+          >
+            <TableHeader className="sticky top-0 z-10 bg-muted shadow-[0_1px_0_0_var(--border)]">
                 <TableRow>
                   <TableHead className="px-3">Survey</TableHead>
                   <TableHead className="px-3">Audience</TableHead>
@@ -698,7 +703,6 @@ export function SurveysTab() {
                 ))}
               </TableBody>
             </Table>
-          </div>
         </section>
       )}
 

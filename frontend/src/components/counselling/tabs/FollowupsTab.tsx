@@ -95,8 +95,12 @@ function FollowUpAppointments() {
         </Select>
       </header>
 
-      <Table ariaLabel="Follow-up appointments">
-        <TableHeader className="bg-muted/50">
+      <Table
+        ariaLabel="Follow-up appointments"
+        wrapperClassName="max-h-[60vh] overflow-y-auto"
+        className="[&_td]:py-1.5"
+      >
+        <TableHeader className="sticky top-0 z-10 bg-muted shadow-[0_1px_0_0_var(--border)]">
           <TableRow>
             <TableHead className="px-3">When</TableHead>
             <TableHead className="px-3">Patient</TableHead>
@@ -283,9 +287,15 @@ export function FollowupsTab() {
       {!followups.isLoading && !followups.isError && rows.length > 0 && (
         <section aria-labelledby="followup-list-heading" className="overflow-hidden rounded-xl border bg-card">
           <h2 id="followup-list-heading" className="sr-only">Follow-up caseload</h2>
-          <div className="overflow-x-auto">
-            <Table ariaLabel="Follow-up caseload">
-              <TableHeader className="bg-muted/50">
+          {/* The Table's own wrapper is the scroll container (vertical cap +
+              horizontal overflow) — an extra overflow-x-auto div here would
+              become the sticky header's scrollport and defeat it. */}
+          <Table
+            ariaLabel="Follow-up caseload"
+            wrapperClassName="max-h-[60vh] overflow-y-auto"
+            className="[&_td]:py-1.5"
+          >
+            <TableHeader className="sticky top-0 z-10 bg-muted shadow-[0_1px_0_0_var(--border)]">
                 <TableRow>
                   <TableHead className="px-3">Student</TableHead>
                   <TableHead className="px-3">Why flagged</TableHead>
@@ -339,7 +349,6 @@ export function FollowupsTab() {
                 ))}
               </TableBody>
             </Table>
-          </div>
         </section>
       )}
 

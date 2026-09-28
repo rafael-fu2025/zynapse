@@ -175,6 +175,22 @@ class UserProfile {
     return '$firstName$middle $lastName'.trim();
   }
 
+  /// Display name for lists and titles. MIS-synced registry rows arrive
+  /// ALL-CAPS ("VILLANUEVA, ELLAHYZA FAITH") and read as shouting next to
+  /// mixed-case employees — fully-uppercase names are rewritten to
+  /// first-letter-only casing (word starts, hyphens, apostrophes:
+  /// JUDY-ANN → Judy-Ann, O'BRIEN → O'Brien). Anything already mixed-case
+  /// (hand-registered "de la Cruz") passes through untouched. Mirrors
+  /// `personName()` in PatientsPage.tsx.
+  String get displayName {
+    final name = fullName;
+    if (name != name.toUpperCase()) return name;
+    return name.replaceAllMapped(
+      RegExp(r"(^|[\s,'’-])([a-z])"),
+      (m) => '${m.group(1)}${m.group(2)!.toUpperCase()}',
+    );
+  }
+
   bool get isStudent => kind == 'student';
 }
 

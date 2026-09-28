@@ -14,7 +14,7 @@ export const loginSchema = z
   .object({
     identifier: z
       .string()
-      .min(1, 'Enter your student or employee number.')
+      .min(1, 'Enter your ID number.')
       .max(64, 'That number is too long.'),
       // A syntactically valid email in the identifier field means the
       // user is an admin — send it as `email` instead, below.

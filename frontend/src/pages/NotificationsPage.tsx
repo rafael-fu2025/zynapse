@@ -143,7 +143,7 @@ export default function NotificationsPage() {
       </section>
 
       <nav className="flex items-center justify-between" aria-label="pagination">
-        <p className="text-xs text-muted-foreground">Page {history.length}</p>
+        <p className="text-xs text-muted-foreground">Page {history.length} · {rows.length} notification{rows.length === 1 ? '' : 's'} shown</p>
         <div className="flex gap-2">
           <Button variant="outline" size="sm" onClick={prevPage} disabled={history.length < 2}>
             <ChevronLeft /> Prev

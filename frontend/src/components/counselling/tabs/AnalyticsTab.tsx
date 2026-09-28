@@ -97,8 +97,12 @@ export function AnalyticsTab() {
       </div>
 
       <section className="overflow-hidden rounded-xl border bg-card">
-        <Table ariaLabel="Scheduling analytics by counsellor, day and slot">
-          <TableHeader className="bg-muted/50">
+        <Table
+          ariaLabel="Scheduling analytics by counsellor, day and slot"
+          wrapperClassName="max-h-[60vh] overflow-y-auto"
+          className="[&_td]:py-1.5"
+        >
+          <TableHeader className="sticky top-0 z-10 bg-muted shadow-[0_1px_0_0_var(--border)]">
             <TableRow>
               <TableHead className="px-3">Counsellor</TableHead>
               <TableHead className="px-3">Day</TableHead>

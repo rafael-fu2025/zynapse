@@ -16,7 +16,9 @@
 import { expect, test } from '@playwright/test';
 import { signInMocked, type MockSession } from './helpers/auth';
 
-/** A guidance administrator: the six codes the Guidance Center group reads. */
+/** A guidance administrator: the six codes the Guidance Center group reads,
+ * plus the clinic registry codes so the duplicated-href behaviour (the two
+ * Records entries) is exercised the way a dual-role user sees it. */
 const SESSION: MockSession = {
   id: 9001,
   email: 'guidance-admin@synapse.test',
@@ -31,6 +33,8 @@ const SESSION: MockSession = {
     'counselling.announcements.manage',
     'counselling.services.manage',
     'counselling.responses.read_any',
+    'clinic.patients.read',
+    'clinic.encounters.read',
   ],
 };
 
@@ -157,7 +161,6 @@ test('a collapsed accordion stays collapsed across navigation', async ({ page })
 test('a sibling surface does not keep the tab child highlighted', async ({ page }) => {
   const sidebar = page.getByRole('navigation', { name: /primary/i });
   const row = sidebar.getByRole('button', { name: 'Counselling', exact: true });
-  const toggle = sidebar.getByRole('button', { name: 'Counselling', exact: true });
 
   // The tab child is active on the tabbed page itself...
   await page.goto('/counselling?tab=queue');
@@ -166,16 +169,39 @@ test('a sibling surface does not keep the tab child highlighted', async ({ page 
     'true',
   );
 
-  // ...but moving to a sibling surface under the same module drops the
-  // highlight — from both the child and the parent row — even though the
-  // accordion stays open for the module family.
-  await page.goto('/counselling/surveys');
-  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  // ...but tapping through to a sibling surface drops the highlight from
+  // both the child and the parent row. The accordion stays open (the user
+  // opened it and the family convention never closes it), so the child
+  // link remains in the accessibility tree to assert on.
+  await sidebar.getByRole('link', { name: 'Surveys', exact: true }).click();
+  await expect(page).toHaveURL(/\/counselling\/surveys$/);
   await expect(sidebar.getByRole('link', { name: 'Queue', exact: true })).not.toHaveAttribute(
     'data-active',
     'true',
   );
   await expect(row).not.toHaveAttribute('data-active', 'true');
+});
+
+test('a sibling surface never opens the module accordion — not by tap, not by reload', async ({
+  page,
+}) => {
+  const sidebar = page.getByRole('navigation', { name: /primary/i });
+  const toggle = sidebar.getByRole('button', { name: 'Counselling', exact: true });
+
+  // Reload straight onto a sibling surface: the Counselling accordion
+  // starts closed — the surface (/counselling/surveys) is the longest
+  // prefix match and owns no accordion, so it must not claim its parent
+  // module's panel (2026-09-27: the naive prefix wayfinding did).
+  await page.goto('/counselling/surveys');
+  await expect(page.getByRole('heading', { name: 'Surveys', exact: true })).toBeVisible();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+
+  // Tapping the surface from the dashboard (SPA navigation) does not open
+  // it either — the accordion only ever opens for the module's own pages.
+  await page.goto('/');
+  await sidebar.getByRole('link', { name: 'Surveys', exact: true }).click();
+  await expect(page).toHaveURL(/\/counselling\/surveys$/);
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
 });
 
 test('the module row is lit on a bare URL, but no child is auto-selected', async ({ page }) => {
@@ -201,6 +227,44 @@ test('the module row is lit on a bare URL, but no child is auto-selected', async
     'true',
   );
   await expect(sidebar.getByRole('link', { name: 'Queue', exact: true })).not.toHaveAttribute(
+    'data-active',
+    'true',
+  );
+});
+
+test('the two Records entries open exclusively', async ({ page }) => {
+  // A dual-role user sees the Records accordion under Clinic AND its
+  // Guidance Center twin (same href, different sides). They share no
+  // state: opening one must close the other — the first cut keyed the
+  // accordion by href and opened both at once.
+  const sidebar = page.getByRole('navigation', { name: /primary/i });
+  const records = sidebar.getByRole('button', { name: 'Records', exact: true });
+  await expect(records).toHaveCount(2);
+
+  // Clinic entry opens…
+  await records.nth(0).click();
+  await expect(records.nth(0)).toHaveAttribute('aria-expanded', 'true');
+  await expect(records.nth(1)).toHaveAttribute('aria-expanded', 'false');
+
+  // …and tapping the Guidance Center twin closes the clinic one
+  // (single-expand across the duplicate).
+  await records.nth(1).click();
+  await expect(records.nth(1)).toHaveAttribute('aria-expanded', 'true');
+  await expect(records.nth(0)).toHaveAttribute('aria-expanded', 'false');
+});
+
+test('an explicit ?tab=queue deep link sticks and lights the Queue child', async ({ page }) => {
+  const sidebar = page.getByRole('navigation', { name: /primary/i });
+
+  await page.goto('/counselling?tab=queue');
+
+  // Queue is the page's DEFAULT tab, but the URL must keep the explicit
+  // param — the accordion lights a child only from its own ?tab= value,
+  // so stripping it back to bare /counselling would leave the Queue row
+  // unlit right after the user selects it. The URL assertion is what
+  // catches the strip; the attribute alone can pass on a transient paint.
+  await expect(page).toHaveURL(/\/counselling\?tab=queue$/);
+  await expect(sidebar.getByRole('link', { name: 'Queue', exact: true })).toHaveAttribute(
     'data-active',
     'true',
   );

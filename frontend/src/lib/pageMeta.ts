@@ -25,7 +25,7 @@ export const PAGE_META: Readonly<Record<string, PageMeta>> = {
     title: 'Appointments',
     description: 'Times shown in Asia/Manila; stored in UTC.',
   },
-  '/patients': { title: 'Patients' },
+  '/patients': { title: 'Records' },
   '/inventory': { title: 'Inventory' },
   '/counselling': { title: 'Counselling' },
   '/counselling/surveys': { title: 'Surveys' },

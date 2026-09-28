@@ -24,11 +24,15 @@ import {
   Phone,
   Plus,
   Search,
+  Share2,
   Trash2,
   UserPlus,
 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { useForm } from 'react-hook-form';
+import { useSearchParams } from 'react-router-dom';
+import { ApiEnvelopeError } from '@/api/envelope';
+import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { PageHeader, PageToolbar } from '@/components/PageHeader';
 import { Button } from '@/components/ui/button';
@@ -62,6 +66,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { Textarea } from '@/components/ui/textarea';
 import {
   Table,
   TableBody,
@@ -92,6 +97,8 @@ import {
   useUpdateContact,
   useUpdateEmployee,
 } from '@/hooks/usePatients';
+import { useCreateReferral } from '@/hooks/useReferrals';
+import { createReferralSchema, type CreateReferralInput } from '@/schemas/referrals';
 import {
   addAllergySchema,
   addContactSchema,
@@ -110,6 +117,21 @@ import {
 import { deriveUniversityEmail } from '@/lib/universityEmail';
 
 const SEVERITY_VARIANT = { mild: 'info', moderate: 'warning', severe: 'destructive' } as const;
+
+/**
+ * Display casing for registry names. MIS-synced students arrive ALL-CAPS
+ * ("VILLANUEVA, ELLAHYZA FAITH") and read as shouting next to the
+ * mixed-case employees. Only fully-uppercase names are rewritten — first
+ * letter up, rest down, at word starts and after hyphens/apostrophes
+ * (JUDY-ANN → Judy-Ann, O'BRIEN → O'Brien). Anything already mixed-case
+ * (hand-registered "de la Cruz") passes through untouched.
+ */
+function personName(value: string): string {
+  if (value !== value.toUpperCase()) return value;
+  return value
+    .toLowerCase()
+    .replace(/(^|[\s,'’-])(\p{L})/gu, (_match, separator: string, letter: string) => separator + letter.toUpperCase());
+}
 
 /**
  * Human label for an employee's employment status. The API stores
@@ -188,10 +210,130 @@ function PortalCredentialModal({
   );
 }
 
+/**
+ * Server rejections (duplicate handles, account-email conflicts) arrive as
+ * field-level envelope errors — map those onto the form inputs so the
+ * message sits under the offending field; everything else becomes a
+ * form-level alert above the footer.
+ */
+function serverErrorFor(err: unknown, fields: readonly string[]): { field?: string; message: string } {
+  if (err instanceof ApiEnvelopeError) {
+    const fieldHit = err.errors.find((e) => e.field !== undefined && fields.includes(e.field));
+    if (fieldHit?.field !== undefined) return { field: fieldHit.field, message: fieldHit.message };
+    const first = err.errors[0];
+    if (first !== undefined) return { message: first.message };
+  }
+  return { message: 'Request failed. Please try again.' };
+}
+
+/**
+ * ReferStudentDialog — the guidance-side action on a registry record.
+ * The direction is fixed (counselling → clinic) and the patient is the
+ * row's own record; the operator picks the artifact and may add a reason
+ * or notes. Posts through the same referral pipeline the Referrals page
+ * uses — the backend enforces `referrals.create`.
+ */
+function ReferStudentDialog({ student, onClose }: { student: Student; onClose: () => void }) {
+  const create = useCreateReferral();
+  const { register, handleSubmit, formState: { errors }, watch, setValue } =
+    useForm<CreateReferralInput>({
+      resolver: zodResolver(createReferralSchema),
+      defaultValues: {
+        patient_school_id: student.student_number ?? '',
+        source_module: 'counselling',
+        target_module: 'clinic',
+        artifact_type: 'referral_letter',
+      },
+    });
+  // Custom artifact mode (free text) — off by default.
+  const [customArtifact, setCustomArtifact] = useState(false);
+  const artifactType = watch('artifact_type');
+
+  const onSubmit = handleSubmit((values) => {
+    create.mutate(values, { onSuccess: onClose });
+  });
+
+  return (
+    <DialogContent lockDismiss>
+      <DialogHeader>
+        <DialogTitle>Refer to clinic</DialogTitle>
+      </DialogHeader>
+      <p className="text-sm text-muted-foreground">
+        {personName(`${student.last_name}, ${student.first_name}`)} · {student.student_number}
+      </p>
+      <form noValidate onSubmit={(e) => void onSubmit(e)} className="space-y-3">
+        <div className="space-y-1.5">
+          <Label id="refer-artifact-label">Artifact type</Label>
+          {customArtifact ? (
+            <div className="flex gap-2">
+              <Input
+                id="artifact_type"
+                autoFocus
+                placeholder="e.g. clearance, school_letter"
+                value={artifactType ?? ''}
+                aria-invalid={errors.artifact_type !== undefined}
+                onChange={(e) => setValue('artifact_type', e.target.value, { shouldValidate: true })}
+              />
+              <Button type="button" variant="outline" onClick={() => {
+                setCustomArtifact(false);
+                setValue('artifact_type', 'referral_letter', { shouldValidate: true });
+              }}>
+                Use preset
+              </Button>
+            </div>
+          ) : (
+            <Select
+              value={artifactType === 'intake_pass' || artifactType === 'referral_letter' ? artifactType : ''}
+              onValueChange={(v) => {
+                if (v === 'custom') {
+                  setValue('artifact_type', '', { shouldValidate: false });
+                  setCustomArtifact(true);
+                } else {
+                  setValue('artifact_type', v, { shouldValidate: true });
+                }
+              }}
+            >
+              <SelectTrigger id="artifact_type" aria-labelledby="refer-artifact-label">
+                <SelectValue placeholder="Select…" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="referral_letter">Referral letter</SelectItem>
+                <SelectItem value="intake_pass">Intake pass</SelectItem>
+                <SelectItem value="custom">Custom…</SelectItem>
+              </SelectContent>
+            </Select>
+          )}
+          {errors.artifact_type !== undefined && (
+            <p role="alert" className="text-xs text-destructive">{errors.artifact_type.message}</p>
+          )}
+        </div>
+
+        <div className="space-y-1.5">
+          <Label htmlFor="refer-reason">Reason code (optional)</Label>
+          <Input id="refer-reason" {...register('reason_code')} />
+        </div>
+
+        <div className="space-y-1.5">
+          <Label htmlFor="refer-notes">Notes (optional)</Label>
+          <Textarea id="refer-notes" rows={3} {...register('notes_plaintext')} />
+        </div>
+
+        <DialogFooter>
+          <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
+          <Button type="submit" disabled={create.isPending}>
+            {create.isPending && <Loader2 className="animate-spin" />} Create referral
+          </Button>
+        </DialogFooter>
+      </form>
+    </DialogContent>
+  );
+}
+
 function CreateStudentDialog({ onClose }: { onClose: () => void }) {
   const create = useCreateStudent();
   const [createdAccount, setCreatedAccount] = useState<{ identifier: string; account: PortalAccount } | null>(null);
-  const { register, handleSubmit, formState: { errors }, reset, setValue, watch } =
+  const [serverError, setServerError] = useState<string | null>(null);
+  const { register, handleSubmit, formState: { errors }, reset, setValue, watch, setError } =
     useForm<CreateStudentInput>({ resolver: zodResolver(createStudentSchema) });
 
   const gender = watch('gender');
@@ -207,6 +349,7 @@ function CreateStudentDialog({ onClose }: { onClose: () => void }) {
   }, [derivedEmail, setValue]);
 
   const onSubmit = handleSubmit((values) => {
+    setServerError(null);
     create.mutate(values, {
       onSuccess: (result) => {
         if (result.portal_account !== undefined) {
@@ -214,6 +357,14 @@ function CreateStudentDialog({ onClose }: { onClose: () => void }) {
         } else {
           reset();
           onClose();
+        }
+      },
+      onError: (err) => {
+        const e = serverErrorFor(err, ['student_number', 'account_email', 'qr_code', 'rfid_tag']);
+        if (e.field !== undefined) {
+          setError(e.field as keyof CreateStudentInput, { type: 'server', message: e.message });
+        } else {
+          setServerError(e.message);
         }
       },
     });
@@ -296,6 +447,11 @@ function CreateStudentDialog({ onClose }: { onClose: () => void }) {
             <p role="alert" className="text-xs text-destructive">{errors.account_email.message}</p>
           )}
         </div>
+        {serverError !== null && (
+          <Alert variant="destructive" className="col-span-2">
+            <AlertDescription>{serverError}</AlertDescription>
+          </Alert>
+        )}
         <DialogFooter className="col-span-2">
           <Button type="button" variant="outline" onClick={handleClose}>Cancel</Button>
           <Button type="submit" disabled={create.isPending}>
@@ -402,7 +558,7 @@ function ManageMedicalRecordDialog({ studentId, onClose }: { studentId: number |
     <DialogContent lockDismiss className="max-h-[85vh] overflow-y-auto sm:max-w-xl">
       <DialogHeader>
         <DialogTitle>
-          {s !== undefined ? `${s.last_name}, ${s.first_name} — ${s.student_number}` : 'Student'}
+          {s !== undefined ? `${personName(`${s.last_name}, ${s.first_name}`)} — ${s.student_number}` : 'Student'}
         </DialogTitle>
       </DialogHeader>
 
@@ -573,7 +729,7 @@ function StudentDetailDialog({ studentId, onClose }: { studentId: number | strin
     <DialogContent lockDismiss className="max-h-[85vh] overflow-y-auto sm:max-w-xl">
       <DialogHeader>
         <DialogTitle>
-          {s !== undefined ? `${s.last_name}, ${s.first_name} — ${s.student_number}` : 'Student'}
+          {s !== undefined ? `${personName(`${s.last_name}, ${s.first_name}`)} — ${s.student_number}` : 'Student'}
         </DialogTitle>
       </DialogHeader>
 
@@ -636,7 +792,8 @@ function StudentDetailDialog({ studentId, onClose }: { studentId: number | strin
 function CreateEmployeeDialog({ onClose }: { onClose: () => void }) {
   const create = useCreateEmployee();
   const [createdAccount, setCreatedAccount] = useState<{ identifier: string; account: PortalAccount } | null>(null);
-  const { register, handleSubmit, formState: { errors }, reset, setValue, watch } =
+  const [serverError, setServerError] = useState<string | null>(null);
+  const { register, handleSubmit, formState: { errors }, reset, setValue, watch, setError } =
     useForm<CreateEmployeeInput>({
       resolver: zodResolver(createEmployeeSchema),
       defaultValues: { employment_status: 'active' },
@@ -653,6 +810,7 @@ function CreateEmployeeDialog({ onClose }: { onClose: () => void }) {
   }, [derivedEmail, setValue]);
 
   const onSubmit = handleSubmit((values) => {
+    setServerError(null);
     create.mutate(values, {
       onSuccess: (result) => {
         if (result.portal_account !== undefined) {
@@ -660,6 +818,14 @@ function CreateEmployeeDialog({ onClose }: { onClose: () => void }) {
         } else {
           reset();
           onClose();
+        }
+      },
+      onError: (err) => {
+        const e = serverErrorFor(err, ['employee_number', 'account_email', 'qr_code', 'rfid_tag']);
+        if (e.field !== undefined) {
+          setError(e.field as keyof CreateEmployeeInput, { type: 'server', message: e.message });
+        } else {
+          setServerError(e.message);
         }
       },
     });
@@ -722,6 +888,11 @@ function CreateEmployeeDialog({ onClose }: { onClose: () => void }) {
             <p role="alert" className="text-xs text-destructive">{errors.account_email.message}</p>
           )}
         </div>
+        {serverError !== null && (
+          <Alert variant="destructive" className="col-span-2">
+            <AlertDescription>{serverError}</AlertDescription>
+          </Alert>
+        )}
         <DialogFooter className="col-span-2">
           <Button type="button" variant="outline" onClick={handleClose}>Cancel</Button>
           <Button type="submit" disabled={create.isPending}>
@@ -966,6 +1137,15 @@ export default function PatientsPage() {
   // Registry writes need their own permission (counsellors hold read
   // only) — hide what the backend would 403 (2026-09 audit).
   const canWrite = useCan('clinic.patients.write');
+  // Clinic records and guidance records are NOT the same surface: the
+  // actions differ (clinic registers/treats/archives; guidance refers to
+  // clinic). The sidebar entry picks the side via ?side=guidance; writers
+  // default to the clinic side, everyone else lands on the guidance side.
+  const [searchParams] = useSearchParams();
+  const side: 'clinic' | 'guidance' =
+    canWrite && searchParams.get('side') !== 'guidance' ? 'clinic' : 'guidance';
+  const canRefer = useCan('referrals.create');
+  const [referStudent, setReferStudent] = useState<Student | null>(null);
   // Filters live in the URL (PRODUCT principle 5): ?q=, ?archived=1,
   // ?emp_q=, ?emp_archived=, ?emp_department= and ?emp_position= survive a
   // refresh and can be shared as links. Each tab keeps its own search key
@@ -1055,7 +1235,7 @@ export default function PatientsPage() {
   const studentActions = (student: Student) => (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button className="min-h-11" size="sm" variant="outline" aria-label={`Actions for ${student.student_number}`}>
+        <Button className="min-h-11 md:min-h-0" size="sm" variant="outline" aria-label={`Actions for ${student.student_number}`}>
           Actions <ChevronDown className="size-3.5" aria-hidden />
         </Button>
       </DropdownMenuTrigger>
@@ -1063,6 +1243,14 @@ export default function PatientsPage() {
         <DropdownMenuItem className="min-h-11" onSelect={() => setDetailId(student.id <= 0 && student.student_number ? student.student_number : student.id)}>
           <Eye /> View record
         </DropdownMenuItem>
+        {/* Guidance-side action (2026-09-27): the guidance record surface
+            refers a student to the clinic — clinic-only actions (medical
+            edits, archiving) stay below, gated on write. */}
+        {side === 'guidance' && canRefer && (
+          <DropdownMenuItem className="min-h-11" onSelect={() => setReferStudent(student)}>
+            <Share2 /> Refer to clinic
+          </DropdownMenuItem>
+        )}
         {canWrite && (
           <DropdownMenuItem className="min-h-11" onSelect={() => setManageId(student.id <= 0 && student.student_number ? student.student_number : student.id)}>
             <HeartPulse /> Manage medical record
@@ -1104,7 +1292,7 @@ export default function PatientsPage() {
   const employeeActions = (employee: Employee) => (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button className="min-h-11" size="sm" variant="outline" aria-label={`Actions for ${employee.employee_number}`}>
+        <Button className="min-h-11 md:min-h-0" size="sm" variant="outline" aria-label={`Actions for ${employee.employee_number}`}>
           Actions <ChevronDown className="size-3.5" aria-hidden />
         </Button>
       </DropdownMenuTrigger>
@@ -1151,14 +1339,24 @@ export default function PatientsPage() {
   );
 
   return (
-    <main className="space-y-4 p-6">
-      <Tabs value={tab} onValueChange={setTab} className="space-y-4">
-        <PageHeader
-          title="Patients"
-          description="Registry recycled from the legacy system — records are archived, never deleted."
+    // md+: the page becomes a flex column exactly one viewport tall
+    // (100dvh minus the h-14 topbar), so the registry tables flex to the
+    // real leftover space and the pagers sit inside the fold — no
+    // estimated constants to go stale when filters wrap. Mobile keeps
+    // the natural scrolling flow.
+    <main className="space-y-4 p-6 md:flex md:h-[calc(100dvh-3.5rem)] md:flex-col md:overflow-hidden">
+      <Tabs value={tab} onValueChange={setTab} className="space-y-4 md:min-h-0 md:flex-1 md:flex md:flex-col">
+        <div className="md:shrink-0">
+          <PageHeader
+          title="Records"
+          description={
+            side === 'guidance'
+              ? 'The student and employee registry as seen from Guidance — refer records to the clinic; clinical actions stay clinic-side.'
+              : 'Registry recycled from the legacy system — records are archived, never deleted.'
+          }
           actions={
             tab === 'students' ? (
-              canWrite ? (
+              side === 'clinic' && canWrite ? (
                 <Dialog open={openCreate} onOpenChange={setOpenCreate}>
                   <Button onClick={() => setOpenCreate(true)}>
                     <UserPlus /> Register student
@@ -1167,7 +1365,7 @@ export default function PatientsPage() {
                 </Dialog>
               ) : null
             ) : (
-              canWrite ? (
+              side === 'clinic' && canWrite ? (
                 <Dialog open={openCreateEmp} onOpenChange={setOpenCreateEmp}>
                   <Button onClick={() => setOpenCreateEmp(true)}>
                     <UserPlus /> Register employee
@@ -1177,10 +1375,11 @@ export default function PatientsPage() {
               ) : null
             )
           }
-        />
+          />
+        </div>
 
-        <TabsContent value="students" className="space-y-4">
-          <PageToolbar>
+        <TabsContent value="students" className="space-y-4 md:min-h-0 md:flex-1 md:flex md:flex-col">
+          <PageToolbar className="md:shrink-0">
             <div className="w-full space-y-1 sm:w-80 lg:flex-1 lg:max-w-md">
               <Label htmlFor="student-search" className="text-xs">Search</Label>
               <div className="relative">
@@ -1272,22 +1471,37 @@ export default function PatientsPage() {
             </div>
           </PageToolbar>
 
-          <section className="hidden overflow-hidden rounded-xl border bg-card md:block">
-            <Table ariaLabel="Student registry">
-              <TableHeader className="bg-muted/50">
+          <section className="hidden overflow-hidden rounded-xl border bg-card md:block md:min-h-0 md:flex-1">
+            {/* The table flexes to the real leftover space (no estimated
+                constants): the section is a flex-1 child of the viewport-
+                tall page column, and the wrapper below is its h-full
+                scroll container — which is also what the sticky header
+                binds to. Solid header bg (a translucent one lets rows
+                bleed through while scrolling) and a box-shadow bottom
+                border, which survives border-collapse where a real
+                border would scroll away. */}
+            <Table
+              ariaLabel="Student registry"
+              wrapperClassName="h-full overflow-y-auto"
+              className="[&_td]:py-1.5"
+            >
+              <TableHeader className="sticky top-0 z-10 bg-muted shadow-[0_1px_0_0_var(--border)]">
                 <TableRow>
                   <TableHead className="px-3">Number</TableHead>
                   <TableHead className="px-3">Name</TableHead>
-                  <TableHead className="px-3">Course / Yr</TableHead>
-                  <TableHead className="px-3">Blood</TableHead>
-                  <TableHead className="px-3">No-shows</TableHead>
+                  <TableHead className="px-3">Course</TableHead>
+                  <TableHead className="px-3">Year</TableHead>
+                  {/* Blood type is a clinical detail — the guidance side of
+                      Records shows the department instead. */}
+                  {side === 'clinic' && <TableHead className="px-3">Blood</TableHead>}
+                  <TableHead className="px-3">Department</TableHead>
                   <TableHead className="px-3">Status</TableHead>
                   <TableHead className="px-3 text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 <TableStateRows
-                  colSpan={7}
+                  colSpan={side === 'clinic' ? 8 : 7}
                   isLoading={loading}
                   isError={errored}
                   isEmpty={rows.length === 0}
@@ -1308,16 +1522,15 @@ export default function PatientsPage() {
                 {rows.map((s) => (
                   <TableRow key={s.id}>
                     <TableCell className="px-3 tabular-nums text-xs">{s.student_number}</TableCell>
-                    <TableCell className="px-3">{s.last_name}, {s.first_name}</TableCell>
-                    <TableCell className="px-3 text-xs">
-                      {s.course ?? '—'}{s.year_level !== null ? ` · Y${s.year_level}` : ''}
+                    <TableCell className="px-3">{personName(`${s.last_name}, ${s.first_name}`)}</TableCell>
+                    <TableCell className="px-3 text-xs">{s.course ?? '—'}</TableCell>
+                    <TableCell className="px-3 tabular-nums text-xs">
+                      {s.year_level !== null ? s.year_level : '—'}
                     </TableCell>
-                    <TableCell className="px-3 tabular-nums text-xs">{s.blood_type ?? '—'}</TableCell>
-                    <TableCell className="px-3">
-                      {s.consecutive_no_shows >= 3
-                        ? <Badge variant="destructive">{s.consecutive_no_shows}</Badge>
-                        : <span className="text-xs">{s.consecutive_no_shows}</span>}
-                    </TableCell>
+                    {side === 'clinic' && (
+                      <TableCell className="px-3 tabular-nums text-xs">{s.blood_type ?? '—'}</TableCell>
+                    )}
+                    <TableCell className="px-3 text-xs">{s.department ?? '—'}</TableCell>
                     <TableCell className="px-3">
                       {s.is_directory_record ? (
                         <Badge variant="outline" className="border-sky-300 bg-sky-50 text-sky-700 dark:border-sky-800 dark:bg-sky-950/40 dark:text-sky-300">
@@ -1359,7 +1572,7 @@ export default function PatientsPage() {
             {rows.map((s) => (
               <MobileCard key={s.id} aria-label={`Student ${s.student_number}`}>
                 <div className="mb-1 flex items-center justify-between gap-2">
-                  <span className="text-sm font-medium text-foreground">{s.last_name}, {s.first_name}</span>
+                  <span className="text-sm font-medium text-foreground">{personName(`${s.last_name}, ${s.first_name}`)}</span>
                   {s.is_directory_record ? (
                     <Badge variant="outline" className="border-sky-300 bg-sky-50 text-sky-700 dark:border-sky-800 dark:bg-sky-950/40 dark:text-sky-300">
                       MIS Directory
@@ -1371,21 +1584,20 @@ export default function PatientsPage() {
                   )}
                 </div>
                 <MobileCardField label="Number"><span className="tabular-nums text-xs">{s.student_number}</span></MobileCardField>
-                <MobileCardField label="Course / Yr"><span className="text-xs">{s.course ?? '—'}{s.year_level !== null ? ` · Y${s.year_level}` : ''}</span></MobileCardField>
-                <MobileCardField label="Blood"><span className="tabular-nums text-xs">{s.blood_type ?? '—'}</span></MobileCardField>
-                <MobileCardField label="No-shows">
-                  {s.consecutive_no_shows >= 3
-                    ? <Badge variant="destructive">{s.consecutive_no_shows}</Badge>
-                    : <span className="text-xs">{s.consecutive_no_shows}</span>}
-                </MobileCardField>
+                <MobileCardField label="Course"><span className="text-xs">{s.course ?? '—'}</span></MobileCardField>
+                <MobileCardField label="Year"><span className="tabular-nums text-xs">{s.year_level !== null ? s.year_level : '—'}</span></MobileCardField>
+                {side === 'clinic' && (
+                  <MobileCardField label="Blood"><span className="tabular-nums text-xs">{s.blood_type ?? '—'}</span></MobileCardField>
+                )}
+                <MobileCardField label="Department"><span className="text-xs">{s.department ?? '—'}</span></MobileCardField>
                 <MobileCardActions>{studentActions(s)}</MobileCardActions>
               </MobileCard>
             ))}
           </MobileCardList>
 
           {!searching && (
-            <nav className="flex items-center justify-between" aria-label="pagination">
-              <p className="text-xs text-muted-foreground">Page {history.length}</p>
+            <nav className="flex items-center justify-between md:shrink-0" aria-label="pagination">
+              <p className="text-xs text-muted-foreground">Page {history.length} · {rows.length} student{rows.length === 1 ? '' : 's'} shown</p>
               <div className="flex gap-2">
                 <Button variant="outline" size="sm" onClick={prevPage} disabled={history.length < 2}>
                   <ChevronLeft /> Prev
@@ -1403,8 +1615,8 @@ export default function PatientsPage() {
           )}
         </TabsContent>
 
-        <TabsContent value="employees" className="space-y-4">
-          <PageToolbar>
+        <TabsContent value="employees" className="space-y-4 md:min-h-0 md:flex-1 md:flex md:flex-col">
+          <PageToolbar className="md:shrink-0">
             <div className="w-full space-y-1 sm:w-80 lg:flex-1 lg:max-w-md">
               <Label htmlFor="employee-search" className="text-xs">Search</Label>
               <div className="relative">
@@ -1475,9 +1687,15 @@ export default function PatientsPage() {
             </div>
           </PageToolbar>
 
-          <section className="hidden overflow-hidden rounded-xl border bg-card md:block">
-            <Table ariaLabel="Employee registry">
-              <TableHeader className="bg-muted/50">
+          <section className="hidden overflow-hidden rounded-xl border bg-card md:block md:min-h-0 md:flex-1">
+            {/* Same flex-to-fit recipe as the students table (see the
+                comment there). */}
+            <Table
+              ariaLabel="Employee registry"
+              wrapperClassName="h-full overflow-y-auto"
+              className="[&_td]:py-1.5"
+            >
+              <TableHeader className="sticky top-0 z-10 bg-muted shadow-[0_1px_0_0_var(--border)]">
                 <TableRow>
                   <TableHead className="px-3">Number</TableHead>
                   <TableHead className="px-3">Name</TableHead>
@@ -1604,8 +1822,8 @@ export default function PatientsPage() {
           })()}
 
           {!empSearching && (
-            <nav className="flex items-center justify-between" aria-label="pagination">
-              <p className="text-xs text-muted-foreground">Page {empHistory.length}</p>
+            <nav className="flex items-center justify-between md:shrink-0" aria-label="pagination">
+              <p className="text-xs text-muted-foreground">Page {empHistory.length} · {(employees.data?.data ?? []).length} employee{(employees.data?.data ?? []).length === 1 ? '' : 's'} shown</p>
               <div className="flex gap-2">
                 <Button variant="outline" size="sm" onClick={empPrevPage} disabled={empHistory.length < 2}>
                   <ChevronLeft /> Prev
@@ -1634,6 +1852,10 @@ export default function PatientsPage() {
         <Dialog open onOpenChange={(o) => !o && setManageId(null)}>
           <ManageMedicalRecordDialog studentId={manageId} onClose={() => setManageId(null)} />
         </Dialog>
+      )}
+
+      {referStudent !== null && (
+        <ReferStudentDialog student={referStudent} onClose={() => setReferStudent(null)} />
       )}
 
       {editEmp !== null && (

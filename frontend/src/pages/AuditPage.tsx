@@ -260,7 +260,11 @@ export default function AuditPage() {
   const activeCount = FILTER_KEYS.filter((key) => applied[key] !== undefined).length;
 
   return (
-    <main className="space-y-4 p-6">
+    // md+: one-viewport flex column (topbar h-14 excluded) — the event
+    // stream flexes to the leftover space and the pager stays in view
+    // even with the advanced filters expanded.
+    <main className="space-y-4 p-6 md:flex md:h-[calc(100dvh-3.5rem)] md:flex-col md:overflow-hidden">
+      <div className="md:shrink-0">
       <PageHeader
         title={
           <span className="flex items-center gap-2">
@@ -406,12 +410,15 @@ export default function AuditPage() {
           </form>
         }
       />
+      </div>
 
+      <div className="md:shrink-0">
       <VerificationStatus verification={verification} />
+      </div>
 
-      <div>
-        <section aria-labelledby="audit-results-heading" className="min-w-0 space-y-3">
-          <div className="flex items-center justify-between gap-3">
+      <div className="min-w-0 space-y-3 md:min-h-0 md:flex-1 md:flex md:flex-col">
+        <section aria-labelledby="audit-results-heading" className="min-w-0 space-y-3 md:min-h-0 md:flex-1 md:flex md:flex-col">
+          <div className="flex items-center justify-between gap-3 md:shrink-0">
             <div>
               <h2 id="audit-results-heading" className="text-sm font-semibold text-foreground">Event stream</h2>
               <p className="text-xs text-muted-foreground">Newest event first.</p>
@@ -419,9 +426,9 @@ export default function AuditPage() {
             {events.isFetching && !events.isLoading && <Loader2 className="size-4 animate-spin text-muted-foreground" aria-label="Refreshing events" />}
           </div>
 
-          <div className="hidden overflow-hidden border bg-card md:block">
-            <Table ariaLabel="Audit event stream, newest first">
-              <TableHeader className="bg-muted/50">
+          <div className="hidden overflow-hidden border bg-card md:block md:min-h-0 md:flex-1">
+            <Table ariaLabel="Audit event stream, newest first" wrapperClassName="h-full overflow-y-auto" className="[&_td]:py-1.5">
+              <TableHeader className="sticky top-0 z-10 bg-muted shadow-[0_1px_0_0_var(--border)]">
                 {table.getHeaderGroups().map((group) => (
                   <TableRow key={group.id}>
                     {group.headers.map((header) => (
@@ -499,9 +506,9 @@ export default function AuditPage() {
             </MobileCardList>
           )}
 
-          <nav className="flex items-center justify-between gap-3" aria-label="Audit pagination">
+          <nav className="flex items-center justify-between gap-3 md:shrink-0" aria-label="Audit pagination">
             <p className="text-xs text-muted-foreground">
-              Page {history.length} · {table.getRowModel().rows.length} events
+              Page {history.length} · {table.getRowModel().rows.length} events shown
             </p>
             <div className="flex gap-2">
               <Button type="button" variant="outline" onClick={previousPage} disabled={history.length < 2}>

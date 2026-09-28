@@ -62,6 +62,14 @@ interface NavChild {
 interface NavItem {
   label: string;
   href: string;
+  /**
+   * Stable identity for sidebar state (open-accordion, selected-module,
+   * owner highlighting, React keys). Required whenever two items share
+   * an href — e.g. the Records entry under Clinic and its Guidance
+   * Center twin, or the two Referrals rows — otherwise every
+   * href-keyed mechanism would drive both items at once.
+   */
+  key?: string;
   icon: LucideIcon;
   /**
    * Visibility predicate:
@@ -102,6 +110,17 @@ function hasAnyPermission(state: ReturnType<typeof useAuthStore.getState>, perm:
   if (perm === null) return true;
   const list = Array.isArray(perm) ? perm : [perm];
   return list.some((p) => hasPermission(state, p));
+}
+
+/** Stable identity for sidebar state — explicit key when given, else href. */
+function itemKey(item: NavItem): string {
+  return item.key ?? item.href;
+}
+
+/** Strip a nav href's query for path matching (Guidance Records carries
+    `?side=guidance`; path identity is `/patients`). */
+function itemPath(item: NavItem): string {
+  return item.href.split('?')[0] ?? item.href;
 }
 
 const NAV_SECTIONS: ReadonlyArray<{ title: string; items: ReadonlyArray<NavItem> }> = [
@@ -173,8 +192,9 @@ const NAV_SECTIONS: ReadonlyArray<{ title: string; items: ReadonlyArray<NavItem>
         ],
       },
       {
-        label: 'Patients',
+        label: 'Records',
         href: '/patients',
+        key: 'records-clinic',
         icon: ContactRound,
         permission: 'clinic.patients.read',
         children: [
@@ -194,6 +214,19 @@ const NAV_SECTIONS: ReadonlyArray<{ title: string; items: ReadonlyArray<NavItem>
           { label: 'Purchases', tab: 'reorders', permission: null },
           { label: 'Insights', tab: 'insights', permission: null },
         ],
+      },
+      // Referrals split by side (2026-09-27) — see the Guidance Center
+      // sibling for the rationale. Clinic staff reach the handoffs here.
+      {
+        label: 'Clinic Referrals',
+        href: '/referrals',
+        key: 'referrals-clinic',
+        icon: Share2,
+        permission: 'clinic.encounters.read',
+        badge: (c) => {
+          const n = (c?.referrals?.submitted ?? 0) + (c?.referrals?.under_review ?? 0);
+          return n > 0 ? { count: n, label: `${n} referrals awaiting action` } : null;
+        },
       },
     ],
   },
@@ -220,6 +253,25 @@ const NAV_SECTIONS: ReadonlyArray<{ title: string; items: ReadonlyArray<NavItem>
           { label: 'Scheduling', tab: 'scheduling', permission: null },
         ],
       },
+      // The same registry, surfaced for guidance staff — but NOT the same
+      // view: clinic records and guidance records carry different actions
+      // (clinic registers/treats/archives; guidance refers to clinic), so
+      // this entry opens the registry in its guidance side
+      // (`?side=guidance`), which the page renders with the guidance
+      // action set. Gated on the guidance code rather than the clinic one;
+      // holders of both permissions see both entries, each opening its own
+      // side (identities are keyed separately — see itemKey).
+      {
+        label: 'Records',
+        href: '/patients?side=guidance',
+        key: 'records-guidance',
+        icon: ContactRound,
+        permission: 'counselling.records.read',
+        children: [
+          { label: 'Students', tab: 'students', permission: null },
+          { label: 'Employees', tab: 'employees', permission: null },
+        ],
+      },
       // The four content surfaces moved here from the Counselling page's tab
       // strip (2026-09-24). Flat sibling rows, following the Facilities →
       // Waste Category precedent rather than nesting: the longest-prefix
@@ -230,16 +282,18 @@ const NAV_SECTIONS: ReadonlyArray<{ title: string; items: ReadonlyArray<NavItem>
       { label: 'Announcements', href: '/counselling/announcements', icon: Megaphone, permission: 'counselling.announcements.manage' },
       { label: 'Analytics', href: '/counselling/analytics', icon: BarChart3, permission: 'counselling.schedule.read' },
       { label: 'Services', href: '/counselling/services', icon: HeartHandshake, permission: 'counselling.services.manage' },
-    ],
-  },
-  {
-    title: 'Referrals',
-    items: [
+      // Referrals split by side (2026-09-27): the old Referrals section's
+      // single "All Referrals" row became one entry per section, gated on
+      // that section's domain code — clinic staff reach referrals under
+      // Clinic, guidance staff under Guidance Center, and holders of both
+      // see both. Both deep-link to the same page, which keeps its own
+      // status filter and "showing your referrals" scoping.
       {
-        label: 'All Referrals',
+        label: 'Guidance Referrals',
         href: '/referrals',
+        key: 'referrals-guidance',
         icon: Share2,
-        permission: 'referrals.read',
+        permission: 'counselling.records.read',
         badge: (c) => {
           const n = (c?.referrals?.submitted ?? 0) + (c?.referrals?.under_review ?? 0);
           return n > 0 ? { count: n, label: `${n} referrals awaiting action` } : null;
@@ -292,6 +346,37 @@ const NAV_SECTIONS: ReadonlyArray<{ title: string; items: ReadonlyArray<NavItem>
   },
 ];
 
+/**
+ * The nav item whose href is the LONGEST matching prefix of the path —
+ * the same rule isActive applies. A flat sibling surface
+ * (/counselling/surveys) outranks its parent module (/counselling), so
+ * the accordion wayfinding below only ever claims the module's OWN pages;
+ * landing on Surveys, Announcements, Analytics or Services — by tap or
+ * by reload — never opens the Counselling accordion.
+ */
+function accordionOwner(pathname: string, side: string | null): NavItem | undefined {
+  let best: NavItem | undefined;
+  let bestLen = -1;
+  let bestSideMatch = false;
+  for (const item of NAV_SECTIONS.flatMap((s) => s.items)) {
+    // Query strings are presentation, not identity — match on the path
+    // only (Guidance Records carries `?side=guidance`).
+    const path = itemPath(item);
+    const inside = pathname === path || pathname.startsWith(`${path}/`);
+    if (!inside) continue;
+    const itemSide = new URLSearchParams(item.href.split('?')[1] ?? '').get('side');
+    const sideMatch = itemSide === side;
+    // Longer path always wins; among equal paths (the two Records
+    // entries on /patients) the one whose `side` matches the URL wins.
+    if (path.length > bestLen || (path.length === bestLen && sideMatch && !bestSideMatch)) {
+      best = item;
+      bestLen = path.length;
+      bestSideMatch = sideMatch;
+    }
+  }
+  return best;
+}
+
 export function AppSidebar() {
   const state = useAuthStore();
   const isAdmin = hasPermission(state, '*');
@@ -300,19 +385,9 @@ export function AppSidebar() {
   const counters = useDashboardCounters();
 
   const closeMobile = () => setOpenMobile(false);
-  // Longest-prefix match: `/facilities/waste-categories` must light up
-  // ONLY its own entry, not `/facilities` too — so a row is active when
-  // its path prefixes the URL AND no other nav entry matches more
-  // specifically (longer prefix).
-  const allPaths = NAV_SECTIONS.flatMap((s) => s.items.map((i) => i.href.split('?')[0] ?? i.href));
-  const isActive = (href: string) => {
-    const path = href.split('?')[0] ?? href;
-    if (path === '/') return pathname === '/';
-    if (pathname !== path && !pathname.startsWith(`${path}/`)) return false;
-    return !allPaths.some(
-      (p) => p.length > path.length && (pathname === p || pathname.startsWith(`${p}/`)),
-    );
-  };
+  // Row highlighting is owner-based (see isRowActive below): the nav item
+  // with the longest matching path lights up, which is what kept sibling
+  // surfaces like /counselling/surveys from also lighting /counselling.
 
   // The last-tapped accordion label stays highlighted even though the tap
   // deliberately does NOT navigate — the content area keeps showing the
@@ -322,6 +397,9 @@ export function AppSidebar() {
   useEffect(() => {
     setSelectedModule(null);
   }, [pathname]);
+  const [params] = useSearchParams();
+  const tabParam = params.get('tab');
+  const sideParam = params.get('side');
 
   // Accordions are SINGLE-EXPAND: one `openAccordion` id lives here, so
   // opening a module's section list closes the others and the sidebar never
@@ -335,33 +413,28 @@ export function AppSidebar() {
   // open another one (the first cut forced it open on every render, and an
   // earlier auto-open fired on every navigation; both fought the user).
   //
-  // Per-item active tab: the explicit `?tab=` when it names one of the
-  // item's permission-visible children, otherwise the FIRST visible child —
-  // which is each page's default tab by convention (Counselling's
-  // permission-conditional default falls out of the same rule).
+  // The owner of a path is the nav item with the LONGEST matching href —
+  // the same rule as isActive. A flat sibling surface (/counselling/surveys)
+  // outranks its parent module (/counselling), so landing on Surveys,
+  // Announcements, Analytics or Services — by tap or by reload — never
+  // claims the Counselling accordion; only the module's own pages do.
+  // Identity is the item KEY, not the href: the Clinic and Guidance Records
+  // entries share `/patients`, and keying by href would drive both
+  // accordions (and both highlights) at once.
   const [openAccordion, setOpenAccordion] = useState<string | null>(() => {
-    const active = NAV_SECTIONS.flatMap((s) => s.items).find(
-      (i) =>
-        i.children !== undefined &&
-        (pathname === i.href || pathname.startsWith(`${i.href}/`)),
-    );
-    return active?.href ?? null;
+    const owner = accordionOwner(pathname, null);
+    return owner?.children !== undefined ? itemKey(owner) : null;
   });
   const lastPathRef = useRef(pathname);
   useEffect(() => {
-    const inside = (href: string) => pathname === href || pathname.startsWith(`${href}/`);
     const cameFromInside = (href: string) =>
       lastPathRef.current === href || lastPathRef.current.startsWith(`${href}/`);
-    const active = NAV_SECTIONS.flatMap((s) => s.items).find(
-      (i) => i.children !== undefined && inside(i.href),
-    );
-    if (active !== undefined && !cameFromInside(active.href)) {
-      setOpenAccordion(active.href);
+    const owner = accordionOwner(pathname, sideParam);
+    if (owner?.children !== undefined && !cameFromInside(itemPath(owner))) {
+      setOpenAccordion(itemKey(owner));
     }
     lastPathRef.current = pathname;
-  }, [pathname]);
-  const [params] = useSearchParams();
-  const tabParam = params.get('tab');
+  }, [pathname, sideParam]);
   // Pure students get portal sections as accordion children; employees and
   // admins see the flat row (the employee portal has no tabs to map).
   const isPureStudent =
@@ -369,14 +442,30 @@ export function AppSidebar() {
   const visibleChildren = (item: NavItem): NavChild[] =>
     (item.children ?? [])
       .filter(() => !(item.studentChildren === true && !isPureStudent))
-      .filter((ch) => hasAnyPermission(state, ch.permission));  /** Child-link URL: on the module page, carry the current params over
-   * (Reports' start/end range survives); from elsewhere, start fresh. */
+      .filter((ch) => hasAnyPermission(state, ch.permission));
+  /** Child-link URL: the item's own query seeds the target (Guidance
+   * Records pins `side=guidance`; the item's side wins over whatever side
+   * the current page is on), the current page's params overlay it
+   * (Reports' start/end survives), and `tab` is set last. */
   const childHref = (item: NavItem, ch: NavChild): string => {
-    if (pathname !== item.href) return `${item.href}?tab=${ch.tab}`;
-    const target = new URLSearchParams(params);
+    const [base, itemQuery = ''] = item.href.split('?');
+    const target = new URLSearchParams(itemQuery);
+    if (pathname === base) {
+      for (const [k, v] of params) {
+        if (k !== 'side') target.append(k, v);
+      }
+    }
     target.set('tab', ch.tab);
-    return `${item.href}?${target.toString()}`;
+    return `${base}?${target.toString()}`;
   };
+  /** Row highlighting goes to the path's OWNER (see accordionOwner) plus
+   * the last-tapped module — never to every item sharing the href. */
+  const ownerKey = (() => {
+    const owner = accordionOwner(pathname, sideParam);
+    return owner !== undefined ? itemKey(owner) : null;
+  })();
+  const isRowActive = (item: NavItem): boolean =>
+    (ownerKey !== null && itemKey(item) === ownerKey) || selectedModule === itemKey(item);
 
   return (
     <Sidebar collapsible="icon">
@@ -423,27 +512,29 @@ export function AppSidebar() {
                 <SidebarMenu>
                   {items.map((item) => {
                     const visible = visibleChildren(item);
-                    return (
-                    <SidebarMenuItem key={item.href}>
-                      {/* Accordion only when children exist AND at least one
-                          is visible (My portal collapses to a flat row for
-                          employees/admins, who have no portal tabs). */}
-                      {item.children !== undefined && visible.length > 0 ? (
+                    // Accordion only when children exist AND at least one
+                    // is visible (My portal collapses to a flat row for
+                    // employees/admins, who have no portal tabs).
+                    // SidebarAccordion renders its own SidebarMenuItem —
+                    // wrapping it in another would nest <li> in <li>.
+                    if (item.children !== undefined && visible.length > 0) {
+                      return (
                         <SidebarAccordion
-                          id={`nav-${item.label.toLowerCase().replace(/\s+/g, '-')}`}
+                          key={itemKey(item)}
+                          id={`nav-${itemKey(item).replace(/[^a-z0-9-]+/gi, '-')}`}
                           label={item.label}
                           icon={item.icon}
                           // Row tap: select the module (highlight moves here,
                           // content stays put) + open its panel. Children do
                           // the actual navigating.
                           onOpenChange={(next) => {
-                            if (next) setSelectedModule(item.href);
-                            setOpenAccordion(next ? item.href : null);
+                            if (next) setSelectedModule(itemKey(item));
+                            setOpenAccordion(next ? itemKey(item) : null);
                           }}
                           // The module row carries the bare-URL case on its
                           // own — nothing in the child list is auto-selected.
-                          active={isActive(item.href) || selectedModule === item.href}
-                          open={openAccordion === item.href}
+                          active={isRowActive(item)}
+                          open={openAccordion === itemKey(item)}
                           badge={item.badge !== undefined && counters.data !== undefined
                             ? (() => {
                                 const b = item.badge(counters.data);
@@ -464,13 +555,13 @@ export function AppSidebar() {
                                 // A child lights up ONLY when its own ?tab=
                                 // value is explicit — no auto-selection of
                                 // the first entry.
-                                isActive={pathname === item.href && tabParam === ch.tab}
+                                isActive={pathname === itemPath(item) && tabParam === ch.tab}
                               >
                                 <NavLink
                                   to={childHref(item, ch)}
                                   onClick={closeMobile}
-                                  onMouseEnter={() => void prefetchRoute(item.href)}
-                                  onFocus={() => void prefetchRoute(item.href)}
+                                  onMouseEnter={() => void prefetchRoute(itemPath(item))}
+                                  onFocus={() => void prefetchRoute(itemPath(item))}
                                 >
                                   <span className="truncate">{ch.label}</span>
                                 </NavLink>
@@ -478,8 +569,11 @@ export function AppSidebar() {
                             </SidebarMenuSubItem>
                           ))}
                         </SidebarAccordion>
-                      ) : (
-                        <SidebarMenuButton asChild isActive={isActive(item.href)} tooltip={item.label}>
+                      );
+                    }
+                    return (
+                      <SidebarMenuItem key={itemKey(item)}>
+                        <SidebarMenuButton asChild isActive={isRowActive(item)} tooltip={item.label}>
                         {/*
                           Intent-based chunk prefetch. Fires on the
                           earliest signal a user might be heading
@@ -496,11 +590,11 @@ export function AppSidebar() {
                         */}
                         <NavLink
                           to={item.href}
-                          end={item.href === '/'}
+                          end={itemPath(item) === '/'}
                           onClick={closeMobile}
-                          onMouseEnter={() => void prefetchRoute(item.href)}
-                          onFocus={() => void prefetchRoute(item.href)}
-                          onTouchStart={() => void prefetchRoute(item.href)}
+                          onMouseEnter={() => void prefetchRoute(itemPath(item))}
+                          onFocus={() => void prefetchRoute(itemPath(item))}
+                          onTouchStart={() => void prefetchRoute(itemPath(item))}
                         >
                           <item.icon aria-hidden />
                           <span className="flex-1 truncate">{item.label}</span>
@@ -516,9 +610,9 @@ export function AppSidebar() {
                           })()}
                         </NavLink>
                       </SidebarMenuButton>
-                      )}
-                    </SidebarMenuItem>
-                  );})}
+                      </SidebarMenuItem>
+                    );
+                  })}
                 </SidebarMenu>
               </SidebarGroupContent>
             </SidebarGroup>

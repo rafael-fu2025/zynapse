@@ -442,7 +442,7 @@ function UserActions({
     <div className="flex justify-end">
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button className="min-h-11" size="sm" variant="outline" aria-label={`Actions for ${identity}`}>
+          <Button className="min-h-11 lg:min-h-0" size="sm" variant="outline" aria-label={`Actions for ${identity}`}>
             Actions <ChevronDown className="size-3.5" aria-hidden />
           </Button>
         </DropdownMenuTrigger>
@@ -621,7 +621,11 @@ export default function AdminUsersPage() {
     || filters.group !== 'all' || filters.kind !== 'all';
 
   return (
-    <main className="space-y-4 p-6">
+    // lg+: one-viewport flex column (topbar h-14 excluded) so the account
+    // table flexes to the leftover space and the pager stays in view —
+    // this page's desktop table breakpoint is lg, not md.
+    <main className="space-y-4 p-6 lg:flex lg:h-[calc(100dvh-3.5rem)] lg:flex-col lg:overflow-hidden">
+      <div className="lg:shrink-0">
       <PageHeader
         title="Users"
         description="Manage account access, roles, and credential recovery. Accounts are disabled rather than deleted."
@@ -700,12 +704,13 @@ export default function AdminUsersPage() {
           </section>
         }
       />
+      </div>
 
       {roles.isError && (
         <QueryErrorState message="Failed to load the authoritative role list." onRetry={() => void roles.refetch()} pending={roles.isFetching} />
       )}
 
-      <section aria-labelledby="users-list-heading" className="overflow-hidden rounded-xl border bg-card">
+      <section aria-labelledby="users-list-heading" className="overflow-hidden rounded-xl border bg-card lg:flex-1 lg:min-h-0 lg:flex lg:flex-col">
         <h2 id="users-list-heading" className="sr-only">User accounts</h2>
         <TableStateBlock
           isLoading={list.isLoading}
@@ -781,10 +786,10 @@ export default function AdminUsersPage() {
               ))}
             </div>
 
-            <div className="hidden min-w-0 overflow-x-auto lg:block">
-              <Table>
+            <div className="hidden min-w-0 overflow-x-auto lg:block lg:flex-1 lg:min-h-0">
+              <Table wrapperClassName="h-full overflow-y-auto" className="[&_td]:py-1.5">
                 <TableCaption className="sr-only">User accounts, their roles, security state, and available actions.</TableCaption>
-                <TableHeader className="bg-muted/50">
+                <TableHeader className="sticky top-0 z-10 bg-muted shadow-[0_1px_0_0_var(--border)]">
                   <TableRow>
                     <TableHead className="px-3">Account</TableHead>
                     <TableHead className="px-3">Patient</TableHead>
@@ -861,7 +866,7 @@ export default function AdminUsersPage() {
         )}
       </section>
 
-      <nav className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between" aria-label="User pagination">
+      <nav className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between lg:shrink-0" aria-label="User pagination">
         <p className="text-xs text-muted-foreground" role="status">
           Page {history.length} · {rows.length} account{rows.length === 1 ? '' : 's'} shown
         </p>
