@@ -106,3 +106,11 @@ config/mcporter.json
 mobile/.flutter*
 vite.config.ts.timestamp-*
 frontend/.vitest-tmp
+
+# --- BMG IoT (mechanized compost tumbler) ---
+# The real sketch carries the WiFi credentials + device token and stays
+# local. Only the placeholder copy (compost.ino.example) ships to the
+# repo — copy it to compost.ino and fill in the four config values.
+# (Do NOT add a second .ino to the sketch folder: the Arduino IDE
+# concatenates every .ino in the folder into one build.)
+/bmg_iot/compost/compost.ino

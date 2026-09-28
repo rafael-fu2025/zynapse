@@ -247,6 +247,63 @@ final class BmgController extends ApiController
         return $this->ok($this->service->acknowledgeAlert($alertId));
     }
 
+    // ---- BMG device administration (mechanized tumbler) ----------------
+
+    public function listDevices(): ResponseInterface
+    {
+        $cursor   = (string) ($this->request->getGet('cursor') ?? '');
+        $limit    = (int)    ($this->request->getGet('limit')  ?? 25);
+        $archived = (string) ($this->request->getGet('include_archived') ?? '');
+
+        $page = $this->service->listDevices(
+            $cursor !== '' ? $cursor : null,
+            $limit,
+            $archived === '1' || $archived === 'true',
+        );
+
+        return $this->ok(
+            $page['data'],
+            \App\Http\ApiResponse::paginationMeta($page['count'], $page['next'], null),
+        );
+    }
+
+    public function createDevice(): ResponseInterface
+    {
+        $payload = $this->request->getJSON(true) ?? [];
+
+        $rules = [
+            'code'         => 'permit_empty|max_length[32]',
+            'mac'          => 'permit_empty|max_length[32]',
+            'display_name' => 'permit_empty|max_length[128]',
+            'unit_id'      => 'permit_empty|is_natural_no_zero',
+        ];
+        if (! $this->makeValidation($rules)->run($payload)) {
+            throw ApiException::validationFailure($this->collectErrors());
+        }
+
+        // 201 carries the plaintext token — shown once in the UI.
+        return $this->ok($this->service->registerDevice([
+            'code'         => (string) ($payload['code'] ?? ''),
+            'mac'          => (string) ($payload['mac'] ?? ''),
+            'display_name' => (string) ($payload['display_name'] ?? ''),
+            'unit_id'      => isset($payload['unit_id']) && $payload['unit_id'] !== '' ? (int) $payload['unit_id'] : null,
+        ]), null, 201);
+    }
+
+    public function setDeviceStatus(int $deviceId): ResponseInterface
+    {
+        $payload = $this->request->getJSON(true) ?? [];
+        $status  = (string) ($payload['status'] ?? '');
+
+        return $this->ok($this->service->setDeviceStatus($deviceId, $status));
+    }
+
+    public function regenerateDeviceToken(int $deviceId): ResponseInterface
+    {
+        // 201 carries the new plaintext token — shown once in the UI.
+        return $this->ok($this->service->regenerateDeviceToken($deviceId), null, 201);
+    }
+
     public function addProcessLog(int $batchId): ResponseInterface
     {
         $payload = $this->request->getJSON(true) ?? [];

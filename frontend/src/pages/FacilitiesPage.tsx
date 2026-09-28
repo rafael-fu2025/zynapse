@@ -7,7 +7,7 @@
  * status badge and roll back on error. shadcn Table / Dialog /
  * Textarea primitives.
  */
-import { Play, StopCircle, Loader2, Ban, ChevronDown, ChevronLeft, ChevronRight, ClipboardList, Boxes, LineChart, Plus, Wrench, Eye, Pencil, Archive, ArchiveRestore, X, ShieldCheck, FileCheck2, TriangleAlert, History, Sparkles, SquarePen, List } from 'lucide-react';
+import { Play, StopCircle, Loader2, Ban, ChevronDown, ChevronLeft, ChevronRight, ClipboardList, Boxes, LineChart, Plus, Wrench, Eye, Pencil, Archive, ArchiveRestore, X, ShieldCheck, FileCheck2, TriangleAlert, History, Sparkles, SquarePen, List, Cpu, RotateCcw, Power, PowerOff } from 'lucide-react';
 import { useId, useMemo, useState } from 'react';
 import { Link, Navigate, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
@@ -16,11 +16,13 @@ import { PageHeader } from '@/components/PageHeader';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { ConfirmDialog, type ConfirmAction } from '@/components/ConfirmDialog';
+import { CopyButton } from '@/components/CopyButton';
 import { MobileCardList, MobileCard, MobileCardField, MobileCardActions } from '@/components/MobileCardList';
 import { TableStateRows } from '@/components/TableStates';
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -61,6 +63,7 @@ import {
   useBatchHistory,
   useBatchUpdates,
   useBlendCn,
+  useBmgDevices,
   useBmgUnits,
   useCancelBatch,
   useCreateUnit,
@@ -68,7 +71,10 @@ import {
   useOpenAlerts,
   useProcessLogs,
   useRecordOutput,
+  useRegenerateBmgDeviceToken,
+  useRegisterBmgDevice,
   useReleaseBatch,
+  useSetBmgDeviceStatus,
   useSetUnitMaintenance,
   useStartBatch,
   useSuggestUnit,
@@ -85,9 +91,11 @@ import {
   addBatchUpdateSchema,
   createUnitSchema,
   recordOutputSchema,
+  registerDeviceSchema,
   startBatchSchema,
   updateUnitSchema,
   type ActiveBatch,
+  type BmgDevice,
   type BmgMaturityLevel,
   type BmgProcessEventType,
   type BmgQualityGrade,
@@ -811,6 +819,263 @@ function DrumImage({ className = '' }: { className?: string }) {
   );
 }
 
+// ------------------------------------------------------ BMG devices
+
+/**
+ * Shown-once credential reveal for a freshly minted device token —
+ * same pattern as the temporary-password dialog on AdminUsersPage.
+ * The plaintext is never retrievable again.
+ */
+function DeviceTokenDialog({ device, token, onClose }: { device: BmgDevice; token: string; onClose: () => void }) {
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent lockDismiss>
+        <DialogHeader>
+          <DialogTitle>Device token</DialogTitle>
+          <DialogDescription>
+            Paste this into <span className="font-mono">DEVICE_TOKEN</span> in the sketch and flash the board. It is
+            shown once — only a SHA-256 hash is stored server-side. Losing it means regenerating (the old token stops
+            working).
+          </DialogDescription>
+        </DialogHeader>
+        <div className="flex items-center gap-2">
+          <p className="min-w-0 flex-1 break-all rounded-lg bg-muted p-3 text-center font-mono text-sm">{token}</p>
+          <CopyButton value={token} label="Copy device token" successMessage="Device token copied." />
+        </div>
+        <p className="text-xs text-muted-foreground">
+          Device <span className="font-mono">{device.code}</span> registered
+          {device.unit_name !== null && device.unit_name !== undefined ? ` for ${device.unit_name}` : ' without a drum binding'}.
+        </p>
+        <DialogFooter>
+          <Button onClick={onClose}>Done</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/** Register a tumbler: chip MAC (auto-codes) or explicit slug, optional drum binding. */
+function RegisterDeviceForm({ onRegistered }: { onRegistered: (r: { device: BmgDevice; token: string }) => void }) {
+  const register = useRegisterBmgDevice();
+  const units = useBmgUnits(null, 100, false);
+  const [mac, setMac] = useState('');
+  const [code, setCode] = useState('');
+  const [name, setName] = useState('');
+  const [unitId, setUnitId] = useState('unset');
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const macId = useId();
+  const codeId = useId();
+  const nameId = useId();
+  const unitIdFieldId = useId();
+
+  function submit() {
+    const parsed = registerDeviceSchema.safeParse({
+      mac,
+      code,
+      display_name: name,
+      unit_id: unitId === 'unset' ? '' : unitId,
+    });
+    if (!parsed.success) {
+      setErrors(Object.fromEntries(parsed.error.issues.map((i) => [String(i.path[0]), i.message])));
+      return;
+    }
+    setErrors({});
+    register.mutate(parsed.data, { onSuccess: onRegistered });
+  }
+
+  const unitOptions = units.data?.data.filter((u) => u.archived_at == null) ?? [];
+
+  return (
+    <div className="space-y-3">
+      <div className="space-y-1.5">
+        <Label htmlFor={macId}>Chip MAC address</Label>
+        <Input
+          id={macId}
+          value={mac}
+          onChange={(e) => setMac(e.target.value)}
+          placeholder="b8:1f:3f:d7:ec:18"
+          className="font-mono"
+          aria-invalid={errors.mac !== undefined}
+        />
+        {errors.mac !== undefined && <p className="text-xs text-destructive">{errors.mac}</p>}
+        <p className="text-xs text-muted-foreground">
+          From the board itself (esptool/Arduino serial monitor). Becomes the default code, e.g.
+          <span className="font-mono"> b8-1f-3f-d7-ec-18</span>. Leave empty to give a code instead.
+        </p>
+      </div>
+      <div className="space-y-1.5">
+        <Label htmlFor={codeId}>Code (override)</Label>
+        <Input
+          id={codeId}
+          value={code}
+          onChange={(e) => setCode(e.target.value.toLowerCase())}
+          placeholder="compost-tumbler-1"
+          aria-invalid={errors.code !== undefined}
+        />
+        {errors.code !== undefined && <p className="text-xs text-destructive">{errors.code}</p>}
+      </div>
+      <div className="space-y-1.5">
+        <Label htmlFor={nameId}>Display name</Label>
+        <Input
+          id={nameId}
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="Compost Tumbler 1"
+          maxLength={128}
+        />
+      </div>
+      <div className="space-y-1.5">
+        <Label id={unitIdFieldId}>Bound drum</Label>
+        <Select value={unitId} onValueChange={setUnitId}>
+          <SelectTrigger aria-labelledby={unitIdFieldId}><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="unset">None (reports will be rejected until bound)</SelectItem>
+            {unitOptions.map((u) => (
+              <SelectItem key={u.id} value={String(u.id)}>{u.display_name} ({u.code})</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+      <DialogFooter>
+        <Button onClick={submit} disabled={register.isPending}>
+          {register.isPending && <Loader2 className="size-4 animate-spin" aria-hidden />} Register device
+        </Button>
+      </DialogFooter>
+    </div>
+  );
+}
+
+/**
+ * Manage automated tumblers: register, mint/regenerate tokens (shown
+ * once), bind, enable/disable.
+ */
+function DevicesDialog({ onClose }: { onClose: () => void }) {
+  const devices = useBmgDevices(null, 100);
+  const setStatus = useSetBmgDeviceStatus();
+  const regenerate = useRegenerateBmgDeviceToken();
+  const [registering, setRegistering] = useState(false);
+  const [minted, setMinted] = useState<{ device: BmgDevice; token: string } | null>(null);
+  const [confirm, setConfirm] = useState<ConfirmAction | null>(null);
+
+  const rows = devices.data?.data ?? [];
+
+  return (
+    <>
+      <Dialog open onOpenChange={(open) => !open && onClose()}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Cpu className="size-4 text-primary" /> Automated tumblers
+            </DialogTitle>
+            <DialogDescription>
+              Devices that mechanize drum rotation and report turning sessions to the process log. Token is shown once
+              at mint time.
+            </DialogDescription>
+          </DialogHeader>
+
+          {registering ? (
+            <RegisterDeviceForm
+              onRegistered={(r) => { setRegistering(false); setMinted(r); }}
+            />
+          ) : (
+            <>
+              <div className="max-h-80 space-y-2 overflow-auto rounded-md border p-2">
+                {devices.isLoading && <Loader2 className="mx-auto size-4 animate-spin text-muted-foreground" />}
+                {devices.isError && <p className="p-2 text-sm text-destructive">Could not load devices.</p>}
+                {!devices.isLoading && !devices.isError && rows.length === 0 && (
+                  <p className="p-2 text-sm text-muted-foreground">No devices registered yet.</p>
+                )}
+                {rows.map((d) => (
+                  <div key={d.id} className="rounded-md border p-2">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-medium">{d.display_name}</p>
+                        <p className="truncate font-mono text-xs text-muted-foreground">{d.code}</p>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-1">
+                        <Badge variant={d.status === 'active' ? 'success' : 'destructive'}>{titleCase(d.status)}</Badge>
+                        {d.unit_name !== null && d.unit_name !== undefined && (
+                          <Badge variant="outline">{d.unit_name}</Badge>
+                        )}
+                      </div>
+                    </div>
+                    <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                      {d.token_prefix !== null && d.token_prefix !== undefined && (
+                        <span className="font-mono">{d.token_prefix}…</span>
+                      )}
+                      {d.firmware !== null && d.firmware !== undefined && <span>fw {d.firmware}</span>}
+                      {d.last_seen_at !== null && d.last_seen_at !== undefined ? (
+                        <span>last seen {fmtHumanDate(d.last_seen_at)}</span>
+                      ) : (
+                        <span>never connected</span>
+                      )}
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => setConfirm({
+                          title: `Regenerate token for ${d.code}?`,
+                          description: 'The current token stops working immediately. The device will need the new token flashed before its next report.',
+                          confirmLabel: 'Regenerate',
+                          run: () => regenerate.mutate({ deviceId: d.id }, { onSuccess: setMinted }),
+                        })}
+                      >
+                        <RotateCcw /> Regenerate token
+                      </Button>
+                      {d.status === 'active' ? (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => setConfirm({
+                            title: `Disable ${d.code}?`,
+                            description: 'Reports will be refused until re-enabled.',
+                            confirmLabel: 'Disable',
+                            run: () => setStatus.mutate({ deviceId: d.id, status: 'disabled' }),
+                          })}
+                        >
+                          <PowerOff /> Disable
+                        </Button>
+                      ) : (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => setStatus.mutate({ deviceId: d.id, status: 'active' })}
+                        >
+                          <Power /> Enable
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <DialogFooter>
+                <Button variant="outline" onClick={onClose}>Close</Button>
+                <Button onClick={() => setRegistering(true)}>
+                  <Plus /> Register device
+                </Button>
+              </DialogFooter>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
+      {minted !== null && <DeviceTokenDialog device={minted.device} token={minted.token} onClose={() => setMinted(null)} />}
+      <ConfirmDialog
+        open={confirm !== null}
+        title={confirm?.title ?? ''}
+        description={confirm?.description}
+        confirmLabel={confirm?.confirmLabel}
+        pending={regenerate.isPending || setStatus.isPending}
+        onConfirm={() => {
+          confirm?.run();
+          setConfirm(null);
+        }}
+        onCancel={() => setConfirm(null)}
+      />
+    </>
+  );
+}
+
 function ProcessingDrumsCard() {
   const active = useActiveBatches();
   const items = active.data ?? [];
@@ -872,7 +1137,7 @@ function DrumCard({ batch }: { batch: ActiveBatch }) {
     >
       {/* Theme-aware drum graphic (white in dark mode, maroon in light mode). */}
       <div className="flex justify-center py-1">
-        <DrumImage className="h-16 w-auto" />
+        <DrumImage className="h-14 w-auto" />
       </div>
 
       <header className="flex items-start justify-between gap-2 border-b border-border/60 pb-2">
@@ -885,31 +1150,37 @@ function DrumCard({ batch }: { batch: ActiveBatch }) {
         </Badge>
       </header>
 
-      <dl className="space-y-1 text-[0.8125rem]">
-        <div className="flex items-center justify-between">
-          <dt className="text-muted-foreground">Batch</dt>
-          <dd className="tabular-nums font-semibold text-foreground">{batch.batch_code}</dd>
+      {/* Narrow tile: short values stay inline, long ones (batch ref,
+          date) stack so they can never collide with their label. */}
+      <dl className="space-y-1.5 text-xs">
+        <div>
+          <dt className="text-[0.6875rem] uppercase tracking-wide text-muted-foreground">Batch</dt>
+          <dd className="font-mono text-[0.6875rem] font-semibold text-foreground [overflow-wrap:anywhere]">
+            {batch.batch_code}
+          </dd>
+        </div>
+        <div className="flex items-center justify-between gap-2">
+          <dt className="text-[0.6875rem] uppercase tracking-wide text-muted-foreground">Waste</dt>
+          <dd className="truncate text-right font-semibold text-foreground" title={batch.category_name ?? undefined}>
+            {batch.category_name ?? '—'}
+          </dd>
         </div>
         <div className="flex items-center justify-between">
-          <dt className="text-muted-foreground">Waste</dt>
-          <dd className="font-semibold text-foreground">{batch.category_name ?? '—'}</dd>
-        </div>
-        <div className="flex items-center justify-between">
-          <dt className="text-muted-foreground">Input</dt>
+          <dt className="text-[0.6875rem] uppercase tracking-wide text-muted-foreground">Input</dt>
           <dd className="tabular-nums font-semibold text-foreground">{batch.input_kg.toFixed(2)} kg</dd>
         </div>
-        <div className="flex items-start justify-between gap-2">
-          <dt className="shrink-0 text-muted-foreground">Expected Done</dt>
-          <dd className="text-right">
+        <div>
+          <dt className="text-[0.6875rem] uppercase tracking-wide text-muted-foreground">Expected done</dt>
+          <dd className="flex items-baseline justify-between gap-2">
             <span className="tabular-nums font-semibold text-foreground">
               {batch.expected_completion_date !== null ? fmtShort(batch.expected_completion_date) : '—'}
             </span>
             {batch.days_until_expected !== null && (
-              <p
+              <span
                 className={
                   overdue
-                    ? 'mt-0.5 text-[0.6875rem] font-medium text-destructive'
-                    : 'mt-0.5 text-[0.6875rem] font-medium text-muted-foreground'
+                    ? 'text-[0.6875rem] font-medium text-destructive'
+                    : 'text-[0.6875rem] font-medium text-muted-foreground'
                 }
               >
                 {overdue
@@ -917,7 +1188,7 @@ function DrumCard({ batch }: { batch: ActiveBatch }) {
                   : dueToday
                     ? 'Due today'
                     : `in ${batch.days_until_expected} day${batch.days_until_expected === 1 ? '' : 's'}`}
-              </p>
+              </span>
             )}
           </dd>
         </div>
@@ -1461,7 +1732,7 @@ function BatchHistoryDialog({ unitId, onClose }: { unitId: number | null; onClos
             <SelectItem value="cancelled">Cancelled</SelectItem>
           </SelectContent>
         </Select>
-        <span className="text-xs text-muted-foreground">Page {history.length}</span>
+        <span className="text-xs text-muted-foreground">Page {history.length} · {batchRows.length} batch{batchRows.length === 1 ? '' : 'es'} shown</span>
       </div>
       <div className="max-h-[60vh] overflow-auto rounded-md border">
         <Table ariaLabel="Batch history">
@@ -1579,6 +1850,7 @@ export default function FacilitiesPage() {
   const [openCompliance, setOpenCompliance] = useState<{ unit: BmgUnit; batchId: number } | null>(null);
   const [openHistory, setOpenHistory] = useState<number | 'all' | null>(null);
   const [openCreate, setOpenCreate] = useState(false);
+  const [openDevices, setOpenDevices] = useState(false);
   const [openEdit, setOpenEdit] = useState<BmgUnit | null>(null);
   const [openArchive, setOpenArchive] = useState<BmgUnit | null>(null);
   const [confirm, setConfirm] = useState<ConfirmAction | null>(null);
@@ -1612,7 +1884,7 @@ export default function FacilitiesPage() {
     return (
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button className="min-h-11" size="sm" variant="outline" aria-label={`Actions for ${u.code}`}>
+          <Button className="min-h-11 md:min-h-0" size="sm" variant="outline" aria-label={`Actions for ${u.code}`}>
             Actions <ChevronDown className="size-3.5" aria-hidden />
           </Button>
         </DropdownMenuTrigger>
@@ -1691,6 +1963,10 @@ export default function FacilitiesPage() {
   };
 
   return (
+    // Natural document flow — the page scrolls with the app shell. The
+    // old fixed-viewport flex column squeezed the drums table to zero
+    // height whenever the Processing Drums card grew, so the table now
+    // bounds itself with its own internal scroll instead.
     <main className="space-y-4 p-6">
       <PageHeader
         title="Facilities — BMG"
@@ -1707,6 +1983,9 @@ export default function FacilitiesPage() {
             <Button variant="outline" onClick={() => setOpenHistory('all')}>
               <History /> Batch history
             </Button>
+            <Button variant="outline" onClick={() => setOpenDevices(true)}>
+              <Cpu /> Devices
+            </Button>
             {/* The primary "New drum" action sits ALONE at the far right,
                 visually separated from the utility buttons by a divider,
                 so the prominent CTA reads as its own group. (Waste
@@ -1716,6 +1995,7 @@ export default function FacilitiesPage() {
               <Button onClick={() => setOpenCreate(true)}>
                 <Plus /> New drum
               </Button>
+              {openDevices && <DevicesDialog onClose={() => setOpenDevices(false)} />}
               {openCreate && (
                 <CreateUnitDialog
                   onClose={() => setOpenCreate(false)}
@@ -1731,9 +2011,13 @@ export default function FacilitiesPage() {
 
       <ProcessingDrumsCard />
 
-      <section className="hidden overflow-hidden rounded-xl border bg-card md:block">
-        <Table ariaLabel="Composting drums with status and utilization">
-          <TableHeader className="bg-muted/50">
+      <section className="hidden rounded-xl border bg-card md:block">
+        <Table
+          ariaLabel="Composting drums with status and utilization"
+          wrapperClassName="max-h-[65vh] overflow-y-auto"
+          className="[&_td]:py-1.5"
+        >
+          <TableHeader className="sticky top-0 z-10 bg-muted shadow-[0_1px_0_0_var(--border)]">
             <TableRow>
               <TableHead className="px-3">Code</TableHead>
               <TableHead className="px-3">Name</TableHead>
@@ -1876,7 +2160,7 @@ export default function FacilitiesPage() {
       </MobileCardList>
 
       <nav className="flex items-center justify-between" aria-label="pagination">
-        <p className="text-xs text-muted-foreground">Page {history.length}</p>
+        <p className="text-xs text-muted-foreground">Page {history.length} · {unitRows.length} unit{unitRows.length === 1 ? '' : 's'} shown</p>
         <div className="flex gap-2">
           <Button variant="outline" size="sm" onClick={prevPage} disabled={history.length < 2}>
             <ChevronLeft /> Prev

@@ -179,13 +179,16 @@ final class ManualLifecycleGatesTest extends FeatureTestCase
         };
 
         // Upcoming + approved: the confirmed schedule, earliest first.
-        $upcoming = $get($this, $this->admin['token'], '?scope=upcoming&provider=assigned');
+        // `q` scopes to this test's unique student — the shared schema
+        // accumulates rows across runs, and the default 25-row page
+        // would eventually drop ours.
+        $upcoming = $get($this, $this->admin['token'], '?scope=upcoming&provider=assigned&limit=100&q=' . urlencode($student['schoolId']));
         $this->assertContains($ids[1], $upcoming);
         $this->assertNotContains($unassignedId, $upcoming);
         $this->assertNotContains($pastId, $upcoming);
 
         // Needs action: only the unapproved portal booking.
-        $needsAction = $get($this, $this->admin['token'], '?scope=upcoming&provider=unassigned');
+        $needsAction = $get($this, $this->admin['token'], '?scope=upcoming&provider=unassigned&limit=100&q=' . urlencode($student['schoolId']));
         $this->assertContains($unassignedId, $needsAction);
         $this->assertNotContains($ids[1], $needsAction);
 
@@ -204,8 +207,11 @@ final class ManualLifecycleGatesTest extends FeatureTestCase
         $this->assertLessThan($posUnassigned, $posPast);
         $this->assertLessThan($posFuture, $posUnassigned);
 
-        // Past slice: most recent first.
-        $past = $get($this, $this->admin['token'], '?scope=past');
+        // Past slice: most recent first. limit=100 (like the scope=all
+        // read above) — the shared test schema accumulates rows across
+        // runs, and once >25 completed appointments exist the default
+        // page drops our row and the read silently paginates.
+        $past = $get($this, $this->admin['token'], '?scope=past&limit=100');
         $this->assertContains($pastId, $past);
         $this->assertNotContains($ids[1], $past);
     }

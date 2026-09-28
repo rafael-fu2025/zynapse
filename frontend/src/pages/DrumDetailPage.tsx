@@ -160,6 +160,11 @@ function ProcessLogSection({ batchId }: { batchId: number }) {
                       cal {titleCase(l.calibration_status)}
                     </Badge>
                   )}
+                  {l.turns_count !== null && l.turns_count !== undefined && (
+                    <Badge variant="outline" className="tabular-nums">
+                      ⚙ {l.turns_count} rotations{l.duration_seconds !== null && l.duration_seconds !== undefined ? ` · ${l.duration_seconds}s` : ''}
+                    </Badge>
+                  )}
                   {l.device_id !== null && l.device_id !== undefined && (
                     <Badge variant="outline" className="tabular-nums">{l.device_id}</Badge>
                   )}

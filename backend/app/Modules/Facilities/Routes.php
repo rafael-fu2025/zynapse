@@ -48,6 +48,21 @@ final class Routes implements BaseRoutes
             $r->post('batches/(:num)/losses',         'BmgController::addBatchLoss/$1');
             $r->get('batches/(:num)/losses',          'BmgController::listBatchLosses/$1');
             $r->get('batches/(:num)/analytics',       'BmgController::batchAnalytics/$1');
+
+            // Device administration (mechanized tumbler). The device's
+            // own INGEST surface lives under api/v1/devices with
+            // device_auth; these are the human admin endpoints.
+            $r->get('devices',                        'BmgController::listDevices');
+            $r->post('devices',                       'BmgController::createDevice');
+            $r->post('devices/(:num)/status',         'BmgController::setDeviceStatus/$1');
+            $r->post('devices/(:num)/regenerate-token','BmgController::regenerateDeviceToken/$1');
+        });
+
+        // Automated BMG hardware (mechanized tumbler): static device
+        // token via DeviceAuthFilter, disjoint from the human JWT
+        // surface. Deliberately OUTSIDE the api_auth group above.
+        $routes->group('api/v1/devices', ['namespace' => 'Modules\\Facilities\\Controllers', 'filter' => 'device_auth'], static function (RouteCollection $r): void {
+            $r->post('bmg/turn-sessions', 'DeviceTurnSessionController::store');
         });
     }
 }

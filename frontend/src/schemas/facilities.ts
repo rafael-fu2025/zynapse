@@ -267,6 +267,11 @@ export const processLogSchema = z.object({
   oxygen_pct: z.number().nullable().optional(),
   device_id: z.string().nullable().optional(),
   calibration_status: z.enum(['ok', 'due', 'overdue']).nullable().optional(),
+  // Device turning-session fields (mechanized tumbler ingest). Only
+  // device-reported rows carry them; manual logs stay null.
+  session_uid: z.string().nullable().optional(),
+  turns_count: z.number().int().positive().nullable().optional(),
+  duration_seconds: z.number().int().positive().nullable().optional(),
   recorded_by_user_id: z.number().int().positive(),
   created_at: z.string(),
 });
@@ -538,4 +543,57 @@ export const categoryDeviationSchema = z.object({
   expected_days: z.number().int().nullable(),
   days_delta: z.number().int().nullable(),
 });
+
+// ---- BMG devices (mechanized tumbler) --------------------------------
+
+export const BMG_DEVICE_STATUSES = ['active', 'disabled'] as const;
+export type BmgDeviceStatus = (typeof BMG_DEVICE_STATUSES)[number];
+
+export const bmgDeviceSchema = z.object({
+  id: z.number().int().positive(),
+  code: z.string(),
+  display_name: z.string(),
+  status: z.enum(BMG_DEVICE_STATUSES),
+  unit_id: z.number().int().positive().nullable().optional(),
+  unit_name: z.string().nullable().optional(),
+  unit_code: z.string().nullable().optional(),
+  // Plaintext never returns after registration — only the prefix that
+  // lets an operator identify WHICH credential a request used.
+  token_prefix: z.string().nullable().optional(),
+  firmware: z.string().nullable().optional(),
+  last_seen_at: z.string().nullable().optional(),
+  created_at: z.string(),
+  updated_at: z.string().nullable().optional(),
+  archived_at: z.string().nullable().optional(),
+});
+export type BmgDevice = z.infer<typeof bmgDeviceSchema>;
+
+/**
+ * Register a tumbler: either the chip MAC (six hex byte pairs, any
+ * separator — becomes the default code, e.g. `b8-1f-3f-d7-ec-18`) or an
+ * explicit slug code. The backend returns the plaintext token ONCE.
+ */
+export const registerDeviceSchema = z
+  .object({
+    mac: z
+      .string()
+      .trim()
+      .regex(/^[0-9a-fA-F]{2}[:\-\s]?([0-9a-fA-F]{2}[:\-\s]?){5}$/, 'Six hex byte pairs, e.g. b8:1f:3f:d7:ec:18')
+      .optional()
+      .or(z.literal('')),
+    code: z
+      .string()
+      .trim()
+      .max(32)
+      .regex(/^[a-z0-9][a-z0-9._-]{2,31}$/, '3–32 chars: lowercase letters, digits, dots, dashes, underscores')
+      .optional()
+      .or(z.literal('')),
+    display_name: z.string().trim().max(128).optional().or(z.literal('')),
+    unit_id: z.coerce.number().int().positive().optional().or(z.literal('')),
+  })
+  .refine((v) => (v.mac ?? '') !== '' || (v.code ?? '') !== '', {
+    message: 'Provide the chip MAC or a device code.',
+    path: ['mac'],
+  });
+export type RegisterDeviceInput = z.infer<typeof registerDeviceSchema>;
 export type CategoryDeviation = z.infer<typeof categoryDeviationSchema>;

@@ -19,6 +19,7 @@ use App\Filters\ApiAuthFilter;
 use App\Filters\ApiRateLimitFilter;
 use App\Filters\ApiRequestLoggerFilter;
 use App\Filters\ApiExceptionFilter;
+use App\Filters\DeviceAuthFilter;
 
 class Filters extends BaseFilters
 {
@@ -42,6 +43,7 @@ class Filters extends BaseFilters
         'api_ratelimit' => ApiRateLimitFilter::class,
         'api_log'       => ApiRequestLoggerFilter::class,
         'api_exc'       => ApiExceptionFilter::class,
+        'device_auth'   => DeviceAuthFilter::class,
     ];
 
     /**

@@ -1218,6 +1218,9 @@ final class BmgService extends BaseService
             'oxygen_pct'          => isset($r['oxygen_pct']) && $r['oxygen_pct'] !== null ? (float) $r['oxygen_pct'] : null,
             'device_id'           => isset($r['device_id']) && $r['device_id'] !== null ? (string) $r['device_id'] : null,
             'calibration_status'  => isset($r['calibration_status']) && $r['calibration_status'] !== null ? (string) $r['calibration_status'] : null,
+            'session_uid'         => isset($r['session_uid']) && $r['session_uid'] !== null ? (string) $r['session_uid'] : null,
+            'turns_count'         => isset($r['turns_count']) && $r['turns_count'] !== null ? (int) $r['turns_count'] : null,
+            'duration_seconds'    => isset($r['duration_seconds']) && $r['duration_seconds'] !== null ? (int) $r['duration_seconds'] : null,
             'recorded_by_user_id' => (int) $r['recorded_by_user_id'],
             'created_at'          => (string) $r['created_at'],
         ], $rows);
@@ -1383,6 +1386,652 @@ final class BmgService extends BaseService
                 'alerts'              => $persistedAlerts,
             ];
         });
+    }
+
+    // -------------------------------------------------- device ingest
+
+    /**
+     * Record a device-reported turning session against the ACTIVE batch
+     * on the device's own unit.
+     *
+     * Unlike `addProcessLog` — whose caller is a human whose write right
+     * is `started_by` ownership — the caller here is the drum's
+     * mechanized tumbler. It can never be the batch starter, so its
+     * record-level right comes from the device→unit binding: the unit
+     * row is locked FOR UPDATE, which serializes device sessions against
+     * concurrent batch state changes (start/finish/cancel take the same
+     * lock). The `bmg_device` machine user bound by DeviceAuthFilter
+     * supplies `recorded_by_user_id`, so the NOT NULL FK, the audit
+     * chain, and the notification outbox all behave exactly as for a
+     * human entry.
+     *
+     * Idempotent on (tenant_id, session_uid): a retried report (offline
+     * queue replay, WiFi blip) returns the original row unchanged
+     * (`created: false`) instead of duplicating it.
+     *
+     * @param array<string, mixed> $device row resolved by DeviceAuthFilter
+     *        (expects keys: id, code, unit_id, linked_user_id)
+     * @param array<string, mixed> $input validated payload (session_uid,
+     *        turns_count, duration_seconds, optional sets_count, firmware, note)
+     * @return array<string, mixed> process-log DTO + `created: bool`
+     */
+    public function recordDeviceTurnSession(array $device, array $input): array
+    {
+        $this->policy->check('device_logs_record');
+        $deviceId = (int) $device['id'];
+
+        return $this->txn(function () use ($device, $deviceId, $input): array {
+            // Re-read AND lock the device inside the txn: a concurrent
+            // revoke must not race a session that is already in flight.
+            $device = $this->selectForUpdate('facilities_bmg_devices', [
+                'id'        => $deviceId,
+                'tenant_id' => CurrentTenant::id(),
+            ]);
+            if ($device === null || $device['status'] !== 'active' || $device['archived_at'] !== null) {
+                throw new ApiException('device.disabled', 403, [
+                    ['code' => 'device.disabled', 'message' => 'This device has been disabled.'],
+                ]);
+            }
+
+            // Idempotency first: a retried session must resolve to the
+            // original row without touching the batch state machine.
+            $sessionUid = (string) $input['session_uid'];
+            $existing   = $this->db->table('facilities_bmg_process_logs')
+                ->where('tenant_id', CurrentTenant::id())
+                ->where('session_uid', $sessionUid)
+                ->get()->getRowArray();
+            if ($existing !== null) {
+                return $this->deviceLogDto($existing, false);
+            }
+
+            $unitId = $device['unit_id'] !== null ? (int) $device['unit_id'] : null;
+            if ($unitId === null) {
+                throw new ApiException('device.not_bound', 409, [
+                    ['code' => 'device.not_bound', 'message' => 'This device is not bound to a BMG unit.'],
+                ]);
+            }
+
+            $unit = $this->selectForUpdate('facilities_bmg_units', [
+                'id'          => $unitId,
+                'tenant_id'   => CurrentTenant::id(),
+                'archived_at' => null,
+            ]);
+            if ($unit === null) {
+                throw new ApiException('resource.not_found', 404, [
+                    ['code' => 'resource.not_found', 'message' => 'The bound BMG unit no longer exists.'],
+                ]);
+            }
+
+            $batch = $this->db->table('facilities_bmg_batches')
+                ->where('unit_id', $unitId)
+                ->where('tenant_id', CurrentTenant::id())
+                ->where('archived_at', null)
+                ->whereIn('status', [BMG_STATE_PROCESSING, BMG_STATE_AWAITING_OUTPUT])
+                ->orderBy('id', 'DESC')
+                ->limit(1)
+                ->get()->getRowArray();
+            if ($batch === null) {
+                throw new ApiException('statemachine.bmg.log_terminal_batch', 409, [
+                    ['code' => 'statemachine.bmg.log_terminal_batch', 'message' => 'Process logs can only be added while a batch is active.'],
+                ]);
+            }
+
+            $actorId  = (int) $device['linked_user_id'];
+            $now      = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
+            $turns    = (int) $input['turns_count'];
+            $duration = (int) $input['duration_seconds'];
+            $sets     = isset($input['sets_count']) && $input['sets_count'] !== '' ? (int) $input['sets_count'] : null;
+            $note     = trim((string) ($input['observation_note'] ?? ''));
+            if ($note === '') {
+                // Auto-summary from the device's own report — always
+                // truthful to the payload, never to compile-time numbers.
+                $note = $sets !== null
+                    ? sprintf('Automated turning session: %d sets, %d rotations, %d s', $sets, $turns, $duration)
+                    : sprintf('Automated turning session: %d rotations, %d s', $turns, $duration);
+            }
+
+            $this->db->table('facilities_bmg_process_logs')->insert([
+                'batch_id'            => (int) $batch['id'],
+                'tenant_id'           => CurrentTenant::id(),
+                // Manila business calendar, same day-grouping as humans.
+                'log_date'            => ManilaDay::fromUtcSql($now),
+                'event_type'          => 'turning',
+                'observation_note'    => $note !== '' ? $note : null,
+                'temperature_celsius' => null,
+                'moisture_level'      => null,
+                'oxygen_pct'          => null,
+                'device_id'           => (string) $device['code'],
+                'calibration_status'  => null,
+                'session_uid'         => $sessionUid,
+                'turns_count'         => $turns,
+                'duration_seconds'    => $duration,
+                'recorded_by_user_id' => $actorId,
+                'created_at'          => $now,
+            ]);
+            $id = (int) $this->db->insertID();
+
+            $this->audit->enqueue(
+                'bmg.process_log_recorded',
+                'facilities_bmg_process_logs',
+                $id,
+                $actorId,
+                ['resource_code' => (string) $batch['reference_code']],
+            );
+
+            $deviceUpdate = [
+                'last_seen_at' => $now,
+                'updated_at'   => $now,
+            ];
+            $firmware = trim((string) ($input['firmware'] ?? ''));
+            if ($firmware !== '') {
+                $deviceUpdate['firmware'] = $firmware;
+            }
+            $this->db->table('facilities_bmg_devices')->where('id', $deviceId)->update($deviceUpdate);
+
+            $persistedAlerts = $this->evaluateAlertsForLog(
+                (int) $batch['id'],
+                $batch,
+                $id,
+                $actorId,
+                $now,
+            );
+
+            return $this->deviceLogDto(
+                $this->db->table('facilities_bmg_process_logs')
+                    ->where('tenant_id', CurrentTenant::id())
+                    ->where('id', $id)
+                    ->get()->getRowArray() ?? [],
+                true,
+                $persistedAlerts,
+            );
+        });
+    }
+
+    /**
+     * SPC alert evaluation for an inserted process-log row, in the same
+     * transaction so a rollback drops both the log and its alerts.
+     * VERBATIM mirror of the block inside `addProcessLog` — kept as a
+     * helper rather than refactoring the proven human path; extract
+     * both call sites together when that path is next revisited.
+     *
+     * @param array<string, mixed> $batch locked batch row
+     * @return list<array<string, mixed>> persisted alert DTOs
+     */
+    private function evaluateAlertsForLog(int $batchId, array $batch, int $id, int $actorId, string $now): array
+    {
+        $previousLog = $this->db->table('facilities_bmg_process_logs')
+            ->where('facilities_bmg_process_logs.tenant_id', CurrentTenant::id())
+            ->select('log_date')
+            ->where('batch_id', $batchId)
+            ->where('id !=', $id)
+            ->orderBy('log_date', 'DESC')
+            ->orderBy('id', 'DESC')
+            ->limit(1)
+            ->get()
+            ->getRowArray();
+
+        $row = $this->db->table('facilities_bmg_process_logs')
+            ->where('facilities_bmg_process_logs.tenant_id', CurrentTenant::id())
+            ->where('id', $id)->get()->getRowArray();
+        if ($row === null) {
+            return [];
+        }
+
+        $daysSince = $this->alertEngine->daysSinceLastLog($previousLog ?: null);
+        $alerts = $this->alertEngine->evaluate(
+            [
+                'id'          => $batchId,
+                'status'      => (string) $batch['status'],
+                'started_at'  => (string) $batch['started_at'],
+                'archived_at' => null,
+            ],
+            $row,
+            $daysSince,
+        );
+
+        $persistedAlerts = [];
+        foreach ($alerts as $alert) {
+            $this->db->table('facilities_bmg_alerts')->insert([
+                'batch_id'      => $batchId,
+                'tenant_id'     => CurrentTenant::id(),
+                'code'          => (string) $alert['code'],
+                'severity'      => (string) $alert['severity'],
+                'message'       => (string) $alert['message'],
+                'triggered_at'  => $now,
+                'created_at'    => $now,
+                'updated_at'    => $now,
+            ]);
+            $alertId = (int) $this->db->insertID();
+            $this->audit->enqueue(
+                'bmg.alert_triggered',
+                'facilities_bmg_alerts',
+                $alertId,
+                $actorId,
+                [
+                    'resource_code' => (string) $batch['reference_code'],
+                    'alert_code'    => (string) $alert['code'],
+                    'severity'      => (string) $alert['severity'],
+                ],
+            );
+
+            // Tier 3: surface the alert globally — every user who can
+            // read BMG logs gets an in-app notification (dashboard
+            // "at-risk" widget + bell). Runs in the same txn (outbox).
+            $this->notify->enqueueToPermissions(
+                ['facilities.bmg.logs.read'],
+                'bmg.alert_triggered',
+                [
+                    'resource_code' => (string) $batch['reference_code'],
+                    'urgency'       => (string) $alert['severity'],
+                    'source_module' => 'facilities',
+                ],
+            );
+            $persistedAlerts[] = BmgAlertDto::fromRow([
+                'id'                      => $alertId,
+                'batch_id'                => $batchId,
+                'code'                    => (string) $alert['code'],
+                'severity'                => (string) $alert['severity'],
+                'message'                 => (string) $alert['message'],
+                'triggered_at'            => $now,
+                'acknowledged_at'         => null,
+                'acknowledged_by_user_id' => null,
+            ])->toArray();
+        }
+
+        return $persistedAlerts;
+    }
+
+    /**
+     * DTO for a process-log row on the device path. Adds the session
+     * fields and, for the fresh-insert response, the persisted alerts.
+     *
+     * @param array<string, mixed> $row
+     * @return array<string, mixed>
+     */
+    private function deviceLogDto(array $row, bool $created, array $alerts = []): array
+    {
+        return [
+            'id'                  => (int) $row['id'],
+            'batch_id'            => (int) $row['batch_id'],
+            'log_date'            => (string) $row['log_date'],
+            'event_type'          => isset($row['event_type']) && $row['event_type'] !== null ? (string) $row['event_type'] : 'observation',
+            'observation_note'    => $row['observation_note'] !== null ? (string) $row['observation_note'] : null,
+            'temperature_celsius' => $row['temperature_celsius'] !== null ? (float) $row['temperature_celsius'] : null,
+            'moisture_level'      => $row['moisture_level'] !== null ? (string) $row['moisture_level'] : null,
+            'oxygen_pct'          => $row['oxygen_pct'] !== null ? (float) $row['oxygen_pct'] : null,
+            'device_id'           => $row['device_id'] !== null ? (string) $row['device_id'] : null,
+            'calibration_status'  => $row['calibration_status'] !== null ? (string) $row['calibration_status'] : null,
+            'session_uid'         => $row['session_uid'] !== null ? (string) $row['session_uid'] : null,
+            'turns_count'         => $row['turns_count'] !== null ? (int) $row['turns_count'] : null,
+            'duration_seconds'    => $row['duration_seconds'] !== null ? (int) $row['duration_seconds'] : null,
+            'recorded_by_user_id' => (int) $row['recorded_by_user_id'],
+            'created_at'          => (string) $row['created_at'],
+            'created'             => $created,
+            'alerts'              => $alerts,
+        ];
+    }
+
+    // -------------------------------------------------- device admin
+
+    /**
+     * List registered BMG devices (with their bound unit's name).
+     * Read-gated at units.read (operators may see devices); writes are
+     * gated at units.manage (bmg_admin only) — mirrors the "operators
+     * run the drums; the admin configures them" split.
+     *
+     * @return array{data: list<array<string, mixed>>, next: ?string, count: int}
+     */
+    public function listDevices(?string $cursor, int $limit, bool $includeArchived = false): array
+    {
+        $this->policy->check('devices_list');
+
+        $builder = $this->db->table('facilities_bmg_devices AS d')
+            ->select('d.id, d.code, d.display_name, d.status, d.unit_id, d.token_prefix, d.firmware, d.last_seen_at, d.created_at, d.updated_at, d.archived_at, u.display_name AS unit_name, u.code AS unit_code')
+            ->join('facilities_bmg_units AS u', 'u.id = d.unit_id', 'left')
+            ->where('d.tenant_id', CurrentTenant::id())
+            ->orderBy('d.created_at', 'DESC')
+            ->orderBy('d.id', 'DESC');
+
+        if (! $includeArchived) {
+            $builder->where('d.archived_at', null);
+        }
+
+        KeysetPaginator::apply($builder, $cursor, $limit, 'd.created_at', 'd.id');
+
+        $rows  = $builder->get()->getResultArray();
+        $final = KeysetPaginator::finalize($rows, $limit, 'd.created_at');
+
+        return [
+            'data'  => array_map(static fn (array $r): array => [
+                'id'           => (int) $r['id'],
+                'code'         => (string) $r['code'],
+                'display_name' => (string) $r['display_name'],
+                'status'       => (string) $r['status'],
+                'unit_id'      => $r['unit_id'] !== null ? (int) $r['unit_id'] : null,
+                'unit_name'    => $r['unit_name'] !== null ? (string) $r['unit_name'] : null,
+                'unit_code'    => $r['unit_code'] !== null ? (string) $r['unit_code'] : null,
+                'token_prefix' => $r['token_prefix'] !== null ? (string) $r['token_prefix'] : null,
+                'firmware'     => $r['firmware'] !== null ? (string) $r['firmware'] : null,
+                'last_seen_at' => $r['last_seen_at'] !== null ? (string) $r['last_seen_at'] : null,
+                'created_at'   => (string) $r['created_at'],
+                'updated_at'   => (string) $r['updated_at'],
+                'archived_at'  => $r['archived_at'] !== null ? (string) $r['archived_at'] : null,
+            ], $final['rows']),
+            'next'  => $final['nextCursor'],
+            'count' => $limit,
+        ];
+    }
+
+    /**
+     * Register a device and mint its ingest token. The plaintext token
+     * is returned ONCE and only from this method and
+     * `regenerateDeviceToken` — the UI/CLI must surface it immediately;
+     * only the SHA-256 hash is stored.
+     *
+     * Accepts either `code` (slug) or `mac` (six hex byte pairs, any
+     * separator) — the MAC normalizes to the default code. Also
+     * provisions the machine user the device writes as. Idempotency is
+     * a refusal: an existing code must not be silently rekeyed; use
+     * `regenerateDeviceToken` explicitly.
+     *
+     * @param array{code?:string, mac?:string, display_name?:string, unit_id?:int|null} $input
+     * @return array{device: array<string, mixed>, token: string}
+     */
+    public function registerDevice(array $input): array
+    {
+        $this->policy->check('devices_manage');
+
+        return $this->registerDeviceUnchecked($input);
+    }
+
+    /**
+     * CLI variant of `registerDevice` (`synapse:bmg-device-register`).
+     * No acting user exists on the shell, so the permission gate lives
+     * at the HTTP boundary — the same posture as PromoteSuperadmin
+     * ("CLI bootstrap has no acting user"; audit actor stays null).
+     *
+     * @param array{code?:string, mac?:string, display_name?:string, unit_id?:int|null} $input
+     * @return array{device: array<string, mixed>, token: string}
+     */
+    public function registerDeviceUnchecked(array $input): array
+    {
+        $code  = $this->normalizeDeviceCode($input);
+        $name  = trim((string) ($input['display_name'] ?? ''));
+        $unitId = isset($input['unit_id']) && (int) $input['unit_id'] > 0 ? (int) $input['unit_id'] : null;
+
+        if ($unitId !== null) {
+            $unit = $this->db->table('facilities_bmg_units')
+                ->where('id', $unitId)
+                ->where('tenant_id', CurrentTenant::id())
+                ->where('archived_at', null)
+                ->get()->getRowArray();
+            if ($unit === null) {
+                throw new ApiException('resource.not_found', 404, [
+                    ['code' => 'resource.not_found', 'message' => 'BMG unit not found (or archived) for that id.'],
+                ]);
+            }
+        }
+
+        $existing = $this->db->table('facilities_bmg_devices')->where('code', $code)->get()->getRowArray();
+        if ($existing !== null) {
+            throw new ApiException('resource.conflict', 409, [
+                ['code' => 'resource.conflict', 'message' => "Device '{$code}' is already registered. Regenerate its token instead of re-registering."],
+            ]);
+        }
+
+        return $this->txn(function () use ($code, $name, $unitId): array {
+            $now  = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
+            $userId = $this->provisionDeviceMachineUser($code, $now);
+            $token  = $this->mintDeviceToken();
+
+            $this->db->table('facilities_bmg_devices')->insert([
+                'tenant_id'      => CurrentTenant::id(),
+                'unit_id'        => $unitId,
+                'code'           => $code,
+                'display_name'   => $name !== '' ? $name : 'BMG Device ' . $code,
+                'token_hash'     => hash('sha256', $token),
+                'token_prefix'   => substr($token, 0, 12),
+                'status'         => 'active',
+                'linked_user_id' => $userId,
+                'created_at'     => $now,
+                'updated_at'     => $now,
+            ]);
+            $deviceId = (int) $this->db->insertID();
+
+            $this->audit->enqueue(
+                'bmg.device_registered',
+                'facilities_bmg_devices',
+                $deviceId,
+                null,
+                ['resource_code' => $code, 'reason_code' => 'facilities.device.register', 'outcome' => 'registered'],
+            );
+
+            $row = $this->db->table('facilities_bmg_devices')->where('id', $deviceId)->get()->getRowArray() ?? [];
+            return ['device' => $this->deviceAdminDto($row), 'token' => $token];
+        });
+    }
+
+    /**
+     * Mint a NEW token for an existing device: the old one stops
+     * working on the next request. The machine user is intentionally
+     * NOT churned — historical process-log rows FK to it.
+     *
+     * @return array{device: array<string, mixed>, token: string}
+     */
+    public function regenerateDeviceToken(int $deviceId): array
+    {
+        $this->policy->check('devices_manage');
+
+        return $this->regenerateDeviceTokenUnchecked($deviceId);
+    }
+
+    /** CLI variant — see `registerDeviceUnchecked` for the posture. */
+    public function regenerateDeviceTokenUnchecked(int $deviceId): array
+    {
+        return $this->txn(function () use ($deviceId): array {
+            $device = $this->selectForUpdate('facilities_bmg_devices', ['id' => $deviceId, 'tenant_id' => CurrentTenant::id()]);
+            if ($device === null || $device['archived_at'] !== null) {
+                throw new ApiException('resource.not_found', 404, [
+                    ['code' => 'resource.not_found', 'message' => 'Device not found.'],
+                ]);
+            }
+
+            $now   = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
+            $token = $this->mintDeviceToken();
+            $this->db->table('facilities_bmg_devices')->where('id', $deviceId)->update([
+                'token_hash'   => hash('sha256', $token),
+                'token_prefix' => substr($token, 0, 12),
+                'status'       => 'active',
+                'archived_at'  => null,
+                'updated_at'   => $now,
+            ]);
+
+            $this->audit->enqueue(
+                'bmg.device_registered',
+                'facilities_bmg_devices',
+                $deviceId,
+                null,
+                ['resource_code' => (string) $device['code'], 'reason_code' => 'facilities.device.regenerate', 'outcome' => 'token_regenerated'],
+            );
+
+            $row = $this->db->table('facilities_bmg_devices')->where('id', $deviceId)->get()->getRowArray() ?? [];
+            return ['device' => $this->deviceAdminDto($row), 'token' => $token];
+        });
+    }
+
+    /**
+     * Flip a device between active / disabled. Disabled devices fail
+     * DeviceAuthFilter on their next request — revocation is instant.
+     *
+     * @return array<string, mixed> the updated device row
+     */
+    public function setDeviceStatus(int $deviceId, string $status): array
+    {
+        $this->policy->check('devices_manage');
+
+        return $this->setDeviceStatusUnchecked($deviceId, $status);
+    }
+
+    /** CLI variant — see `registerDeviceUnchecked` for the posture. */
+    public function setDeviceStatusUnchecked(int $deviceId, string $status): array
+    {
+        if (! in_array($status, ['active', 'disabled'], true)) {
+            throw new ApiException('request.validation_failed', 422, [
+                ['code' => 'request.validation_failed', 'message' => 'Status must be active or disabled.', 'field' => 'status'],
+            ]);
+        }
+
+        return $this->txn(function () use ($deviceId, $status): array {
+            $device = $this->selectForUpdate('facilities_bmg_devices', ['id' => $deviceId, 'tenant_id' => CurrentTenant::id()]);
+            if ($device === null) {
+                throw new ApiException('resource.not_found', 404, [
+                    ['code' => 'resource.not_found', 'message' => 'Device not found.'],
+                ]);
+            }
+
+            $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
+            $this->db->table('facilities_bmg_devices')->where('id', $deviceId)->update([
+                'status'     => $status,
+                'updated_at' => $now,
+            ]);
+
+            $this->audit->enqueue(
+                'bmg.device_status_changed',
+                'facilities_bmg_devices',
+                $deviceId,
+                null,
+                ['resource_code' => (string) $device['code'], 'reason_code' => 'facilities.device.status', 'outcome' => $status],
+            );
+
+            $row = $this->db->table('facilities_bmg_devices')->where('id', $deviceId)->get()->getRowArray() ?? [];
+            return $this->deviceAdminDto($row);
+        });
+    }
+
+    /**
+     * Resolve the device code from an explicit slug or a MAC. The MAC
+     * normalizes to dash-separated lowercase hex pairs
+     * (b8-1f-3f-d7-ec-18), which fits VARCHAR(32).
+     *
+     * @param array{code?:string, mac?:string} $input
+     */
+    private function normalizeDeviceCode(array $input): string
+    {
+        $code = strtolower(trim((string) ($input['code'] ?? '')));
+        $mac  = trim((string) ($input['mac'] ?? ''));
+
+        if ($code === '' && $mac === '') {
+            throw new ApiException('request.validation_failed', 422, [
+                ['code' => 'request.validation_failed', 'message' => 'Provide a MAC address or a device code.', 'field' => 'mac'],
+            ]);
+        }
+
+        if ($code === '') {
+            $pairs = preg_split('/[:\-\s]+/', strtolower($mac)) ?: [];
+            $pairs = array_values(array_filter(array_map('trim', $pairs), static fn (string $p): bool => $p !== ''));
+            $pairsAreHex = count($pairs) === 6 && in_array(
+                false,
+                array_map(static fn (string $p): bool => preg_match('/^[0-9a-f]{2}$/', $p) === 1, $pairs),
+                true,
+            ) === false;
+            if (! $pairsAreHex) {
+                throw new ApiException('request.validation_failed', 422, [
+                    ['code' => 'request.validation_failed', 'message' => 'The MAC must be six hex byte pairs (e.g. b8:1f:3f:d7:ec:18).', 'field' => 'mac'],
+                ]);
+            }
+            $code = implode('-', $pairs);
+        }
+
+        if (! preg_match('/^[a-z0-9][a-z0-9._-]{2,31}$/', $code)) {
+            throw new ApiException('request.validation_failed', 422, [
+                ['code' => 'request.validation_failed', 'message' => 'Device code must be 3–32 chars: lowercase letters, digits, dots, dashes, underscores.', 'field' => 'code'],
+            ]);
+        }
+
+        return $code;
+    }
+
+    /**
+     * Create (or reuse) the device's machine user in the `bmg_device`
+     * group. The identity exists so every device write satisfies the
+     * NOT NULL `recorded_by_user_id` FK, the audit chain, and the
+     * notification outbox. Its password is random and never surfaced —
+     * there is no interactive login path. Reused across token
+     * regenerations so historical rows keep their attribution.
+     */
+    private function provisionDeviceMachineUser(string $code, string $now): int
+    {
+        $email = 'device.' . $code . '@devices.local';
+        $existing = $this->db->table('auth_identities')
+            ->where('type', 'email_password')
+            ->where('secret', $email)
+            ->get()->getRowArray();
+        if ($existing !== null) {
+            return (int) $existing['user_id'];
+        }
+
+        $group = $this->db->table('auth_groups')->where('name', 'bmg_device')->get()->getRowArray();
+        if ($group === null) {
+            throw new ApiException('internal.error', 500, [
+                ['code' => 'internal.error', 'message' => "The 'bmg_device' group is missing — run migrations and the PermissionsAndGroupsSeeder."],
+            ]);
+        }
+
+        $this->db->table('users')->insert([
+            'username'   => 'dev-' . preg_replace('/[^a-z0-9]/', '', $code),
+            'status'     => 'active',
+            'active'     => 1,
+            'tenant_id'  => CurrentTenant::id(),
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        $userId = (int) $this->db->insertID();
+
+        $this->db->table('auth_identities')->insert([
+            'user_id'     => $userId,
+            'type'        => 'email_password',
+            'secret'      => $email,
+            'secret2'     => password_hash(bin2hex(random_bytes(32)), PASSWORD_DEFAULT),
+            'force_reset' => 0,
+            'created_at'  => $now,
+            'updated_at'  => $now,
+        ]);
+
+        $this->db->table('auth_groups_users')->insert([
+            'group_id'   => (int) $group['id'],
+            'user_id'    => $userId,
+            'created_at' => $now,
+        ]);
+
+        return $userId;
+    }
+
+    private function mintDeviceToken(): string
+    {
+        return 'dev_' . bin2hex(random_bytes(32));
+    }
+
+    /**
+     * @param array<string, mixed> $row facilities_bmg_devices row (+ optional unit join fields)
+     * @return array<string, mixed>
+     */
+    private function deviceAdminDto(array $row): array
+    {
+        return [
+            'id'           => (int) $row['id'],
+            'code'         => (string) $row['code'],
+            'display_name' => (string) $row['display_name'],
+            'status'       => (string) $row['status'],
+            'unit_id'      => $row['unit_id'] !== null ? (int) $row['unit_id'] : null,
+            'unit_name'    => isset($row['unit_name']) && $row['unit_name'] !== null ? (string) $row['unit_name'] : null,
+            'unit_code'    => isset($row['unit_code']) && $row['unit_code'] !== null ? (string) $row['unit_code'] : null,
+            'token_prefix' => $row['token_prefix'] !== null ? (string) $row['token_prefix'] : null,
+            'firmware'     => $row['firmware'] !== null ? (string) $row['firmware'] : null,
+            'last_seen_at' => $row['last_seen_at'] !== null ? (string) $row['last_seen_at'] : null,
+            'created_at'   => (string) $row['created_at'],
+            'updated_at'   => (string) $row['updated_at'],
+            'archived_at'  => $row['archived_at'] !== null ? (string) $row['archived_at'] : null,
+        ];
     }
 
     // -------------------------------------------------------- losses

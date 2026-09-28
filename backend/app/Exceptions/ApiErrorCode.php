@@ -53,6 +53,11 @@ final class ApiErrorCode
     public const STATEMACHINE_BMG_UNIT_BUSY      = 'statemachine.bmg.unit_busy';
     public const STATEMACHINE_BMG_MASS_INVARIANT = 'statemachine.bmg.mass_invariant';
 
+    // Automated BMG hardware (device-token ingest surface).
+    public const DEVICE_UNAUTHORIZED = 'device.unauthorized';
+    public const DEVICE_DISABLED     = 'device.disabled';
+    public const DEVICE_NOT_BOUND    = 'device.not_bound';
+
     public const ENCRYPTION_FAILED              = 'encryption.failed';
     public const DECRYPTION_FAILED              = 'decryption.failed';
 
@@ -85,6 +90,9 @@ final class ApiErrorCode
             str_starts_with($code, 'request.malformed')                => 400,
             str_starts_with($code, 'ratelimit.')                       => 429,
             str_starts_with($code, 'statemachine.')                    => 409,
+            $code === self::DEVICE_UNAUTHORIZED                        => 401,
+            $code === self::DEVICE_DISABLED                            => 403,
+            $code === self::DEVICE_NOT_BOUND                           => 409,
             str_starts_with($code, 'encryption.'), str_starts_with($code, 'decryption.') => 500,
             str_starts_with($code, 'transaction.')                     => 503,
             str_starts_with($code, 'export.')                          => 500,

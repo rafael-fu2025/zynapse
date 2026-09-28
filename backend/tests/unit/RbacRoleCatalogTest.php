@@ -9,11 +9,14 @@ use PHPUnit\Framework\TestCase;
 /**
  * Role catalog invariants for the 2026-09 RBAC rework (D1/D2).
  *
- * Pins the 13-role catalog shape WITHOUT a database: `Config\AuthGroups`
+ * Pins the 14-role catalog shape WITHOUT a database: `Config\AuthGroups`
  * is not PSR-4 autoloadable (namespace `Config`), so the class file is
  * required directly and its defaults read via reflection — same pattern
  * as ReadOnlyRoleInvariantTest. PrivilegedRoles is required directly too
  * so the SET_P list can never drift away from the catalog silently.
+ * (`bmg_device` joined in 2026-09 as the automated-tumbler machine
+ * identity — config-only group, provisioned by the device register
+ * command, never an interactive login role.)
  */
 final class RbacRoleCatalogTest extends TestCase
 {
@@ -26,6 +29,7 @@ final class RbacRoleCatalogTest extends TestCase
         'counsellor',
         'bmg_admin',
         'facilities_op',
+        'bmg_device',
         'audit_reader',
         'report_viewer',
         'student',
@@ -58,12 +62,12 @@ final class RbacRoleCatalogTest extends TestCase
         return $groups;
     }
 
-    public function testCatalogHasExactlyTheThirteenRoles(): void
+    public function testCatalogHasExactlyTheFourteenRoles(): void
     {
         $this->assertSame(
             self::EXPECTED_ROLES,
             array_keys($this->catalogGroups()),
-            'The 13-role catalog is code-defined — changes must be deliberate.',
+            'The 14-role catalog is code-defined — changes must be deliberate.',
         );
     }
 

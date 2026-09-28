@@ -52,6 +52,10 @@ class AuthGroups extends ShieldAuthGroups
         // BMG / FACILITIES UNIT
         'bmg_admin'           => 'BMG Administrator',
         'facilities_op'       => 'BMG Operator',
+        // Automated hardware identity (the mechanized tumbler's machine
+        // user). Holds the narrowest slice that lets it report turning
+        // sessions; never used for interactive login.
+        'bmg_device'          => 'BMG Device (automated tumbler)',
 
         // CROSS-CUTTING / READ-ONLY
         'audit_reader'        => 'Audit Reader',
@@ -231,6 +235,10 @@ class AuthGroups extends ShieldAuthGroups
             // /interview submissions.
             'counselling.responses.read',
             'counselling.responses.read_any',
+            // Registry READ (2026-09-27): supervisors reach the Records
+            // surface from the sidebar's Guidance Center entry. READ only
+            // — clinical writes stay clinic-side.
+            'clinic.patients.read',
             'notifications.read',
             'employee.portal.read',
         ],
@@ -290,6 +298,16 @@ class AuthGroups extends ShieldAuthGroups
             'facilities.bmg.io.record',
             'notifications.read',
             'employee.portal.read',
+        ],
+        // Machine identity for BMG hardware (per-device user created by
+        // `synapse:bmg-device-register`). Deliberately narrower than
+        // facilities_op: read units (to resolve its own binding) and
+        // record logs — nothing else. Ownership for its writes comes
+        // from the device→unit binding, not `started_by` (see
+        // BmgPolicy::device_logs_record).
+        'bmg_device' => [
+            'facilities.units.read',
+            'facilities.bmg.logs.record',
         ],
 
         'audit_reader' => [

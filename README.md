@@ -128,6 +128,30 @@ Production must drain the durable outbox and report queue outside HTTP processes
 
 The appointment worker promotes Clinic and Guidance bookings into their destination queues at T−15. The reports worker streams CSV rows to disk without holding a transaction open and expires files after 30 days — run a single reports worker. Route non-zero exits and the nightly verification result to alerting. Full command list: [`backend/README.md`](backend/README.md#cli-workers--commands).
 
+## BMG device integration (mechanized tumbler)
+
+The compost drum is turned by an ESP32-S3 controller (`bmg_iot/compost/compost.ino`). After each completed rotation cycle the device reports one *turning session* over WiFi; the backend writes a `turning` process-log row (device + turns + duration) on the drum's active batch. Sensor readings (temperature, moisture, oxygen) are still entered manually by staff — the device has no sensors.
+
+```
+ESP32-S3 ──POST /api/v1/devices/bmg/turn-sessions──▶ DeviceAuthFilter ──▶ BmgService::recordDeviceTurnSession
+            header: X-Device-Token: dev_<64hex>       (machine user)        (idempotent per session_uid)
+```
+
+Setup:
+
+1. **UI (preferred)** — open **Facilities — BMG → Devices** (bmg_admin). Register the device by its chip MAC, bind it to a drum, and copy the token from the shown-once dialog.
+2. **CLI** — from `backend/`:
+
+```bash
+php spark migrate                          # BmgDevices + turn-session columns
+php spark db:seed PermissionsAndGroupsSeeder   # adds the bmg_device group
+php spark synapse:bmg-device-register --mac b8:1f:3f:d7:ec:18 --unit drum-01
+# ↑ prints the device token EXACTLY ONCE — paste it into DEVICE_TOKEN in the sketch
+php spark synapse:bmg-device-revoke b8-1f-3f-d7-ec-18   # instant revocation
+```
+
+The device authenticates with a static per-device token (SHA-256 stored, machine user carries the minimal `bmg_device` group). Reports are idempotent — the device queues failed attempts in flash and replays them, keyed by `session_uid`. Wiring, flashing (COM6), and the firmware config live in [`bmg_iot/compost/README.md`](bmg_iot/compost/README.md).
+
 ## House rules (enforced by tests where possible)
 
 - No SQL JOIN between `clinic_*` and `counselling_*` — bridge via `referral_referrals`.

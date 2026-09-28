@@ -32,6 +32,7 @@ import {
   blendCnSchema,
   bmgAlertSchema,
   bmgBatchSchema,
+  bmgDeviceSchema,
   bmgUnitSchema,
   cancelBatchSchema,
   categoryDeviationSchema,
@@ -40,6 +41,7 @@ import {
   moveToCuringSchema,
   openAlertSchema,
   processLogSchema,
+  registerDeviceSchema,
   releaseBatchSchema,
   updateUnitSchema,
   updateWasteCategorySchema,
@@ -56,6 +58,8 @@ import {
   type BlendCn,
   type BmgAlert,
   type BmgBatch,
+  type BmgDevice,
+  type BmgDeviceStatus,
   type BmgUnit,
   type CancelBatchInput,
   type CategoryDeviation,
@@ -65,6 +69,7 @@ import {
   type OpenAlert,
   type ProcessLog,
   type RecordOutputInput,
+  type RegisterDeviceInput,
   type ReleaseBatchInput,
   type StartBatchInput,
   type UpdateUnitInput,
@@ -74,6 +79,7 @@ import {
 
 const UNITS_KEY = ['facilities', 'units'] as const;
 const ACTIVE_BATCHES_KEY = ['facilities', 'batches', 'active'] as const;
+const DEVICES_KEY = ['facilities', 'devices'] as const;
 
 function unitsQueryKey(cursor: string | null, limit: number, includeArchived = false) {
   return [...UNITS_KEY, { cursor, limit, includeArchived }] as const;
@@ -1076,6 +1082,105 @@ export function useWasteCategoryDeviation() {
     queryFn: async () => {
       const res = await apiClient.get<unknown[]>('/facilities/waste-categories/deviation');
       return z.array(categoryDeviationSchema).parse(res.data);
+    },
+  });
+}
+
+// ------------------------------------------------------ BMG devices
+
+/** Registered automated tumblers, newest first (keyset-paginated). */
+export function useBmgDevices(cursor: string | null, limit = 25) {
+  return useQuery<{ data: BmgDevice[]; next: string | null }, ApiEnvelopeError>({
+    queryKey: [DEVICES_KEY, { cursor, limit }] as const,
+    queryFn: async () => {
+      const params = new URLSearchParams();
+      if (cursor !== null) params.set('cursor', cursor);
+      params.set('limit', String(limit));
+      const res = await apiClient.get<{ data: BmgDevice[]; next: string | null }>(
+        `/facilities/devices?${params.toString()}`,
+      );
+      return {
+        data: z.array(bmgDeviceSchema).parse(res.data),
+        next: res.data?.next ?? null,
+      };
+    },
+  });
+}
+
+/**
+ * Register a device. Resolves the { device, token } envelope ONCE — the
+ * plaintext token is never retrievable again, so the caller MUST show
+ * it in the shown-once dialog before invalidating.
+ */
+export function useRegisterBmgDevice() {
+  const qc = useQueryClient();
+  return useMutation<{ device: BmgDevice; token: string }, ApiEnvelopeError, RegisterDeviceInput>({
+    mutationFn: async (input) => {
+      const valid = registerDeviceSchema.parse(input);
+      const payload: Record<string, unknown> = {
+        mac: (valid.mac ?? '') !== '' ? (valid.mac as string).replace(/[\s-]+/g, ':') : '',
+        code: (valid.code ?? '') !== '' ? valid.code : '',
+        display_name: (valid.display_name ?? '') !== '' ? valid.display_name : '',
+        unit_id: (valid.unit_id ?? '') !== '' ? valid.unit_id : '',
+      };
+      const res = await apiClient.post<{ device: BmgDevice; token: string }>(
+        '/facilities/devices',
+        payload,
+      );
+      return {
+        device: bmgDeviceSchema.parse(res.data.device),
+        token: z.string().startsWith('dev_').parse(res.data.token),
+      };
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: DEVICES_KEY });
+    },
+  });
+}
+
+/** Mint a new token for a device (old one stops working immediately). */
+export function useRegenerateBmgDeviceToken() {
+  const qc = useQueryClient();
+  return useMutation<{ device: BmgDevice; token: string }, ApiEnvelopeError, { deviceId: number }>({
+    mutationFn: async ({ deviceId }) => {
+      const res = await apiClient.post<{ device: BmgDevice; token: string }>(
+        `/facilities/devices/${deviceId}/regenerate-token`,
+      );
+      return {
+        device: bmgDeviceSchema.parse(res.data.device),
+        token: z.string().startsWith('dev_').parse(res.data.token),
+      };
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: DEVICES_KEY });
+    },
+  });
+}
+
+/** Flip a device active/disabled. Disabled fails DeviceAuthFilter instantly. */
+type DeviceStatusCtx = Array<[readonly unknown[], { data: BmgDevice[]; next: string | null } | undefined]>;
+export function useSetBmgDeviceStatus() {
+  const qc = useQueryClient();
+  return useMutation<BmgDevice, ApiEnvelopeError, { deviceId: number; status: BmgDeviceStatus }, DeviceStatusCtx>({
+    mutationFn: async ({ deviceId, status }) => {
+      const res = await apiClient.post<BmgDevice>(`/facilities/devices/${deviceId}/status`, { status });
+      return bmgDeviceSchema.parse(res.data);
+    },
+    onMutate: async ({ deviceId, status }) => {
+      await qc.cancelQueries({ queryKey: DEVICES_KEY });
+      const previous = qc.getQueriesData<{ data: BmgDevice[]; next: string | null }>({ queryKey: DEVICES_KEY });
+      qc.setQueriesData<{ data: BmgDevice[]; next: string | null }>({ queryKey: DEVICES_KEY }, (old) =>
+        old === undefined ? old : { ...old, data: old.data.map((d) => (d.id === deviceId ? { ...d, status } : d)) },
+      );
+      return previous;
+    },
+    onError: (_err, _vars, ctx) => {
+      for (const [key, snap] of ctx ?? []) {
+        qc.setQueryData(key, snap);
+      }
+    },
+    onSettled: () => {
+      void qc.invalidateQueries({ queryKey: DEVICES_KEY });
     },
   });
 }

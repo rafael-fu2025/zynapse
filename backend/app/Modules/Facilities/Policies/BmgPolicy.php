@@ -64,6 +64,8 @@ final class BmgPolicy extends BasePolicy
         $code = match ($action) {
             'list'             => 'facilities.units.read',
             'manage_units'     => 'facilities.units.manage',
+            'devices_list'     => 'facilities.units.read',
+            'devices_manage'   => 'facilities.units.manage',
             'start'            => 'facilities.bmg.transition',
             'update'           => 'facilities.bmg.transition',
             'record_output'    => 'facilities.bmg.record_output',
@@ -74,6 +76,12 @@ final class BmgPolicy extends BasePolicy
             'maintenance'      => 'facilities.bmg.transition',
             'logs_read'        => 'facilities.bmg.logs.read',
             'logs_record'      => 'facilities.bmg.logs.record',
+            // Device ingest (mechanized tumbler). Deliberately NOT in
+            // OWNED_BATCH_ACTIONS: a machine can never be the batch
+            // starter. Its record-level right to log comes from the
+            // device→unit binding, enforced by the service after it
+            // resolves the active batch on its own drum.
+            'device_logs_record' => 'facilities.bmg.logs.record',
             'categories_manage' => 'facilities.categories.manage',
             'io_record'        => 'facilities.bmg.io.record',
             'losses_record'    => 'facilities.bmg.io.record',

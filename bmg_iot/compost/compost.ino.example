@@ -1,0 +1,225 @@
+#include <Arduino.h>
+#include <Wire.h>
+#include <RTClib.h>
+#include <WiFi.h>
+#include <HTTPClient.h>
+#include <Preferences.h>
+
+constexpr uint8_t I2C_SDA_PIN=8, I2C_SCL_PIN=9;
+constexpr uint8_t MOTOR_IN1=4, MOTOR_IN2=5, MOTOR_ENABLE=6;
+
+constexpr uint8_t TURNS_PER_SET=7;
+constexpr uint8_t TOTAL_SETS=3;
+constexpr uint8_t MOTOR_PWM=180;
+constexpr uint32_t START_DELAY_MS=5000UL;
+constexpr uint32_t TIMED_TURN_MS=1200UL;
+constexpr uint32_t BETWEEN_TURNS_MS=300UL;
+constexpr uint32_t SET_PAUSE_MS=10000UL;
+
+// ---------------------------------------------------------------------
+// Device reporting (additive) — report each completed turning session
+// to the BMG backend. All motor logic above and the state machine below
+// are untouched; reporting only runs once the process reaches DONE.
+//
+// Prototype config — fill in per bench setup. Get the token from
+// `php spark synapse:bmg-device-register --mac <chip-mac> --unit <drum>`
+// or the Facilities UI (Devices → Register device).
+//
+// NOTE: the I2C LCD from the original sketch was removed (not part of
+// the prototype). All status goes to the Serial Monitor (115200).
+// The DS3231 RTC stays wired on I2C (GPIO 8/9) — the sketch needs the
+// Adafruit RTClib library installed in the IDE.
+// ---------------------------------------------------------------------
+constexpr char WIFI_SSID[]     = "YOUR_WIFI_SSID";
+constexpr char WIFI_PASS[]     = "YOUR_WIFI_PASS";
+constexpr char API_BASE_URL[]  = "http://192.168.1.50:8090"; // no trailing slash
+constexpr char DEVICE_TOKEN[]  = "dev_PASTE_TOKEN_FROM_FACILITIES_UI_DEVICES_DIALOG";
+#define USE_HTTPS 0                  // 0 = LAN HTTP prototype. For 1: WiFiClientSecure — TODO pin the CA cert, setInsecure() is NOT for production.
+constexpr char FIRMWARE_TAG[]  = "compost-1.1";
+
+constexpr uint32_t WIFI_CONNECT_TIMEOUT_MS = 15000UL;
+constexpr uint32_t REPORT_RETRY_MS         = 60000UL;
+constexpr uint32_t REPORT_GIVE_UP_MS       = 86400000UL; // 24 h of retries, then drop
+
+// Session length is COMPUTED from the constants above (never hardcoded),
+// so the reported number stays truthful if the recipe changes.
+constexpr uint32_t SESSION_ACTIVE_MS =
+    (uint32_t)TOTAL_SETS * TURNS_PER_SET * TIMED_TURN_MS
+  + (uint32_t)TOTAL_SETS * (TURNS_PER_SET - 1) * BETWEEN_TURNS_MS
+  + (uint32_t)(TOTAL_SETS - 1) * SET_PAUSE_MS;
+
+RTC_DS3231 rtc;
+
+enum class ProcessState:uint8_t {WAITING,TURNING,TURN_GAP,SET_PAUSE,DONE};
+ProcessState state=ProcessState::WAITING;
+uint32_t processStartMs=0, phaseStartMs=0;
+uint8_t currentSet=0, currentTurn=0;
+
+// ---- reporting state (additive) ----
+Preferences prefs;
+bool sessionReported=false;
+String queuedPayload="";
+uint32_t lastAttemptMs=0, firstAttemptMs=0;
+uint32_t lastShownCountdownSec=0;
+
+void stopMotor(){analogWrite(MOTOR_ENABLE,0);digitalWrite(MOTOR_IN1,LOW);digitalWrite(MOTOR_IN2,LOW);}
+void startMotor(){digitalWrite(MOTOR_IN1,HIGH);digitalWrite(MOTOR_IN2,LOW);analogWrite(MOTOR_ENABLE,MOTOR_PWM);}
+
+void showResult(){
+  Serial.println("PROCESS COMPLETE");
+  Serial.println("Weight measurement is disabled.");
+}
+
+// ---- reporting helpers (additive) ----
+
+String makeSessionUid(){
+  char buf[33];
+  for(uint8_t i=0;i<4;i++){snprintf(buf+i*8,sizeof(buf)-i*8,"%08lx",(unsigned long)esp_random());}
+  return String(buf);
+}
+
+bool ensureWifi(){
+  if(WiFi.status()==WL_CONNECTED)return true;
+  Serial.println("WIFI: connecting...");
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(WIFI_SSID,WIFI_PASS);
+  uint32_t t0=millis();
+  while(WiFi.status()!=WL_CONNECTED&&millis()-t0<WIFI_CONNECT_TIMEOUT_MS){delay(100);}
+  if(WiFi.status()!=WL_CONNECTED){Serial.println("WIFI: connect FAILED");return false;}
+  Serial.print("WIFI: connected, IP ");Serial.println(WiFi.localIP());
+  return true;
+}
+
+// POST one session payload. Returns the HTTP code, or a negative value
+// for network-level failure (connect refused / timeout / DNS).
+int postTurnSession(const String& payload){
+#if USE_HTTPS
+  WiFiClientSecure tls;
+  // TODO(production): pin the server CA here. setInsecure() disables
+  // verification and must never ship beyond the LAN prototype.
+  tls.setInsecure();
+  HTTPClient http;
+  if(!http.begin(tls,String(API_BASE_URL)+"/api/v1/devices/bmg/turn-sessions"))return -1;
+#else
+  HTTPClient http;
+  if(!http.begin(String(API_BASE_URL)+"/api/v1/devices/bmg/turn-sessions"))return -1;
+#endif
+  http.addHeader("X-Device-Token",DEVICE_TOKEN);
+  http.addHeader("Content-Type","application/json");
+  http.setTimeout(10000);
+  int code=http.POST(payload);
+  http.end();
+  return code;
+}
+
+// Persist the payload BEFORE the first attempt so a power cut never
+// loses a completed session. lastAttemptMs is backdated so the first
+// pump fires immediately even before millis() reaches RETRY_MS.
+void queuePayload(const String& payload){
+  queuedPayload=payload;
+  prefs.putString("pend",payload);
+  lastAttemptMs=millis()-REPORT_RETRY_MS;
+  firstAttemptMs=millis();
+}
+
+void beginSessionReport(){
+  if(queuedPayload!=""&&ensureWifi()){
+    // A session from a previous power cycle is still queued: give it
+    // one flush attempt before the new session takes the slot.
+    Serial.println("REPORT: flushing previous pending session first");
+    int code=postTurnSession(queuedPayload);
+    if(code==200||code==201||(code>=400&&code<500)){queuedPayload="";prefs.remove("pend");}
+  }
+
+  uint32_t turns=(uint32_t)TOTAL_SETS*TURNS_PER_SET;
+  String payload="{\"session_uid\":\""+makeSessionUid()+"\""+
+    ",\"turns_count\":"+String(turns)+
+    ",\"sets_count\":"+String(TOTAL_SETS)+
+    ",\"duration_seconds\":"+String(SESSION_ACTIVE_MS/1000UL)+
+    ",\"firmware\":\""+FIRMWARE_TAG+"\"}";
+  Serial.print("REPORT: session queued ");Serial.println(payload);
+  queuePayload(payload);
+}
+
+// Non-blocking retry pump. Called every loop; only ever does work while
+// a payload is queued. WiFi connect + HTTP are blocking (up to ~25 s),
+// which is why the pump is driven from DONE-entry only — reporting can
+// never stall the motor state machine.
+void pumpSessionReport(uint32_t now){
+  if(queuedPayload=="")return;
+  if(now-lastAttemptMs<REPORT_RETRY_MS)return;
+  lastAttemptMs=now;
+  if(now-firstAttemptMs>REPORT_GIVE_UP_MS){
+    Serial.println("REPORT: give up after 24 h of retries (SYNC DROPPED)");
+    queuedPayload="";prefs.remove("pend");
+    return;
+  }
+  if(!ensureWifi()){Serial.println("REPORT: wifi unavailable — session stays queued");return;}
+
+  int code=postTurnSession(queuedPayload);
+  Serial.print("REPORT: HTTP ");Serial.println(code);
+  if(code==200||code==201){
+    Serial.println("REPORT: SYNC OK");
+    queuedPayload="";prefs.remove("pend");
+  }else if(code>=400&&code<500){
+    // Permanent (409 no active batch, 401 bad token, 422): retrying
+    // cannot fix these — surface the code and drop the session.
+    Serial.print("REPORT: permanent failure ");Serial.println(code);
+    queuedPayload="";prefs.remove("pend");
+  }else{
+    // Network failure or 5xx: keep the queue, retry on REPORT_RETRY_MS.
+    Serial.println("REPORT: SYNC QUEUED");
+  }
+}
+
+void setup(){
+  Serial.begin(115200);delay(500);
+  Wire.end();Wire.begin(I2C_SDA_PIN,I2C_SCL_PIN,100000U);
+  rtc.begin();
+  pinMode(MOTOR_IN1,OUTPUT);pinMode(MOTOR_IN2,OUTPUT);pinMode(MOTOR_ENABLE,OUTPUT);stopMotor();
+  processStartMs=millis();
+  Serial.println("SYSTEM READY");
+  Serial.println("PROCESS START: timed operation mode");
+  Serial.println("Weight measurement is disabled.");
+  Serial.println("Sequence: 5 s delay, 3 sets x 7 timed turns, 10 s pauses");
+
+  // Reporting init (additive): reload a session queued by a previous
+  // power cycle so it can be flushed after this run completes.
+  prefs.begin("bmgdev",false);
+  queuedPayload=prefs.getString("pend","");
+  if(queuedPayload!=""){Serial.println("REPORT: pending session found in NVS");lastAttemptMs=millis()-REPORT_RETRY_MS;firstAttemptMs=millis();}
+}
+
+void loop(){
+  uint32_t now=millis();
+  // Reporting hooks (additive): fire once at DONE-entry, then pump the
+  // retry queue. The switch below is the untouched motor state machine.
+  if(state==ProcessState::DONE&&!sessionReported){sessionReported=true;beginSessionReport();}
+  pumpSessionReport(now);
+  switch(state){
+    case ProcessState::WAITING:
+      if(now-processStartMs>=START_DELAY_MS){
+        currentSet=1;currentTurn=1;startMotor();phaseStartMs=now;state=ProcessState::TURNING;
+        Serial.println("SET 1/3: TURN 1/7 START");
+      } else {
+        uint32_t secs=(START_DELAY_MS-(now-processStartMs)+999UL)/1000UL;
+        if(secs!=lastShownCountdownSec){lastShownCountdownSec=secs;Serial.print("SYSTEM READY — START IN: ");Serial.print(secs);Serial.println("s");}
+      }
+      break;
+    case ProcessState::TURNING:
+      if(now-phaseStartMs>=TIMED_TURN_MS){
+        stopMotor();
+        if(currentTurn<TURNS_PER_SET){state=ProcessState::TURN_GAP;phaseStartMs=now;}
+        else if(currentSet<TOTAL_SETS){state=ProcessState::SET_PAUSE;phaseStartMs=now;Serial.println("SET COMPLETE: pause 10 s");}
+        else {state=ProcessState::DONE;Serial.println("ALL ROTATIONS COMPLETE");showResult();}
+      }
+      break;
+    case ProcessState::TURN_GAP:
+      if(now-phaseStartMs>=BETWEEN_TURNS_MS){currentTurn++;startMotor();phaseStartMs=now;Serial.printf("SET %u/3: TURN %u/7 START\n",currentSet,currentTurn);state=ProcessState::TURNING;}
+      break;
+    case ProcessState::SET_PAUSE:
+      if(now-phaseStartMs>=SET_PAUSE_MS){currentSet++;currentTurn=1;startMotor();phaseStartMs=now;Serial.printf("SET %u/3: TURN 1/7 START\n",currentSet);state=ProcessState::TURNING;}
+      break;
+    case ProcessState::DONE: stopMotor(); break;
+  }
+}
