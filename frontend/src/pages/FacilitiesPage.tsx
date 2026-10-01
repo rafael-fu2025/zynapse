@@ -2,27 +2,28 @@
  * FacilitiesPage — BMG state machine control surface.
  *
  * Lists units (with their `active_batch_id` joined in) and lets the
- * operator start, record output, finish, or cancel a batch. TanStack
+ * operator start, log an update, finish, or cancel a batch. TanStack
  * Query mutations apply optimistic state transitions to the unit's
  * status badge and roll back on error. shadcn Table / Dialog /
  * Textarea primitives.
  */
-import { Play, StopCircle, Loader2, Ban, ChevronDown, ChevronLeft, ChevronRight, ClipboardList, Boxes, LineChart, Plus, Wrench, Eye, Pencil, Archive, ArchiveRestore, X, ShieldCheck, FileCheck2, TriangleAlert, History, Sparkles, SquarePen, List, Cpu, RotateCcw, Power, PowerOff } from 'lucide-react';
+import { Play, StopCircle, Loader2, Ban, ChevronDown, ChevronLeft, ChevronRight, Boxes, LineChart, Plus, Wrench, Pencil, Archive, ArchiveRestore, X, FileCheck2, TriangleAlert, History, Sparkles, SquarePen, List } from 'lucide-react';
 import { useId, useMemo, useState } from 'react';
 import { Link, Navigate, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
+import { useKeysetPagination } from '@/hooks/useKeysetPagination';
+import { useUrlFilter } from '@/hooks/useUrlFilter';
 import { Badge } from '@/components/ui/badge';
 import { PageHeader } from '@/components/PageHeader';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { ConfirmDialog, type ConfirmAction } from '@/components/ConfirmDialog';
 import { CopyButton } from '@/components/CopyButton';
-import { MobileCardList, MobileCard, MobileCardField, MobileCardActions } from '@/components/MobileCardList';
+import { MobileCardList, MobileCard, MobileCardField, MobileCardActions, MobileCardListState } from '@/components/MobileCardList';
 import { TableStateRows } from '@/components/TableStates';
+import { ProcessingDrums } from '@/components/facilities/ProcessingDrums';
 import {
   Dialog,
   DialogContent,
-  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -53,28 +54,21 @@ import {
 } from '@/components/ui/table';
 import { Textarea } from '@/components/ui/textarea';
 import {
+  useAcknowledgeAlert,
   useActiveBatches,
   useAddBatchIo,
   useAddBatchUpdate,
-  useAddProcessLog,
   useArchiveUnit,
   useBatchAnalytics,
   useBatchCompliance,
   useBatchHistory,
   useBatchUpdates,
   useBlendCn,
-  useBmgDevices,
   useBmgUnits,
   useCancelBatch,
   useCreateUnit,
   useFinishBatch,
   useOpenAlerts,
-  useProcessLogs,
-  useRecordOutput,
-  useRegenerateBmgDeviceToken,
-  useRegisterBmgDevice,
-  useReleaseBatch,
-  useSetBmgDeviceStatus,
   useSetUnitMaintenance,
   useStartBatch,
   useSuggestUnit,
@@ -87,15 +81,10 @@ import {
   BMG_PROCESS_EVENT_TYPES,
   BMG_QUALITY_GRADES,
   MOISTURE_LEVELS,
-  OUTPUT_GRADES,
   addBatchUpdateSchema,
   createUnitSchema,
-  recordOutputSchema,
-  registerDeviceSchema,
   startBatchSchema,
   updateUnitSchema,
-  type ActiveBatch,
-  type BmgDevice,
   type BmgMaturityLevel,
   type BmgProcessEventType,
   type BmgQualityGrade,
@@ -103,17 +92,17 @@ import {
   type MoistureLevel,
 } from '@/schemas/facilities';
 import { ApiEnvelopeError } from '@/api/envelope';
-import { fmtHumanDate, fmtUtcToApp, fmtShort } from '@/utils/date';
+import { fmtHumanDate, fmtUtcToApp } from '@/utils/date';
 import { slugify, uniqueSlug } from '@/utils/slug';
 import { statusLabel } from '@/utils/status';
 import { titleCase } from '@/lib/utils';
+import { bmgActionAvailability } from '@/lib/bmgActions';
 
 function unitStatusVariant(status: BmgUnit['status']): 'default' | 'info' | 'warning' | 'success' | 'destructive' | 'secondary' {
   switch (status) {
     case 'idle': return 'success';
     case 'processing': return 'info';
     case 'awaiting_output': return 'warning';
-    case 'curing': return 'info';
     case 'cancelled': return 'destructive';
     case 'maintenance': return 'secondary';
     default: return 'default';
@@ -260,53 +249,11 @@ function StartBatchDialog({ unit, onClose }: { unit: BmgUnit; onClose: () => voi
   );
 }
 
-function RecordOutputDialog({ unit, batchId, onClose }: { unit: BmgUnit; batchId: number; onClose: () => void }) {
-  const rec = useRecordOutput();
-  const [output, setOutput] = useState('');
-  const outputId = useId();
-
-  function submit() {
-    const parsed = recordOutputSchema.safeParse({
-      output_weight_kg: Number(output),
-      output_items: [],
-    });
-    if (!parsed.success) {
-      toast.error(parsed.error.issues[0]?.message ?? 'Invalid input.');
-      return;
-    }
-    rec.mutate(
-      { unitId: unit.id, batchId, input: parsed.data },
-      { onSuccess: () => onClose() },
-    );
-  }
-
-  return (
-    <DialogContent lockDismiss>
-      <DialogHeader>
-        <DialogTitle>Record output for batch #{batchId} on {unit.code}</DialogTitle>
-      </DialogHeader>
-      <div className="space-y-3">
-        <div className="space-y-1.5">
-          <Label htmlFor={outputId}>Output weight (kg)</Label>
-          <Input id={outputId} type="number" min={0} step={0.01} value={output} onChange={(e) => setOutput(e.target.value)} />
-        </div>
-      </div>
-      <DialogFooter>
-        <Button variant="outline" onClick={onClose}>Cancel</Button>
-        <Button onClick={submit} disabled={rec.isPending}>
-          {rec.isPending && <Loader2 className="animate-spin" />}
-          Record
-        </Button>
-      </DialogFooter>
-    </DialogContent>
-  );
-}
-
 /**
  * 2. Add update — ONE plain-language action that appends an immutable
- * ledger entry. Internally branches by what the operator fills in:
- * output weight → output entry; curing note → curing entry; any log
- * detail → log entry. Mirrors the mobile `_addUpdate`.
+ * ledger observation. The final output (yield) is recorded when you
+ * finish the batch; the transition to `awaiting_output` happens there
+ * too. Mirrors the mobile `_addUpdate`.
  */
 function AddUpdateDialog({ unit, batchId, onClose }: { unit: BmgUnit; batchId: number; onClose: () => void }) {
   const add = useAddBatchUpdate();
@@ -385,7 +332,8 @@ function AddUpdateDialog({ unit, batchId, onClose }: { unit: BmgUnit; batchId: n
 
 /**
  * 6a. Combined, append-only "Updates" feed for the active batch —
- * output / curing / log entries, oldest → newest. Read-only.
+ * output / log entries, oldest → newest, plus any historical `curing`
+ * rows predating that state's retirement. Read-only.
  */
 function UpdatesFeedDialog({ unit, batchId, onClose }: { unit: BmgUnit; batchId: number; onClose: () => void }) {
   const updates = useBatchUpdates(batchId);
@@ -394,7 +342,7 @@ function UpdatesFeedDialog({ unit, batchId, onClose }: { unit: BmgUnit; batchId:
       <DialogHeader>
         <DialogTitle>Updates — batch #{batchId} on {unit.code}</DialogTitle>
         <p className="text-sm text-muted-foreground">
-          Append-only record of every output, curing, and log entry for this batch.
+          Append-only record of every output and log entry for this batch.
         </p>
       </DialogHeader>
       <div className="space-y-2">
@@ -561,122 +509,6 @@ function DrumStatusDialog({ unit, onClose }: { unit: BmgUnit; onClose: () => voi
   );
 }
 
-function ProcessLogsDialog({ unit, batchId, onClose }: { unit: BmgUnit; batchId: number; onClose: () => void }) {
-  const logs = useProcessLogs(batchId);
-  const add = useAddProcessLog();
-  const [note, setNote] = useState('');
-  const [temp, setTemp] = useState('');
-  const [moisture, setMoisture] = useState<MoistureLevel | 'unset'>('unset');
-  // Audit #6: event_type records WHAT was done (turning, aeration…).
-  const [eventType, setEventType] = useState<BmgProcessEventType | 'unset'>('unset');
-  const noteId = useId();
-  const tempId = useId();
-
-  function submit() {
-    if (note.trim() === '' && temp.trim() === '' && moisture === 'unset' && eventType === 'unset') {
-      toast.error('Enter at least one observation field.');
-      return;
-    }
-    add.mutate(
-      {
-        batchId,
-        input: {
-          observation_note: note.trim(),
-          temperature_celsius: temp.trim(),
-          ...(moisture !== 'unset' ? { moisture_level: moisture } : {}),
-          ...(eventType !== 'unset' ? { event_type: eventType } : {}),
-        },
-      },
-      {
-        onSuccess: () => {
-          setNote('');
-          setTemp('');
-          setMoisture('unset');
-          setEventType('unset');
-        },
-      },
-    );
-  }
-
-  return (
-    <DialogContent lockDismiss className="max-w-lg">
-      <DialogHeader>
-        <DialogTitle className="flex items-center gap-2">
-          <ClipboardList className="size-4" /> Process log — batch #{batchId} on {unit.code}
-        </DialogTitle>
-      </DialogHeader>
-      <div className="max-h-56 space-y-2 overflow-auto rounded-md border p-2">
-        {logs.isLoading && <Loader2 className="mx-auto size-4 animate-spin text-muted-foreground" />}
-        {!logs.isLoading && (logs.data?.length ?? 0) === 0 && (
-          <p className="p-2 text-sm text-muted-foreground">No observations yet.</p>
-        )}
-        {logs.data?.map((l) => (
-          <section key={l.id} className="rounded-md border p-2">
-            <header className="flex items-center justify-between">
-              <p className="text-[0.625rem] text-muted-foreground">{fmtHumanDate(l.log_date)}</p>
-              <div className="flex flex-wrap gap-1">
-                {l.event_type !== undefined && l.event_type !== 'observation' && (
-                  <Badge variant="secondary">{titleCase(l.event_type)}</Badge>
-                )}
-                {l.temperature_celsius !== null && <Badge variant="info">{l.temperature_celsius}°C</Badge>}
-                {l.moisture_level !== null && (
-                  <Badge variant={l.moisture_level === 'normal' ? 'success' : 'warning'}>{titleCase(l.moisture_level)}</Badge>
-                )}
-              </div>
-            </header>
-            {l.observation_note !== null && (
-              <p className="mt-1 whitespace-pre-wrap text-sm text-foreground">{l.observation_note}</p>
-            )}
-          </section>
-        ))}
-      </div>
-      <div className="space-y-3">
-        <div className="space-y-1.5">
-          <Label id="event-type-label">Event type</Label>
-          <Select value={eventType} onValueChange={(v) => setEventType(v as BmgProcessEventType | 'unset')}>
-            <SelectTrigger aria-labelledby="event-type-label"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="unset">Observation (default)</SelectItem>
-              {BMG_PROCESS_EVENT_TYPES.filter((t) => t !== 'observation').map((t) => (
-                <SelectItem key={t} value={t}>{titleCase(t)}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-        <div className="space-y-1.5">
-          <Label htmlFor={noteId}>Observation note</Label>
-          <Textarea id={noteId} rows={2} maxLength={1000} value={note} onChange={(e) => setNote(e.target.value)} />
-        </div>
-        <div className="grid grid-cols-2 gap-3">
-          <div className="space-y-1.5">
-            <Label htmlFor={tempId}>Temperature (°C)</Label>
-            <Input id={tempId} type="number" step={0.1} value={temp} onChange={(e) => setTemp(e.target.value)} />
-          </div>
-          <div className="space-y-1.5">
-            <Label id="moisture-label">Moisture level</Label>
-            <Select value={moisture} onValueChange={(v) => setMoisture(v as MoistureLevel | 'unset')}>
-              <SelectTrigger aria-labelledby="moisture-label"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="unset">—</SelectItem>
-                {MOISTURE_LEVELS.map((m) => (
-                  <SelectItem key={m} value={m}>{titleCase(m)}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-        </div>
-      </div>
-      <DialogFooter>
-        <Button variant="outline" onClick={onClose}>Close</Button>
-        <Button onClick={submit} disabled={add.isPending}>
-          {add.isPending && <Loader2 className="animate-spin" />}
-          Log observation
-        </Button>
-      </DialogFooter>
-    </DialogContent>
-  );
-}
-
 /**
  * Waste-category management moved to its own screen —
  * see `WasteCategoriesPage` (routed at `/facilities/waste-categories`).
@@ -719,13 +551,13 @@ function AnalyticsDialog({ unit, batchId, onClose }: { unit: BmgUnit; batchId: n
             <Sparkles className="size-3.5" /> Feedstock C:N blend
           </p>
           {blend.data.blend_cn !== null ? (
-            <p className="flex items-center gap-2">
+            <div className="flex items-center gap-2">
               <span className="tabular-nums font-semibold">{blend.data.blend_cn}</span>
               <Badge variant={blend.data.status === 'optimal' ? 'success' : 'warning'}>
                 {blend.data.status === 'optimal' ? 'Optimal (15–30)' : blend.data.status === 'high' ? 'Too high' : blend.data.status === 'low' ? 'Too low' : 'Unknown'}
               </Badge>
               <span className="text-xs text-muted-foreground">({blend.data.n_inputs} inputs)</span>
-            </p>
+            </div>
           ) : (
             <p className="text-xs text-muted-foreground">No C:N data — record feedstock inputs with a C:N ratio.</p>
           )}
@@ -766,7 +598,7 @@ function AnalyticsDialog({ unit, batchId, onClose }: { unit: BmgUnit; batchId: n
             <Select value={grade} onValueChange={(v) => setGrade(v as 'excellent' | 'good' | 'fair')}>
               <SelectTrigger aria-label="Quality grade" className="h-8 w-28"><SelectValue /></SelectTrigger>
               <SelectContent>
-                {OUTPUT_GRADES.map((g) => <SelectItem key={g} value={g}>{titleCase(g)}</SelectItem>)}
+                {BMG_QUALITY_GRADES.map((g) => <SelectItem key={g} value={g}>{titleCase(g)}</SelectItem>)}
               </SelectContent>
             </Select>
             <Button size="sm" disabled={io.isPending || outKg === ''} onClick={() => io.mutate({ batchId, kind: 'outputs', body: { output_weight_kg: Number(outKg), quality_grade: grade } }, { onSuccess: () => setOutKg('') })}>Add</Button>
@@ -776,448 +608,6 @@ function AnalyticsDialog({ unit, batchId, onClose }: { unit: BmgUnit; batchId: n
 
       <DialogFooter><Button variant="outline" onClick={onClose}>Close</Button></DialogFooter>
     </DialogContent>
-  );
-}
-
-/**
- * ProcessingDrumsCard — "Processing Drums" widget.
- *
- * Mirrors the dashboard tile from the legacy Synapse project: a card grid
- * (auto-fill, ~220px min) where each tile shows the drum code, the
- * underlying batch, the waste category, input weight, expected completion
- * date, days active, and a gradient progress bar. Clicking a card (or its
- * "Open" affordance) navigates to the dedicated drum detail screen at
- * `/facilities/drums/:unitId`, which focuses on that drum's information.
- *
- * Read-only: the widget is a status surface, not a control surface. All
- * state transitions still flow through the table actions below.
- */
-/**
- * DrumImage — theme-aware drum graphic used by the "Processing Drums"
- * widget. Replaces the abstract `Cylinder` icon with the actual drum
- * asset: maroon drum in light mode, white drum in dark mode. Both files
- * are served from /public (note the white asset filename is `drum-whte`).
- */
-function DrumImage({ className = '' }: { className?: string }) {
-  return (
-    <>
-      <img
-        src="/drum-maroon.png"
-        alt=""
-        aria-hidden
-        draggable={false}
-        className={`${className} object-contain dark:hidden`}
-      />
-      <img
-        src="/drum-whte.png"
-        alt=""
-        aria-hidden
-        draggable={false}
-        className={`${className} hidden object-contain dark:block`}
-      />
-    </>
-  );
-}
-
-// ------------------------------------------------------ BMG devices
-
-/**
- * Shown-once credential reveal for a freshly minted device token —
- * same pattern as the temporary-password dialog on AdminUsersPage.
- * The plaintext is never retrievable again.
- */
-function DeviceTokenDialog({ device, token, onClose }: { device: BmgDevice; token: string; onClose: () => void }) {
-  return (
-    <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <DialogContent lockDismiss>
-        <DialogHeader>
-          <DialogTitle>Device token</DialogTitle>
-          <DialogDescription>
-            Paste this into <span className="font-mono">DEVICE_TOKEN</span> in the sketch and flash the board. It is
-            shown once — only a SHA-256 hash is stored server-side. Losing it means regenerating (the old token stops
-            working).
-          </DialogDescription>
-        </DialogHeader>
-        <div className="flex items-center gap-2">
-          <p className="min-w-0 flex-1 break-all rounded-lg bg-muted p-3 text-center font-mono text-sm">{token}</p>
-          <CopyButton value={token} label="Copy device token" successMessage="Device token copied." />
-        </div>
-        <p className="text-xs text-muted-foreground">
-          Device <span className="font-mono">{device.code}</span> registered
-          {device.unit_name !== null && device.unit_name !== undefined ? ` for ${device.unit_name}` : ' without a drum binding'}.
-        </p>
-        <DialogFooter>
-          <Button onClick={onClose}>Done</Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-/** Register a tumbler: chip MAC (auto-codes) or explicit slug, optional drum binding. */
-function RegisterDeviceForm({ onRegistered }: { onRegistered: (r: { device: BmgDevice; token: string }) => void }) {
-  const register = useRegisterBmgDevice();
-  const units = useBmgUnits(null, 100, false);
-  const [mac, setMac] = useState('');
-  const [code, setCode] = useState('');
-  const [name, setName] = useState('');
-  const [unitId, setUnitId] = useState('unset');
-  const [errors, setErrors] = useState<Record<string, string>>({});
-  const macId = useId();
-  const codeId = useId();
-  const nameId = useId();
-  const unitIdFieldId = useId();
-
-  function submit() {
-    const parsed = registerDeviceSchema.safeParse({
-      mac,
-      code,
-      display_name: name,
-      unit_id: unitId === 'unset' ? '' : unitId,
-    });
-    if (!parsed.success) {
-      setErrors(Object.fromEntries(parsed.error.issues.map((i) => [String(i.path[0]), i.message])));
-      return;
-    }
-    setErrors({});
-    register.mutate(parsed.data, { onSuccess: onRegistered });
-  }
-
-  const unitOptions = units.data?.data.filter((u) => u.archived_at == null) ?? [];
-
-  return (
-    <div className="space-y-3">
-      <div className="space-y-1.5">
-        <Label htmlFor={macId}>Chip MAC address</Label>
-        <Input
-          id={macId}
-          value={mac}
-          onChange={(e) => setMac(e.target.value)}
-          placeholder="b8:1f:3f:d7:ec:18"
-          className="font-mono"
-          aria-invalid={errors.mac !== undefined}
-        />
-        {errors.mac !== undefined && <p className="text-xs text-destructive">{errors.mac}</p>}
-        <p className="text-xs text-muted-foreground">
-          From the board itself (esptool/Arduino serial monitor). Becomes the default code, e.g.
-          <span className="font-mono"> b8-1f-3f-d7-ec-18</span>. Leave empty to give a code instead.
-        </p>
-      </div>
-      <div className="space-y-1.5">
-        <Label htmlFor={codeId}>Code (override)</Label>
-        <Input
-          id={codeId}
-          value={code}
-          onChange={(e) => setCode(e.target.value.toLowerCase())}
-          placeholder="compost-tumbler-1"
-          aria-invalid={errors.code !== undefined}
-        />
-        {errors.code !== undefined && <p className="text-xs text-destructive">{errors.code}</p>}
-      </div>
-      <div className="space-y-1.5">
-        <Label htmlFor={nameId}>Display name</Label>
-        <Input
-          id={nameId}
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder="Compost Tumbler 1"
-          maxLength={128}
-        />
-      </div>
-      <div className="space-y-1.5">
-        <Label id={unitIdFieldId}>Bound drum</Label>
-        <Select value={unitId} onValueChange={setUnitId}>
-          <SelectTrigger aria-labelledby={unitIdFieldId}><SelectValue /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value="unset">None (reports will be rejected until bound)</SelectItem>
-            {unitOptions.map((u) => (
-              <SelectItem key={u.id} value={String(u.id)}>{u.display_name} ({u.code})</SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
-      <DialogFooter>
-        <Button onClick={submit} disabled={register.isPending}>
-          {register.isPending && <Loader2 className="size-4 animate-spin" aria-hidden />} Register device
-        </Button>
-      </DialogFooter>
-    </div>
-  );
-}
-
-/**
- * Manage automated tumblers: register, mint/regenerate tokens (shown
- * once), bind, enable/disable.
- */
-function DevicesDialog({ onClose }: { onClose: () => void }) {
-  const devices = useBmgDevices(null, 100);
-  const setStatus = useSetBmgDeviceStatus();
-  const regenerate = useRegenerateBmgDeviceToken();
-  const [registering, setRegistering] = useState(false);
-  const [minted, setMinted] = useState<{ device: BmgDevice; token: string } | null>(null);
-  const [confirm, setConfirm] = useState<ConfirmAction | null>(null);
-
-  const rows = devices.data?.data ?? [];
-
-  return (
-    <>
-      <Dialog open onOpenChange={(open) => !open && onClose()}>
-        <DialogContent className="max-w-2xl">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <Cpu className="size-4 text-primary" /> Automated tumblers
-            </DialogTitle>
-            <DialogDescription>
-              Devices that mechanize drum rotation and report turning sessions to the process log. Token is shown once
-              at mint time.
-            </DialogDescription>
-          </DialogHeader>
-
-          {registering ? (
-            <RegisterDeviceForm
-              onRegistered={(r) => { setRegistering(false); setMinted(r); }}
-            />
-          ) : (
-            <>
-              <div className="max-h-80 space-y-2 overflow-auto rounded-md border p-2">
-                {devices.isLoading && <Loader2 className="mx-auto size-4 animate-spin text-muted-foreground" />}
-                {devices.isError && <p className="p-2 text-sm text-destructive">Could not load devices.</p>}
-                {!devices.isLoading && !devices.isError && rows.length === 0 && (
-                  <p className="p-2 text-sm text-muted-foreground">No devices registered yet.</p>
-                )}
-                {rows.map((d) => (
-                  <div key={d.id} className="rounded-md border p-2">
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="min-w-0">
-                        <p className="truncate text-sm font-medium">{d.display_name}</p>
-                        <p className="truncate font-mono text-xs text-muted-foreground">{d.code}</p>
-                      </div>
-                      <div className="flex shrink-0 items-center gap-1">
-                        <Badge variant={d.status === 'active' ? 'success' : 'destructive'}>{titleCase(d.status)}</Badge>
-                        {d.unit_name !== null && d.unit_name !== undefined && (
-                          <Badge variant="outline">{d.unit_name}</Badge>
-                        )}
-                      </div>
-                    </div>
-                    <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
-                      {d.token_prefix !== null && d.token_prefix !== undefined && (
-                        <span className="font-mono">{d.token_prefix}…</span>
-                      )}
-                      {d.firmware !== null && d.firmware !== undefined && <span>fw {d.firmware}</span>}
-                      {d.last_seen_at !== null && d.last_seen_at !== undefined ? (
-                        <span>last seen {fmtHumanDate(d.last_seen_at)}</span>
-                      ) : (
-                        <span>never connected</span>
-                      )}
-                    </div>
-                    <div className="mt-2 flex flex-wrap gap-2">
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => setConfirm({
-                          title: `Regenerate token for ${d.code}?`,
-                          description: 'The current token stops working immediately. The device will need the new token flashed before its next report.',
-                          confirmLabel: 'Regenerate',
-                          run: () => regenerate.mutate({ deviceId: d.id }, { onSuccess: setMinted }),
-                        })}
-                      >
-                        <RotateCcw /> Regenerate token
-                      </Button>
-                      {d.status === 'active' ? (
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => setConfirm({
-                            title: `Disable ${d.code}?`,
-                            description: 'Reports will be refused until re-enabled.',
-                            confirmLabel: 'Disable',
-                            run: () => setStatus.mutate({ deviceId: d.id, status: 'disabled' }),
-                          })}
-                        >
-                          <PowerOff /> Disable
-                        </Button>
-                      ) : (
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => setStatus.mutate({ deviceId: d.id, status: 'active' })}
-                        >
-                          <Power /> Enable
-                        </Button>
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </div>
-              <DialogFooter>
-                <Button variant="outline" onClick={onClose}>Close</Button>
-                <Button onClick={() => setRegistering(true)}>
-                  <Plus /> Register device
-                </Button>
-              </DialogFooter>
-            </>
-          )}
-        </DialogContent>
-      </Dialog>
-      {minted !== null && <DeviceTokenDialog device={minted.device} token={minted.token} onClose={() => setMinted(null)} />}
-      <ConfirmDialog
-        open={confirm !== null}
-        title={confirm?.title ?? ''}
-        description={confirm?.description}
-        confirmLabel={confirm?.confirmLabel}
-        pending={regenerate.isPending || setStatus.isPending}
-        onConfirm={() => {
-          confirm?.run();
-          setConfirm(null);
-        }}
-        onCancel={() => setConfirm(null)}
-      />
-    </>
-  );
-}
-
-function ProcessingDrumsCard() {
-  const active = useActiveBatches();
-  const items = active.data ?? [];
-
-  return (
-    <Card>
-      <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-3">
-        <CardTitle className="flex items-center gap-2 text-base">
-          <DrumImage className="size-5" />
-          Processing Drums
-        </CardTitle>
-        <Badge variant={items.length > 0 ? 'warning' : 'secondary'} className="tabular-nums">
-          {items.length} active
-        </Badge>
-      </CardHeader>
-      <CardContent>
-        {active.isLoading && (
-          <div className="flex items-center justify-center py-8 text-muted-foreground">
-            <Loader2 className="size-4 animate-spin" />
-          </div>
-        )}
-        {active.isError && (
-          <p className="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
-            Failed to load active drums.
-          </p>
-        )}
-        {!active.isLoading && !active.isError && items.length === 0 && (
-          <p className="rounded-md border border-dashed p-6 text-center text-sm text-muted-foreground">
-            No drums currently processing. Start a batch on an idle unit to begin composting.
-          </p>
-        )}
-        {items.length > 0 && (
-          <div className="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-3">
-            {items.map((b) => (
-              <DrumCard key={b.batch_id} batch={b} />
-            ))}
-          </div>
-        )}
-      </CardContent>
-    </Card>
-  );
-}
-
-function DrumCard({ batch }: { batch: ActiveBatch }) {
-  const isInput = batch.input_kg <= 0;
-  const overdue = batch.days_until_expected !== null && batch.days_until_expected < 0;
-  const dueToday = batch.days_until_expected === 0;
-  const days = batch.days_active;
-
-  /**
-   * The whole tile is a router Link to the drum's dedicated detail
-   * screen — a full page focused on this drum's batch info, analytics
-   * and process log (replaces the old scroll-to-table-row behavior).
-   */
-  return (
-    <Link
-      to={`/facilities/drums/${batch.unit_id}`}
-      className="group flex flex-col gap-2 rounded-lg border border-primary/50 bg-card p-3 text-left transition-all hover:border-primary hover:shadow-md hover:-translate-y-px focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-    >
-      {/* Theme-aware drum graphic (white in dark mode, maroon in light mode). */}
-      <div className="flex justify-center py-1">
-        <DrumImage className="h-14 w-auto" />
-      </div>
-
-      <header className="flex items-start justify-between gap-2 border-b border-border/60 pb-2">
-        <div className="min-w-0">
-          <p className="tabular-nums text-sm font-bold tracking-wide text-foreground">{batch.unit_code}</p>
-          <p className="truncate text-xs text-muted-foreground" title={batch.unit_name}>{batch.unit_name}</p>
-        </div>
-        <Badge variant={isInput ? 'info' : 'warning'} className="shrink-0 uppercase">
-          {isInput ? 'Input' : 'Processing'}
-        </Badge>
-      </header>
-
-      {/* Narrow tile: short values stay inline, long ones (batch ref,
-          date) stack so they can never collide with their label. */}
-      <dl className="space-y-1.5 text-xs">
-        <div>
-          <dt className="text-[0.6875rem] uppercase tracking-wide text-muted-foreground">Batch</dt>
-          <dd className="font-mono text-[0.6875rem] font-semibold text-foreground [overflow-wrap:anywhere]">
-            {batch.batch_code}
-          </dd>
-        </div>
-        <div className="flex items-center justify-between gap-2">
-          <dt className="text-[0.6875rem] uppercase tracking-wide text-muted-foreground">Waste</dt>
-          <dd className="truncate text-right font-semibold text-foreground" title={batch.category_name ?? undefined}>
-            {batch.category_name ?? '—'}
-          </dd>
-        </div>
-        <div className="flex items-center justify-between">
-          <dt className="text-[0.6875rem] uppercase tracking-wide text-muted-foreground">Input</dt>
-          <dd className="tabular-nums font-semibold text-foreground">{batch.input_kg.toFixed(2)} kg</dd>
-        </div>
-        <div>
-          <dt className="text-[0.6875rem] uppercase tracking-wide text-muted-foreground">Expected done</dt>
-          <dd className="flex items-baseline justify-between gap-2">
-            <span className="tabular-nums font-semibold text-foreground">
-              {batch.expected_completion_date !== null ? fmtShort(batch.expected_completion_date) : '—'}
-            </span>
-            {batch.days_until_expected !== null && (
-              <span
-                className={
-                  overdue
-                    ? 'text-[0.6875rem] font-medium text-destructive'
-                    : 'text-[0.6875rem] font-medium text-muted-foreground'
-                }
-              >
-                {overdue
-                  ? `${Math.abs(batch.days_until_expected)} day${Math.abs(batch.days_until_expected) === 1 ? '' : 's'} overdue`
-                  : dueToday
-                    ? 'Due today'
-                    : `in ${batch.days_until_expected} day${batch.days_until_expected === 1 ? '' : 's'}`}
-              </span>
-            )}
-          </dd>
-        </div>
-      </dl>
-
-      {/* Progress bar — design-system gradient, no Radix required. */}
-      <div
-        className="mt-1 h-1.5 overflow-hidden rounded-full bg-muted"
-        role="progressbar"
-        aria-label="Decomposition progress"
-        aria-valuenow={batch.progress_pct}
-        aria-valuemin={0}
-        aria-valuemax={100}
-      >
-        <div
-          className="h-full rounded-full bg-gradient-to-r from-primary/70 to-primary transition-[width] duration-500"
-          style={{ width: `${batch.progress_pct}%` }}
-        />
-      </div>
-
-      <footer className="mt-1 flex items-center justify-between border-t border-dashed border-border/60 pt-2">
-        <Badge variant={days > 30 ? 'warning' : 'info'}>
-          {days} day{days === 1 ? '' : 's'} active
-        </Badge>
-        <span className="inline-flex items-center gap-1 text-xs font-medium text-primary transition-colors group-hover:underline group-focus-visible:underline">
-          <Eye className="size-3" /> Open
-        </span>
-      </footer>
-    </Link>
   );
 }
 
@@ -1550,80 +940,6 @@ function ArchiveUnitDialog({ unit, onClose }: { unit: BmgUnit; onClose: () => vo
 }
 
 /**
- * ReleaseBatchDialog — the final QA gate (audit #4). Only shown for a
- * batch that reached AwaitingOutput or Curing: the operator records the
- * finished compost's quality grade + maturity level, which become the
- * batch's certificate fields and flip it to the terminal `released`
- * state (unit returns to Idle).
- */
-function ReleaseBatchDialog({ unit, batchId, onClose }: { unit: BmgUnit; batchId: number; onClose: () => void }) {
-  const release = useReleaseBatch();
-  const [grade, setGrade] = useState<BmgQualityGrade | 'unset'>('unset');
-  const [maturity, setMaturity] = useState<BmgMaturityLevel | 'unset'>('unset');
-  const [notes, setNotes] = useState('');
-
-  function submit() {
-    if (grade === 'unset' || maturity === 'unset') {
-      toast.error('Select a quality grade and maturity level.');
-      return;
-    }
-    release.mutate(
-      { unitId: unit.id, batchId, input: { quality_grade: grade, maturity_level: maturity, notes } },
-      { onSuccess: () => onClose() },
-    );
-  }
-
-  return (
-    <DialogContent lockDismiss>
-      <DialogHeader>
-        <DialogTitle className="flex items-center gap-2">
-          <ShieldCheck className="size-4 text-primary" /> Release batch #{batchId} on {unit.code}
-        </DialogTitle>
-      </DialogHeader>
-      <div className="space-y-3">
-        <p className="text-xs text-muted-foreground">
-          Final QA gate. Releasing makes the batch terminal and returns the drum to Idle.
-          The grade + maturity are saved on the batch certificate.
-        </p>
-        <div className="grid grid-cols-2 gap-3">
-          <div className="space-y-1.5">
-            <Label id="quality-grade-label">Quality grade</Label>
-            <Select value={grade} onValueChange={(v) => setGrade(v as BmgQualityGrade | 'unset')}>
-              <SelectTrigger aria-labelledby="quality-grade-label"><SelectValue placeholder="Select…" /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="unset">—</SelectItem>
-                {BMG_QUALITY_GRADES.map((g) => <SelectItem key={g} value={g}>{titleCase(g)}</SelectItem>)}
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="space-y-1.5">
-            <Label id="maturity-label">Maturity level</Label>
-            <Select value={maturity} onValueChange={(v) => setMaturity(v as BmgMaturityLevel | 'unset')}>
-              <SelectTrigger aria-labelledby="maturity-label"><SelectValue placeholder="Select…" /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="unset">—</SelectItem>
-                {BMG_MATURITY_LEVELS.map((m) => <SelectItem key={m} value={m}>{titleCase(m)}</SelectItem>)}
-              </SelectContent>
-            </Select>
-          </div>
-        </div>
-        <div className="space-y-1.5">
-          <Label htmlFor="release-notes">Notes (optional)</Label>
-          <Textarea id="release-notes" rows={2} maxLength={512} value={notes} onChange={(e) => setNotes(e.target.value)} />
-        </div>
-      </div>
-      <DialogFooter>
-        <Button variant="outline" onClick={onClose}>Cancel</Button>
-        <Button onClick={submit} disabled={release.isPending}>
-          {release.isPending && <Loader2 className="animate-spin" />}
-          <ShieldCheck className="size-4" /> Release batch
-        </Button>
-      </DialogFooter>
-    </DialogContent>
-  );
-}
-
-/**
  * ComplianceDialog — the printable batch certificate (audit #2).
  * Shows the PFRP temperature evidence (thermophilic days, peak temp,
  * consecutive PFRP days), the mass-balance reconciliation, and the
@@ -1693,25 +1009,17 @@ function ComplianceDialog({ unit, batchId, onClose }: { unit: BmgUnit; batchId: 
  * keyset-paginated. Read-only.
  */
 function BatchHistoryDialog({ unitId, onClose }: { unitId: number | null; onClose: () => void }) {
-  const [cursor, setCursor] = useState<string | null>(null);
-  const [history, setHistory] = useState<Array<string | null>>([null]);
-  const [statusFilter, setStatusFilter] = useState<string>('all');
+  // Filter lives in the URL so a filtered history view is linkable and
+  // survives a reload; the cursor stays in memory (the project-wide
+  // convention) and snaps back to page 1 when the filter changes.
+  const [statusFilter, setStatusFilter] = useUrlFilter('hist', { default: 'all' });
   const status = statusFilter === 'all' ? null : statusFilter;
+  const { cursor, history, nextPage: nextCursor, prevPage } = useKeysetPagination(statusFilter);
   const batches = useBatchHistory(unitId, status, cursor, 25);
   const batchRows = batches.data?.data ?? [];
 
   function nextPage() {
-    if (batches.data?.next !== null && batches.data?.next !== undefined) {
-      const n = batches.data.next;
-      setHistory((h) => [...h, n]);
-      setCursor(n);
-    }
-  }
-  function prevPage() {
-    if (history.length < 2) return;
-    const next = history.slice(0, -1);
-    setHistory(next);
-    setCursor(next[next.length - 1] ?? null);
+    nextCursor(batches.data?.next);
   }
 
   return (
@@ -1723,7 +1031,7 @@ function BatchHistoryDialog({ unitId, onClose }: { unitId: number | null; onClos
         </DialogTitle>
       </DialogHeader>
       <div className="mb-2 flex items-center justify-between gap-2">
-        <Select value={statusFilter} onValueChange={(v) => { setStatusFilter(v); setCursor(null); setHistory([null]); }}>
+        <Select value={statusFilter} onValueChange={setStatusFilter}>
           <SelectTrigger aria-label="Filter by status" className="w-44"><SelectValue /></SelectTrigger>
           <SelectContent>
             <SelectItem value="all">All statuses</SelectItem>
@@ -1771,7 +1079,7 @@ function BatchHistoryDialog({ unitId, onClose }: { unitId: number | null; onClos
                   </Button>
                 ),
               }}
-              hasFilters={status !== 'all'}
+              hasFilters={statusFilter !== 'all'}
             />
             {batchRows.map((b) => (
               <TableRow key={b.id}>
@@ -1810,47 +1118,87 @@ function BatchHistoryDialog({ unitId, onClose }: { unitId: number | null; onClos
  */
 function OpenAlertsBanner() {
   const open = useOpenAlerts();
+  const ack = useAcknowledgeAlert();
   const items = (open.data ?? []).filter((a) => a.severity !== 'info');
   if (items.length === 0) return null;
+  const shown = items.slice(0, 3);
+  const overflow = items.length - shown.length;
   return (
-    <div className="flex items-start gap-2 rounded-xl border border-destructive/30 bg-destructive/5 p-3 text-sm">
+    <div
+      role="alert"
+      aria-live="polite"
+      className="flex items-start gap-2 rounded-xl border border-destructive/30 bg-destructive/5 p-3 text-sm"
+    >
       <TriangleAlert className="mt-0.5 size-4 shrink-0 text-destructive" />
-      <div className="space-y-1">
-        <p className="font-medium text-destructive">{items.length} open BMG alert{items.length > 1 ? 's' : ''} on live batches</p>
-        <ul className="space-y-0.5 text-xs text-muted-foreground">
-          {items.slice(0, 3).map((a) => (
-            <li key={a.alert_id}>
-              <span className="tabular-nums">{a.reference_code}</span> · <Badge variant={a.severity === 'critical' ? 'destructive' : 'warning'}>{a.severity}</Badge> · {a.message}
+      <div className="min-w-0 flex-1 space-y-2">
+        <p className="font-medium text-destructive">
+          {items.length} open BMG alert{items.length > 1 ? 's' : ''} on live batches
+        </p>
+        <ul className="space-y-1.5">
+          {shown.map((a) => (
+            <li key={a.alert_id} className="flex flex-wrap items-center gap-1.5 text-xs">
+              <Badge variant={a.severity === 'critical' ? 'destructive' : 'warning'}>
+                {a.severity}
+              </Badge>
+              <CopyButton value={a.code} label={`Copy alert code ${a.code}`} successMessage="Alert code copied." />
+              {a.unit_id !== null ? (
+                <Link
+                  to={`/facilities/drums/${a.unit_id}`}
+                  className="tabular-nums font-medium text-foreground underline-offset-2 hover:underline"
+                >
+                  {a.reference_code}
+                  {a.unit_code !== null ? ` · ${a.unit_code}` : ''}
+                </Link>
+              ) : (
+                <span className="tabular-nums font-medium text-foreground">{a.reference_code}</span>
+              )}
+              <span className="min-w-0 basis-full truncate text-muted-foreground">{a.message}</span>
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-7 px-2 text-xs"
+                disabled={ack.isPending}
+                onClick={() => ack.mutate({ alertId: a.alert_id, batchId: a.batch_id })}
+              >
+                Acknowledge
+              </Button>
             </li>
           ))}
         </ul>
+        {overflow > 0 && (
+          <p className="text-xs text-muted-foreground">
+            +{overflow} more open alert{overflow > 1 ? 's' : ''}. Open a drum above to review its full list.
+          </p>
+        )}
       </div>
     </div>
   );
 }
 
 export default function FacilitiesPage() {
-  const [cursor, setCursor] = useState<string | null>(null);
-  const [history, setHistory] = useState<Array<string | null>>([null]);
-  const [showArchived, setShowArchived] = useState(false);
+  // The archived toggle is URL state so an operator can share a link to
+  // the archived view, and so a reload lands where they left off. The
+  // cursor stays in memory and snaps back to page 1 when the toggle flips.
+  const [archivedParam, setArchivedParam] = useUrlFilter('archived');
+  const showArchived = archivedParam === '1';
+  const { cursor, history, nextPage: nextCursor, prevPage } = useKeysetPagination(archivedParam);
   const units = useBmgUnits(cursor, 50, showArchived);
   const unitRows = units.data?.data ?? [];
+  // Powers the Processing Drums grid. Lifted out of the card component
+  // so the page owns the query and the widget stays presentational.
+  const activeBatches = useActiveBatches();
   const finish = useFinishBatch();
   const cancel = useCancelBatch();
   const unarchiveUnit = useUnarchiveUnit();
   const [openStart, setOpenStart] = useState<BmgUnit | null>(null);
-  const [openOutput, setOpenOutput] = useState<BmgUnit | null>(null);
   const [openUpdate, setOpenUpdate] = useState<BmgUnit | null>(null);
   const [openUpdates, setOpenUpdates] = useState<BmgUnit | null>(null);
   const [openFinish, setOpenFinish] = useState<BmgUnit | null>(null);
   const [openStatus, setOpenStatus] = useState<BmgUnit | null>(null);
-  const [openLogs, setOpenLogs] = useState<BmgUnit | null>(null);
   const [openAnalytics, setOpenAnalytics] = useState<BmgUnit | null>(null);
-  const [openRelease, setOpenRelease] = useState<BmgUnit | null>(null);
   const [openCompliance, setOpenCompliance] = useState<{ unit: BmgUnit; batchId: number } | null>(null);
   const [openHistory, setOpenHistory] = useState<number | 'all' | null>(null);
   const [openCreate, setOpenCreate] = useState(false);
-  const [openDevices, setOpenDevices] = useState(false);
   const [openEdit, setOpenEdit] = useState<BmgUnit | null>(null);
   const [openArchive, setOpenArchive] = useState<BmgUnit | null>(null);
   const [confirm, setConfirm] = useState<ConfirmAction | null>(null);
@@ -1864,23 +1212,20 @@ export default function FacilitiesPage() {
   }
 
   function nextPage() {
-    if (units.data?.next !== null && units.data?.next !== undefined) {
-      const n = units.data.next;
-      setHistory((h) => [...h, n]);
-      setCursor(n);
-    }
-  }
-  function prevPage() {
-    if (history.length < 2) return;
-    const next = history.slice(0, -1);
-    setHistory(next);
-    setCursor(next[next.length - 1] ?? null);
+    nextCursor(units.data?.next);
   }
 
   // Shared compact menu for desktop rows and mobile cards.
   const unitActions = (u: BmgUnit) => {
     const activeBatch = u.active_batch_id ?? null;
     const archived = u.archived_at !== null && u.archived_at !== undefined;
+    // All state rules live in `bmgActionAvailability` so they can be
+    // tested directly; see lib/bmgActions.ts.
+    const can = bmgActionAvailability(u, {
+      finish: finish.isPending,
+      cancel: cancel.isPending,
+      restore: unarchiveUnit.isPending,
+    });
     return (
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
@@ -1897,30 +1242,30 @@ export default function FacilitiesPage() {
             <Pencil /> Edit drum
           </DropdownMenuItem>
         {archived ? (
-          <DropdownMenuItem className="min-h-11" disabled={unarchiveUnit.isPending} onSelect={() => unarchiveUnit.mutate({ unitId: u.id })}>
+          <DropdownMenuItem className="min-h-11" disabled={!can.restore} onSelect={() => unarchiveUnit.mutate({ unitId: u.id })}>
             <ArchiveRestore /> Restore
           </DropdownMenuItem>
         ) : (
-          <DropdownMenuItem className="min-h-11" onSelect={() => setOpenArchive(u)}>
+          <DropdownMenuItem className="min-h-11" disabled={!can.archive} onSelect={() => setOpenArchive(u)}>
             <Archive /> Archive
           </DropdownMenuItem>
         )}
           <DropdownMenuSeparator />
-          <DropdownMenuItem className="min-h-11" disabled={u.status !== 'idle'} onSelect={() => setOpenStart(u)}>
+          <DropdownMenuItem className="min-h-11" disabled={!can.start} onSelect={() => setOpenStart(u)}>
             <Play /> Start batch
           </DropdownMenuItem>
-          {/* 2. Add update — ONE action; output/curing/log internally. */}
-          <DropdownMenuItem className="min-h-11" disabled={!['processing', 'awaiting_output', 'curing'].includes(u.status) || activeBatch === null} onSelect={() => activeBatch !== null && setOpenUpdate(u)}>
+          {/* 2. Add update — ONE action; appends an immutable log entry. */}
+          <DropdownMenuItem className="min-h-11" disabled={!can.addUpdate} onSelect={() => activeBatch !== null && setOpenUpdate(u)}>
             <SquarePen /> Add update
           </DropdownMenuItem>
           {/* 6a. Combined append-only Updates feed. */}
-          <DropdownMenuItem className="min-h-11" disabled={activeBatch === null} onSelect={() => activeBatch !== null && setOpenUpdates(u)}>
+          <DropdownMenuItem className="min-h-11" disabled={!can.viewUpdates} onSelect={() => activeBatch !== null && setOpenUpdates(u)}>
             <List /> View updates
           </DropdownMenuItem>
           {/* 3. Finish = graded release (requires QA). */}
           <DropdownMenuItem
           className="min-h-11"
-          disabled={!['processing', 'awaiting_output', 'curing'].includes(u.status) || activeBatch === null || finish.isPending}
+          disabled={!can.finish}
           onSelect={() => activeBatch !== null && setOpenFinish(u)}
         >
             <StopCircle /> Finish batch
@@ -1930,24 +1275,24 @@ export default function FacilitiesPage() {
           <DropdownMenuItem className="min-h-11" onSelect={() => setOpenHistory(u.id)}>
             <History /> Batch history
           </DropdownMenuItem>
-          <DropdownMenuItem className="min-h-11" disabled={activeBatch === null} onSelect={() => activeBatch !== null && setOpenCompliance({ unit: u, batchId: activeBatch })}>
+          <DropdownMenuItem className="min-h-11" disabled={!can.certificate} onSelect={() => activeBatch !== null && setOpenCompliance({ unit: u, batchId: activeBatch })}>
             <FileCheck2 /> Certificate / compliance
           </DropdownMenuItem>
-          <DropdownMenuItem className="min-h-11" disabled={activeBatch === null} onSelect={() => setOpenAnalytics(u)}>
+          <DropdownMenuItem className="min-h-11" disabled={!can.analytics} onSelect={() => setOpenAnalytics(u)}>
             <LineChart /> Analytics
           </DropdownMenuItem>
           <DropdownMenuSeparator />
           {/* 5. Drum status (no active batch only). */}
           <DropdownMenuItem
           className="min-h-11"
-          disabled={activeBatch !== null}
+          disabled={!can.drumStatus}
           onSelect={() => setOpenStatus(u)}
         >
             <Wrench /> Drum status
           </DropdownMenuItem>
           <DropdownMenuItem
           className="min-h-11 text-destructive focus:text-destructive"
-          disabled={!['processing', 'awaiting_output', 'curing'].includes(u.status) || activeBatch === null || cancel.isPending}
+          disabled={!can.cancel}
           onSelect={() => activeBatch !== null && setConfirm({
             title: `Cancel batch #${activeBatch} on ${u.code}?`,
             description: 'The batch will be cancelled and the drum returned to Idle. This cannot be undone.',
@@ -1969,22 +1314,19 @@ export default function FacilitiesPage() {
     // bounds itself with its own internal scroll instead.
     <main className="space-y-4 p-6">
       <PageHeader
-        title="Facilities — BMG"
-        description="Drums move Idle → Processing → Awaiting output → Idle (or Cancelled), and can be placed in Maintenance."
+        title="Facilities"
+        description="Drums move Idle → Processing → Awaiting output → Released (or Cancelled), and can be placed in Maintenance."
         actions={
           <>
             <Button
               variant={showArchived ? 'secondary' : 'outline'}
               aria-pressed={showArchived}
-              onClick={() => { setShowArchived((v) => !v); setCursor(null); setHistory([null]); }}
+              onClick={() => setArchivedParam(showArchived ? '' : '1')}
             >
               <Archive /> {showArchived ? 'Hide archived' : 'Show archived'}
             </Button>
             <Button variant="outline" onClick={() => setOpenHistory('all')}>
               <History /> Batch history
-            </Button>
-            <Button variant="outline" onClick={() => setOpenDevices(true)}>
-              <Cpu /> Devices
             </Button>
             {/* The primary "New drum" action sits ALONE at the far right,
                 visually separated from the utility buttons by a divider,
@@ -1995,7 +1337,6 @@ export default function FacilitiesPage() {
               <Button onClick={() => setOpenCreate(true)}>
                 <Plus /> New drum
               </Button>
-              {openDevices && <DevicesDialog onClose={() => setOpenDevices(false)} />}
               {openCreate && (
                 <CreateUnitDialog
                   onClose={() => setOpenCreate(false)}
@@ -2009,7 +1350,14 @@ export default function FacilitiesPage() {
 
       <OpenAlertsBanner />
 
-      <ProcessingDrumsCard />
+      <ProcessingDrums
+        batches={activeBatches.data?.data ?? []}
+        turningDueDays={activeBatches.data?.turning_due_days ?? null}
+        isLoading={activeBatches.isLoading}
+        isError={activeBatches.isError}
+        isFetching={activeBatches.isFetching}
+        onRetry={() => void activeBatches.refetch()}
+      />
 
       <section className="hidden rounded-xl border bg-card md:block">
         <Table
@@ -2097,25 +1445,22 @@ export default function FacilitiesPage() {
 
       {/* Mobile: drum cards from the same rows. Actions carry visible
           labels (touch-friendly) instead of the desktop icon rail. */}
-      {units.isLoading && (
-        <p className="py-6 text-center text-sm text-muted-foreground md:hidden" role="status">
-          <Loader2 className="mx-auto size-4 animate-spin" />
-        </p>
-      )}
-      {units.isError && !units.isLoading && (
-        <div role="alert" className="rounded-xl border border-destructive/40 bg-card p-4 text-center text-sm text-destructive md:hidden">
-          <p>Failed to load drums.</p>
-          <Button variant="outline" size="sm" className="mt-2" onClick={() => void units.refetch()} disabled={units.isFetching}>
-            Retry
-          </Button>
-        </div>
-      )}
-      {!units.isLoading && !units.isError && (units.data?.data.length ?? 0) === 0 && (
-        <p className="rounded-xl border border-dashed p-6 text-center text-sm text-muted-foreground md:hidden">
-          No drums yet. Create one to start composting.
-        </p>
-      )}
       <MobileCardList>
+        <MobileCardListState
+          isLoading={units.isLoading}
+          isError={units.isError}
+          isEmpty={unitRows.length === 0}
+          onRetry={() => void units.refetch()}
+          pending={units.isFetching}
+          errorMessage="Failed to load drums."
+          loadingLabel="Loading drums"
+          empty={{
+            title: 'No drums yet.',
+            description: showArchived
+              ? 'No drums have been registered yet.'
+              : 'Create one to start composting.',
+          }}
+        />
         {units.data?.data.map((u) => {
           const activeBatch = u.active_batch_id ?? null;
           const archived = u.archived_at !== null && u.archived_at !== undefined;
@@ -2182,16 +1527,6 @@ export default function FacilitiesPage() {
         </Dialog>
       )}
 
-      {openOutput !== null && openOutput.active_batch_id !== null && openOutput.active_batch_id !== undefined && (
-        <Dialog open onOpenChange={(o) => !o && setOpenOutput(null)}>
-          <RecordOutputDialog
-            unit={openOutput}
-            batchId={openOutput.active_batch_id}
-            onClose={() => setOpenOutput(null)}
-          />
-        </Dialog>
-      )}
-
       {openUpdate !== null && openUpdate.active_batch_id !== null && openUpdate.active_batch_id !== undefined && (
         <Dialog open onOpenChange={(o) => !o && setOpenUpdate(null)}>
           <AddUpdateDialog
@@ -2228,32 +1563,12 @@ export default function FacilitiesPage() {
         </Dialog>
       )}
 
-      {openLogs !== null && openLogs.active_batch_id !== null && openLogs.active_batch_id !== undefined && (
-        <Dialog open onOpenChange={(o) => !o && setOpenLogs(null)}>
-          <ProcessLogsDialog
-            unit={openLogs}
-            batchId={openLogs.active_batch_id}
-            onClose={() => setOpenLogs(null)}
-          />
-        </Dialog>
-      )}
-
       {openAnalytics !== null && openAnalytics.active_batch_id !== null && openAnalytics.active_batch_id !== undefined && (
         <Dialog open onOpenChange={(o) => !o && setOpenAnalytics(null)}>
           <AnalyticsDialog
             unit={openAnalytics}
             batchId={openAnalytics.active_batch_id}
             onClose={() => setOpenAnalytics(null)}
-          />
-        </Dialog>
-      )}
-
-      {openRelease !== null && openRelease.active_batch_id !== null && openRelease.active_batch_id !== undefined && (
-        <Dialog open onOpenChange={(o) => !o && setOpenRelease(null)}>
-          <ReleaseBatchDialog
-            unit={openRelease}
-            batchId={openRelease.active_batch_id}
-            onClose={() => setOpenRelease(null)}
           />
         </Dialog>
       )}

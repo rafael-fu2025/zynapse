@@ -21,6 +21,20 @@ export function parseUtc(isoUtc: string): Date {
   return parseISO(hasZone ? isoUtc : isoUtc.replace(' ', 'T') + 'Z');
 }
 
+/**
+ * parseUtc + validity, for the formatters below: anything unparseable
+ * (empty string, a DATE column handed to a datetime formatter, truncated
+ * data) becomes `null` so the caller can degrade instead of throwing.
+ * A formatter crash here takes down the whole page (RangeError inside
+ * render) — the guard is what keeps one bad column value from being a
+ * white screen.
+ */
+function parseUtcSafe(isoUtc: string): Date | null {
+  if (isoUtc.trim() === '') return null;
+  const parsed = parseUtc(isoUtc);
+  return isValid(parsed) ? parsed : null;
+}
+
 export function nowInAppTz(): string {
   return formatInTimeZone(new Date(), useAuthStore.getState().timezone, 'MMM d, yyyy · h:mm:ss a zzz');
 }
@@ -50,11 +64,17 @@ export function appNowParts(): { date: string; time: string } {
  * (ISO date inputs, compact lists, or surfaces that need the zone).
  */
 export function fmtUtcToApp(isoUtc: string, pattern = 'MMM d, yyyy · h:mm a'): string {
-  return formatInTimeZone(parseUtc(isoUtc), useAuthStore.getState().timezone ?? DEFAULT_TZ, pattern);
+  const instant = parseUtcSafe(isoUtc);
+  // Unparseable input renders untouched rather than throwing — the raw
+  // value is still diagnostic; a RangeError inside render is not.
+  if (instant === null) return isoUtc;
+  return formatInTimeZone(instant, useAuthStore.getState().timezone ?? DEFAULT_TZ, pattern);
 }
 
 export function fmtRelative(isoUtc: string): string {
-  return formatDistanceToNow(parseUtc(isoUtc), { addSuffix: true });
+  const instant = parseUtcSafe(isoUtc);
+  if (instant === null) return isoUtc;
+  return formatDistanceToNow(instant, { addSuffix: true });
 }
 
 /**
@@ -66,7 +86,9 @@ export function fmtRelative(isoUtc: string): string {
  * app zone preserves the calendar day while instants roll over correctly.
  */
 export function fmtShort(isoUtc: string): string {
-  return formatInTimeZone(parseUtc(isoUtc), useAuthStore.getState().timezone ?? DEFAULT_TZ, 'yyyy-MM-dd');
+  const instant = parseUtcSafe(isoUtc);
+  if (instant === null) return isoUtc;
+  return formatInTimeZone(instant, useAuthStore.getState().timezone ?? DEFAULT_TZ, 'yyyy-MM-dd');
 }
 
 /**
@@ -75,10 +97,16 @@ export function fmtShort(isoUtc: string): string {
  * date like `Aug 1, 2026` in the app timezone. The bare `YYYY-MM-DD`
  * is treated as midnight in the app timezone (NOT UTC) so the calendar
  * day never shifts across tz boundaries.
+ *
+ * Non-throwing like the other formatters: a value that doesn't parse
+ * (e.g. a full DATETIME passed by mistake) renders untouched instead of
+ * crashing the surface that shows it.
  */
 export function fmtHumanDate(ymd: string): string {
   const tz = useAuthStore.getState().timezone ?? DEFAULT_TZ;
-  return formatInTimeZone(fromZonedTime(`${ymd} 00:00:00`, tz), tz, 'MMM d, yyyy');
+  const instant = fromZonedTime(`${ymd} 00:00:00`, tz);
+  if (!isValid(instant)) return ymd;
+  return formatInTimeZone(instant, tz, 'MMM d, yyyy');
 }
 
 /** `HH:mm`, with optional `:ss` and optional single-digit hour. */
@@ -138,10 +166,14 @@ export function appDateTimeToUtcSql(dateYmd: string, timeHhMm: string): string {
 /**
  * Split a UTC timestamp into app-timezone `date` (`YYYY-MM-DD`) and
  * `time` (`HH:mm`) parts for seeding the date/time pickers on edit.
+ * Unparseable input seeds EMPTY pickers rather than throwing mid-render.
  */
 export function utcSqlToAppParts(isoUtc: string): { date: string; time: string } {
   const tz = useAuthStore.getState().timezone ?? DEFAULT_TZ;
-  const instant = parseUtc(isoUtc);
+  const instant = parseUtcSafe(isoUtc);
+  if (instant === null) {
+    return { date: '', time: '' };
+  }
   return {
     date: formatInTimeZone(instant, tz, 'yyyy-MM-dd'),
     time: formatInTimeZone(instant, tz, 'HH:mm'),

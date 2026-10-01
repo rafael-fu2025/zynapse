@@ -52,6 +52,14 @@ const DYNAMIC_COLSPAN_EXEMPT = new Map<string, string>([
     'pages/PatientsPage.tsx',
     'students table colSpan is side-aware (8 clinic / 7 guidance — the Blood column is clinic-only); both branches hand-verified',
   ],
+  [
+    'pages/DevicesPage.tsx',
+    'colSpan is 7 with the Actions column for facilities.units.manage holders, 6 without — the whole column renders conditionally; both branches hand-verified',
+  ],
+  [
+    'pages/WasteCategoriesPage.tsx',
+    'colSpan is 6 with the Actions column for facilities.categories.manage holders, 5 without — the whole column renders conditionally; both branches hand-verified',
+  ],
 ]);
 
 function walk(dir: string, out: string[] = []): string[] {

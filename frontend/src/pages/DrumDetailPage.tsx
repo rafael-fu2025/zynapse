@@ -9,10 +9,9 @@
  * timeline with an inline observation form, and a quick-loss form
  * for the operator to record categorised mass out of the run.
  *
- * Read-mostly: state transitions (finish / cancel / record output /
- * move to curing) still live on the Facilities table. The writes here
- * are logging an observation and recording a loss — both mirror
- * per-drum log sheets.
+ * Read-mostly: state transitions (finish / cancel) still live on the
+ * Facilities table. The writes here are logging an observation and
+ * recording a loss — both mirror per-drum log sheets.
  */
 import { ArrowLeft, Boxes, Calendar, ClipboardList, Cylinder, LineChart, Loader2, MapPin, Scale, Trash2, TriangleAlert, X } from 'lucide-react';
 import { useId, useState } from 'react';
@@ -53,6 +52,13 @@ import {
   type MoistureLevel,
 } from '@/schemas/facilities';
 import { fmtHumanDate, fmtShort, fmtUtcToApp } from '@/utils/date';
+import {
+  describeBatchPhase,
+  describeEta,
+  formatDayCount,
+  formatKg,
+  formatProgress,
+} from '@/lib/bmgFormat';
 import { titleCase } from '@/lib/utils';
 
 /** Process-log timeline + inline observation form for the batch. */
@@ -163,6 +169,11 @@ function ProcessLogSection({ batchId }: { batchId: number }) {
                   {l.turns_count !== null && l.turns_count !== undefined && (
                     <Badge variant="outline" className="tabular-nums">
                       ⚙ {l.turns_count} rotations{l.duration_seconds !== null && l.duration_seconds !== undefined ? ` · ${l.duration_seconds}s` : ''}
+                    </Badge>
+                  )}
+                  {l.session_started_at !== null && l.session_started_at !== undefined && (
+                    <Badge variant="outline" className="tabular-nums" title="RTC-stamped session start (UTC)">
+                      started {fmtUtcToApp(l.session_started_at, 'MMM d · h:mm a')}
                     </Badge>
                   )}
                   {l.device_id !== null && l.device_id !== undefined && (
@@ -476,10 +487,11 @@ function AnalyticsSection({ batchId }: { batchId: number }) {
 
 /** Everything derived from the active-batch row: header + batch card. */
 function DrumDetail({ batch }: { batch: ActiveBatch }) {
-  const isInput = batch.input_kg <= 0;
-  const overdue = batch.days_until_expected !== null && batch.days_until_expected < 0;
-  const dueToday = batch.days_until_expected === 0;
-  const days = batch.days_active;
+  // Wording comes from the shared formatters so this page and the drum
+  // grid can never describe the same batch differently.
+  const phase = describeBatchPhase(batch.input_kg);
+  const eta = describeEta(batch.days_until_expected);
+  const progress = formatProgress(batch.progress_pct);
 
   return (
     <>
@@ -488,8 +500,8 @@ function DrumDetail({ batch }: { batch: ActiveBatch }) {
           <span className="flex items-center gap-2">
             <Cylinder className="size-5 text-primary" />
             <span className="tabular-nums">{batch.unit_code}</span>
-            <Badge variant={isInput ? 'info' : 'warning'} className="uppercase">
-              {isInput ? 'Input' : 'Processing'}
+            <Badge variant={phase.tone === 'info' ? 'info' : 'warning'} className="uppercase">
+              {phase.label}
             </Badge>
           </span>
         }
@@ -517,8 +529,8 @@ function DrumDetail({ batch }: { batch: ActiveBatch }) {
           <CardTitle className="flex items-center gap-2 text-base">
             <Scale className="size-4 text-primary" /> Batch {batch.batch_code}
           </CardTitle>
-          <Badge variant={days > 30 ? 'warning' : 'info'}>
-            {days} day{days === 1 ? '' : 's'} active
+          <Badge variant={batch.days_active > 30 ? 'warning' : 'info'}>
+            {formatDayCount(batch.days_active)} active
           </Badge>
         </CardHeader>
         <CardContent className="space-y-3">
@@ -531,13 +543,11 @@ function DrumDetail({ batch }: { batch: ActiveBatch }) {
             </div>
             <div className="rounded-md border p-2">
               <dt className="text-xs text-muted-foreground">Input</dt>
-              <dd className="tabular-nums font-semibold">{batch.input_kg.toFixed(2)} kg</dd>
+              <dd className="tabular-nums font-semibold">{formatKg(batch.input_kg)}</dd>
             </div>
             <div className="rounded-md border p-2">
               <dt className="text-xs text-muted-foreground">Output</dt>
-              <dd className="tabular-nums font-semibold">
-                {batch.output_kg !== null ? `${batch.output_kg.toFixed(2)} kg` : '—'}
-              </dd>
+              <dd className="tabular-nums font-semibold">{formatKg(batch.output_kg)}</dd>
             </div>
             <div className="rounded-md border p-2">
               <dt className="flex items-center gap-1 text-xs text-muted-foreground">
@@ -556,17 +566,9 @@ function DrumDetail({ batch }: { batch: ActiveBatch }) {
                 </span>
                 {batch.days_until_expected !== null && (
                   <span
-                    className={
-                      overdue
-                        ? 'ml-2 text-xs font-medium text-destructive'
-                        : 'ml-2 text-xs font-medium text-muted-foreground'
-                    }
+                    className={`ml-2 text-xs font-medium ${eta.tone === 'danger' ? 'text-destructive' : 'text-muted-foreground'}`}
                   >
-                    {overdue
-                      ? `${Math.abs(batch.days_until_expected)} day${Math.abs(batch.days_until_expected) === 1 ? '' : 's'} overdue`
-                      : dueToday
-                        ? 'Due today'
-                        : `in ${batch.days_until_expected} day${batch.days_until_expected === 1 ? '' : 's'}`}
+                    {eta.label}
                   </span>
                 )}
               </span>
@@ -574,17 +576,18 @@ function DrumDetail({ batch }: { batch: ActiveBatch }) {
             <div
               className="h-2 overflow-hidden rounded-full bg-muted"
               role="progressbar"
-              aria-label="Decomposition progress"
-              aria-valuenow={batch.progress_pct}
+              aria-label={`Decomposition progress for ${batch.unit_code}`}
+              aria-valuenow={progress.value}
               aria-valuemin={0}
               aria-valuemax={100}
+              aria-valuetext={`${progress.label} toward expected completion`}
             >
               <div
                 className="h-full rounded-full bg-gradient-to-r from-primary/70 to-primary transition-[width] duration-500"
-                style={{ width: `${batch.progress_pct}%` }}
+                style={{ width: `${progress.value}%` }}
               />
             </div>
-            <p className="text-right text-xs text-muted-foreground">{batch.progress_pct}% progress</p>
+            <p className="text-right text-xs text-muted-foreground">{progress.label} progress</p>
           </div>
         </CardContent>
       </Card>
@@ -603,7 +606,7 @@ export default function DrumDetailPage() {
   const { unitId: unitIdParam } = useParams();
   const unitId = Number(unitIdParam);
   const active = useActiveBatches();
-  const batch = (active.data ?? []).find((b) => b.unit_id === unitId) ?? null;
+  const batch = (active.data?.data ?? []).find((b) => b.unit_id === unitId) ?? null;
 
   return (
     <main className="mx-auto max-w-5xl space-y-4 p-6">

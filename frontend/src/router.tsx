@@ -36,6 +36,7 @@ const CounsellingPage = lazyWithRetry(() => import('@/pages/CounsellingPage'));
 const DashboardPage = lazyWithRetry(() => import('@/pages/DashboardPage'));
 const FacilitiesPage = lazyWithRetry(() => import('@/pages/FacilitiesPage'));
 const WasteCategoriesPage = lazyWithRetry(() => import('@/pages/WasteCategoriesPage'));
+const DevicesPage = lazyWithRetry(() => import('@/pages/DevicesPage'));
 const DrumDetailPage = lazyWithRetry(() => import('@/pages/DrumDetailPage'));
 const ForbiddenPage = lazyWithRetry(() => import('@/pages/ForbiddenPage'));
 const InventoryPage = lazyWithRetry(() => import('@/pages/InventoryPage'));
@@ -293,6 +294,14 @@ const router = createBrowserRouter([
         element: (
           <ProtectedRoute anyOf={['facilities.units.read']}>
             <WasteCategoriesPage />
+          </ProtectedRoute>
+        ),
+      },
+      {
+        path: '/facilities/devices',
+        element: (
+          <ProtectedRoute anyOf={['facilities.units.read']}>
+            <DevicesPage />
           </ProtectedRoute>
         ),
       },

@@ -15,6 +15,7 @@ import {
   CalendarClock,
   ClipboardList,
   ContactRound,
+  Cpu,
   Factory,
   HeartHandshake,
   HeartPulse,
@@ -318,6 +319,9 @@ const NAV_SECTIONS: ReadonlyArray<{ title: string; items: ReadonlyArray<NavItem>
       // dialog inside the Facilities page) — the sidebar entry links
       // straight to the dedicated route.
       { label: 'Waste Category', href: '/facilities/waste-categories', icon: Recycle, permission: 'facilities.units.read' },
+      // Same pattern for the automated tumblers: a dedicated screen,
+      // not a dialog on the Facilities page.
+      { label: 'Devices', href: '/facilities/devices', icon: Cpu, permission: 'facilities.units.read' },
     ],
   },
   {

@@ -32,9 +32,10 @@ export const PAGE_META: Readonly<Record<string, PageMeta>> = {
   '/counselling/announcements': { title: 'Announcements' },
   '/counselling/analytics': { title: 'Analytics' },
   '/counselling/services': { title: 'Services' },
-  '/facilities': { title: 'Facilities — BMG' },
+  '/facilities': { title: 'Facilities' },
   '/facilities/drums': { title: 'Drums' },
   '/facilities/waste-categories': { title: 'Waste categories' },
+  '/facilities/devices': { title: 'Devices' },
   '/admin': { title: 'Administration' },
   '/admin/users': {
     title: 'Users',

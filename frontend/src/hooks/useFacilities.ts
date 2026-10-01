@@ -17,11 +17,10 @@
  */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { z } from 'zod';
-import { apiClient } from '@/api/client';
+import { apiClient, getNextCursor } from '@/api/client';
 import { ApiEnvelopeError } from '@/api/envelope';
 import { toast } from 'sonner';
 import {
-  addBatchInputSchema,
   addBatchLossSchema,
   addProcessLogSchema,
   activeBatchSchema,
@@ -38,16 +37,14 @@ import {
   categoryDeviationSchema,
   createUnitSchema,
   createWasteCategorySchema,
-  moveToCuringSchema,
   openAlertSchema,
   processLogSchema,
   registerDeviceSchema,
-  releaseBatchSchema,
+  updateDeviceSchema,
   updateUnitSchema,
   updateWasteCategorySchema,
   wasteCategorySchema,
   type ActiveBatch,
-  type AddBatchInputInput,
   type AddBatchLossInput,
   type AddBatchUpdateInput,
   type AddProcessLogInput,
@@ -65,13 +62,12 @@ import {
   type CategoryDeviation,
   type CreateUnitInput,
   type CreateWasteCategoryInput,
-  type MoveToCuringInput,
   type OpenAlert,
   type ProcessLog,
-  type RecordOutputInput,
   type RegisterDeviceInput,
-  type ReleaseBatchInput,
+  type FinishBatchInput,
   type StartBatchInput,
+  type UpdateDeviceInput,
   type UpdateUnitInput,
   type UpdateWasteCategoryInput,
   type WasteCategory,
@@ -146,9 +142,14 @@ export function useBmgUnits(cursor: string | null, limit = 25, includeArchived =
       const res = await apiClient.get<{ data: BmgUnit[]; next: string | null }>(
         `/facilities/units?${params.toString()}`,
       );
+      // The API normalizer already unwrapped the `{success,data,...}`
+      // envelope, so `res.data` IS the row array — the BMG controllers
+      // flatten the service's `{data, next}` page into the standard
+      // shape (bare array in `data`, cursor in `meta.pagination`).
+      // The cursor therefore comes from the retained meta, not `res.data`.
       return {
         data: z.array(bmgUnitSchema).parse(res.data),
-        next: res.data?.next ?? null,
+        next: getNextCursor(res),
       };
     },
   });
@@ -198,47 +199,10 @@ export function useStartBatch() {
   });
 }
 
-export interface UseRecordOutputVars {
-  unitId: number;
-  batchId: number;
-  input: RecordOutputInput;
-}
-
-export function useRecordOutput() {
-  const qc = useQueryClient();
-  return useMutation<BmgBatch, ApiEnvelopeError, UseRecordOutputVars, UnitsMutationCtx>({
-    mutationFn: async ({ batchId, input }) => {
-      const res = await apiClient.post<BmgBatch>(`/facilities/batches/${batchId}/output`, input);
-      return bmgBatchSchema.parse(res.data);
-    },
-    onMutate: async ({ unitId }) => {
-      await qc.cancelQueries({ queryKey: UNITS_KEY });
-      const snapshots = snapshotUnits(qc);
-      patchUnitInCache(qc, unitId, { status: 'awaiting_output' });
-      return { snapshots };
-    },
-    onError: (err, _input, ctx) => {
-      for (const [key, snap] of ctx?.snapshots ?? []) {
-        qc.setQueryData(key, snap);
-      }
-      toast.error(err.errors[0]?.message ?? 'Failed to record output.');
-    },
-    onSettled: (_d, _e, vars) => {
-      // The batch is still active (now AwaitingOutput) but its yield /
-      // inputs have changed — drop both the unit and the per-batch
-      // analytics so the dashboard + analytics card stay honest.
-      invalidateFacilities(qc, vars.batchId);
-    },
-    onSuccess: () => {
-      toast.success('Output recorded.');
-    },
-  });
-}
-
 export interface UseFinishBatchVars {
   unitId: number;
   batchId: number;
-  input: ReleaseBatchInput;
+  input: FinishBatchInput;
 }
 
 export function useFinishBatch() {
@@ -277,18 +241,15 @@ export interface UseAddBatchUpdateVars {
   input: AddBatchUpdateInput;
 }
 
-/** Unified "Add update" — appends an immutable output/curing/log entry. */
+/** Unified "Add update" — appends an immutable output/log entry. */
 export function useAddBatchUpdate() {
   const qc = useQueryClient();
-  return useMutation<BatchUpdate, ApiEnvelopeError, UseAddBatchUpdateVars, UnitsMutationCtx>({
+  return useMutation<BatchUpdate, ApiEnvelopeError, UseAddBatchUpdateVars>({
     mutationFn: async ({ batchId, input }) => {
       const res = await apiClient.post<BatchUpdate>(`/facilities/batches/${batchId}/update`, input);
       return batchUpdateSchema.parse(res.data);
     },
-    onError: (err, _input, ctx) => {
-      for (const [key, snap] of ctx?.snapshots ?? []) {
-        qc.setQueryData(key, snap);
-      }
+    onError: (err) => {
       toast.error(err.errors[0]?.message ?? 'Failed to add update.');
     },
     onSettled: (_d, _e, vars) => {
@@ -365,18 +326,40 @@ export function useProcessLogs(batchId: number | null) {
   });
 }
 
+/**
+ * Build the wire payload for `POST /facilities/batches/{id}/logs`.
+ *
+ * Extracted so it can be tested directly. It used to live inline in
+ * `useAddProcessLog`, where it hand-copied field by field and silently
+ * dropped `event_type` — which meant every manually logged TURNING
+ * stored as a generic observation, leaving `days_since_last_turning`
+ * permanently null and the TURNING_DUE alert unreachable for humans.
+ *
+ * Empty strings are omitted so the server sees a missing key (null)
+ * rather than ''.
+ */
+export function buildProcessLogPayload(input: AddProcessLogInput): Record<string, unknown> {
+  const valid = addProcessLogSchema.parse(input);
+  const payload: Record<string, unknown> = {};
+  if (valid.observation_note !== undefined && valid.observation_note !== '') {
+    payload['observation_note'] = valid.observation_note;
+  }
+  if (valid.event_type !== undefined) payload['event_type'] = valid.event_type;
+  if (valid.temperature_celsius !== undefined && valid.temperature_celsius !== '') {
+    payload['temperature_celsius'] = valid.temperature_celsius;
+  }
+  if (valid.moisture_level !== undefined) payload['moisture_level'] = valid.moisture_level;
+  if (valid.oxygen_pct !== undefined && valid.oxygen_pct !== '') payload['oxygen_pct'] = valid.oxygen_pct;
+  if (valid.device_id !== undefined && valid.device_id !== '') payload['device_id'] = valid.device_id;
+  if (valid.calibration_status !== undefined) payload['calibration_status'] = valid.calibration_status;
+  return payload;
+}
+
 export function useAddProcessLog() {
   const qc = useQueryClient();
   return useMutation<ProcessLog, ApiEnvelopeError, { batchId: number; input: AddProcessLogInput }>({
     mutationFn: async ({ batchId, input }) => {
-      const valid = addProcessLogSchema.parse(input);
-      const payload: Record<string, unknown> = {};
-      if (valid.observation_note !== undefined && valid.observation_note !== '') payload['observation_note'] = valid.observation_note;
-      if (valid.temperature_celsius !== undefined && valid.temperature_celsius !== '') payload['temperature_celsius'] = valid.temperature_celsius;
-      if (valid.moisture_level !== undefined) payload['moisture_level'] = valid.moisture_level;
-      if (valid.oxygen_pct !== undefined && valid.oxygen_pct !== '') payload['oxygen_pct'] = valid.oxygen_pct;
-      if (valid.device_id !== undefined && valid.device_id !== '') payload['device_id'] = valid.device_id;
-      if (valid.calibration_status !== undefined) payload['calibration_status'] = valid.calibration_status;
+      const payload = buildProcessLogPayload(input);
       const res = await apiClient.post<unknown>(`/facilities/batches/${batchId}/logs`, payload);
       return processLogSchema.parse(res.data);
     },
@@ -731,16 +714,31 @@ export function useUnarchiveUnit() {
  * dashboard widget — a single round-trip keeps the dashboard snappy
  * behind the single-threaded dev server.
  */
+/**
+ * Active batches for the "Processing Drums" surfaces, plus the
+ * turning-cadence threshold the backend enforces. The threshold ships
+ * with the payload so the card's "stale turning" styling can never drift
+ * from the rule that actually raises the TURNING_DUE alert.
+ *
+ * `refetchInterval` matters here specifically because the mechanized
+ * tumbler writes process logs (and can raise alerts) out-of-band — an
+ * operator watching the widget would otherwise see stale state until
+ * they re-focused the tab.
+ */
 export function useActiveBatches() {
-  return useQuery<ActiveBatch[], ApiEnvelopeError>({
-    queryKey: ['facilities', 'batches', 'active'],
+  return useQuery<{ data: ActiveBatch[]; turning_due_days: number }, ApiEnvelopeError>({
+    queryKey: ACTIVE_BATCHES_KEY,
     queryFn: async () => {
       const res = await apiClient.get<unknown>('/facilities/batches/active');
-      return z.array(activeBatchSchema).parse(res.data);
+      const parsed = z
+        .object({ data: z.array(activeBatchSchema), turning_due_days: z.number() })
+        .parse(res.data);
+      return parsed;
     },
     // Cheap query (small result set, but every page re-mounts). Refresh
     // when the tab regains focus so an operator always sees fresh state.
     staleTime: 30_000,
+    refetchInterval: 60_000,
   });
 }
 
@@ -774,97 +772,6 @@ export function useSetUnitMaintenance() {
     },
     onSuccess: (d) => {
       toast.success(`Unit → ${d.status}.`);
-    },
-  });
-}
-
-// ------------------------------------------------------ Curing transition
-
-/**
- * Move a batch from `awaiting_output` to `curing` — industry practice when
- * the drum has residue that needs a slow maturation phase (1–3 months at
- * lower monitoring frequency) before final QA / output. Mirrors the
- * `useFinishBatch` / `useCancelBatch` pattern: optimistic unit status
- * patch, rollback on error, reconcile via invalidate on settle.
- *
- * Note: the unit also flips to `curing` so the dashboard widget's join
- * (which filters by `curing` as an active status) still surfaces the row.
- */
-export interface UseMoveToCuringVars {
-  unitId: number;
-  batchId: number;
-  input?: MoveToCuringInput;
-}
-
-export function useMoveToCuring() {
-  const qc = useQueryClient();
-  return useMutation<BmgBatch, ApiEnvelopeError, UseMoveToCuringVars, UnitsMutationCtx>({
-    mutationFn: async ({ batchId, input }) => {
-      // The form may pass an empty object (no AIP snapshot) — Zod
-      // makes every field optional so we just always parse.
-      const valid = moveToCuringSchema.parse(input ?? {});
-      const payload: Record<string, unknown> = {};
-      if (valid.accumulated_in_process_kg !== undefined && valid.accumulated_in_process_kg !== '') {
-        payload['accumulated_in_process_kg'] = valid.accumulated_in_process_kg;
-      }
-      const res = await apiClient.post<BmgBatch>(`/facilities/batches/${batchId}/curing`, payload);
-      return bmgBatchSchema.parse(res.data);
-    },
-    onMutate: async ({ unitId }) => {
-      await qc.cancelQueries({ queryKey: UNITS_KEY });
-      const snapshots = snapshotUnits(qc);
-      // Curing is an ACTIVE state — keep `active_batch_id` populated so
-      // the "Processing Drums" widget still shows the drum.
-      patchUnitInCache(qc, unitId, { status: 'curing' });
-      return { snapshots };
-    },
-    onError: (err, _vars, ctx) => {
-      for (const [key, snap] of ctx?.snapshots ?? []) {
-        qc.setQueryData(key, snap);
-      }
-      toast.error(err.errors[0]?.message ?? 'Failed to move batch to curing.');
-    },
-    onSettled: (_d, _e, vars) => {
-      invalidateFacilities(qc, vars.batchId);
-    },
-    onSuccess: () => {
-      toast.success('Batch moved to curing.');
-    },
-  });
-}
-
-// ------------------------------------------------------ Batch inputs (feedstock)
-
-/**
- * Record a feedstock input against a batch — required for mass-balance
- * analytics. Supports the Tier 2.1 characterisation columns (C:N,
- * bulk density, pH) as optional fields; empty strings are stripped so
- * the backend sees nulls (matches the existing `permit_empty` rule).
- */
-export function useAddBatchInput() {
-  const qc = useQueryClient();
-  return useMutation<unknown, ApiEnvelopeError, { batchId: number; input: AddBatchInputInput }>({
-    mutationFn: async ({ batchId, input }) => {
-      const valid = addBatchInputSchema.parse(input);
-      const payload: Record<string, unknown> = { weight_kg: valid.weight_kg };
-      if (valid.cn_ratio !== undefined && valid.cn_ratio !== '') payload['cn_ratio'] = valid.cn_ratio;
-      if (valid.bulk_density_kg_per_m3 !== undefined && valid.bulk_density_kg_per_m3 !== '') {
-        payload['bulk_density_kg_per_m3'] = valid.bulk_density_kg_per_m3;
-      }
-      if (valid.ph !== undefined && valid.ph !== '') payload['ph'] = valid.ph;
-      if (valid.note !== undefined && valid.note !== '') payload['note'] = valid.note;
-      const res = await apiClient.post<unknown>(`/facilities/batches/${batchId}/inputs`, payload);
-      return res.data;
-    },
-    onSuccess: (_d, vars) => {
-      // Recording an input shifts the analytics; the active-batches
-      // widget also re-evaluates expected completion.
-      void qc.invalidateQueries({ queryKey: ['facilities', 'analytics', vars.batchId] });
-      void qc.invalidateQueries({ queryKey: ACTIVE_BATCHES_KEY });
-      toast.success('Input recorded.');
-    },
-    onError: (err) => {
-      toast.error(err.errors[0]?.message ?? 'Failed to record input.');
     },
   });
 }
@@ -943,56 +850,16 @@ export function useAcknowledgeAlert() {
           return old.map((a) => (a.id === vars.alertId ? _d : a));
         },
       );
+      // The per-batch patch above deliberately skips the network, but the
+      // OPEN alerts list and the active-batches feeds are separate
+      // caches that would otherwise keep counting an alert the operator
+      // has already dealt with — including the sidebar's at-risk badge.
+      void qc.invalidateQueries({ queryKey: ['facilities', 'alerts', 'open'] });
+      void qc.invalidateQueries({ queryKey: ACTIVE_BATCHES_KEY });
       toast.success('Alert acknowledged.');
     },
     onError: (err) => {
       toast.error(err.errors[0]?.message ?? 'Failed to acknowledge alert.');
-    },
-  });
-}
-
-// ------------------------------------------------------ Audit fixes
-
-export interface UseReleaseBatchVars {
-  unitId: number;
-  batchId: number;
-  input: ReleaseBatchInput;
-}
-
-/**
- * Release a finished/cured batch — the final QA gate (audit #4).
- * Terminal state; the unit returns to Idle.
- */
-export function useReleaseBatch() {
-  const qc = useQueryClient();
-  return useMutation<BmgBatch, ApiEnvelopeError, UseReleaseBatchVars, UnitsMutationCtx>({
-    mutationFn: async ({ batchId, input }) => {
-      const valid = releaseBatchSchema.parse(input);
-      const payload: Record<string, unknown> = {
-        quality_grade: valid.quality_grade,
-        maturity_level: valid.maturity_level,
-      };
-      if (valid.notes !== undefined && valid.notes !== '') payload['notes'] = valid.notes;
-      const res = await apiClient.post<BmgBatch>(`/facilities/batches/${batchId}/release`, payload);
-      return bmgBatchSchema.parse(res.data);
-    },
-    onMutate: async ({ unitId }) => {
-      await qc.cancelQueries({ queryKey: UNITS_KEY });
-      const snapshots = snapshotUnits(qc);
-      patchUnitInCache(qc, unitId, { status: 'idle', active_batch_id: null });
-      return { snapshots };
-    },
-    onError: (err, _vars, ctx) => {
-      for (const [key, snap] of ctx?.snapshots ?? []) {
-        qc.setQueryData(key, snap);
-      }
-      toast.error(err.errors[0]?.message ?? 'Failed to release batch.');
-    },
-    onSettled: (_d, _e, vars) => {
-      invalidateFacilities(qc, vars.batchId);
-    },
-    onSuccess: () => {
-      toast.success('Batch released.');
     },
   });
 }
@@ -1052,7 +919,7 @@ export function useBatchHistory(
       );
       return {
         data: z.array(batchHistoryItemSchema).parse(res.data),
-        next: res.data?.next ?? null,
+        next: getNextCursor(res),
       };
     },
   });
@@ -1089,20 +956,86 @@ export function useWasteCategoryDeviation() {
 // ------------------------------------------------------ BMG devices
 
 /** Registered automated tumblers, newest first (keyset-paginated). */
-export function useBmgDevices(cursor: string | null, limit = 25) {
+export function useBmgDevices(cursor: string | null, limit = 25, includeArchived = false) {
   return useQuery<{ data: BmgDevice[]; next: string | null }, ApiEnvelopeError>({
-    queryKey: [DEVICES_KEY, { cursor, limit }] as const,
+    queryKey: [DEVICES_KEY, { cursor, limit, includeArchived }] as const,
     queryFn: async () => {
       const params = new URLSearchParams();
       if (cursor !== null) params.set('cursor', cursor);
       params.set('limit', String(limit));
+      if (includeArchived) params.set('include_archived', '1');
       const res = await apiClient.get<{ data: BmgDevice[]; next: string | null }>(
         `/facilities/devices?${params.toString()}`,
       );
       return {
         data: z.array(bmgDeviceSchema).parse(res.data),
-        next: res.data?.next ?? null,
+        next: getNextCursor(res),
       };
+    },
+  });
+}
+
+/**
+ * Patch a device's display name and/or drum binding — the recovery path
+ * for a tumbler flashed against the wrong drum. Rebinding must not
+ * re-key the token: the board keeps reporting with the credential it
+ * already has.
+ */
+export function useUpdateBmgDevice() {
+  const qc = useQueryClient();
+  return useMutation<BmgDevice, ApiEnvelopeError, { deviceId: number; input: UpdateDeviceInput }>({
+    mutationFn: async ({ deviceId, input }) => {
+      const valid = updateDeviceSchema.parse(input);
+      const payload: Record<string, unknown> = {};
+      if (valid.display_name !== undefined) payload['display_name'] = valid.display_name;
+      // An explicit null is meaningful — it UNBINDS the device — so it
+      // is sent rather than stripped like the other optional keys.
+      if (valid.unit_id !== undefined) payload['unit_id'] = valid.unit_id;
+      const res = await apiClient.post<BmgDevice>(`/facilities/devices/${deviceId}`, payload);
+      return bmgDeviceSchema.parse(res.data);
+    },
+    onSuccess: (device) => {
+      qc.setQueriesData<{ data: BmgDevice[]; next: string | null }>(
+        { queryKey: DEVICES_KEY },
+        (old) =>
+          old === undefined
+            ? old
+            : {
+                ...old,
+                data: old.data.map((d) => (d.id === device.id ? device : d)),
+              },
+      );
+      toast.success('Device updated.');
+    },
+    onError: (err) => {
+      toast.error(err.errors[0]?.message ?? 'Failed to update device.');
+    },
+  });
+}
+
+/**
+ * Soft-archive a device. The credential stays hashed but the device is
+ * rejected by the ingest filter, so a decommissioned board can neither
+ * report nor be silently rebound by mistake.
+ */
+export function useArchiveBmgDevice() {
+  const qc = useQueryClient();
+  return useMutation<BmgDevice, ApiEnvelopeError, { deviceId: number }>({
+    mutationFn: async ({ deviceId }) => {
+      const res = await apiClient.delete<BmgDevice>(`/facilities/devices/${deviceId}`);
+      return bmgDeviceSchema.parse(res.data);
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: DEVICES_KEY });
+      toast.success('Device archived.');
+    },
+    onError: (err) => {
+      if (err instanceof ApiEnvelopeError && err.httpStatus === 404) {
+        // Already gone — the list refresh below is the whole outcome.
+        void qc.invalidateQueries({ queryKey: DEVICES_KEY });
+        return;
+      }
+      toast.error(err.errors[0]?.message ?? 'Failed to archive device.');
     },
   });
 }

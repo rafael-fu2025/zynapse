@@ -1,92 +1,238 @@
 /**
- * Phase 4 smoke — extended.
+ * Facilities drum-menu gating.
  *
- * Skipped unless `SYNAPSE_E2E=1`. Requires both backend (8090) and
- * frontend (5173) running locally with at least one BMG unit seeded.
+ * This spec was previously live-only and asserted a "Move to curing" menu
+ * item. That action had been removed from the product, so the assertion
+ * had been failing on anyone who actually ran it — but the spec was
+ * gated behind `SYNAPSE_E2E=1` and therefore never ran in CI, so nothing
+ * flagged it. The rotting stayed invisible for months.
  *
- * Steps:
- *   1. Sign in as `clinic_staff` (uses login form).
- *   2. Navigate to /facilities.
- *   3. Confirm the units table renders.
+ * The state rules now live in `src/lib/bmgActions.ts` and are unit-tested
+ * there. This spec is the surface-level guard: it drives the real menu
+ * from a mocked API and asserts which items are actually actionable for
+ * each drum state, including the negative case that the retired `curing`
+ * state must not reappear.
  *
- * Use `playwright.config.ts` to point at the right baseURL.
+ * Mocked (CI-safe): no live backend needed.
  */
-import { expect, test } from '@playwright/test';
-import { apiOrigin, apiToken, signInLive } from './helpers/auth';
+import { expect, test, type Page } from '@playwright/test';
+import { signInMocked } from './helpers/auth';
 
-const RUN = process.env['SYNAPSE_E2E'] === '1';
+const PERMISSIONS = [
+  'facilities.units.read',
+  'facilities.units.manage',
+  'facilities.bmg.transition',
+  'facilities.bmg.record_output',
+  'facilities.bmg.logs.read',
+  'facilities.bmg.logs.record',
+  'facilities.categories.manage',
+  'notifications.read',
+];
 
-test.skip(!RUN, 'SYNAPSE_E2E=1 not set — skipping live smoke.');
+interface SeedUnit {
+  id: number;
+  code: string;
+  status: string;
+  active_batch_id: number | null;
+  archived_at: string | null;
+}
 
-test('facilities page renders the BMG units table', async ({ page }) => {
-  await signInLive(page);
+const IDLE: SeedUnit = {
+  id: 1,
+  code: 'drum-idle',
+  status: 'idle',
+  active_batch_id: null,
+  archived_at: null,
+};
 
-  // Client-side navigation — hard reload drops the in-memory token.
-  await page.getByRole('link', { name: /facilities/i }).first().click();
-  await page.waitForURL(/\/facilities$/);
-  await expect(page.getByRole('heading', { name: /facilities/i }).first()).toBeVisible();
+const PROCESSING: SeedUnit = {
+  id: 2,
+  code: 'drum-busy',
+  status: 'processing',
+  active_batch_id: 42,
+  archived_at: null,
+};
 
-  const actions = page.getByRole('button', { name: /actions for/i }).first();
-  await expect(actions).toBeVisible();
-  await actions.click();
-  await expect(page.getByRole('menuitem', { name: 'Edit drum' })).toBeVisible();
-  await expect(page.getByRole('menuitem', { name: 'Start batch' })).toBeVisible();
-});
+const AWAITING: SeedUnit = {
+  id: 3,
+  code: 'drum-waiting',
+  status: 'awaiting_output',
+  active_batch_id: 43,
+  archived_at: null,
+};
+
+const ARCHIVED: SeedUnit = {
+  id: 4,
+  code: 'drum-old',
+  status: 'idle',
+  active_batch_id: null,
+  archived_at: '2026-08-01 09:00:00',
+};
+
+function unitRow(u: SeedUnit) {
+  return {
+    id: u.id,
+    code: u.code,
+    display_name: u.code,
+    status: u.status,
+    location_code: null,
+    spec_capacity_kg: 120,
+    default_category_id: null,
+    notes: null,
+    created_at: '2026-08-01 09:00:00',
+    updated_at: '2026-08-01 09:00:00',
+    archived_at: u.archived_at,
+    active_batch_id: u.active_batch_id,
+  };
+}
+
+async function signIn(page: Page): Promise<void> {
+  await signInMocked(
+    page,
+    {
+      id: 9,
+      email: 'bmg_admin@example.test',
+      username: 'bmg-admin',
+      is_active: true,
+      force_reset: false,
+      permissions: PERMISSIONS,
+    },
+    { mockRefresh: true },
+  );
+
+  const json = (data: unknown) => ({
+    contentType: 'application/json',
+    body: JSON.stringify({ success: true, data, errors: [], meta: null }),
+  });
+
+  // NOTE: Playwright treats `?` in a glob as a single-character wildcard,
+  // so a literal query separator must be expressed with `*` instead.
+  //
+  // The response shape must mirror what the BMG controllers ACTUALLY emit:
+  // a bare row array in `data`, with the cursor in `meta.pagination`
+  // (they flatten the service's `{data, next}` page). An earlier version
+  // of this mock nested `{data, next}` inside `data` and so passed
+  // against a client bug it should have caught.
+  await page.route('**/api/v1/facilities/units*', (route) =>
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        success: true,
+        data: [IDLE, PROCESSING, AWAITING, ARCHIVED].map(unitRow),
+        errors: [],
+        meta: { pagination: { limit: 50, next_cursor: null, prev_cursor: null } },
+      }),
+    }),
+  );
+  // Active batches are NOT flattened — that endpoint returns its
+  // `{data, turning_due_days}` payload verbatim.
+  await page.route('**/api/v1/facilities/batches/active*', (route) =>
+    route.fulfill(json({ data: [], turning_due_days: 4 })),
+  );
+  await page.route('**/api/v1/facilities/alerts/open*', (route) =>
+    route.fulfill(json([])),
+  );
+  await page.route('**/api/v1/facilities/waste-categories*', (route) =>
+    route.fulfill(json([])),
+  );
+  await page.route('**/api/v1/notifications**', (route) => route.fulfill(json([])));
+  await page.route('**/api/v1/dashboard/counters**', (route) =>
+    route.fulfill(json({ facilities: { units_idle: 1, units_processing: 1, units_awaiting: 1, at_risk: 0 } })),
+  );
+}
 
 /**
- * Tier 3.1 — curing transition is exposed in the units menu.
+ * Land on /facilities by CLIENT-SIDE navigation.
  *
- * The "Move to curing" entry must render for every unit (gated only
- * by the `disabled` prop when the batch isn't in `awaiting_output`).
- * The networking path is `POST /facilities/batches/:id/curing` —
- * we boot a single batch into `awaiting_output` via the existing
- * dev seed, then assert the menu shows the action and the route
- * accepts the empty payload (no AIP snapshot).
- *
- * Defensive: this test is skipped if no unit is in the
- * `awaiting_output` state on the first row of the list — the
- * E2E environment is shared and we must not assume seed ordering.
+ * The mocked session lives in memory only — a hard `page.goto` reloads
+ * the SPA, drops the token, and bounces to /login. The live spec this
+ * replaces hit exactly that and worked around it with a link click.
  */
-test('Move to curing action is available for awaiting_output units', async ({ page, request }) => {
-  await signInLive(page);
+async function gotoFacilities(page: Page): Promise<void> {
+  await page.getByRole('link', { name: /facilities/i }).first().click();
+  await page.waitForURL(/\/facilities(\?|$)/);
+  await expect(page.getByRole('heading', { name: 'Facilities' }).first()).toBeVisible();
+}
 
-  // The API is Bearer-authenticated — cookies are never accepted on
-  // api_auth routes (the cookie-only header 401'd here, 2026-09 run).
-  const api = apiOrigin();
-  const bearer = await apiToken();
-  const auth = { authorization: `Bearer ${bearer}` };
+async function openMenu(page: Page, code: string) {
+  const trigger = page.getByRole('button', { name: `Actions for ${code}` });
+  await expect(trigger).toBeVisible();
+  await trigger.click();
+  return page.getByRole('menu');
+}
 
-  // Discover the first unit in awaiting_output via the API.
-  // The endpoint is paginated; the seed ships 1–2 units, so a single
-  // page is enough. The backend groups everything under /api/v1.
-  const list = await request.get(`${api}/api/v1/facilities/units?limit=50`, {
-    headers: auth,
+test.describe('BMG drum menu gating', () => {
+  test('an idle drum offers Start batch and can be parked or archived', async ({ page }) => {
+    await signIn(page);
+    await gotoFacilities(page);
+
+    const menu = await openMenu(page, IDLE.code);
+    await expect(menu.getByRole('menuitem', { name: 'Start batch' })).toBeEnabled();
+    await expect(menu.getByRole('menuitem', { name: 'Add update' })).toBeDisabled();
+    await expect(menu.getByRole('menuitem', { name: 'Finish batch' })).toBeDisabled();
+    await expect(menu.getByRole('menuitem', { name: 'Cancel batch' })).toBeDisabled();
+    await expect(menu.getByRole('menuitem', { name: 'Drum status' })).toBeEnabled();
   });
-  expect(list.ok(), `units list status was ${list.status()}`).toBeTruthy();
-  const body = (await list.json()) as { data?: Array<{ id: number; status: string; active_batch_id?: number | null }> };
-  const rows = body.data ?? [];
-  const awaiting = rows.find((u) => u.status === 'awaiting_output' && u.active_batch_id !== null && u.active_batch_id !== undefined);
-  test.skip(!awaiting, 'No unit currently in awaiting_output — skipping curing transition E2E.');
 
-  // Locate the row's actions trigger. The aria-label is
-  // `Actions for <unit_code>`; the regex matches any unit row.
-  const rowIndex = rows.indexOf(awaiting!);
-  const actions = page.getByRole('button', { name: /actions for/i }).nth(rowIndex);
-  await expect(actions).toBeVisible();
-  await actions.click();
+  test('a processing drum offers the batch actions and hides Start batch', async ({ page }) => {
+    await signIn(page);
+    await gotoFacilities(page);
 
-  const menuItem = page.getByRole('menuitem', { name: 'Move to curing' });
-  await expect(menuItem).toBeVisible();
-  await expect(menuItem).toBeEnabled();
-
-  // The transition endpoint must be wired. We don't actually fire the
-  // mutation — that would change shared state — we just probe the
-  // route with a batch id that won't exist. A 404 (resource not
-  // found) or 409 (state machine rejection) is enough to prove the
-  // route is reachable; a 405 would mean the route is missing.
-  const probe = await request.post(`${api}/api/v1/facilities/batches/-1/curing`, {
-    headers: { ...auth, 'content-type': 'application/json' },
-    data: {},
+    const menu = await openMenu(page, PROCESSING.code);
+    await expect(menu.getByRole('menuitem', { name: 'Start batch' })).toBeDisabled();
+    await expect(menu.getByRole('menuitem', { name: 'Add update' })).toBeEnabled();
+    await expect(menu.getByRole('menuitem', { name: 'Finish batch' })).toBeEnabled();
+    await expect(menu.getByRole('menuitem', { name: 'Cancel batch' })).toBeEnabled();
+    // Parking a drum mid-run would strand the batch.
+    await expect(menu.getByRole('menuitem', { name: 'Drum status' })).toBeDisabled();
   });
-  expect([404, 409]).toContain(probe.status());
+
+  test('an awaiting-output drum behaves like a processing drum', async ({ page }) => {
+    await signIn(page);
+    await gotoFacilities(page);
+
+    const menu = await openMenu(page, AWAITING.code);
+    await expect(menu.getByRole('menuitem', { name: 'Add update' })).toBeEnabled();
+    await expect(menu.getByRole('menuitem', { name: 'Finish batch' })).toBeEnabled();
+    await expect(menu.getByRole('menuitem', { name: 'Start batch' })).toBeDisabled();
+  });
+
+  test('an archived drum offers Restore and nothing that starts work', async ({ page }) => {
+    await signIn(page);
+    await gotoFacilities(page);
+
+    // Archived rows are hidden by default; the toggle brings them back.
+    await page.getByRole('button', { name: /show archived/i }).click();
+    await expect(page.getByRole('button', { name: /hide archived/i })).toBeVisible();
+
+    const menu = await openMenu(page, ARCHIVED.code);
+    await expect(menu.getByRole('menuitem', { name: 'Restore' })).toBeEnabled();
+    await expect(menu.getByRole('menuitem', { name: 'Start batch' })).toBeDisabled();
+    await expect(menu.getByRole('menuitem', { name: 'Drum status' })).toBeDisabled();
+  });
+
+  test('the retired curing transition is not offered anywhere', async ({ page }) => {
+    // The `curing` state was removed from the domain on 2026-09-29. This
+    // is the assertion that would have caught the stale e2e spec that
+    // used to check for exactly this menu item.
+    await signIn(page);
+    await gotoFacilities(page);
+
+    for (const code of [IDLE.code, PROCESSING.code, AWAITING.code]) {
+      const menu = await openMenu(page, code);
+      await expect(menu.getByRole('menuitem', { name: /curing/i })).toHaveCount(0);
+      await page.keyboard.press('Escape');
+    }
+  });
+
+  test('the archived toggle round-trips through the URL', async ({ page }) => {
+    await signIn(page);
+    await gotoFacilities(page);
+
+    const toggle = page.getByRole('button', { name: /show archived/i });
+    await expect(toggle).toBeVisible();
+    await toggle.click();
+    await expect(page).toHaveURL(/[?&]archived=1/);
+    await expect(page.getByRole('button', { name: /hide archived/i })).toBeVisible();
+  });
 });

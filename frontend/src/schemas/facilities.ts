@@ -4,14 +4,13 @@
  */
 import { z } from 'zod';
 
-export const BMG_UNIT_STATUSES = ['idle', 'processing', 'awaiting_output', 'curing', 'cancelled', 'maintenance'] as const;
+export const BMG_UNIT_STATUSES = ['idle', 'processing', 'awaiting_output', 'cancelled', 'maintenance'] as const;
 export type BmgUnitStatus = (typeof BMG_UNIT_STATUSES)[number];
 
 export const BMG_BATCH_STATUSES = [
   'idle',
   'processing',
   'awaiting_output',
-  'curing',
   'cancelled',
   'released',
 ] as const;
@@ -55,6 +54,7 @@ export const BMG_ALERT_CODES = [
   'MOISTURE_HIGH',
   'STALLED',
   'OXYGEN_OUT',
+  'TURNING_DUE',
 ] as const;
 export type BmgAlertCode = (typeof BMG_ALERT_CODES)[number];
 
@@ -83,7 +83,8 @@ export type BmgUnit = z.infer<typeof bmgUnitSchema>;
 
 /**
  * One immutable, timestamped entry in a batch's append-only "Updates"
- * feed — output / curing / log. Mirrors `BmgService::listBatchUpdates`.
+ * feed — output / log, plus historical `curing` rows predating that
+ * state's retirement. Mirrors `BmgService::listBatchUpdates`.
  */
 export const batchUpdateSchema = z.object({
   id: z.number().int().positive(),
@@ -100,15 +101,13 @@ export const batchUpdateSchema = z.object({
 export type BatchUpdate = z.infer<typeof batchUpdateSchema>;
 
 /**
- * Unified "Add update" — one action, three internal entry types. The
- * UI branches by what the operator fills in (output weight / curing
- * note / log details); the backend appends an immutable ledger row.
+ * Unified "Add update" — one action, two internal entry types. The
+ * backend appends an immutable ledger row.
  */
 export const addBatchUpdateSchema = z
   .object({
-    update_type: z.enum(['output', 'curing', 'log']),
+    update_type: z.enum(['output', 'log']),
     output_weight_kg: z.number().positive().optional(),
-    curing_note: z.string().max(512).optional().or(z.literal('')),
     event_type: z.enum(BMG_PROCESS_EVENT_TYPES).optional(),
     observation_note: z.string().max(1000).optional().or(z.literal('')),
     temperature_celsius: z.coerce.number().min(-20).max(120).optional(),
@@ -118,9 +117,7 @@ export const addBatchUpdateSchema = z
     (v) =>
       v.update_type === 'output'
         ? v.output_weight_kg !== undefined
-        : v.update_type === 'curing'
-          ? (v.curing_note ?? '') !== ''
-          : (v.event_type !== undefined || (v.observation_note ?? '') !== '' || v.temperature_celsius !== undefined || v.moisture_level !== undefined),
+        : v.event_type !== undefined || (v.observation_note ?? '') !== '' || v.temperature_celsius !== undefined || v.moisture_level !== undefined,
     { message: 'Fill in the relevant detail for this update.', path: ['update_type'] },
   );
 export type AddBatchUpdateInput = z.infer<typeof addBatchUpdateSchema>;
@@ -185,18 +182,22 @@ export const bmgBatchSchema = z.object({
 export type BmgBatch = z.infer<typeof bmgBatchSchema>;
 
 /**
- * Finish a batch — graded release with the final output (yield) and
- * quality/maturity gate. `output_weight_kg` is the final yield
- * recorded at finish (the output ledger entry); it's optional only
- * when the run produced nothing measurable.
+ * Finish a batch — the graded release. Both QA fields are required;
+ * `output_weight_kg` is the final yield recorded at finish as the
+ * batch's closing output-ledger entry, optional when the run produced
+ * nothing measurable.
+ *
+ * This is the only operator-facing terminal transition. The backend's
+ * `releaseBatch` variant lands on the same `released` state but does not
+ * stamp `finished_at`, so it is deliberately not modelled here.
  */
-export const releaseBatchSchema = z.object({
+export const finishBatchSchema = z.object({
   quality_grade: z.enum(BMG_QUALITY_GRADES),
   maturity_level: z.enum(BMG_MATURITY_LEVELS),
   output_weight_kg: z.coerce.number().positive().optional(),
   notes: z.string().max(512).optional().or(z.literal('')),
 });
-export type ReleaseBatchInput = z.infer<typeof releaseBatchSchema>;
+export type FinishBatchInput = z.infer<typeof finishBatchSchema>;
 
 /**
  * Start a batch with its segregated waste composition (panel
@@ -242,13 +243,6 @@ export const cancelBatchSchema = z.object({
 });
 export type CancelBatchInput = z.infer<typeof cancelBatchSchema>;
 
-export const bmgBatchPageSchema = z.object({
-  data: z.array(bmgUnitSchema),
-  next: z.string().nullable().optional(),
-});
-export type BmgUnitsPage = z.infer<typeof bmgBatchPageSchema>;
-export type BmgBatchPage = z.infer<typeof bmgBatchSchema>;
-
 export const MOISTURE_LEVELS = ['low', 'normal', 'high'] as const;
 export type MoistureLevel = (typeof MOISTURE_LEVELS)[number];
 
@@ -272,6 +266,10 @@ export const processLogSchema = z.object({
   session_uid: z.string().nullable().optional(),
   turns_count: z.number().int().positive().nullable().optional(),
   duration_seconds: z.number().int().positive().nullable().optional(),
+  // RTC-stamped session window (UTC) — when the session ACTUALLY ran on
+  // the device. Absent on manual logs and pre-RTC firmware reports.
+  session_started_at: z.string().nullable().optional(),
+  session_ended_at: z.string().nullable().optional(),
   recorded_by_user_id: z.number().int().positive(),
   created_at: z.string(),
 });
@@ -287,33 +285,6 @@ export const addProcessLogSchema = z.object({
   calibration_status: z.enum(['ok', 'due', 'overdue']).optional(),
 });
 export type AddProcessLogInput = z.infer<typeof addProcessLogSchema>;
-
-/**
- * Move an AwaitingOutput batch into Curing. The operator may optionally
- * declare the WIP still inside the drum (residue); the value is
- * surfaced on the batch row for QA close.
- */
-export const moveToCuringSchema = z.object({
-  accumulated_in_process_kg: z
-    .union([z.coerce.number().nonnegative(), z.literal('')])
-    .optional(),
-});
-export type MoveToCuringInput = z.infer<typeof moveToCuringSchema>;
-
-/**
- * Append a single feedstock component to an active batch. Optional
- * C:N / bulk-density / pH fields support industry-grade
- * characterization without blocking the simpler "just record weight"
- * workflow.
- */
-export const addBatchInputSchema = z.object({
-  weight_kg: z.coerce.number().positive(),
-  cn_ratio: z.coerce.number().min(0.1).max(200).optional().or(z.literal('')),
-  bulk_density_kg_per_m3: z.coerce.number().positive().optional().or(z.literal('')),
-  ph: z.coerce.number().min(0).max(14).optional().or(z.literal('')),
-  note: z.string().max(255).optional().or(z.literal('')),
-});
-export type AddBatchInputInput = z.infer<typeof addBatchInputSchema>;
 
 /**
  * Record a categorised mass loss against an active batch. The backend
@@ -369,8 +340,6 @@ export const updateWasteCategorySchema = z.object({
   is_active: z.boolean().optional(),
 });
 export type UpdateWasteCategoryInput = z.infer<typeof updateWasteCategorySchema>;
-
-export const OUTPUT_GRADES = ['excellent', 'good', 'fair'] as const;
 
 export const batchCompositionRowSchema = z.object({
   category_id: z.number().int().positive(),
@@ -429,6 +398,11 @@ export const activeBatchSchema = z.object({
   expected_completion_date: z.string().nullable(),
   days_until_expected: z.number().int().nullable(),
   progress_pct: z.number().int().min(0).max(100),
+  // Aeration cadence: newest `turning` log for the batch. null = never
+  // turned. Nullable/optional so deploys before the backend enrichment
+  // keep parsing.
+  last_turned_at: z.string().nullable().optional(),
+  days_since_last_turning: z.number().int().nonnegative().nullable().optional(),
 });
 export type ActiveBatch = z.infer<typeof activeBatchSchema>;
 
@@ -562,11 +536,26 @@ export const bmgDeviceSchema = z.object({
   token_prefix: z.string().nullable().optional(),
   firmware: z.string().nullable().optional(),
   last_seen_at: z.string().nullable().optional(),
+  // When the device-silence watchdog last flagged this device. Lets the
+  // UI keep a persistent "silent" signal instead of relying on the
+  // one-shot notification the watchdog fires.
+  silence_notified_at: z.string().nullable().optional(),
   created_at: z.string(),
   updated_at: z.string().nullable().optional(),
   archived_at: z.string().nullable().optional(),
 });
 export type BmgDevice = z.infer<typeof bmgDeviceSchema>;
+
+/**
+ * Patch a device's display name and/or drum binding. `code` and the
+ * token are immutable here — the token is re-keyed through the
+ * regenerate action, which deliberately forces a re-flash.
+ */
+export const updateDeviceSchema = z.object({
+  display_name: z.string().trim().min(1).max(128).optional(),
+  unit_id: z.number().int().positive().nullable().optional(),
+});
+export type UpdateDeviceInput = z.infer<typeof updateDeviceSchema>;
 
 /**
  * Register a tumbler: either the chip MAC (six hex byte pairs, any

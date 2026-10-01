@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   appDateTimeToUtcSql,
   fmtClock,
+  fmtHumanDate,
+  fmtRelative,
   fmtShort,
   fmtTimeRange,
   fmtUtcToApp,
@@ -141,5 +143,45 @@ describe('wholeMonthSpanLabel', () => {
   it('returns null for day-precision ranges', () => {
     expect(wholeMonthSpanLabel('2026-08-19', '2026-09-17')).toBeNull();
     expect(wholeMonthSpanLabel('2026-08-01', '2026-12-30')).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------
+// Non-throwing contract: a formatter crash inside render takes down the
+// whole page (RangeError: Invalid time value). Unparseable input must
+// render UNTOUCHED instead — the raw value stays diagnostic.
+// ---------------------------------------------------------------------
+
+describe('formatters never throw on unparseable input', () => {
+  it('fmtHumanDate passes a full DATETIME through untouched (no throw)', () => {
+    // The exact crash that took down the Devices dialog: fmtHumanDate
+    // builds `${ymd} 00:00:00`, so a datetime value is garbage to the
+    // parser — it must render raw, not throw.
+    const datetime = '2026-09-28 22:36:47';
+    expect(() => fmtHumanDate(datetime)).not.toThrow();
+    expect(fmtHumanDate(datetime)).toBe(datetime);
+  });
+
+  it('fmtHumanDate passes empty and garbage input through untouched', () => {
+    expect(fmtHumanDate('')).toBe('');
+    expect(fmtHumanDate('not-a-date')).toBe('not-a-date');
+  });
+
+  it('fmtUtcToApp degrades to the raw value instead of throwing', () => {
+    expect(() => fmtUtcToApp('garbage')).not.toThrow();
+    expect(fmtUtcToApp('garbage')).toBe('garbage');
+    expect(fmtUtcToApp('')).toBe('');
+  });
+
+  it('fmtShort and fmtRelative degrade to the raw value instead of throwing', () => {
+    expect(() => fmtShort('garbage')).not.toThrow();
+    expect(fmtShort('garbage')).toBe('garbage');
+    expect(() => fmtRelative('garbage')).not.toThrow();
+    expect(fmtRelative('garbage')).toBe('garbage');
+  });
+
+  it('utcSqlToAppParts seeds empty pickers for unparseable input', () => {
+    expect(utcSqlToAppParts('garbage')).toEqual({ date: '', time: '' });
+    expect(utcSqlToAppParts('')).toEqual({ date: '', time: '' });
   });
 });
