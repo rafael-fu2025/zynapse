@@ -430,4 +430,109 @@ final class BmgDeviceIngestTest extends FeatureTestCase
         $enable->assertStatus(200);
         $this->devicePost($newToken, $this->sessionPayload())->assertStatus(201);
     }
+
+    // --- RTC session timestamps -------------------------------------------
+
+    public function testRtcEpochsStampTheSessionWindowAndLogDate(): void
+    {
+        $ctx   = $this->runLifecycle();
+        $device = $this->createDevice($ctx['unitId']);
+
+        // Session claims it ran 2 days ago (sane: inside the 7-day
+        // horizon). log_date must be the SESSION's Manila day, not the
+        // receipt day — that is the whole point of the RTC pair.
+        $payload = $this->sessionPayload();
+        $payload['session_started_at_epoch'] = time() - 172800;
+        $payload['session_ended_at_epoch']   = time() - 172800 + 50;
+        $res = $this->devicePost($device['token'], $payload);
+        $res->assertStatus(201);
+        $log = $this->envelope($res)['data'];
+
+        // log_date is the SESSION's MANILA day (UTC+8) — 2 days ago in
+        // UTC seconds can be a different Manila calendar date than the
+        // raw UTC date.
+        $expectedDate = gmdate('Y-m-d', (int) $payload['session_started_at_epoch'] + 8 * 3600);
+        $this->assertSame($expectedDate, $log['log_date'] ?? null, 'log_date must follow the session start, not receipt.');
+        $this->assertSame(
+            gmdate('Y-m-d H:i:s', (int) $payload['session_started_at_epoch']),
+            $log['session_started_at'] ?? null,
+        );
+        $this->assertSame(
+            gmdate('Y-m-d H:i:s', (int) $payload['session_ended_at_epoch']),
+            $log['session_ended_at'] ?? null,
+        );
+    }
+
+    public function testInsaneEpochsFallBackToServerTime(): void
+    {
+        $ctx   = $this->runLifecycle();
+        $device = $this->createDevice($ctx['unitId']);
+
+        // Ended 30 days ago — outside the 7-day offline-queue horizon
+        // (an unsynced DS3231). Fall back: today's log_date, nulls.
+        $payload = $this->sessionPayload();
+        $payload['session_started_at_epoch'] = time() - 2592000;
+        $payload['session_ended_at_epoch']   = time() - 2591950;
+        $res = $this->devicePost($device['token'], $payload);
+        $res->assertStatus(201);
+        $log = $this->envelope($res)['data'];
+
+        $this->assertSame(gmdate('Y-m-d', time() + 8 * 3600), $log['log_date'] ?? null, 'Fallback log_date = receipt day (Manila).');
+        $this->assertNull($log['session_started_at'] ?? null);
+        $this->assertNull($log['session_ended_at'] ?? null);
+    }
+
+    // --- silence watchdog ---------------------------------------------------
+
+    public function testSilenceWatchdogNotifiesOncePerEpisode(): void
+    {
+        $ctx   = $this->runLifecycle();
+        $device = $this->createDevice($ctx['unitId']);
+        $db    = db_connect();
+
+        // Backdate the device's last check-in to 3 days ago.
+        $db->table('facilities_bmg_devices')->where('id', $device['deviceId'])->update([
+            'last_seen_at' => gmdate('Y-m-d H:i:s', time() - 259200),
+        ]);
+
+        $command = new \App\Commands\BmgDeviceWatchdog(service('logger'), service('commands'));
+        $this->assertSame(0, $command->run([]));
+
+        // One notification row per logs.read holder, marker stamped.
+        // Scope by the device's code — the shared outbox accumulates
+        // rows from the rest of the suite.
+        $silentRowsFor = fn (string $code): int => $db->table('notification_outbox')
+            ->where('template_code', 'bmg.device_silent')
+            ->like('context_json', $code)
+            ->countAllResults();
+        $this->assertGreaterThan(0, $silentRowsFor($device['code']), 'Watchdog must enqueue a silence notification.');
+        $row = $db->table('facilities_bmg_devices')->where('id', $device['deviceId'])->get()->getRowArray();
+        $this->assertNotNull($row['silence_notified_at']);
+
+        // Episode dedupe: a second sweep in the same silence notifies nobody.
+        $before = $silentRowsFor($device['code']);
+        $this->assertSame(0, $command->run([]));
+        $this->assertSame($before, $silentRowsFor($device['code']));
+    }
+
+    public function testSilenceWatchdogSkipsFreshAndUnboundDevices(): void
+    {
+        $ctx   = $this->runLifecycle();
+        $fresh = $this->createDevice($ctx['unitId']);   // last_seen = now → not silent
+        $this->createDevice(null);                       // unbound → out of scope
+        $db = db_connect();
+
+        $command = new \App\Commands\BmgDeviceWatchdog(service('logger'), service('commands'));
+        $this->assertSame(0, $command->run([]));
+
+        $this->assertSame(
+            0,
+            $db->table('notification_outbox')
+                ->where('template_code', 'bmg.device_silent')
+                ->like('context_json', $fresh['code'])
+                ->countAllResults(),
+        );
+        $row = $db->table('facilities_bmg_devices')->where('id', $fresh['deviceId'])->get()->getRowArray();
+        $this->assertNull($row['silence_notified_at']);
+    }
 }

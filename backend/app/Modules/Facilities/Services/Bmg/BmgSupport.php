@@ -83,7 +83,7 @@ final class BmgSupport extends BaseService
 
     /**
      * Recompute the stored `expected_completion_date` for every ACTIVE
-     * batch (processing / awaiting_output / curing) that references the
+     * batch (processing / awaiting_output) that references the
      * given waste category — either as its single `category_id` or as a
      * component of its structured composition. Called when the category's
      * assigned `reference_duration_days` changes, so running drums reflect
@@ -92,7 +92,7 @@ final class BmgSupport extends BaseService
      */
     public function refreshActiveBatchExpectedDates(int $categoryId): void
     {
-        $active = [BMG_STATE_PROCESSING, BMG_STATE_AWAITING_OUTPUT, BMG_STATE_CURING];
+        $active = [BMG_STATE_PROCESSING, BMG_STATE_AWAITING_OUTPUT];
 
         $direct = $this->db->table('facilities_bmg_batches')
             ->select('id, category_id, started_at')

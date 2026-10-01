@@ -36,7 +36,6 @@ final class Routes implements BaseRoutes
             $r->post('batches/(:num)/output',         'BmgController::recordOutput/$1');
             $r->post('batches/(:num)/finish',         'BmgController::finishBatch/$1');
             $r->post('batches/(:num)/cancel',         'BmgController::cancelBatch/$1');
-            $r->post('batches/(:num)/curing',         'BmgController::moveToCuring/$1');
             $r->post('batches/(:num)/update',         'BmgController::addBatchUpdate/$1');
             $r->get('batches/(:num)/updates',         'BmgController::listBatchUpdates/$1');
             $r->get('batches/(:num)/logs',            'BmgController::listProcessLogs/$1');
@@ -54,6 +53,8 @@ final class Routes implements BaseRoutes
             // device_auth; these are the human admin endpoints.
             $r->get('devices',                        'BmgController::listDevices');
             $r->post('devices',                       'BmgController::createDevice');
+            $r->post('devices/(:num)',                'BmgController::updateDevice/$1');
+            $r->delete('devices/(:num)',              'BmgController::archiveDevice/$1');
             $r->post('devices/(:num)/status',         'BmgController::setDeviceStatus/$1');
             $r->post('devices/(:num)/regenerate-token','BmgController::regenerateDeviceToken/$1');
         });

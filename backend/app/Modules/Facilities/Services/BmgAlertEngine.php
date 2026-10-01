@@ -22,12 +22,16 @@ use DateTimeZone;
  *   - STALLED:        no process log in the last 14 days while the
  *     batch is still in `processing` — forgotten/inactive batch.
  *   - OXYGEN_OUT:     oxygen_pct outside the 5–20 % operational window.
+ *   - TURNING_DUE:    no turning session in the last TURNING_DUE_DAYS
+ *     (4) while the batch is still in `processing` — aeration cadence
+ *     slipped. Measured from the newest turning log, or from batch
+ *     start when the batch has never been turned.
  *
  * The engine is stateless and pure: it returns a list of alert specs
  * that the caller persists. Doing evaluation here keeps the rule set
  * unit-testable without a DB.
  *
- *   evaluate(batchStatus, lastLog, daysSinceLastLog): list<AlertSpec>
+ *   evaluate(batch, lastLog, daysSinceLastLog, daysSinceLastTurning): list<AlertSpec>
  *
  * The severity ladder is `info < warning < critical`. The caller
  * duplicates suppression rules ("don't fire OXYGEN_OUT twice in the
@@ -40,6 +44,12 @@ final class BmgAlertEngine
     public const CODE_MOISTURE_HIGH  = 'MOISTURE_HIGH';
     public const CODE_STALLED        = 'STALLED';
     public const CODE_OXYGEN_OUT     = 'OXYGEN_OUT';
+    public const CODE_TURNING_DUE    = 'TURNING_DUE';
+
+    /** Aeriation cadence (days) before TURNING_DUE fires — the 3–4 day
+     * hot-composting guidance with one day of slack. Mirrored by the
+     * drum card badge in the frontend. */
+    public const TURNING_DUE_DAYS    = 4;
 
     public const SEVERITY_INFO     = 'info';
     public const SEVERITY_WARNING  = 'warning';
@@ -51,18 +61,36 @@ final class BmgAlertEngine
      * @param array<string, mixed> $batch            Required keys: id, status, started_at, archived_at.
      * @param array<string, mixed>|null $lastLog     Required keys: temperature_celsius, moisture_level, oxygen_pct, log_date, calibration_status. Nullable if no logs yet.
      * @param int|null $daysSinceLastLog             Days since last log (`null` if no logs).
+     * @param int|null $daysSinceLastTurning         Days since the newest `turning` log; `null` when the batch has never been turned (the rule then measures from batch start). Optional so pre-existing callers stay valid.
      * @return array<int, array{code:string, severity:string, message:string}>
      */
-    public function evaluate(array $batch, ?array $lastLog, ?int $daysSinceLastLog): array
+    public function evaluate(array $batch, ?array $lastLog, ?int $daysSinceLastLog, ?int $daysSinceLastTurning = null): array
     {
         $status = (string) ($batch['status'] ?? '');
         // Only active states participate — finished / cancelled / idle
         // are not actionable and would generate noise.
-        if (! in_array($status, [BMG_STATE_PROCESSING, BMG_STATE_AWAITING_OUTPUT, BMG_STATE_CURING], true)) {
+        if (! in_array($status, [BMG_STATE_PROCESSING, BMG_STATE_AWAITING_OUTPUT], true)) {
             return [];
         }
 
         $alerts = [];
+
+        // -----------------------------------------------------------------
+        // Turning cadence — checked BEFORE the no-logs early return so a
+        // never-logged batch still accrues turning debt from its start
+        // date. Processing only: an awaiting-output batch has already
+        // yielded and is no longer on the turning cadence.
+        // -----------------------------------------------------------------
+        if ($status === BMG_STATE_PROCESSING) {
+            $turningAge = $daysSinceLastTurning ?? $this->daysSinceDate($batch['started_at'] ?? null);
+            if ($turningAge !== null && $turningAge > self::TURNING_DUE_DAYS) {
+                $alerts[] = [
+                    'code'     => self::CODE_TURNING_DUE,
+                    'severity' => self::SEVERITY_WARNING,
+                    'message'  => sprintf('No turning session recorded for %d days.', $turningAge),
+                ];
+            }
+        }
 
         if ($lastLog === null) {
             // No logs yet — STALLED only fires if the batch has been
@@ -153,13 +181,21 @@ final class BmgAlertEngine
         if ($date === null || $date === '') {
             return null;
         }
+        return $this->daysSinceDate((string) $date);
+    }
+
+    /**
+     * Days between now (UTC) and a `Y-m-d`/`Y-m-d H:i:s` date string.
+     * Magnitude-only, like daysSinceLastLog — evaluate() compares with
+     * bare `>` and assumes non-negative integers.
+     */
+    public function daysSinceDate(?string $dateSql): ?int
+    {
+        if ($dateSql === null || $dateSql === '') {
+            return null;
+        }
         $now = new DateTimeImmutable('now', new DateTimeZone('UTC'));
-        $then = new DateTimeImmutable((string) $date, new DateTimeZone('UTC'));
-        // "Days since last log" is a magnitude: always non-negative.
-        // The caller (evaluate()) compares `$daysSinceLastLog > 14`, which
-        // assumes a non-negative integer; a signed value would suppress
-        // STALLED for past-dated logs and (worse) trigger it for any log
-        // dated in the future.
+        $then = new DateTimeImmutable($dateSql, new DateTimeZone('UTC'));
         return abs((int) $now->diff($then)->days);
     }
 }

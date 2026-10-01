@@ -66,7 +66,7 @@ final class DashboardController extends ApiController
                     ->join('facilities_bmg_batches AS b', 'b.id = a.batch_id')
                     ->where('a.tenant_id', $tenantId)
                     ->where('a.acknowledged_at', null)
-                    ->whereIn('b.status', ['processing', 'awaiting_output', 'curing'])
+                    ->whereIn('b.status', ['processing', 'awaiting_output'])
                     ->countAllResults(),
             ];
         }

@@ -49,6 +49,11 @@ final class DeviceTurnSessionController extends ApiController
             'sets_count'       => 'permit_empty|is_natural|less_than_equal_to[50]',
             'firmware'         => 'permit_empty|max_length[32]',
             'note'             => 'permit_empty|max_length[500]',
+            // RTC-stamped session window (UTC epoch seconds) — optional:
+            // firmware without a working DS3231 omits them and the
+            // service falls back to server time.
+            'session_started_at_epoch' => 'permit_empty|is_natural',
+            'session_ended_at_epoch'   => 'permit_empty|is_natural',
         ];
         if (! $this->makeValidation($rules)->run($payload)) {
             throw ApiException::validationFailure($this->collectErrors());
@@ -61,6 +66,8 @@ final class DeviceTurnSessionController extends ApiController
             'sets_count'       => isset($payload['sets_count']) && $payload['sets_count'] !== '' ? (int) $payload['sets_count'] : null,
             'firmware'         => (string) ($payload['firmware'] ?? ''),
             'observation_note' => (string) ($payload['note'] ?? ''),
+            'started_at_epoch' => isset($payload['session_started_at_epoch']) && $payload['session_started_at_epoch'] !== '' ? (int) $payload['session_started_at_epoch'] : null,
+            'ended_at_epoch'   => isset($payload['session_ended_at_epoch']) && $payload['session_ended_at_epoch'] !== '' ? (int) $payload['session_ended_at_epoch'] : null,
         ]);
 
         // 201 for a fresh session, 200 for an idempotent replay.

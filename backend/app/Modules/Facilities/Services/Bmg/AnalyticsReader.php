@@ -103,7 +103,24 @@ final class AnalyticsReader extends BaseService
         }
         $expectedByCat = $this->support->expectedDaysByCategory($catIds);
 
-        return array_map(function (array $r) use ($a, $today, $compositions, $expectedByCat): array {
+        // Aeration cadence feed: the newest `turning` log per batch (one
+        // grouped query, same pre-loop pattern as batchCompositions).
+        // Drives the drum card's "turned Xd ago" badge; null = never.
+        $lastTurningByBatch = [];
+        if ($batchIds !== []) {
+            $turningRows = $this->db->table('facilities_bmg_process_logs')
+                ->select('batch_id, MAX(log_date) AS last_turning')
+                ->where('tenant_id', CurrentTenant::id())
+                ->where('event_type', 'turning')
+                ->whereIn('batch_id', $batchIds)
+                ->groupBy('batch_id')
+                ->get()->getResultArray();
+            foreach ($turningRows as $t) {
+                $lastTurningByBatch[(int) $t['batch_id']] = (string) $t['last_turning'];
+            }
+        }
+
+        return array_map(function (array $r) use ($a, $today, $compositions, $expectedByCat, $lastTurningByBatch): array {
             $startDate = substr((string) $r['started_at'], 0, 10);
             $refDays   = $r['reference_duration_days'] !== null ? (int) $r['reference_duration_days'] : 0;
 
@@ -119,6 +136,13 @@ final class AnalyticsReader extends BaseService
             $expected = $a->expectedCompletionDate($startDate, $effDays);
 
             $daysActive = max(0, (int) ((new DateTimeImmutable($today))->diff(new DateTimeImmutable($startDate)))->days);
+
+            // Aeration cadence: days since the newest turning log; null
+            // when this batch has never been turned.
+            $lastTurnedAt = $lastTurningByBatch[(int) $r['batch_id']] ?? null;
+            $daysSinceTurning = $lastTurnedAt !== null
+                ? max(0, (int) ((new DateTimeImmutable($today))->diff(new DateTimeImmutable(substr($lastTurnedAt, 0, 10))))->days)
+                : null;
 
             return [
                 'batch_id'                 => (int)    $r['batch_id'],
@@ -138,6 +162,8 @@ final class AnalyticsReader extends BaseService
                 'expected_completion_date' => $expected,
                 'days_until_expected'      => $a->daysUntilExpected($expected, $today),
                 'progress_pct'             => $a->progressPercent($startDate, $expected, $today),
+                'last_turned_at'           => $lastTurnedAt,
+                'days_since_last_turning'  => $daysSinceTurning,
             ];
         }, $rows);
     }

@@ -123,6 +123,7 @@ Production must drain the durable outbox and report queue outside HTTP processes
 * * * * * cd /path/to/zynapse/backend && php spark synapse:audit-drain --batch=500 --max-batches=10
 * * * * * cd /path/to/zynapse/backend && php spark synapse:reports-drain --limit=10
 * * * * * cd /path/to/zynapse/backend && php spark synapse:appointments-enqueue-due
+0 * * * * cd /path/to/zynapse/backend && php spark synapse:bmg-device-watchdog
 15 2 * * * cd /path/to/zynapse/backend && php spark synapse:audit-verify
 ```
 

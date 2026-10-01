@@ -7,7 +7,7 @@ namespace Tests\Feature;
 /**
  * BMG batch lifecycle, end-to-end through the real routes: create waste
  * category → create unit → start batch (with structured composition) →
- * structured I/O → losses → curing → finish, plus analytics reads.
+ * structured I/O → losses → finish, plus analytics reads.
  *
  * This is the only net the BmgService refactor has, and it is also the
  * ONLY place the DB-level mass invariants are observable: they are
@@ -145,13 +145,7 @@ final class BmgWorkflowTest extends FeatureTestCase
             'moisture_level'      => 'normal',
         ], 201);
 
-        // 9. → curing.
-        $curing = $this->postJson("api/v1/facilities/batches/{$batchId}/curing", [
-            'accumulated_in_process_kg' => 3,
-        ]);
-        $this->assertSame('curing', $curing['data']['status'] ?? null);
-
-        // 10. Finish (graded release from curing).
+        // 9. Finish (graded release).
         $finished = $this->postJson("api/v1/facilities/batches/{$batchId}/finish", [
             'quality_grade'  => 'good',
             'maturity_level' => 'mature',
@@ -159,7 +153,7 @@ final class BmgWorkflowTest extends FeatureTestCase
         ]);
         $this->assertSame('released', $finished['data']['status'] ?? null);
 
-        // 11. Unit returns to idle.
+        // 10. Unit returns to idle.
         $units = $this->getJson('api/v1/facilities/units');
         $rows  = $units['data'] ?? [];
         $this->assertIsArray($rows);

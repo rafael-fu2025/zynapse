@@ -165,7 +165,7 @@ final class AlertService extends BaseService
             ->join('facilities_bmg_units AS u', 'u.id = b.unit_id', 'left')
             ->where('a.tenant_id', CurrentTenant::id())
             ->where('a.acknowledged_at', null)
-            ->whereIn('b.status', [BMG_STATE_PROCESSING, BMG_STATE_AWAITING_OUTPUT, BMG_STATE_CURING])
+            ->whereIn('b.status', [BMG_STATE_PROCESSING, BMG_STATE_AWAITING_OUTPUT])
             ->orderBy('a.triggered_at', 'DESC')
             ->orderBy('a.id', 'DESC')
             ->get()->getResultArray();

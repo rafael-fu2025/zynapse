@@ -31,8 +31,13 @@ final class BmgAlertEngineTest extends TestCase
 
     public function testNoLogYieldsNoAlerts(): void
     {
+        // Young batch (started 2 days ago): no logs yet AND inside the
+        // turning cadence — the no-log short circuit yields nothing.
+        // (An OLD never-turned batch legitimately fires TURNING_DUE —
+        // see the TURNING_DUE cases below.)
+        $startedAt = (new \DateTimeImmutable('-2 days', new \DateTimeZone('UTC')))->format('Y-m-d');
         $result = $this->engine->evaluate(
-            ['id' => 1, 'status' => BMG_STATE_PROCESSING, 'started_at' => '2026-01-01', 'archived_at' => null],
+            ['id' => 1, 'status' => BMG_STATE_PROCESSING, 'started_at' => $startedAt, 'archived_at' => null],
             null,
             null,
         );
@@ -226,10 +231,15 @@ final class BmgAlertEngineTest extends TestCase
             ['temperature_celsius' => 50.0, 'moisture_level' => 'normal', 'oxygen_pct' => 10.0, 'log_date' => '2026-01-02', 'calibration_status' => 'ok'],
             15,
         );
-        $this->assertCount(1, $result);
-        $this->assertSame(BmgAlertEngine::CODE_STALLED, $result[0]['code']);
-        $this->assertSame(BmgAlertEngine::SEVERITY_WARNING, $result[0]['severity']);
-        $this->assertStringContainsString('15', $result[0]['message']);
+        // The batch started long ago and (daysSinceLastTurning omitted)
+        // has never been turned — an old, unturned, log-silent batch
+        // legitimately fires STALLED *and* TURNING_DUE together.
+        $codes = array_column($result, 'code');
+        $this->assertContains(BmgAlertEngine::CODE_STALLED, $codes);
+        $this->assertContains(BmgAlertEngine::CODE_TURNING_DUE, $codes);
+        $stalled = $result[array_search(BmgAlertEngine::CODE_STALLED, $codes, true)];
+        $this->assertSame(BmgAlertEngine::SEVERITY_WARNING, $stalled['severity']);
+        $this->assertStringContainsString('15', $stalled['message']);
     }
 
     public function testStalledDoesNotFireAt14Days(): void
@@ -242,15 +252,15 @@ final class BmgAlertEngineTest extends TestCase
         $this->assertSame([], $result, 'STALLED threshold is strictly > 14 days');
     }
 
-    public function testStalledDoesNotFireForCuringBatch(): void
+    public function testStalledDoesNotFireForAwaitingOutputBatch(): void
     {
-        // Curing batches are still monitored for SPC breaches — only the
-        // STALLED rule is suppressed (lower monitoring frequency is
-        // expected during cure). The 30 °C reading below the PFRP window
-        // must STILL fire TEMP_PFRP_LOW: that's the whole point of having
-        // a separate STALLED rule.
+        // A batch that has already yielded is off the turning cadence, so
+        // STALLED never applies to it — but it is still monitored for SPC
+        // breaches. The 30 °C reading below the PFRP window must STILL
+        // fire TEMP_PFRP_LOW: that separation is the whole point of having
+        // a distinct STALLED rule.
         $result = $this->engine->evaluate(
-            ['id' => 1, 'status' => BMG_STATE_CURING, 'started_at' => '2026-01-01', 'archived_at' => null],
+            ['id' => 1, 'status' => BMG_STATE_AWAITING_OUTPUT, 'started_at' => '2026-01-01', 'archived_at' => null],
             ['temperature_celsius' => 30.0, 'moisture_level' => 'low', 'oxygen_pct' => 10.0, 'log_date' => '2026-01-02', 'calibration_status' => 'ok'],
             30,
         );
@@ -258,19 +268,22 @@ final class BmgAlertEngineTest extends TestCase
         $this->assertNotContains(
             BmgAlertEngine::CODE_STALLED,
             $codes,
-            'curing batches have lower monitoring frequency; STALLED is suppressed'
+            'an awaiting-output batch is past the turning cadence'
         );
         $this->assertContains(
             BmgAlertEngine::CODE_TEMP_PFRP_LOW,
             $codes,
-            'PFRP temperature rule still applies during cure — only STALLED is suppressed'
+            'PFRP temperature rule still applies once output is recorded'
         );
     }
 
     public function testStalledDoesNotFireWhenLastLogNull(): void
     {
+        // Young batch: no logs and inside the turning cadence — nothing
+        // fires. (The old-batch variant fires TURNING_DUE; see above.)
+        $startedAt = (new \DateTimeImmutable('-2 days', new \DateTimeZone('UTC')))->format('Y-m-d');
         $result = $this->engine->evaluate(
-            ['id' => 1, 'status' => BMG_STATE_PROCESSING, 'started_at' => '2026-01-01', 'archived_at' => null],
+            ['id' => 1, 'status' => BMG_STATE_PROCESSING, 'started_at' => $startedAt, 'archived_at' => null],
             null,
             null,
         );
@@ -313,6 +326,111 @@ final class BmgAlertEngineTest extends TestCase
     {
         $date = (new \DateTimeImmutable('-30 days', new \DateTimeZone('UTC')))->format('Y-m-d');
         $this->assertGreaterThanOrEqual(30, $this->engine->daysSinceLastLog(['log_date' => $date]));
+    }
+
+    // -----------------------------------------------------------------
+    // TURNING_DUE — aeration cadence slipped (> TURNING_DUE_DAYS), and
+    // only while the batch is in processing (mirrors STALLED's gate).
+    // -----------------------------------------------------------------
+
+    /** PROCESSING variant of the activeBatch() helper. */
+    private function processingBatch(string $startedAt = '2026-01-01'): array
+    {
+        return [
+            'id' => 1,
+            'status' => BMG_STATE_PROCESSING,
+            'started_at' => $startedAt,
+            'archived_at' => null,
+        ];
+    }
+
+    public function testTurningDueFiresPastTheCadence(): void
+    {
+        $result = $this->engine->evaluate(
+            $this->processingBatch(),
+            ['temperature_celsius' => 50.0, 'moisture_level' => 'normal', 'oxygen_pct' => null, 'log_date' => '2026-01-02', 'calibration_status' => null],
+            1,
+            5,
+        );
+        $codes = array_column($result, 'code');
+        $this->assertContains(BmgAlertEngine::CODE_TURNING_DUE, $codes);
+    }
+
+    public function testTurningDueDoesNotFireAtExactlyTheCadence(): void
+    {
+        $result = $this->engine->evaluate(
+            $this->processingBatch(),
+            ['temperature_celsius' => 50.0, 'moisture_level' => 'normal', 'oxygen_pct' => null, 'log_date' => '2026-01-02', 'calibration_status' => null],
+            1,
+            BmgAlertEngine::TURNING_DUE_DAYS,
+        );
+        $this->assertNotContains(BmgAlertEngine::CODE_TURNING_DUE, array_column($result, 'code'));
+    }
+
+    public function testTurningDueDoesNotFireForFreshTurning(): void
+    {
+        // A device session just landed (0 days since turning) — silent.
+        $result = $this->engine->evaluate(
+            $this->processingBatch(),
+            ['temperature_celsius' => 50.0, 'moisture_level' => 'normal', 'oxygen_pct' => null, 'log_date' => '2026-01-02', 'calibration_status' => null],
+            1,
+            0,
+        );
+        $this->assertNotContains(BmgAlertEngine::CODE_TURNING_DUE, array_column($result, 'code'));
+    }
+
+    public function testTurningDueIsSuppressedOutsideProcessing(): void
+    {
+        // awaiting_output drums are not on the turning cadence.
+        $result = $this->engine->evaluate(
+            $this->activeBatch(),
+            ['temperature_celsius' => 50.0, 'moisture_level' => 'normal', 'oxygen_pct' => null, 'log_date' => '2026-01-02', 'calibration_status' => null],
+            1,
+            20,
+        );
+        $this->assertNotContains(BmgAlertEngine::CODE_TURNING_DUE, array_column($result, 'code'));
+    }
+
+    public function testTurningDueFallsBackToBatchAgeWhenNeverTurned(): void
+    {
+        // null turning + batch started 5 days ago → the batch age IS the
+        // turning age; fires even before any log exists.
+        $startedAt = (new \DateTimeImmutable('-5 days', new \DateTimeZone('UTC')))->format('Y-m-d');
+        $result = $this->engine->evaluate(
+            $this->processingBatch($startedAt),
+            null,
+            null,
+            null,
+        );
+        $this->assertContains(BmgAlertEngine::CODE_TURNING_DUE, array_column($result, 'code'));
+    }
+
+    public function testTurningDueSilentForYoungNeverTurnedBatch(): void
+    {
+        $startedAt = (new \DateTimeImmutable('-2 days', new \DateTimeZone('UTC')))->format('Y-m-d');
+        $result = $this->engine->evaluate(
+            $this->processingBatch($startedAt),
+            null,
+            null,
+            null,
+        );
+        $this->assertSame([], $result);
+    }
+
+    // -----------------------------------------------------------------
+    // daysSinceDate helper
+    // -----------------------------------------------------------------
+
+    public function testDaysSinceDateHandlesNullAndEmpty(): void
+    {
+        $this->assertNull($this->engine->daysSinceDate(null));
+        $this->assertNull($this->engine->daysSinceDate(''));
+    }
+
+    public function testDaysSinceDateReturnsMagnitudeForPastDate(): void
+    {
+        $date = (new \DateTimeImmutable('-6 days', new \DateTimeZone('UTC')))->format('Y-m-d');
+        $this->assertGreaterThanOrEqual(6, $this->engine->daysSinceDate($date));
     }
 
     // -----------------------------------------------------------------

@@ -182,16 +182,15 @@ final class BmgController extends ApiController
     }
 
     /**
-     * Unified "Add update" — one action, three internal entry types
-     * (output / curing / log). Appends an immutable ledger row.
+     * Unified "Add update" — one action, two internal entry types
+     * (output / log). Appends an immutable ledger row.
      */
     public function addBatchUpdate(int $batchId): ResponseInterface
     {
         $payload = $this->request->getJSON(true) ?? [];
         $rules = [
-            'update_type'         => 'required|in_list[output,curing,log]',
+            'update_type'         => 'required|in_list[output,log]',
             'output_weight_kg'    => 'permit_empty|decimal|greater_than[0]',
-            'curing_note'         => 'permit_empty|max_length[512]',
             'event_type'          => 'permit_empty|in_list[observation,turning,aeration,moisture_adjustment,other]',
             'observation_note'    => 'permit_empty|max_length[1000]',
             'temperature_celsius' => 'permit_empty|decimal|greater_than_equal_to[-20]|less_than_equal_to[120]',
@@ -212,23 +211,8 @@ final class BmgController extends ApiController
     {
         $payload = $this->request->getJSON(true) ?? [];
         $reason = (string) ($payload['reason_code'] ?? 'unspecified');
-        $dto = $this->service->cancelBatch($batchId, $reason);
-        return $this->ok($dto->toArray());
-    }
-
-    public function moveToCuring(int $batchId): ResponseInterface
-    {
-        $payload = $this->request->getJSON(true) ?? [];
-        $rules = [
-            'accumulated_in_process_kg' => 'permit_empty|decimal|greater_than_equal_to[0]',
-        ];
-        if (! $this->makeValidation($rules)->run($payload)) {
-            throw ApiException::validationFailure($this->collectErrors());
-        }
-        $dto = $this->service->moveToCuring(
-            $batchId,
-            isset($payload['accumulated_in_process_kg']) ? (float) $payload['accumulated_in_process_kg'] : null,
-        );
+        $note   = trim((string) ($payload['notes'] ?? ''));
+        $dto = $this->service->cancelBatch($batchId, $reason, mb_substr($note, 0, 512));
         return $this->ok($dto->toArray());
     }
 
@@ -296,6 +280,44 @@ final class BmgController extends ApiController
         $status  = (string) ($payload['status'] ?? '');
 
         return $this->ok($this->service->setDeviceStatus($deviceId, $status));
+    }
+
+    /**
+     * Patch a device's display name and/or drum binding. Both fields are
+     * optional; an omitted key is left untouched, while an explicit
+     * `unit_id: null` unbinds the device.
+     */
+    public function updateDevice(int $deviceId): ResponseInterface
+    {
+        $payload = $this->request->getJSON(true) ?? [];
+        $rules = [
+            'display_name' => 'permit_empty|max_length[128]',
+            'unit_id'      => 'permit_empty|is_natural',
+        ];
+        if (! $this->makeValidation($rules)->run($payload)) {
+            throw ApiException::validationFailure($this->collectErrors());
+        }
+
+        $input = [];
+        if (array_key_exists('display_name', $payload)) {
+            $input['display_name'] = (string) ($payload['display_name'] ?? '');
+        }
+        if (array_key_exists('unit_id', $payload)) {
+            $input['unit_id'] = ($payload['unit_id'] === null || $payload['unit_id'] === '')
+                ? null
+                : (int) $payload['unit_id'];
+        }
+
+        return $this->ok($this->service->updateDevice($deviceId, $input));
+    }
+
+    /**
+     * Soft-archive a device — the credential is refused by the ingest
+     * filter from here on, and the drum binding is dropped.
+     */
+    public function archiveDevice(int $deviceId): ResponseInterface
+    {
+        return $this->ok($this->service->archiveDevice($deviceId));
     }
 
     public function regenerateDeviceToken(int $deviceId): ResponseInterface

@@ -14,6 +14,7 @@ use App\Services\Audit\AuditOutboxService;
 use App\Services\CurrentTenant;
 use App\Services\Notify\NotificationOutboxService;
 use Config\Services;
+use DateInterval;
 use DateTimeImmutable;
 use DateTimeZone;
 use Modules\Facilities\DTOs\BmgAlertDto;
@@ -38,6 +39,14 @@ use Modules\Facilities\Services\Bmg\HistoryService;
  */
 final class BmgService extends BaseService
 {
+    /**
+     * How long a breached SPC rule stays suppressed for a batch while an
+     * earlier, unacknowledged alert for the same code is still open.
+     * Acknowledging re-arms the rule immediately, so a genuine change in
+     * condition still surfaces without waiting out the window.
+     */
+    private const ALERT_DEDUPE_WINDOW_HOURS = 24;
+
     private readonly BmgAnalytics $analytics;
     private readonly BmgSupport $support;
     private readonly BatchIoService $batchIo;
@@ -81,7 +90,7 @@ final class BmgService extends BaseService
             ->where('u.tenant_id', CurrentTenant::id())
             ->join(
                 'facilities_bmg_batches AS b',
-                "b.unit_id = u.id AND b.archived_at IS NULL AND b.status IN ('" . BMG_STATE_PROCESSING . "', '" . BMG_STATE_AWAITING_OUTPUT . "', '" . BMG_STATE_CURING . "')",
+                "b.unit_id = u.id AND b.archived_at IS NULL AND b.status IN ('" . BMG_STATE_PROCESSING . "', '" . BMG_STATE_AWAITING_OUTPUT . "')",
                 'left',
                 false, // no identifier escaping — the ON clause carries quoted literals
             )
@@ -290,8 +299,6 @@ final class BmgService extends BaseService
      *
      *   - `output` — output weight recorded. Validated against the CUMULATIVE
      *     output (ledger sum + new) ≤ total input; otherwise blocked.
-     *   - `curing` — marks the batch moved into the curing phase. At most
-     *     ONE active curing transition per batch (a second one is rejected).
      *   - `log` — free-form observation (temperature / turning / aeration /
      *     moisture / notes).
      *
@@ -299,7 +306,10 @@ final class BmgService extends BaseService
      * aggregates kept in sync for fast reads, but the ledger row is the
      * source of truth and is never overwritten (append-only).
      *
-     * @param array{update_type:string, output_weight_kg?:float, curing_note?:?string, event_type?:?string, observation_note?:?string, temperature_celsius?:?float, moisture_level?:?string} $input
+     * Historical `curing` rows remain readable in the feed — that ledger
+     * member predates the retirement of the state and is never rewritten.
+     *
+     * @param array{update_type:string, output_weight_kg?:float, event_type?:?string, observation_note?:?string, temperature_celsius?:?float, moisture_level?:?string} $input
      * @return array<string, mixed> the created entry
      */
     public function addBatchUpdate(int $batchId, array $input): array
@@ -314,9 +324,9 @@ final class BmgService extends BaseService
         $userId = \App\Auth\CurrentUser::assert();
 
         $type = (string) ($input['update_type'] ?? '');
-        if (! in_array($type, ['output', 'curing', 'log'], true)) {
+        if (! in_array($type, ['output', 'log'], true)) {
             throw ApiException::validationFailure([
-                ['code' => 'validation.field', 'message' => 'update_type must be output, curing, or log.', 'field' => 'update_type'],
+                ['code' => 'validation.field', 'message' => 'update_type must be output or log.', 'field' => 'update_type'],
             ]);
         }
 
@@ -373,48 +383,17 @@ final class BmgService extends BaseService
                         'updated_at'         => $now,
                     ]);
 
+                // The unit mirrors the batch's phase — see the same
+                // correction in `recordOutput`.
+                if ($batch['status'] === BMG_STATE_PROCESSING) {
+                    $this->db->table('facilities_bmg_units')
+                        ->where('facilities_bmg_units.tenant_id', CurrentTenant::id())
+                        ->where('id', (int) $batch['unit_id'])
+                        ->update(['status' => BMG_STATE_AWAITING_OUTPUT, 'updated_at' => $now]);
+                }
+
                 $this->audit->enqueue('bmg.output_recorded', 'facilities_bmg_batches', $batchId, $userId, [
                     'update_entry_id' => $entryId, 'output_weight_kg' => $kg, 'cumulative_kg' => $cumulative,
-                ]);
-
-                return $this->batchUpdateRow($entryId);
-            }
-
-            if ($type === 'curing') {
-                // Only ONE active curing transition per batch.
-                $existing = $this->db->table('facilities_bmg_batch_updates')
-                    ->where('facilities_bmg_batch_updates.tenant_id', CurrentTenant::id())
-                    ->where('batch_id', $batchId)
-                    ->where('update_type', 'curing')
-                    ->get()->getRowArray();
-                if ($existing !== null) {
-                    throw StateMachineException::invalidTransition($batch['status'], BMG_STATE_CURING, 'bmg');
-                }
-                if (in_array($batch['status'], [BMG_STATE_CURING], true)) {
-                    throw StateMachineException::invalidTransition($batch['status'], BMG_STATE_CURING, 'bmg');
-                }
-
-                $this->db->table('facilities_bmg_batch_updates')->insert([
-                    'tenant_id'           => CurrentTenant::id(),
-                    'batch_id'            => $batchId,
-                    'update_type'         => 'curing',
-                    'curing_note'         => (string) ($input['curing_note'] ?? ''),
-                    'recorded_by_user_id' => $userId,
-                    'created_at'          => $now,
-                ]);
-                $entryId = (int) $this->db->insertID();
-
-                $this->db->table('facilities_bmg_batches')
-                    ->where('facilities_bmg_batches.tenant_id', CurrentTenant::id())
-                    ->where('id', $batchId)
-                    ->update(['status' => BMG_STATE_CURING, 'updated_at' => $now]);
-                $this->db->table('facilities_bmg_units')
-                    ->where('facilities_bmg_units.tenant_id', CurrentTenant::id())
-                    ->where('id', (int) $batch['unit_id'])
-                    ->update(['status' => BMG_STATE_CURING, 'updated_at' => $now]);
-
-                $this->audit->enqueue('bmg.batch_curing', 'facilities_bmg_batches', $batchId, $userId, [
-                    'update_entry_id' => $entryId, 'next_status' => BMG_STATE_CURING,
                 ]);
 
                 return $this->batchUpdateRow($entryId);
@@ -450,8 +429,9 @@ final class BmgService extends BaseService
     }
 
     /**
-     * Combined, append-only "Updates" feed for a batch — output / curing /
-     * log entries ordered oldest → newest. Read-only.
+     * Combined, append-only "Updates" feed for a batch — output / log
+     * entries ordered oldest → newest, plus any historical `curing` rows
+     * written before that state was retired. Read-only.
      *
      * @return array<int, array<string, mixed>>
      */
@@ -493,8 +473,8 @@ final class BmgService extends BaseService
     /**
      * Shared validation for the two graded-release transitions —
      * `finishBatch` (any active state, records a final output entry,
-     * stamps finished_at) and `releaseBatch` (awaiting_output/curing
-     * only, no output entry). They are deliberately SEPARATE operations
+     * stamps finished_at) and `releaseBatch` (awaiting_output only, no
+     * output entry). They are deliberately SEPARATE operations
      * with different state guards, side effects, and audit events; this
      * helper deduplicates only the QA-fields validation they share.
      *
@@ -623,82 +603,21 @@ final class BmgService extends BaseService
                 throw $t;
             }
 
+            // The unit mirrors the batch's phase. Without this the drum
+            // keeps reporting `processing` while its batch is
+            // `awaiting_output`, so the table badge reverts on the next
+            // refetch and the dashboard's awaiting-output counter stays 0.
+            $this->db->table('facilities_bmg_units')
+                ->where('facilities_bmg_units.tenant_id', CurrentTenant::id())
+                ->where('id', (int) $batch['unit_id'])
+                ->update(['status' => BMG_STATE_AWAITING_OUTPUT, 'updated_at' => $now]);
+
             $this->audit->enqueue(
                 'bmg.output_recorded',
                 'facilities_bmg_batches',
                 $batchId,
                 $userId,
                 ['previous_status' => BMG_STATE_PROCESSING, 'next_status' => BMG_STATE_AWAITING_OUTPUT, 'reason_code' => 'record_output'],
-            );
-
-            $fresh = $this->db->table('facilities_bmg_batches')
-                ->where('facilities_bmg_batches.tenant_id', CurrentTenant::id())
-                ->where('id', $batchId)->get()->getRowArray();
-            return BmgBatchDto::fromRow($fresh);
-        });
-    }
-
-    /**
-     * Industry lifecycle: `AwaitingOutput → Curing`. Curing is a
-     * long-tail phase (1–3 months) with reduced monitoring cadence.
-     * The batch and unit both transition; the `active_unit_id`
-     * generated column remains populated (curing is "active" for
-     * the one-active-batch-per-unit invariant) so the unit cannot
-     * start a fresh batch until the cure finishes.
-     *
-     * Operator may supply an `accumulated_in_process_kg` snapshot of
-     * the residue mass left on the unit at the transition point, for
-     * trace-back across long cures. Defaulted to 0.00.
-     */
-    public function moveToCuring(int $batchId, ?float $accumulatedKg = null): BmgBatchDto
-    {
-        $batch = $this->policy->loadBatchForOwnership($batchId);
-        if ($batch === null) {
-            throw new ApiException('resource.not_found', 404, [
-                ['code' => 'resource.not_found', 'message' => "BMG batch #{$batchId} not found."],
-            ]);
-        }
-        $this->policy->check('move_to_curing', $batch);
-        $userId = \App\Auth\CurrentUser::assert();
-
-        return $this->txn(function () use ($batchId, $accumulatedKg, $userId): BmgBatchDto {
-            $batch = $this->selectForUpdate('facilities_bmg_batches', ['id' => $batchId, 'tenant_id' => CurrentTenant::id(), 'archived_at' => null]);
-            if ($batch === null) {
-                throw new ApiException('resource.not_found', 404, [
-                    ['code' => 'resource.not_found', 'message' => "Batch #{$batchId} not found."],
-                ]);
-            }
-            if ($batch['status'] !== BMG_STATE_AWAITING_OUTPUT) {
-                throw StateMachineException::invalidTransition($batch['status'], BMG_STATE_CURING, 'bmg');
-            }
-
-            $now = $this->support->utcNow();
-            $aip = $accumulatedKg !== null ? round($accumulatedKg, 2) : 0.00;
-
-            $this->db->table('facilities_bmg_batches')
-                ->where('facilities_bmg_batches.tenant_id', CurrentTenant::id())
-                ->where('id', $batchId)
-                ->update([
-                    'status'                    => BMG_STATE_CURING,
-                    'accumulated_in_process_kg' => $aip,
-                    'updated_at'                => $now,
-                ]);
-
-            $this->db->table('facilities_bmg_units')
-                ->where('facilities_bmg_units.tenant_id', CurrentTenant::id())
-                ->where('id', (int) $batch['unit_id'])
-                ->update(['status' => BMG_STATE_CURING, 'updated_at' => $now]);
-
-            $this->audit->enqueue(
-                'bmg.batch_curing',
-                'facilities_bmg_batches',
-                $batchId,
-                $userId,
-                [
-                    'previous_status'           => BMG_STATE_AWAITING_OUTPUT,
-                    'next_status'               => BMG_STATE_CURING,
-                    'accumulated_in_process_kg' => $aip,
-                ],
             );
 
             $fresh = $this->db->table('facilities_bmg_batches')
@@ -741,12 +660,12 @@ final class BmgService extends BaseService
             }
 
             // Finish is available from ANY active state (processing /
-            // awaiting_output / curing) — e.g. the operator recorded a
+            // awaiting_output) — e.g. the operator recorded a
             // process log confirming the desired output is being met, so
             // they can finalize the batch without forcing the intermediate
             // "record output" step. Only terminal/idle batches can't be
             // finished.
-            if (! in_array($batch['status'], [BMG_STATE_PROCESSING, BMG_STATE_AWAITING_OUTPUT, BMG_STATE_CURING], true)) {
+            if (! in_array($batch['status'], [BMG_STATE_PROCESSING, BMG_STATE_AWAITING_OUTPUT], true)) {
                 throw StateMachineException::invalidTransition($batch['status'], BMG_STATE_RELEASED, 'bmg');
             }
 
@@ -829,7 +748,7 @@ final class BmgService extends BaseService
         });
     }
 
-    public function cancelBatch(int $batchId, string $reasonCode): BmgBatchDto
+    public function cancelBatch(int $batchId, string $reasonCode, string $note = ''): BmgBatchDto
     {
         $batch = $this->policy->loadBatchForOwnership($batchId);
         if ($batch === null) {
@@ -840,7 +759,7 @@ final class BmgService extends BaseService
         $this->policy->check('cancel', $batch);
         $userId = \App\Auth\CurrentUser::assert();
 
-        return $this->txn(function () use ($batchId, $reasonCode, $userId): BmgBatchDto {
+        return $this->txn(function () use ($batchId, $reasonCode, $note, $userId): BmgBatchDto {
             $batch = $this->selectForUpdate('facilities_bmg_batches', ['id' => $batchId, 'tenant_id' => CurrentTenant::id(), 'archived_at' => null]);
 
             if ($batch === null) {
@@ -859,6 +778,12 @@ final class BmgService extends BaseService
 
             $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
 
+            // The operator's free-text detail, when supplied, is folded
+            // into the same `notes` ledger the reason code uses — the
+            // reason code alone loses "why this run died" in a way the
+            // history view can't show.
+            $cancellation = 'cancel: ' . $reasonCode . ($note !== '' ? ' — ' . $note : '');
+
             $this->db->table('facilities_bmg_batches')
                 ->where('facilities_bmg_batches.tenant_id', CurrentTenant::id())
                 ->where('id', $batchId)
@@ -866,8 +791,8 @@ final class BmgService extends BaseService
                     'status'       => BMG_STATE_CANCELLED,
                     'cancelled_at' => $now,
                     'notes'        => ($batch['notes'] ?? '') !== ''
-                        ? (string) $batch['notes'] . ' | cancel: ' . $reasonCode
-                        : 'cancel: ' . $reasonCode,
+                        ? (string) $batch['notes'] . ' | ' . $cancellation
+                        : $cancellation,
                     'updated_at'   => $now,
                 ]);
 
@@ -1170,9 +1095,19 @@ final class BmgService extends BaseService
      *
      * @return array<int, array<string, mixed>>
      */
+    /**
+     * Active batches for the "Processing Drums" widget, wrapped with the
+     * turning-cadence threshold the client would otherwise have to
+     * hard-code and keep in sync with `BmgAlertEngine::TURNING_DUE_DAYS`.
+     *
+     * @return array{data: list<array<string, mixed>>, turning_due_days: int}
+     */
     public function listActiveBatches(): array
     {
-        return $this->analyticsReader->listActiveBatches();
+        return [
+            'data'             => $this->analyticsReader->listActiveBatches(),
+            'turning_due_days' => BmgAlertEngine::TURNING_DUE_DAYS,
+        ];
     }
 
     // ------------------------------------------------- process logs
@@ -1221,6 +1156,8 @@ final class BmgService extends BaseService
             'session_uid'         => isset($r['session_uid']) && $r['session_uid'] !== null ? (string) $r['session_uid'] : null,
             'turns_count'         => isset($r['turns_count']) && $r['turns_count'] !== null ? (int) $r['turns_count'] : null,
             'duration_seconds'    => isset($r['duration_seconds']) && $r['duration_seconds'] !== null ? (int) $r['duration_seconds'] : null,
+            'session_started_at'  => isset($r['session_started_at']) && $r['session_started_at'] !== null ? (string) $r['session_started_at'] : null,
+            'session_ended_at'    => isset($r['session_ended_at']) && $r['session_ended_at'] !== null ? (string) $r['session_ended_at'] : null,
             'recorded_by_user_id' => (int) $r['recorded_by_user_id'],
             'created_at'          => (string) $r['created_at'],
         ], $rows);
@@ -1288,12 +1225,6 @@ final class BmgService extends BaseService
                 ['resource_code' => (string) $batch['reference_code']],
             );
 
-            // -----------------------------------------------------------------
-            // Alert engine: SPC evaluation in the same transaction so a
-            // rollback drops both. We compute staleness against the
-            // PREVIOUS log (the one we just superseded); the engine
-            // uses the freshly-inserted row as `lastLog`.
-            // -----------------------------------------------------------------
             $previousLog = $this->db->table('facilities_bmg_process_logs')
                 ->where('facilities_bmg_process_logs.tenant_id', CurrentTenant::id())
                 ->select('log_date')
@@ -1309,66 +1240,9 @@ final class BmgService extends BaseService
                 ->where('facilities_bmg_process_logs.tenant_id', CurrentTenant::id())
                 ->where('id', $id)->get()->getRowArray();
 
-            $daysSince = $this->alertEngine->daysSinceLastLog($previousLog ?: null);
-            $alerts = $this->alertEngine->evaluate(
-                [
-                    'id'          => $batchId,
-                    'status'      => (string) $batch['status'],
-                    'started_at'  => (string) $batch['started_at'],
-                    'archived_at' => null,
-                ],
-                $row,
-                $daysSince,
-            );
-
-            $persistedAlerts = [];
-            foreach ($alerts as $alert) {
-                $this->db->table('facilities_bmg_alerts')->insert([
-                    'batch_id'      => $batchId,
-                    'tenant_id'     => CurrentTenant::id(),
-                    'code'          => (string) $alert['code'],
-                    'severity'      => (string) $alert['severity'],
-                    'message'       => (string) $alert['message'],
-                    'triggered_at'  => $now,
-                    'created_at'    => $now,
-                    'updated_at'    => $now,
-                ]);
-                $alertId = (int) $this->db->insertID();
-                $this->audit->enqueue(
-                    'bmg.alert_triggered',
-                    'facilities_bmg_alerts',
-                    $alertId,
-                    $userId,
-                    [
-                        'resource_code' => (string) $batch['reference_code'],
-                        'alert_code'    => (string) $alert['code'],
-                        'severity'      => (string) $alert['severity'],
-                    ],
-                );
-
-                // Tier 3: surface the alert globally — every user who can
-                // read BMG logs gets an in-app notification (dashboard
-                // "at-risk" widget + bell). Runs in the same txn (outbox).
-                $this->notify->enqueueToPermissions(
-                    ['facilities.bmg.logs.read'],
-                    'bmg.alert_triggered',
-                    [
-                        'resource_code' => (string) $batch['reference_code'],
-                        'urgency'       => (string) $alert['severity'],
-                        'source_module' => 'facilities',
-                    ],
-                );
-                $persistedAlerts[] = BmgAlertDto::fromRow([
-                    'id'                      => $alertId,
-                    'batch_id'                => $batchId,
-                    'code'                    => (string) $alert['code'],
-                    'severity'                => (string) $alert['severity'],
-                    'message'                 => (string) $alert['message'],
-                    'triggered_at'            => $now,
-                    'acknowledged_at'         => null,
-                    'acknowledged_by_user_id' => null,
-                ])->toArray();
-            }
+            $persistedAlerts = $row === null
+                ? []
+                : $this->persistAlertsForLog($batchId, $batch, $row, $previousLog ?: null, $userId, $now);
 
             return [
                 'id'                  => (int) $row['id'],
@@ -1412,7 +1286,8 @@ final class BmgService extends BaseService
      * @param array<string, mixed> $device row resolved by DeviceAuthFilter
      *        (expects keys: id, code, unit_id, linked_user_id)
      * @param array<string, mixed> $input validated payload (session_uid,
-     *        turns_count, duration_seconds, optional sets_count, firmware, note)
+     *        turns_count, duration_seconds, optional sets_count, firmware, note,
+     *        optional RTC epoch pair started_at_epoch/ended_at_epoch)
      * @return array<string, mixed> process-log DTO + `created: bool`
      */
     public function recordDeviceTurnSession(array $device, array $input): array
@@ -1482,6 +1357,29 @@ final class BmgService extends BaseService
             $duration = (int) $input['duration_seconds'];
             $sets     = isset($input['sets_count']) && $input['sets_count'] !== '' ? (int) $input['sets_count'] : null;
             $note     = trim((string) ($input['observation_note'] ?? ''));
+
+            // RTC-stamped session window. Sane = ended >= started, ended
+            // no further than 7 days in the past (offline-queue horizon)
+            // and no more than 10 min in the future (clock skew). Outside
+            // the window — unsynced DS3231, tampered payload — fall back
+            // to receipt time and leave the columns null. created_at
+            // ALWAYS stays at receipt: that is the audit fact.
+            $startedEpoch = isset($input['started_at_epoch']) && $input['started_at_epoch'] !== null ? (int) $input['started_at_epoch'] : null;
+            $endedEpoch   = isset($input['ended_at_epoch']) && $input['ended_at_epoch'] !== null ? (int) $input['ended_at_epoch'] : null;
+            $nowUnix      = time();
+            $sessionStartedSql = null;
+            $sessionEndedSql   = null;
+            if ($startedEpoch !== null && $endedEpoch !== null
+                && $endedEpoch >= $startedEpoch
+                && $endedEpoch <= $nowUnix + 600
+                && $endedEpoch >= $nowUnix - 604800) {
+                $sessionStartedSql = gmdate('Y-m-d H:i:s', $startedEpoch);
+                $sessionEndedSql   = gmdate('Y-m-d H:i:s', $endedEpoch);
+            }
+            $logDate = $sessionStartedSql !== null
+                ? ManilaDay::fromUtcSql($sessionStartedSql)
+                : ManilaDay::fromUtcSql($now);
+
             if ($note === '') {
                 // Auto-summary from the device's own report — always
                 // truthful to the payload, never to compile-time numbers.
@@ -1494,7 +1392,10 @@ final class BmgService extends BaseService
                 'batch_id'            => (int) $batch['id'],
                 'tenant_id'           => CurrentTenant::id(),
                 // Manila business calendar, same day-grouping as humans.
-                'log_date'            => ManilaDay::fromUtcSql($now),
+                // Uses the RTC-stamped session START when sane, so a
+                // queued session delivered a day later still lands on
+                // the day the drum actually turned.
+                'log_date'            => $logDate,
                 'event_type'          => 'turning',
                 'observation_note'    => $note !== '' ? $note : null,
                 'temperature_celsius' => null,
@@ -1505,6 +1406,8 @@ final class BmgService extends BaseService
                 'session_uid'         => $sessionUid,
                 'turns_count'         => $turns,
                 'duration_seconds'    => $duration,
+                'session_started_at'  => $sessionStartedSql,
+                'session_ended_at'    => $sessionEndedSql,
                 'recorded_by_user_id' => $actorId,
                 'created_at'          => $now,
             ]);
@@ -1548,11 +1451,36 @@ final class BmgService extends BaseService
     }
 
     /**
-     * SPC alert evaluation for an inserted process-log row, in the same
-     * transaction so a rollback drops both the log and its alerts.
-     * VERBATIM mirror of the block inside `addProcessLog` — kept as a
-     * helper rather than refactoring the proven human path; extract
-     * both call sites together when that path is next revisited.
+     * Days since the newest `turning` log for a batch, from the
+     * caller's perspective AFTER inserting `$row`: 0 when the fresh row
+     * is itself a turning (the cadence clock just reset), else the
+     * day-diff to the previous newest turning — `null` when the batch
+     * has never been turned (the engine then measures from batch start).
+     *
+     * @param array<string, mixed> $row freshly inserted process-log row
+     */
+    private function daysSinceLastTurning(int $batchId, array $row): ?int
+    {
+        if ((string) ($row['event_type'] ?? '') === 'turning') {
+            return 0;
+        }
+
+        $last = $this->db->table('facilities_bmg_process_logs')
+            ->select('log_date')
+            ->where('batch_id', $batchId)
+            ->where('tenant_id', CurrentTenant::id())
+            ->where('event_type', 'turning')
+            ->orderBy('log_date', 'DESC')
+            ->orderBy('id', 'DESC')
+            ->limit(1)
+            ->get()->getRowArray();
+
+        return $last === null ? null : $this->alertEngine->daysSinceDate((string) $last['log_date']);
+    }
+
+    /**
+     * Device-path entry point: resolves the freshly-inserted log row and
+     * its predecessor, then defers to the shared alert path below.
      *
      * @param array<string, mixed> $batch locked batch row
      * @return list<array<string, mixed>> persisted alert DTOs
@@ -1577,7 +1505,28 @@ final class BmgService extends BaseService
             return [];
         }
 
-        $daysSince = $this->alertEngine->daysSinceLastLog($previousLog ?: null);
+        return $this->persistAlertsForLog($batchId, $batch, $row, $previousLog ?: null, $actorId, $now);
+    }
+
+    /**
+     * SPC evaluation + persistence for a freshly-inserted process-log row.
+     * Shared by the human path (`addProcessLog`) and the device path
+     * (`recordDeviceTurnSession`), so both get identical rules, identical
+     * repeat suppression, and identical audit/notification side effects.
+     *
+     * Runs inside the caller's transaction so a rollback drops both the
+     * log and its alerts. Staleness is measured against the PREVIOUS log
+     * (the one just superseded); the engine sees the new row as `lastLog`.
+     *
+     * @param array<string, mixed> $batch        locked batch row
+     * @param array<string, mixed> $row          the newly-inserted log row
+     * @param array<string, mixed>|null $previousLog prior log's `log_date`, or null
+     * @return list<array<string, mixed>> persisted alert DTOs
+     */
+    private function persistAlertsForLog(int $batchId, array $batch, array $row, ?array $previousLog, int $actorId, string $now): array
+    {
+        $daysSince = $this->alertEngine->daysSinceLastLog($previousLog);
+        $daysSinceLastTurning = $this->daysSinceLastTurning($batchId, $row);
         $alerts = $this->alertEngine->evaluate(
             [
                 'id'          => $batchId,
@@ -1587,14 +1536,20 @@ final class BmgService extends BaseService
             ],
             $row,
             $daysSince,
+            $daysSinceLastTurning,
         );
 
         $persistedAlerts = [];
         foreach ($alerts as $alert) {
+            $code = (string) $alert['code'];
+            if ($this->hasUnackedAlertWithin($batchId, $code, $now)) {
+                continue;
+            }
+
             $this->db->table('facilities_bmg_alerts')->insert([
                 'batch_id'      => $batchId,
                 'tenant_id'     => CurrentTenant::id(),
-                'code'          => (string) $alert['code'],
+                'code'          => $code,
                 'severity'      => (string) $alert['severity'],
                 'message'       => (string) $alert['message'],
                 'triggered_at'  => $now,
@@ -1609,7 +1564,7 @@ final class BmgService extends BaseService
                 $actorId,
                 [
                     'resource_code' => (string) $batch['reference_code'],
-                    'alert_code'    => (string) $alert['code'],
+                    'alert_code'    => $code,
                     'severity'      => (string) $alert['severity'],
                 ],
             );
@@ -1629,7 +1584,7 @@ final class BmgService extends BaseService
             $persistedAlerts[] = BmgAlertDto::fromRow([
                 'id'                      => $alertId,
                 'batch_id'                => $batchId,
-                'code'                    => (string) $alert['code'],
+                'code'                    => $code,
                 'severity'                => (string) $alert['severity'],
                 'message'                 => (string) $alert['message'],
                 'triggered_at'            => $now,
@@ -1639,6 +1594,27 @@ final class BmgService extends BaseService
         }
 
         return $persistedAlerts;
+    }
+
+    /**
+     * True when this batch already has an OPEN (unacknowledged) alert
+     * for `$code` inside the dedupe window. An operator acknowledging
+     * the alert re-arms the rule at once, so a condition that genuinely
+     * changes still notifies on the very next observation.
+     */
+    private function hasUnackedAlertWithin(int $batchId, string $code, string $now): bool
+    {
+        $since = (new DateTimeImmutable($now, new DateTimeZone('UTC')))
+            ->sub(new DateInterval('PT' . self::ALERT_DEDUPE_WINDOW_HOURS . 'H'))
+            ->format('Y-m-d H:i:s');
+
+        return $this->db->table('facilities_bmg_alerts')
+            ->where('facilities_bmg_alerts.tenant_id', CurrentTenant::id())
+            ->where('batch_id', $batchId)
+            ->where('code', $code)
+            ->where('acknowledged_at', null)
+            ->where('triggered_at', '>=', $since)
+            ->countAllResults() > 0;
     }
 
     /**
@@ -1664,6 +1640,8 @@ final class BmgService extends BaseService
             'session_uid'         => $row['session_uid'] !== null ? (string) $row['session_uid'] : null,
             'turns_count'         => $row['turns_count'] !== null ? (int) $row['turns_count'] : null,
             'duration_seconds'    => $row['duration_seconds'] !== null ? (int) $row['duration_seconds'] : null,
+            'session_started_at'  => $row['session_started_at'] !== null ? (string) $row['session_started_at'] : null,
+            'session_ended_at'    => $row['session_ended_at'] !== null ? (string) $row['session_ended_at'] : null,
             'recorded_by_user_id' => (int) $row['recorded_by_user_id'],
             'created_at'          => (string) $row['created_at'],
             'created'             => $created,
@@ -1686,7 +1664,7 @@ final class BmgService extends BaseService
         $this->policy->check('devices_list');
 
         $builder = $this->db->table('facilities_bmg_devices AS d')
-            ->select('d.id, d.code, d.display_name, d.status, d.unit_id, d.token_prefix, d.firmware, d.last_seen_at, d.created_at, d.updated_at, d.archived_at, u.display_name AS unit_name, u.code AS unit_code')
+            ->select('d.id, d.code, d.display_name, d.status, d.unit_id, d.token_prefix, d.firmware, d.last_seen_at, d.silence_notified_at, d.created_at, d.updated_at, d.archived_at, u.display_name AS unit_name, u.code AS unit_code')
             ->join('facilities_bmg_units AS u', 'u.id = d.unit_id', 'left')
             ->where('d.tenant_id', CurrentTenant::id())
             ->orderBy('d.created_at', 'DESC')
@@ -1713,6 +1691,10 @@ final class BmgService extends BaseService
                 'token_prefix' => $r['token_prefix'] !== null ? (string) $r['token_prefix'] : null,
                 'firmware'     => $r['firmware'] !== null ? (string) $r['firmware'] : null,
                 'last_seen_at' => $r['last_seen_at'] !== null ? (string) $r['last_seen_at'] : null,
+                // When the device-silence watchdog last flagged this
+                // device, so the UI can keep a persistent "silent" signal
+                // instead of relying on the one-shot notification.
+                'silence_notified_at' => $r['silence_notified_at'] !== null ? (string) $r['silence_notified_at'] : null,
                 'created_at'   => (string) $r['created_at'],
                 'updated_at'   => (string) $r['updated_at'],
                 'archived_at'  => $r['archived_at'] !== null ? (string) $r['archived_at'] : null,
@@ -1909,6 +1891,236 @@ final class BmgService extends BaseService
     }
 
     /**
+     * Patch a device's mutable admin fields. Only `display_name` and the
+     * drum binding are mutable — the `code` is the device's identity on
+     * the wire (it is the `device_id` stamped onto every process log), and
+     * the token is re-keyed through `regenerateDeviceToken`, never edited.
+     *
+     * Rebinding is the recovery path for a device flashed against the
+     * wrong drum: without it, correcting the binding means re-registering
+     * the device, which mints a new token and forces a re-flash.
+     *
+     * Passing `unit_id: null` unbinds. A bound drum that is archived is
+     * rejected — an archived drum can never start a batch, so a device
+     * bound to one would silently 409 on every report.
+     *
+     * @param array{display_name?:string, unit_id?:int|null} $input
+     */
+    public function updateDevice(int $deviceId, array $input): array
+    {
+        $this->policy->check('devices_manage');
+
+        return $this->txn(function () use ($deviceId, $input): array {
+            $device = $this->selectForUpdate('facilities_bmg_devices', ['id' => $deviceId, 'tenant_id' => CurrentTenant::id()]);
+            if ($device === null) {
+                throw new ApiException('resource.not_found', 404, [
+                    ['code' => 'resource.not_found', 'message' => 'Device not found.'],
+                ]);
+            }
+
+            $patch = [];
+
+            if (array_key_exists('display_name', $input)) {
+                $name = trim((string) ($input['display_name'] ?? ''));
+                if ($name === '' || mb_strlen($name) > 128) {
+                    throw ApiException::validationFailure([
+                        ['code' => 'validation.field', 'message' => 'Display name must be 1-128 characters.', 'field' => 'display_name'],
+                    ]);
+                }
+                $patch['display_name'] = $name;
+            }
+
+            if (array_key_exists('unit_id', $input)) {
+                $unitId = $input['unit_id'] === null || $input['unit_id'] === '' ? null : (int) $input['unit_id'];
+                if ($unitId !== null) {
+                    $unit = $this->db->table('facilities_bmg_units')
+                        ->where('facilities_bmg_units.tenant_id', CurrentTenant::id())
+                        ->where('id', $unitId)
+                        ->where('archived_at', null)
+                        ->get()->getRowArray();
+                    if ($unit === null) {
+                        throw ApiException::validationFailure([
+                            ['code' => 'validation.field', 'message' => 'Bound drum not found, or is archived.', 'field' => 'unit_id'],
+                        ]);
+                    }
+                }
+                $patch['unit_id'] = $unitId;
+            }
+
+            if ($patch !== []) {
+                $changed  = array_values(array_diff(array_keys($patch), ['updated_at']));
+                $now      = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
+                $patch['updated_at'] = $now;
+                $this->db->table('facilities_bmg_devices')->where('id', $deviceId)->update($patch);
+
+                $this->audit->enqueue(
+                    'bmg.device_updated',
+                    'facilities_bmg_devices',
+                    $deviceId,
+                    \App\Auth\CurrentUser::assert(),
+                    [
+                        'resource_code' => (string) $device['code'],
+                        'reason_code'   => 'facilities.device.update',
+                        'outcome'       => implode(',', $changed),
+                    ],
+                );
+            }
+
+            $row = $this->db->table('facilities_bmg_devices')->where('id', $deviceId)->get()->getRowArray() ?? [];
+            return $this->deviceAdminDto($row);
+        });
+    }
+
+    /**
+     * Soft-archive a device. The token hash stays on the row (so the
+     * audit trail of which credential existed is preserved) but the
+     * ingest filter refuses archived devices, so a decommissioned board
+     * cannot report and cannot be silently rebound by mistake.
+     *
+     * Archiving also drops the drum binding: an archived device must not
+     * keep a live drum pinned to it in the registry.
+     */
+    public function archiveDevice(int $deviceId): array
+    {
+        $this->policy->check('devices_manage');
+
+        return $this->txn(function () use ($deviceId): array {
+            $device = $this->selectForUpdate('facilities_bmg_devices', ['id' => $deviceId, 'tenant_id' => CurrentTenant::id()]);
+            if ($device === null) {
+                throw new ApiException('resource.not_found', 404, [
+                    ['code' => 'resource.not_found', 'message' => 'Device not found.'],
+                ]);
+            }
+
+            $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
+            $this->db->table('facilities_bmg_devices')->where('id', $deviceId)->update([
+                'archived_at' => $now,
+                'unit_id'     => null,
+                'status'      => 'disabled',
+                'updated_at'  => $now,
+            ]);
+
+            $this->audit->enqueue(
+                'bmg.device_archived',
+                'facilities_bmg_devices',
+                $deviceId,
+                \App\Auth\CurrentUser::assert(),
+                ['resource_code' => (string) $device['code']],
+            );
+
+            $row = $this->db->table('facilities_bmg_devices')->where('id', $deviceId)->get()->getRowArray() ?? [];
+            return $this->deviceAdminDto($row);
+        });
+    }
+
+    /**
+     * Device-silence watchdog (`synapse:bmg-device-watchdog`).
+     *
+     * For every ACTIVE device whose bound unit holds an ACTIVE batch:
+     * when the device hasn't checked in (`last_seen_at`, falling back to
+     * `created_at` for never-seen devices) for more than `$silenceHours`,
+     * notify the logs.read audience — one notification per silence
+     * episode, deduped via `silence_notified_at`: the marker re-arms
+     * automatically the moment the device checks back in (last_seen
+     * advances past it).
+     *
+     * Silence is NORMAL between sessions (the device only reports when a
+     * session runs) — the threshold should exceed the turning cadence,
+     * which is why the default is 48 h against a 4-day cadence.
+     *
+     * CLI variant: no acting user exists on the shell, so there is no
+     * permission gate here (same posture as `registerDeviceUnchecked`);
+     * the notify/audit fan-out is the system speaking.
+     *
+     * @return int devices notified this run
+     */
+    public function deviceWatchdogUnchecked(int $silenceHours): int
+    {
+        $nowUnix = time();
+        $notified = 0;
+
+        // Candidate devices: active, bound, tenant-scoped, unit holds an
+        // active batch. The silence/dedupe decision is re-validated per
+        // device under lock.
+        $candidates = $this->db->table('facilities_bmg_devices AS d')
+            ->select('d.id, d.code, d.last_seen_at, d.created_at, d.silence_notified_at')
+            ->join('facilities_bmg_batches AS b', 'b.unit_id = d.unit_id AND b.archived_at IS NULL', 'inner', false)
+            ->where('d.tenant_id', CurrentTenant::id())
+            ->where('d.status', 'active')
+            ->where('d.archived_at', null)
+            ->where('d.unit_id IS NOT NULL', null, false)
+            ->whereIn('b.status', [BMG_STATE_PROCESSING, BMG_STATE_AWAITING_OUTPUT])
+            ->get()->getResultArray();
+
+        foreach ($candidates as $candidate) {
+            try {
+                $notified += $this->txn(function () use ($candidate, $silenceHours, $nowUnix): int {
+                    $device = $this->selectForUpdate('facilities_bmg_devices', [
+                        'id'        => (int) $candidate['id'],
+                        'tenant_id' => CurrentTenant::id(),
+                    ]);
+                    if ($device === null || $device['status'] !== 'active' || $device['archived_at'] !== null) {
+                        return 0;
+                    }
+
+                    $lastSeen = $device['last_seen_at'] ?? $device['created_at'];
+                    if ($lastSeen === null) {
+                        return 0;
+                    }
+                    $hoursSilent = ($nowUnix - (strtotime((string) $lastSeen) ?: $nowUnix)) / 3600;
+                    if ($hoursSilent <= $silenceHours) {
+                        return 0;
+                    }
+
+                    // One notification per silence episode: skip when we
+                    // already notified AFTER the device's last check-in.
+                    $notifiedAt = $device['silence_notified_at'] ?? null;
+                    if ($notifiedAt !== null && (string) $notifiedAt >= (string) $lastSeen) {
+                        return 0;
+                    }
+
+                    $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
+                    $this->db->table('facilities_bmg_devices')->where('id', (int) $device['id'])->update([
+                        'silence_notified_at' => $now,
+                        'updated_at'          => $now,
+                    ]);
+
+                    $this->notify->enqueueToPermissions(
+                        ['facilities.bmg.logs.read'],
+                        'bmg.device_silent',
+                        [
+                            'resource_code' => (string) $device['code'],
+                            'urgency'       => 'warning',
+                            'source_module' => 'facilities',
+                        ],
+                    );
+                    $this->audit->enqueue(
+                        'bmg.device_silent',
+                        'facilities_bmg_devices',
+                        (int) $device['id'],
+                        null,
+                        [
+                            'resource_code' => (string) $device['code'],
+                            'reason_code'   => 'synapse:bmg-device-watchdog',
+                            'outcome'       => sprintf('silent %.1fh', $hoursSilent),
+                        ],
+                    );
+
+                    return 1;
+                });
+            } catch (\Throwable $e) {
+                // One wedged device must not starve the rest of the sweep.
+                log_message('warning', 'bmg device watchdog: device #{id} failed: {m}', [
+                    'id' => (int) $candidate['id'],
+                    'm'  => $e->getMessage(),
+                ]);
+            }
+        }
+
+        return $notified;
+    }
+
+    /**
      * Resolve the device code from an explicit slug or a MAC. The MAC
      * normalizes to dash-separated lowercase hex pairs
      * (b8-1f-3f-d7-ec-18), which fits VARCHAR(32).
@@ -2028,6 +2240,7 @@ final class BmgService extends BaseService
             'token_prefix' => $row['token_prefix'] !== null ? (string) $row['token_prefix'] : null,
             'firmware'     => $row['firmware'] !== null ? (string) $row['firmware'] : null,
             'last_seen_at' => $row['last_seen_at'] !== null ? (string) $row['last_seen_at'] : null,
+            'silence_notified_at' => isset($row['silence_notified_at']) && $row['silence_notified_at'] !== null ? (string) $row['silence_notified_at'] : null,
             'created_at'   => (string) $row['created_at'],
             'updated_at'   => (string) $row['updated_at'],
             'archived_at'  => $row['archived_at'] !== null ? (string) $row['archived_at'] : null,
@@ -2277,15 +2490,12 @@ final class BmgService extends BaseService
                 ]);
             }
             $current = (string) $unit['status'];
-            // Curing is a long-tail phase (1-3 months) and is intentionally
-            // "active" for the one-active-batch-per-unit invariant (see
-            // moveToCuring). Putting a unit into maintenance while a batch
-            // is curing would orphan the cure and break the generated
-            // `active_unit_id` uniqueness. Reject both directions.
-            $blocked = [BMG_STATE_CURING];
+            // Strictly idle <-> maintenance. A drum with a live batch
+            // cannot be parked — that would strand the batch and break
+            // the generated `active_unit_id` uniqueness.
             $allowed = $maintenance ? [BMG_STATE_IDLE] : [BMG_STATE_MAINTENANCE];
             $next = $maintenance ? BMG_STATE_MAINTENANCE : BMG_STATE_IDLE;
-            if (in_array($current, $blocked, true) || ! in_array($current, $allowed, true)) {
+            if (! in_array($current, $allowed, true)) {
                 throw StateMachineException::invalidTransition($current, $next, 'bmg');
             }
             $now = $this->support->utcNow();
@@ -2355,10 +2565,10 @@ final class BmgService extends BaseService
 
     /**
      * Release a batch for use — the final quality/maturity gate before
-     * compost leaves the system. Only an `awaiting_output` / `curing`
-     * batch can be released; the operator records a quality grade +
-     * maturity level (the batch's "certificate" fields). Terminal state
-     * `released`; the unit returns to Idle.
+     * compost leaves the system. Only an `awaiting_output` batch can be
+     * released; the operator records a quality grade + maturity level
+     * (the batch's "certificate" fields). Terminal state `released`; the
+     * unit returns to Idle.
      *
      * @param array{quality_grade?:string, maturity_level?:string, notes?:?string} $input
      */
@@ -2380,7 +2590,7 @@ final class BmgService extends BaseService
                     ['code' => 'resource.not_found', 'message' => "Batch #{$batchId} not found."],
                 ]);
             }
-            if (! in_array($batch['status'], [BMG_STATE_AWAITING_OUTPUT, BMG_STATE_CURING], true)) {
+            if ($batch['status'] !== BMG_STATE_AWAITING_OUTPUT) {
                 throw StateMachineException::invalidTransition($batch['status'], BMG_STATE_RELEASED, 'bmg');
             }
 

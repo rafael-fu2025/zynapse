@@ -47,8 +47,17 @@ POSTs it:
 POST {API_BASE_URL}/api/v1/devices/bmg/turn-sessions
 X-Device-Token: dev_<64 hex>
 { "session_uid": "<32 hex>", "turns_count": 21, "sets_count": 3,
-  "duration_seconds": 50, "firmware": "compost-1.1" }
+  "duration_seconds": 50, "firmware": "compost-1.1",
+  "session_started_at_epoch": <utc>, "session_ended_at_epoch": <utc> }
 ```
+
+The epoch pair is the DS3231-stamped session window — the backend dates
+the log by when the drum ACTUALLY turned, so a session queued overnight
+still lands on the right Manila day. The RTC syncs from NTP on the first
+WiFi connect (Asia/Manila); if it lost backup power it is re-adjusted
+automatically, and if no RTC is present the fields are omitted and the
+backend falls back to server time (sanity window: ended within the past
+7 days, at most 10 min in the future).
 
 - `2xx` → Serial shows `REPORT: SYNC OK`; the backend writes a `turning`
   process-log row on the drum's active batch.
