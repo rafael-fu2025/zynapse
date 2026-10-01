@@ -34,6 +34,25 @@ export const contactSchema = z.object({
 export type EmergencyContact = z.infer<typeof contactSchema>;
 
 /**
+ * One MIS appointment record of an employee person (backend
+ * `EmployeePersonService`). FU MIS issues one record per appointment, so
+ * one human can hold several; `is_primary` marks the newest one, whose
+ * position the registry row displays. Optional everywhere so older
+ * payloads and e2e mocks keep parsing.
+ */
+export const employeeRecordSchema = z.object({
+  id: z.number().int(),
+  employee_number: z.string(),
+  department: z.string().nullable(),
+  position: z.string().nullable(),
+  position_year: z.number().int().nullable(),
+  archived: z.boolean(),
+  is_primary: z.boolean(),
+  visit_count: z.number().int().min(0),
+});
+export type EmployeeRecord = z.infer<typeof employeeRecordSchema>;
+
+/**
  * personSchema — the unified user/person shape returned by every patient
  * endpoint. `id` IS the `users.id`; student- and employee-specific fields
  * are nullable and only one side is populated based on `kind`.
@@ -72,6 +91,10 @@ export const personSchema = z.object({
   emergency_contact_name: z.string().nullable(),
   emergency_contact_phone: z.string().nullable(),
   is_teaching: z.boolean().nullable(),
+
+  // Employee record group (absent for students and legacy payloads).
+  position_year: z.number().int().nullable().optional(),
+  records: z.array(employeeRecordSchema).optional(),
 
   allergies: z.array(allergySchema).optional(),
   contacts: z.array(contactSchema).optional(),

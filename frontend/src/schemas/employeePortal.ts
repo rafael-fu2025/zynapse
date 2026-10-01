@@ -7,6 +7,24 @@
  */
 import { z } from 'zod';
 
+/**
+ * One MIS appointment record of the logged-in employee (backend
+ * `EmployeePersonService`). `is_primary` marks the newest record whose
+ * position the profile card displays. Optional so legacy payloads and
+ * e2e route mocks keep parsing.
+ */
+export const employeePortalRecordSchema = z.object({
+  id: z.number().int(),
+  employee_number: z.string(),
+  department: z.string().nullable(),
+  position: z.string().nullable(),
+  position_year: z.number().int().nullable(),
+  archived: z.boolean(),
+  is_primary: z.boolean(),
+  visit_count: z.number().int().min(0),
+});
+export type EmployeePortalRecord = z.infer<typeof employeePortalRecordSchema>;
+
 export const employeePortalProfileSchema = z.object({
   id: z.number().int().positive(),
   kind: z.enum(['student', 'employee', 'contractor', 'alumni']).nullable(),
@@ -16,6 +34,8 @@ export const employeePortalProfileSchema = z.object({
   middle_name: z.string().nullable(),
   department: z.string().nullable(),
   position: z.string().nullable(),
+  position_year: z.number().int().nullable().optional(),
+  records: z.array(employeePortalRecordSchema).optional(),
   date_hired: z.string().nullable(),
   employment_status: z.string().nullable(),
   hr_synced_at: z.string().nullable(),

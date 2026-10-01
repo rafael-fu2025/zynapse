@@ -29,6 +29,10 @@ import {
   type UpdateEmployeeInput,
   type UpdateStudentInput,
 } from '@/schemas/patients';
+import {
+  employeePortalClinicVisitSchema,
+  type EmployeePortalClinicVisit,
+} from '@/schemas/employeePortal';
 
 interface StudentPage {
   data: Student[];
@@ -554,6 +558,25 @@ export function useEmployee(idOrIdentifier: number | string | null) {
     queryFn: async () => {
       const res = await apiClient.get<unknown>(`/clinic/employees/${encodeURIComponent(String(idOrIdentifier))}`);
       return employeeSchema.parse(res.data);
+    },
+  });
+}
+
+/**
+ * One employee record's clinic encounters — the registry row accordion's
+ * per-record history. Lazily fetched when a record's section expands
+ * (`enabled` is the caller's choice), 0-visit records resolve to [].
+ * Same wire shape as the portal's clinic visits, so one schema parses both.
+ */
+export function useEmployeeEncounters(employeeId: number | null, enabled: boolean) {
+  return useQuery<EmployeePortalClinicVisit[], ApiEnvelopeError>({
+    queryKey: ['patients', 'employees', 'encounters', employeeId],
+    enabled: enabled && employeeId !== null,
+    queryFn: async () => {
+      const res = await apiClient.get<unknown[]>(
+        `/clinic/employees/${employeeId}/encounters?limit=50`,
+      );
+      return res.data.map((v) => employeePortalClinicVisitSchema.parse(v));
     },
   });
 }

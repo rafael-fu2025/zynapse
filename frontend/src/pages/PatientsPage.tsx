@@ -28,7 +28,7 @@ import {
   Trash2,
   UserPlus,
 } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useForm } from 'react-hook-form';
 import { useSearchParams } from 'react-router-dom';
 import { ApiEnvelopeError } from '@/api/envelope';
@@ -84,6 +84,7 @@ import {
   useDeleteAllergy,
   useDeleteContact,
   useEmployee,
+  useEmployeeEncounters,
   useEmployeeFacets,
   useEmployeeSearch,
   useEmployees,
@@ -110,11 +111,13 @@ import {
   type CreateEmployeeInput,
   type CreateStudentInput,
   type Employee,
+  type EmployeeRecord,
   type PortalAccount,
   type Student,
   type UpdateEmployeeInput,
 } from '@/schemas/patients';
 import { deriveUniversityEmail } from '@/lib/universityEmail';
+import { fmtUtcToApp } from '@/utils/date';
 
 const SEVERITY_VARIANT = { mild: 'info', moderate: 'warning', severe: 'destructive' } as const;
 
@@ -1046,6 +1049,156 @@ function EditEmployeeDialog({ employee, onClose }: { employee: Employee; onClose
 }
 
 /**
+ * EmployeeRecordHistory — one MIS record's expandable clinic history.
+ *
+ * FU MIS issues one record (its own employee number) per appointment, so
+ * one person can hold several registry records. This block renders one
+ * record inside the registry row accordion (and the detail dialog);
+ * expanding it lazily fetches that record's encounters.
+ */
+function EmployeeRecordHistory({ record }: { record: EmployeeRecord }) {
+  const [open, setOpen] = useState(false);
+  const encounters = useEmployeeEncounters(record.id, open);
+
+  return (
+    <div className="rounded-lg border bg-background">
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+        className="flex w-full flex-wrap items-center gap-2 px-3 py-2 text-left text-xs hover:bg-muted/50"
+      >
+        <ChevronDown
+          className={`size-3.5 shrink-0 text-muted-foreground transition-transform ${open ? '' : '-rotate-90'}`}
+          aria-hidden
+        />
+        <span className="tabular-nums font-medium">{record.employee_number}</span>
+        {record.is_primary && <Badge variant="outline">current</Badge>}
+        {record.archived && <Badge variant="secondary">Archived</Badge>}
+        <span className="min-w-0 flex-1 truncate">
+          {record.position ?? 'No position'}
+          {record.department !== null && <span className="text-muted-foreground"> — {record.department}</span>}
+        </span>
+        <span className="tabular-nums text-muted-foreground">
+          {record.position_year !== null ? `${record.position_year} · ` : ''}
+          {record.visit_count} visit{record.visit_count === 1 ? '' : 's'}
+        </span>
+      </button>
+      {open && (
+        <div className="border-t px-3 py-2">
+          {encounters.isLoading && (
+            <p className="flex items-center gap-2 text-xs text-muted-foreground" role="status">
+              <Loader2 className="size-3.5 animate-spin" aria-hidden /> Loading clinic history…
+            </p>
+          )}
+          {encounters.isError && (
+            <p className="text-xs text-destructive">Failed to load this record's clinic history.</p>
+          )}
+          {encounters.data !== undefined && encounters.data.length === 0 && (
+            <p className="text-xs text-muted-foreground">No clinic visits under this record.</p>
+          )}
+          {encounters.data !== undefined && encounters.data.length > 0 && (
+            <ul className="divide-y">
+              {encounters.data.map((v) => (
+                <li key={v.id} className="flex items-center gap-3 py-1.5 text-xs">
+                  <span className="w-40 shrink-0 text-muted-foreground">{fmtUtcToApp(v.started_at)}</span>
+                  <span className="min-w-0 flex-1 truncate">{v.chief_complaint}</span>
+                  <Badge variant="secondary">{v.status}</Badge>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * EmployeeRowGroup — one registry row plus its expandable record-group
+ * sub-row. The row IS the person's primary MIS record (the backend lists
+ * one row per person, newest appointment first); the sub-row holds the
+ * position-history accordion over the person's remaining records.
+ */
+function EmployeeRowGroup({
+  employee: e,
+  multiRecord,
+  expanded,
+  onToggle,
+  actions,
+}: {
+  employee: Employee;
+  multiRecord: boolean;
+  expanded: boolean;
+  onToggle: () => void;
+  /** The row's Actions cell — a closure of the page (permission-aware). */
+  actions: ReactNode;
+}) {
+  const records = e.records ?? [];
+  return (
+    <>
+      <TableRow>
+        <TableCell className="px-3 tabular-nums text-xs">{e.employee_number}</TableCell>
+        <TableCell className="px-3">
+          <div className="flex items-center gap-1.5">
+            {multiRecord && (
+              <button
+                type="button"
+                aria-expanded={expanded}
+                aria-label={`${expanded ? 'Hide' : 'Show'} the ${records.length} MIS records of ${e.last_name}, ${e.first_name}`}
+                onClick={onToggle}
+                className="rounded p-0.5 hover:bg-muted"
+              >
+                <ChevronDown
+                  className={`size-4 text-muted-foreground transition-transform ${expanded ? '' : '-rotate-90'}`}
+                  aria-hidden
+                />
+              </button>
+            )}
+            <span>{e.last_name}, {e.first_name}</span>
+          </div>
+        </TableCell>
+        <TableCell className="px-3 text-xs">{e.department ?? '—'}</TableCell>
+        <TableCell className="px-3 text-xs">{e.position ?? '—'}</TableCell>
+        <TableCell className="px-3">
+          <div className="flex flex-wrap items-center gap-1">
+            {e.is_directory_record ? (
+              <Badge variant="outline" className="border-sky-300 bg-sky-50 text-sky-700 dark:border-sky-800 dark:bg-sky-950/40 dark:text-sky-300">
+                MIS Directory
+              </Badge>
+            ) : (
+              <>
+                <Badge variant={e.employment_status === 'active' ? 'success' : e.employment_status === 'on_leave' ? 'warning' : 'secondary'}>
+                  {employmentStatusLabel(e.employment_status)}
+                </Badge>
+                <TeachingBadge isTeaching={e.is_teaching} />
+                {multiRecord && <Badge variant="info">{records.length} records</Badge>}
+                {e.archived && <Badge variant="secondary">Archived</Badge>}
+              </>
+            )}
+          </div>
+        </TableCell>
+        <TableCell className="px-3 text-right">
+          {actions}
+        </TableCell>
+      </TableRow>
+      {multiRecord && expanded && (
+        <TableRow className="bg-muted/40 hover:bg-muted/40">
+          <TableCell colSpan={6} className="px-3 py-3 align-top">
+            <p className="mb-2 text-xs font-medium text-muted-foreground">
+              MIS records — position history, newest first
+            </p>
+            <div className="space-y-1.5">
+              {records.map((r) => <EmployeeRecordHistory key={r.id} record={r} />)}
+            </div>
+          </TableCell>
+        </TableRow>
+      )}
+    </>
+  );
+}
+
+/**
  * EmployeeDetailDialog — read-only detail for the Employees tab. Mirrors
  * `StudentDetailDialog` for the students side. The schema already
  * carries the emergency contact + date-hired fields, so the dialog
@@ -1114,6 +1267,14 @@ function EmployeeDetailDialog({ employeeId, onClose }: { employeeId: number | st
               <TeachingBadge isTeaching={e.is_teaching} />
             </dd>
           </div>
+          {(e.records?.length ?? 0) > 1 && (
+            <div className="col-span-2">
+              <dt className="text-xs text-muted-foreground">MIS records — position history</dt>
+              <dd className="mt-1.5 space-y-1.5">
+                {e.records?.map((r) => <EmployeeRecordHistory key={r.id} record={r} />)}
+              </dd>
+            </div>
+          )}
           {e.archived && (
             <div className="col-span-2">
               <Badge variant="secondary">Archived</Badge>
@@ -1133,6 +1294,20 @@ export default function PatientsPage() {
   const [history, setHistory] = useState<Array<string | null>>([null]);
   const [empCursor, setEmpCursor] = useState<string | null>(null);
   const [empHistory, setEmpHistory] = useState<Array<string | null>>([null]);
+  // Registry rows are one-per-person (the primary MIS record); these ids
+  // mark the rows whose record-group accordion is expanded.
+  const [expandedEmp, setExpandedEmp] = useState<ReadonlySet<number>>(new Set());
+  const toggleEmpExpanded = (id: number) => {
+    setExpandedEmp((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  };
   const [tab, setTab] = useTabParam('students');
   // Registry writes need their own permission (counsellors hold read
   // only) — hide what the backend would 403 (2026-09 audit).
@@ -1731,34 +1906,20 @@ export default function PatientsPage() {
                         }}
                         hasFilters={empSearching || empDepartment !== 'all' || empPosition !== 'all'}
                       />
-                      {empRows.map((e) => (
-                    <TableRow key={e.id}>
-                      <TableCell className="px-3 tabular-nums text-xs">{e.employee_number}</TableCell>
-                      <TableCell className="px-3">{e.last_name}, {e.first_name}</TableCell>
-                      <TableCell className="px-3 text-xs">{e.department ?? '—'}</TableCell>
-                      <TableCell className="px-3 text-xs">{e.position ?? '—'}</TableCell>
-                      <TableCell className="px-3">
-                        <div className="flex flex-wrap items-center gap-1">
-                          {e.is_directory_record ? (
-                            <Badge variant="outline" className="border-sky-300 bg-sky-50 text-sky-700 dark:border-sky-800 dark:bg-sky-950/40 dark:text-sky-300">
-                              MIS Directory
-                            </Badge>
-                          ) : (
-                            <>
-                              <Badge variant={e.employment_status === 'active' ? 'success' : e.employment_status === 'on_leave' ? 'warning' : 'secondary'}>
-                                {employmentStatusLabel(e.employment_status)}
-                              </Badge>
-                              <TeachingBadge isTeaching={e.is_teaching} />
-                              {e.archived && <Badge variant="secondary">Archived</Badge>}
-                            </>
-                          )}
-                        </div>
-                      </TableCell>
-                      <TableCell className="px-3 text-right">
-                        {employeeActions(e)}
-                      </TableCell>
-                    </TableRow>
-                  ))}
+                      {empRows.map((e) => {
+                        const multiRecord = !e.is_directory_record && (e.records?.length ?? 0) > 1;
+                        const expanded = expandedEmp.has(e.id);
+                        return (
+                          <EmployeeRowGroup
+                            key={e.id}
+                            employee={e}
+                            multiRecord={multiRecord}
+                            expanded={expanded}
+                            onToggle={() => toggleEmpExpanded(e.id)}
+                            actions={employeeActions(e)}
+                          />
+                        );
+                      })}
                     </>
                   );
                 })()}
@@ -1813,6 +1974,12 @@ export default function PatientsPage() {
                       <MobileCardField label="Number"><span className="tabular-nums text-xs">{e.employee_number}</span></MobileCardField>
                       <MobileCardField label="Department"><span className="text-xs">{e.department ?? '—'}</span></MobileCardField>
                       <MobileCardField label="Position"><span className="text-xs">{e.position ?? '—'}</span></MobileCardField>
+                      {!e.is_directory_record && (e.records?.length ?? 0) > 1 && (
+                        <div className="mt-2 space-y-1.5" role="group" aria-label={`MIS records of ${e.employee_number}`}>
+                          <p className="text-xs font-medium text-muted-foreground">MIS records — position history</p>
+                          {e.records?.map((r) => <EmployeeRecordHistory key={r.id} record={r} />)}
+                        </div>
+                      )}
                       <MobileCardActions>{employeeActions(e)}</MobileCardActions>
                     </MobileCard>
                   ))}

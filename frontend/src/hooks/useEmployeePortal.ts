@@ -33,12 +33,22 @@ export function useMyEmployeeProfile() {
   });
 }
 
-export function useMyClinicVisits(limit = 50) {
+/**
+ * "My clinic visits" — the logged-in record's encounters, or another of
+ * the caller's own MIS records via `recordId` (the position-history
+ * accordion; the backend 404s any record that is not the same person).
+ * `recordId = null` keeps the pre-grouping behavior (own record only).
+ */
+export function useMyClinicVisits(limit = 50, recordId: number | null = null) {
   return useQuery<EmployeePortalClinicVisit[], ApiEnvelopeError>({
-    queryKey: ['me', 'clinic-visits', limit],
+    queryKey: ['me', 'clinic-visits', limit, recordId],
     queryFn: async () => {
+      const params = new URLSearchParams({ limit: String(limit) });
+      if (recordId !== null) {
+        params.set('record_id', String(recordId));
+      }
       const res = await apiClient.get<EmployeePortalClinicVisit[]>(
-        `/me/clinic-visits?limit=${limit}`,
+        `/me/clinic-visits?${params.toString()}`,
       );
       return res.data.map((v) => employeePortalClinicVisitSchema.parse(v));
     },

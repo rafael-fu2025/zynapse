@@ -12,12 +12,14 @@
 import {
   ArrowRight,
   CheckCircle2,
+  History,
   IdCard,
   Mail,
   Phone,
   Stethoscope,
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
+import { useState } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -32,6 +34,7 @@ import { PortalAppointments } from '@/components/PortalAppointments';
 import { useMe } from '@/hooks/useAuth';
 import { useMyClinicVisits, useMyEmployeeProfile } from '@/hooks/useEmployeePortal';
 import { useNotifications } from '@/hooks/useNotifications';
+import { primaryRecordOf } from '@/utils/employeeRecords';
 import { notificationDetail, notificationLabel } from '@/utils/notifications';
 import { fmtUtcToApp } from '@/utils/date';
 import { statusLabel } from '@/utils/status';
@@ -66,7 +69,15 @@ function ProfileSkeleton() {
 
 export default function EmployeePortalPage() {
   const profile = useMyEmployeeProfile();
-  const visits = useMyClinicVisits();
+  // MIS issues one record per appointment, so the caller may hold several
+  // records. The card + visit history show the primary (newest) record's
+  // position; the history selector picks among the person's records.
+  const records = profile.data?.records ?? [];
+  const primary = primaryRecordOf(records);
+  const hasGroup = records.length > 1;
+  const [selectedRecordId, setSelectedRecordId] = useState<number | null>(null);
+  const activeRecordId = selectedRecordId ?? (hasGroup ? primary?.id ?? null : null);
+  const visits = useMyClinicVisits(50, activeRecordId);
   const visitRows = visits.data ?? [];
   const notifications = useNotifications(5);
   const me = useMe();
@@ -107,9 +118,9 @@ export default function EmployeePortalPage() {
                   {me.data?.email ?? <span className="text-white/60 dark:text-muted-foreground">N/A</span>}
                 </dd>
                 <dt className="text-white/60 dark:text-muted-foreground">Department</dt>
-                <dd className="truncate font-medium">{profile.data.department ?? <span className="text-white/60 dark:text-muted-foreground">N/A</span>}</dd>
+                <dd className="truncate font-medium">{(primary?.department ?? profile.data.department) ?? <span className="text-white/60 dark:text-muted-foreground">N/A</span>}</dd>
                 <dt className="text-white/60 dark:text-muted-foreground">Position</dt>
-                <dd className="truncate">{profile.data.position ?? <span className="text-white/60 dark:text-muted-foreground">N/A</span>}</dd>
+                <dd className="truncate">{(primary?.position ?? profile.data.position) ?? <span className="text-white/60 dark:text-muted-foreground">N/A</span>}</dd>
                 <dt className="text-white/60 dark:text-muted-foreground">Status</dt>
                 <dd className="capitalize">{(profile.data.employment_status ?? 'active').replace('_', ' ')}</dd>
                 <dt className="text-white/60 dark:text-muted-foreground">Type</dt>
@@ -177,9 +188,54 @@ export default function EmployeePortalPage() {
           <Card>
             <CardHeader>
               <CardTitle>My clinic visits</CardTitle>
-              <CardDescription>Your most recent encounters, newest first.</CardDescription>
+              <CardDescription>
+                {hasGroup
+                  ? 'Your most recent encounters, newest first — pick a record to see its history.'
+                  : 'Your most recent encounters, newest first.'}
+              </CardDescription>
             </CardHeader>
-            <CardContent>
+            <CardContent className="space-y-3">
+              {hasGroup && (
+                <div
+                  role="group"
+                  aria-label="Position history — MIS records for this person"
+                  className="flex flex-wrap gap-2"
+                >
+                  {records.map((r) => {
+                    const active = r.id === activeRecordId;
+                    return (
+                      <button
+                        key={r.id}
+                        type="button"
+                        aria-pressed={active}
+                        onClick={() => setSelectedRecordId(r.id)}
+                        className={`flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs transition-colors ${
+                          active
+                            ? 'border-primary bg-primary/10 text-foreground'
+                            : 'border-border text-muted-foreground hover:bg-muted/50'
+                        }`}
+                      >
+                        <History className="size-3.5 shrink-0" aria-hidden />
+                        <span className="tabular-nums font-medium">{r.position_year ?? r.employee_number}</span>
+                        <span className="max-w-48 truncate">{r.position ?? 'No position'}</span>
+                        {r.is_primary && <Badge variant="outline">current</Badge>}
+                        <span className="tabular-nums text-[0.625rem]">
+                          {r.visit_count} visit{r.visit_count === 1 ? '' : 's'}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+              {hasGroup && activeRecordId !== null && activeRecordId !== profile.data.id && (
+                <p className="text-xs text-muted-foreground">
+                  Showing visits recorded under MIS record{' '}
+                  <span className="tabular-nums">
+                    {records.find((r) => r.id === activeRecordId)?.employee_number}
+                  </span>
+                  .
+                </p>
+              )}
               <TableStateBlock
                 isLoading={visits.isLoading}
                 isError={visits.isError}
