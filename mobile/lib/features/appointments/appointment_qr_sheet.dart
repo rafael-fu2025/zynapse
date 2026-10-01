@@ -87,7 +87,8 @@ class _AppointmentQrSheetState extends State<AppointmentQrSheet> {
       _verifyResult = null;
     });
     try {
-      final token = await ApiService.I.issueAppointmentQr(widget.appointment.id);
+      final token =
+          await ApiService.I.issueAppointmentQr(widget.appointment.id);
       // Persist so the same QR survives reopening until an explicit
       // re-issue rotates it.
       try {
@@ -210,8 +211,7 @@ class _AppointmentQrSheetState extends State<AppointmentQrSheet> {
                             height: 16,
                             child: CircularProgressIndicator(strokeWidth: 2),
                           )
-                        : const Icon(HugeIcons.strokeRoundedQrCode01,
-                            size: 18),
+                        : const Icon(HugeIcons.strokeRoundedQrCode01, size: 18),
                     label: const Text('Issue QR'),
                   ),
                 ] else if (widget.canIssue) ...[

@@ -27,7 +27,13 @@ class ModuleCounts {
 }
 
 class ReportSummary {
-  ReportSummary({this.snapshotAt, this.clinic, this.counselling, this.inventory, this.referrals, this.facilities});
+  ReportSummary(
+      {this.snapshotAt,
+      this.clinic,
+      this.counselling,
+      this.inventory,
+      this.referrals,
+      this.facilities});
 
   factory ReportSummary.fromJson(Map<String, dynamic> json) => ReportSummary(
         snapshotAt: json['snapshot_at'] as String?,

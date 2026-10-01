@@ -305,14 +305,123 @@ Color _apptStatusColor(String status) => switch (status) {
 
 class _GuidanceQueueView extends StatefulWidget {
   const _GuidanceQueueView();
-  @override State<_GuidanceQueueView> createState()=>_GuidanceQueueViewState();
+  @override
+  State<_GuidanceQueueView> createState() => _GuidanceQueueViewState();
 }
+
 class _GuidanceQueueViewState extends State<_GuidanceQueueView> {
-  List<GuidanceQueueEntry> _items=const[]; bool _loading=true; String? _error; bool _acting=false;
-  @override void initState(){super.initState();_load();}
-  Future<void> _load()async{try{final rows=await ApiService.I.guidanceQueue();if(mounted)setState((){_items=rows;_loading=false;_error=null;});}catch(e){if(mounted)setState((){_loading=false;_error=mapDioError(e).message;});}}
-  Future<void> _run(Future<void> Function() action)async{if(_acting)return;setState(()=>_acting=true);try{await action();await _load();}catch(e){if(mounted)ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text(mapDioError(e).message)));}finally{if(mounted)setState(()=>_acting=false);}}
-  @override Widget build(BuildContext context){if(_loading)return AsyncState.loading();if(_error!=null)return AsyncState.error(_error!,onRetry:_load);final me=context.read<AuthController>().session?.id;final eligible=_items.where((e)=>e.status=='waiting'&&(e.assignedCounsellorUserId==null||e.assignedCounsellorUserId==me)).toList();return RefreshIndicator(onRefresh:_load,child:ListView(padding:const EdgeInsets.all(16),children:[FilledButton.icon(onPressed:_acting||eligible.isEmpty?null:()=>_run(ApiService.I.callNextGuidance),icon:const Icon(Icons.campaign_outlined),label:const Text('Call next in my lane')),const SizedBox(height:12),if(_items.isEmpty)const Text('No Guidance queue entries.') else ..._items.map((e)=>Card(child:ListTile(title:Text('${e.queueNumber} · ${e.displayName}'),subtitle:Text('${e.purpose}\n${e.status.replaceAll('_',' ')}${e.assignedCounsellorUserId==me?' · My lane':e.assignedCounsellorUserId==null?' · Unassigned':' · Assigned'}'),isThreeLine:true,trailing:Wrap(spacing:4,children:[if(e.status=='called'&&e.assignedCounsellorUserId==me)IconButton(tooltip:'Start',onPressed:_acting?null:()=>_run(()=>ApiService.I.transitionGuidanceQueue(e.id,'start')),icon:const Icon(Icons.play_arrow)),if(e.status=='in_session'&&e.assignedCounsellorUserId==me)...[IconButton(tooltip:'Repair session',onPressed:_acting?null:()=>_run(()=>ApiService.I.repairGuidanceQueue(e.id)),icon:const Icon(Icons.build_outlined)),IconButton(tooltip:'Complete',onPressed:_acting?null:()=>_run(()=>ApiService.I.transitionGuidanceQueue(e.id,'complete')),icon:const Icon(Icons.check_circle_outline))],if(e.status=='called'&&e.assignedCounsellorUserId==me)IconButton(tooltip:'Skip',onPressed:_acting?null:()=>_run(()=>ApiService.I.transitionGuidanceQueue(e.id,'skip')),icon:const Icon(Icons.skip_next))]))))]));}
+  List<GuidanceQueueEntry> _items = const [];
+  bool _loading = true;
+  String? _error;
+  bool _acting = false;
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final rows = await ApiService.I.guidanceQueue();
+      if (mounted)
+        setState(() {
+          _items = rows;
+          _loading = false;
+          _error = null;
+        });
+    } catch (e) {
+      if (mounted)
+        setState(() {
+          _loading = false;
+          _error = mapDioError(e).message;
+        });
+    }
+  }
+
+  Future<void> _run(Future<void> Function() action) async {
+    if (_acting) return;
+    setState(() => _acting = true);
+    try {
+      await action();
+      await _load();
+    } catch (e) {
+      if (mounted)
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(mapDioError(e).message)));
+    } finally {
+      if (mounted) setState(() => _acting = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) return AsyncState.loading();
+    if (_error != null) return AsyncState.error(_error!, onRetry: _load);
+    final me = context.read<AuthController>().session?.id;
+    final eligible = _items
+        .where((e) =>
+            e.status == 'waiting' &&
+            (e.assignedCounsellorUserId == null ||
+                e.assignedCounsellorUserId == me))
+        .toList();
+    return RefreshIndicator(
+        onRefresh: _load,
+        child: ListView(padding: const EdgeInsets.all(16), children: [
+          FilledButton.icon(
+              onPressed: _acting || eligible.isEmpty
+                  ? null
+                  : () => _run(ApiService.I.callNextGuidance),
+              icon: const Icon(Icons.campaign_outlined),
+              label: const Text('Call next in my lane')),
+          const SizedBox(height: 12),
+          if (_items.isEmpty)
+            const Text('No Guidance queue entries.')
+          else
+            ..._items.map((e) => Card(
+                child: ListTile(
+                    title: Text('${e.queueNumber} · ${e.displayName}'),
+                    subtitle: Text(
+                        '${e.purpose}\n${e.status.replaceAll('_', ' ')}${e.assignedCounsellorUserId == me ? ' · My lane' : e.assignedCounsellorUserId == null ? ' · Unassigned' : ' · Assigned'}'),
+                    isThreeLine: true,
+                    trailing: Wrap(spacing: 4, children: [
+                      if (e.status == 'called' &&
+                          e.assignedCounsellorUserId == me)
+                        IconButton(
+                            tooltip: 'Start',
+                            onPressed: _acting
+                                ? null
+                                : () => _run(() => ApiService.I
+                                    .transitionGuidanceQueue(e.id, 'start')),
+                            icon: const Icon(Icons.play_arrow)),
+                      if (e.status == 'in_session' &&
+                          e.assignedCounsellorUserId == me) ...[
+                        IconButton(
+                            tooltip: 'Repair session',
+                            onPressed: _acting
+                                ? null
+                                : () => _run(() =>
+                                    ApiService.I.repairGuidanceQueue(e.id)),
+                            icon: const Icon(Icons.build_outlined)),
+                        IconButton(
+                            tooltip: 'Complete',
+                            onPressed: _acting
+                                ? null
+                                : () => _run(() => ApiService.I
+                                    .transitionGuidanceQueue(e.id, 'complete')),
+                            icon: const Icon(Icons.check_circle_outline))
+                      ],
+                      if (e.status == 'called' &&
+                          e.assignedCounsellorUserId == me)
+                        IconButton(
+                            tooltip: 'Skip',
+                            onPressed: _acting
+                                ? null
+                                : () => _run(() => ApiService.I
+                                    .transitionGuidanceQueue(e.id, 'skip')),
+                            icon: const Icon(Icons.skip_next))
+                    ]))))
+        ]));
+  }
 }
 
 /// Counselling scheduling — availability windows + appointments (mirrors
@@ -332,11 +441,24 @@ class _SchedulingViewState extends State<_SchedulingView> {
   List<Map<String, dynamic>> _appointments = [];
   List<Map<String, dynamic>> _counsellors = [];
 
-  bool get _teamManage => context.read<AuthController>().session?.hasPermission('counselling.schedule.team_manage') ?? false;
+  bool get _teamManage =>
+      context
+          .read<AuthController>()
+          .session
+          ?.hasPermission('counselling.schedule.team_manage') ??
+      false;
 
   bool get _canManageSchedule =>
-      (context.read<AuthController>().session?.hasPermission('counselling.schedule.manage') ?? false) ||
-      (context.read<AuthController>().session?.hasPermission('counselling.schedule.team_manage') ?? false);
+      (context
+              .read<AuthController>()
+              .session
+              ?.hasPermission('counselling.schedule.manage') ??
+          false) ||
+      (context
+              .read<AuthController>()
+              .session
+              ?.hasPermission('counselling.schedule.team_manage') ??
+          false);
 
   @override
   void initState() {
@@ -374,7 +496,9 @@ class _SchedulingViewState extends State<_SchedulingView> {
       context,
       title: 'Add availability window',
       fields: [
-        if (_teamManage) CrudField.dropdown('counsellor', 'Counsellor', _counsellors.map((c)=>c['name'] as String).toList()),
+        if (_teamManage)
+          CrudField.dropdown('counsellor', 'Counsellor',
+              _counsellors.map((c) => c['name'] as String).toList()),
         const CrudField.dropdown(
           'day_of_week',
           'Day',
@@ -390,7 +514,9 @@ class _SchedulingViewState extends State<_SchedulingView> {
     final body = <String, dynamic>{...payload};
     body['day_of_week'] =
         _dayNames.indexOf(payload['day_of_week'] as String? ?? 'Monday');
-    if (_teamManage) body['counsellor_user_id'] = _counsellors.firstWhere((c)=>c['name']==payload['counsellor'])['id'];
+    if (_teamManage)
+      body['counsellor_user_id'] = _counsellors
+          .firstWhere((c) => c['name'] == payload['counsellor'])['id'];
     body.remove('counsellor');
     final ok = await runCrudAction(
       context,
@@ -424,7 +550,9 @@ class _SchedulingViewState extends State<_SchedulingView> {
       title: 'Book counselling appointment',
       fullScreen: true,
       fields: [
-        if (_teamManage) CrudField.dropdown('counsellor', 'Counsellor', _counsellors.map((c)=>c['name'] as String).toList()),
+        if (_teamManage)
+          CrudField.dropdown('counsellor', 'Counsellor',
+              _counsellors.map((c) => c['name'] as String).toList()),
         const CrudField.text('patient_school_id', 'Patient school/employee ID'),
         const CrudField.date('appointment_date', 'Date'),
         const CrudField.time('start_time', 'Start time', initial: '09:00'),
@@ -432,12 +560,15 @@ class _SchedulingViewState extends State<_SchedulingView> {
         const CrudField.dropdown('type', 'Type',
             ['initial', 'follow_up', 'crisis', 'referral_based'],
             initial: 'initial'),
-        const CrudField.text('reason', 'Reason', required: false, maxLength: 255),
+        const CrudField.text('reason', 'Reason',
+            required: false, maxLength: 255),
       ],
       submitLabel: 'Book',
     );
     if (payload == null || !mounted) return;
-    if (_teamManage) payload['counsellor_user_id'] = _counsellors.firstWhere((c)=>c['name']==payload['counsellor'])['id'];
+    if (_teamManage)
+      payload['counsellor_user_id'] = _counsellors
+          .firstWhere((c) => c['name'] == payload['counsellor'])['id'];
     payload.remove('counsellor');
     final ok = await runCrudAction(
       context,
@@ -671,8 +802,16 @@ class _AnalyticsViewState extends State<_AnalyticsView> {
   List<Map<String, dynamic>> _rows = [];
 
   bool get _canManageSchedule =>
-      (context.read<AuthController>().session?.hasPermission('counselling.schedule.manage') ?? false) ||
-      (context.read<AuthController>().session?.hasPermission('counselling.schedule.team_manage') ?? false);
+      (context
+              .read<AuthController>()
+              .session
+              ?.hasPermission('counselling.schedule.manage') ??
+          false) ||
+      (context
+              .read<AuthController>()
+              .session
+              ?.hasPermission('counselling.schedule.team_manage') ??
+          false);
 
   @override
   void initState() {

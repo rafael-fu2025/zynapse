@@ -80,7 +80,8 @@ class _CounsellingSessionWorkspaceState
       // must NOT auto-decrypt the note history — every decrypt is a
       // recorded audit event, so fetching stays behind an explicit
       // Reveal action. Only the session detail loads here.
-      final session = await ApiService.I.counsellingSessionDetail(widget.sessionId);
+      final session =
+          await ApiService.I.counsellingSessionDetail(widget.sessionId);
       if (!mounted) return;
       setState(() {
         _session = session;
@@ -344,8 +345,8 @@ class _CounsellingSessionWorkspaceState
                   const SizedBox(height: 8),
                   Text(
                     _notesError!,
-                    style: TextStyle(
-                        color: Theme.of(context).colorScheme.error),
+                    style:
+                        TextStyle(color: Theme.of(context).colorScheme.error),
                     textAlign: TextAlign.center,
                   ),
                 ],

@@ -243,7 +243,8 @@ class _HeroCard extends StatelessWidget {
           text: '${clinic.openEncounters} Open encounters',
         ),
       if (referrals != null)
-        _HeroChip(color: const Color(0xFFFDE68A), text: '$openReferrals Referrals'),
+        _HeroChip(
+            color: const Color(0xFFFDE68A), text: '$openReferrals Referrals'),
       if (facilities != null)
         _HeroChip(
           color: const Color(0xFFFFC7A3),
@@ -672,5 +673,3 @@ class _StatCard extends StatelessWidget {
     );
   }
 }
-
-

@@ -105,7 +105,8 @@ class AuthController extends ChangeNotifier {
       final data = res.data?['data'];
       if (data is! Map<String, dynamic>) {
         throw ApiException(500, [
-          ApiError(code: 'auth.unexpected', message: 'Unexpected login response'),
+          ApiError(
+              code: 'auth.unexpected', message: 'Unexpected login response'),
         ]);
       }
       final token = data['access_token'] as String?;

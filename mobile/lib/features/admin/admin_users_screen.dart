@@ -66,7 +66,8 @@ class _AdminUsersScreenState extends State<AdminUsersScreen> {
     if (_loadingMore || _nextCursor == null) return;
     setState(() => _loadingMore = true);
     try {
-      final page = await ApiService.I.adminUsers(q: _query, cursor: _nextCursor);
+      final page =
+          await ApiService.I.adminUsers(q: _query, cursor: _nextCursor);
       setState(() {
         _items = [..._items, ...page.items];
         _nextCursor = page.meta?.nextCursor;
@@ -100,8 +101,7 @@ class _AdminUsersScreenState extends State<AdminUsersScreen> {
       context,
       title: 'Create user',
       fields: const [
-        CrudField.text('email', 'Email',
-            keyboard: TextInputType.emailAddress),
+        CrudField.text('email', 'Email', keyboard: TextInputType.emailAddress),
         CrudField.text('username', 'Username',
             required: false, hint: 'Letters, digits, - _'),
         CrudField.dropdown('groups', 'Role', _roleOptions),
@@ -285,7 +285,10 @@ class _UserTile extends StatelessWidget {
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
         side: BorderSide(
-          color: Theme.of(context).colorScheme.outlineVariant.withValues(alpha: 0.5),
+          color: Theme.of(context)
+              .colorScheme
+              .outlineVariant
+              .withValues(alpha: 0.5),
         ),
       ),
       child: ListTile(
@@ -313,11 +316,15 @@ class _UserTile extends StatelessWidget {
             runSpacing: 4,
             children: [
               if (user.email != null && user.email!.isNotEmpty)
-                Text(user.email!, style: const TextStyle(color: Colors.black54)),
+                Text(user.email!,
+                    style: const TextStyle(color: Colors.black54)),
               for (final group in user.groups)
-                StatusBadge(label: titleCaseOption(group), color: const Color(0xFF37474F)),
+                StatusBadge(
+                    label: titleCaseOption(group),
+                    color: const Color(0xFF37474F)),
               if (user.forceReset)
-                const StatusBadge(label: 'Force reset', color: Color(0xFF8A5A00)),
+                const StatusBadge(
+                    label: 'Force reset', color: Color(0xFF8A5A00)),
             ],
           ),
         ),

@@ -44,7 +44,9 @@ class _WasteCategoriesScreenState extends State<WasteCategoriesScreen> {
         deviation = await ApiService.I.wasteCategoryDeviation();
       } catch (e) {
         // Deviation is read-only bonus info — don't block the page.
-        if (kDebugMode) debugPrint('WasteCategoriesScreen.loadDeviation failed: $e');
+        if (kDebugMode) {
+          debugPrint('WasteCategoriesScreen.loadDeviation failed: $e');
+        }
       }
       if (!mounted) return;
       setState(() {
@@ -139,6 +141,39 @@ class _WasteCategoriesScreenState extends State<WasteCategoriesScreen> {
     if (ok) _load();
   }
 
+  /// Restore an archived category so it can be picked by batch starters
+  /// again. Fails with 409 if it is somehow already active.
+  Future<void> _unarchive(Map<String, dynamic> c) async {
+    final ok = await runCrudAction(
+      context,
+      () => ApiService.I.unarchiveWasteCategory(c['id'] as int),
+      successMessage: 'Waste category restored.',
+    );
+    if (ok) _load();
+  }
+
+  /// Hard delete. The server refuses with 409 while any batch references
+  /// the category or any drum still defaults to it — archiving is the
+  /// safe alternative, and the confirm dialog says so up front.
+  Future<void> _delete(Map<String, dynamic> c) async {
+    final confirmed = await showCrudConfirm(
+      context,
+      title: 'Delete permanently?',
+      message: 'Delete “${c['name']}” for good? This only works if no batch '
+          'references it and no drum defaults to it — otherwise archive it '
+          'instead, which keeps the history intact.',
+      confirmLabel: 'Delete forever',
+      destructive: true,
+    );
+    if (!confirmed || !mounted) return;
+    final ok = await runCrudAction(
+      context,
+      () => ApiService.I.deleteWasteCategory(c['id'] as int),
+      successMessage: 'Waste category deleted.',
+    );
+    if (ok) _load();
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -176,7 +211,20 @@ class _WasteCategoriesScreenState extends State<WasteCategoriesScreen> {
                 )
               : Column(
                   children: [
-                    for (final c in _items) _CategoryRow(c: c, onEdit: _canManage ? () => _edit(c) : null, onArchive: _canManage ? () => _archive(c) : null),
+                    for (final c in _items)
+                      _CategoryRow(
+                        c: c,
+                        onEdit: _canManage ? () => _edit(c) : null,
+                        onArchive: _canManage && (c['is_active'] ?? true)
+                            ? () => _archive(c)
+                            : null,
+                        onUnarchive: _canManage && (c['is_active'] ?? true)
+                            ? null
+                            : _canManage
+                                ? () => _unarchive(c)
+                                : null,
+                        onDelete: _canManage ? () => _delete(c) : null,
+                      ),
                   ],
                 ),
         ),
@@ -194,8 +242,7 @@ class _WasteCategoriesScreenState extends State<WasteCategoriesScreen> {
                 )
               : Column(
                   children: [
-                    for (final d in _deviation)
-                      _DeviationRow(dev: d),
+                    for (final d in _deviation) _DeviationRow(dev: d),
                   ],
                 ),
         ),
@@ -205,11 +252,19 @@ class _WasteCategoriesScreenState extends State<WasteCategoriesScreen> {
 }
 
 class _CategoryRow extends StatelessWidget {
-  const _CategoryRow({required this.c, this.onEdit, this.onArchive});
+  const _CategoryRow({
+    required this.c,
+    this.onEdit,
+    this.onArchive,
+    this.onUnarchive,
+    this.onDelete,
+  });
 
   final Map<String, dynamic> c;
   final VoidCallback? onEdit;
   final VoidCallback? onArchive;
+  final VoidCallback? onUnarchive;
+  final VoidCallback? onDelete;
 
   @override
   Widget build(BuildContext context) {
@@ -217,29 +272,41 @@ class _CategoryRow extends StatelessWidget {
     final days = c['expected_days'] ?? c['reference_duration_days'];
     final samples = (c['sample_count'] as num?)?.toInt() ?? 0;
     final hist = c['historical_avg_days'];
+    final isActive = c['is_active'] ?? true;
+    final hasMenu = onEdit != null ||
+        onArchive != null ||
+        onUnarchive != null ||
+        onDelete != null;
     return ListTile(
       contentPadding: EdgeInsets.zero,
       title: Text(
         '${c['name']} (${c['code']})',
         style: const TextStyle(fontWeight: FontWeight.w600),
       ),
-      subtitle: Text(
-        '${yield != null ? '$yield% yield' : '— yield'} · '
-        '${days != null ? '$days expected days' : '— days'}'
-        '${samples > 0 ? ' · avg ${hist ?? 0}d from $samples trial${samples == 1 ? '' : 's'}' : ' (reference)'}'
-      ),
-      trailing: (onEdit != null || onArchive != null)
+      subtitle: Text('${isActive ? '' : 'Archived · '}'
+          '${yield != null ? '$yield% yield' : '— yield'} · '
+          '${days != null ? '$days expected days' : '— days'}'
+          '${samples > 0 ? ' · avg ${hist ?? 0}d from $samples trial${samples == 1 ? '' : 's'}' : ' (reference)'}'),
+      trailing: hasMenu
           ? PopupMenuButton<String>(
               icon: const Icon(HugeIcons.strokeRoundedMore),
               onSelected: (v) {
                 if (v == 'edit') onEdit?.call();
                 if (v == 'archive') onArchive?.call();
+                if (v == 'unarchive') onUnarchive?.call();
+                if (v == 'delete') onDelete?.call();
               },
               itemBuilder: (_) => [
                 if (onEdit != null)
                   const PopupMenuItem(value: 'edit', child: Text('Edit')),
                 if (onArchive != null)
                   const PopupMenuItem(value: 'archive', child: Text('Archive')),
+                if (onUnarchive != null)
+                  const PopupMenuItem(
+                      value: 'unarchive', child: Text('Restore')),
+                if (onDelete != null)
+                  const PopupMenuItem(
+                      value: 'delete', child: Text('Delete permanently')),
               ],
             )
           : null,

@@ -132,8 +132,8 @@ class _PortalScreenState extends State<PortalScreen>
     }
     final ok = await runCrudAction(
       context,
-      () => ApiService.I.changePassword(
-          currentPassword: current, newPassword: next),
+      () => ApiService.I
+          .changePassword(currentPassword: current, newPassword: next),
       successMessage: 'Password changed — other sessions signed out.',
     );
     if (ok && mounted) _load();
@@ -161,8 +161,7 @@ class _PortalScreenState extends State<PortalScreen>
           const SizedBox(height: 12),
           _ProfileCard(
             profile: profile,
-            avatarAsset:
-                avatarAssetFor(context.read<AuthController>().session),
+            avatarAsset: avatarAssetFor(context.read<AuthController>().session),
           ),
           const SizedBox(height: 12),
           if (_isStudent)
@@ -432,9 +431,12 @@ class _EmployeeFields extends StatelessWidget {
           ('Position', profile.position),
           ('Employment status', profile.employmentStatus),
           ('Date hired', profile.dateHired),
-          ('Teaching', profile.isTeaching == null
-              ? null
-              : (profile.isTeaching! ? 'Teaching' : 'Non-teaching')),
+          (
+            'Teaching',
+            profile.isTeaching == null
+                ? null
+                : (profile.isTeaching! ? 'Teaching' : 'Non-teaching')
+          ),
           ('Emergency contact', profile.emergencyContactName),
           ('Contact phone', profile.emergencyContactPhone),
         ],
@@ -529,7 +531,8 @@ class _VisitRow extends StatelessWidget {
                     runSpacing: 4,
                     children: [
                       StatusBadge(
-                        label: 'Triage ${titleCaseOption(visit.triagePriority!)}',
+                        label:
+                            'Triage ${titleCaseOption(visit.triagePriority!)}',
                         color: const Color(0xFFB45309),
                       ),
                       if (visit.attendingUsername != null &&

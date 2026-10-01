@@ -721,8 +721,8 @@ class _PickerField extends StatelessWidget {
               minute: int.tryParse(parts[1]) ?? 0,
             )
           : const TimeOfDay(hour: 9, minute: 0);
-      final picked =
-          await showTwelveHourTimePicker(context: context, initialTime: initial);
+      final picked = await showTwelveHourTimePicker(
+          context: context, initialTime: initial);
       if (picked != null) {
         controller.text = '${_two(picked.hour)}:${_two(picked.minute)}';
         onChanged?.call();

@@ -147,15 +147,15 @@ class _PatientsScreenState extends State<PatientsScreen> {
         CrudField.text('last_name', 'Last name', initial: p?.lastName),
         CrudField.text('middle_name', 'Middle name',
             required: false, initial: p?.middleName),
-        if (p == null)
-          const CrudField.text('student_number', 'Student number'),
+        if (p == null) const CrudField.text('student_number', 'Student number'),
         CrudField.text('course', 'Course', required: false, initial: p?.course),
         CrudField.number('year_level', 'Year level',
             required: false, initial: p?.yearLevel?.toString()),
         CrudField.text('section', 'Section',
             required: false, initial: p?.section),
-        const CrudField.dropdown('gender', 'Gender',
-            ['male', 'female', 'other'], required: false),
+        const CrudField.dropdown(
+            'gender', 'Gender', ['male', 'female', 'other'],
+            required: false),
         CrudField.text('blood_type', 'Blood type',
             required: false, initial: p?.bloodType),
         if (p == null)
@@ -196,7 +196,8 @@ class _PatientsScreenState extends State<PatientsScreen> {
       () => isEmployee
           ? ApiService.I.createEmployee(payload)
           : ApiService.I.createStudent(payload),
-      successMessage: isEmployee ? 'Employee registered.' : 'Student registered.',
+      successMessage:
+          isEmployee ? 'Employee registered.' : 'Student registered.',
     );
     if (ok) _load();
   }
@@ -318,8 +319,14 @@ class _PatientsScreenState extends State<PatientsScreen> {
           ),
           SegmentedButton<bool>(
             segments: const [
-              ButtonSegment(value: false, label: Text('Students'), icon: Icon(HugeIcons.strokeRoundedBook02)),
-              ButtonSegment(value: true, label: Text('Employees'), icon: Icon(HugeIcons.strokeRoundedId)),
+              ButtonSegment(
+                  value: false,
+                  label: Text('Students'),
+                  icon: Icon(HugeIcons.strokeRoundedBook02)),
+              ButtonSegment(
+                  value: true,
+                  label: Text('Employees'),
+                  icon: Icon(HugeIcons.strokeRoundedId)),
             ],
             selected: {_employee},
             onSelectionChanged: (s) {
@@ -342,13 +349,19 @@ class _PatientsScreenState extends State<PatientsScreen> {
                         isDense: true,
                         decoration: const InputDecoration(
                           isDense: true,
-                          contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                          contentPadding:
+                              EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                           border: OutlineInputBorder(),
                         ),
                         items: const [
-                          DropdownMenuItem(value: 'all', child: Text('All employees')),
-                          DropdownMenuItem(value: 'teaching', child: Text('Teaching (faculty)')),
-                          DropdownMenuItem(value: 'non_teaching', child: Text('Non-teaching')),
+                          DropdownMenuItem(
+                              value: 'all', child: Text('All employees')),
+                          DropdownMenuItem(
+                              value: 'teaching',
+                              child: Text('Teaching (faculty)')),
+                          DropdownMenuItem(
+                              value: 'non_teaching',
+                              child: Text('Non-teaching')),
                         ],
                         onChanged: (v) {
                           if (v == null) return;
@@ -554,7 +567,8 @@ class _PatientTile extends StatelessWidget {
     final isStudent = person.isStudent;
     // Students get a blue accent, employees a teal accent — the avatar tint
     // + the type tag make the two registry kinds instantly distinguishable.
-    final accent = isStudent ? const Color(0xFF1E6FD9) : const Color(0xFF0F766E);
+    final accent =
+        isStudent ? const Color(0xFF1E6FD9) : const Color(0xFF0F766E);
     final accentBg =
         isStudent ? const Color(0xFFE8F0FE) : const Color(0xFFE6F4F1);
 
@@ -617,7 +631,10 @@ class _PatientTile extends StatelessWidget {
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
         side: BorderSide(
-          color: Theme.of(context).colorScheme.outlineVariant.withValues(alpha: 0.5),
+          color: Theme.of(context)
+              .colorScheme
+              .outlineVariant
+              .withValues(alpha: 0.5),
         ),
       ),
       // isThreeLine keeps every row a fixed 88dp so the list's itemExtent
@@ -712,8 +729,7 @@ class _ReferSheet extends StatefulWidget {
 }
 
 class _ReferSheetState extends State<_ReferSheet> {
-  final _artifactController =
-      TextEditingController(text: 'referral_letter');
+  final _artifactController = TextEditingController(text: 'referral_letter');
   final _reasonController = TextEditingController();
   final _notesController = TextEditingController();
   bool _customArtifact = false;
@@ -811,8 +827,8 @@ class _ReferSheetState extends State<_ReferSheet> {
                 ChoiceChip(
                   label: const Text('Referral letter'),
                   selected: _artifactController.text == 'referral_letter',
-                  onSelected: (_) =>
-                      setState(() => _artifactController.text = 'referral_letter'),
+                  onSelected: (_) => setState(
+                      () => _artifactController.text = 'referral_letter'),
                 ),
                 ChoiceChip(
                   label: const Text('Intake pass'),
@@ -1100,7 +1116,8 @@ class _DetailSheetState extends State<_DetailSheet> {
         CrudField.text('relationship', 'Relationship', initial: c.relationship),
         CrudField.text('phone', 'Phone',
             initial: c.phone, keyboard: TextInputType.phone),
-        CrudField.bool('is_primary', 'Primary contact', boolInitial: c.isPrimary),
+        CrudField.bool('is_primary', 'Primary contact',
+            boolInitial: c.isPrimary),
       ],
       submitLabel: 'Save',
     );
@@ -1217,7 +1234,8 @@ class _DetailSheetState extends State<_DetailSheet> {
               dense: true,
               leading: _SeverityDot(severity: a.severity),
               title: Text(a.allergen,
-                  style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+                  style: const TextStyle(
+                      fontSize: 14, fontWeight: FontWeight.w600)),
               subtitle: a.reaction != null && a.reaction!.isNotEmpty
                   ? Text(a.reaction!,
                       maxLines: 2,
@@ -1230,13 +1248,15 @@ class _DetailSheetState extends State<_DetailSheet> {
                       children: [
                         IconButton(
                           tooltip: 'Edit',
-                          icon: const Icon(HugeIcons.strokeRoundedPencilEdit01, size: 18),
+                          icon: const Icon(HugeIcons.strokeRoundedPencilEdit01,
+                              size: 18),
                           onPressed: () => _editAllergy(a),
                         ),
                         IconButton(
                           tooltip: 'Remove',
                           color: const Color(0xFFB3261E),
-                          icon: const Icon(HugeIcons.strokeRoundedDelete02, size: 18),
+                          icon: const Icon(HugeIcons.strokeRoundedDelete02,
+                              size: 18),
                           onPressed: () => _removeAllergy(a),
                         ),
                       ],
@@ -1281,15 +1301,17 @@ class _DetailSheetState extends State<_DetailSheet> {
               leading: CircleAvatar(
                 radius: 18,
                 backgroundColor: const Color(0xFFE8F0FE),
-                child: Icon(c.isPrimary
-                    ? HugeIcons.strokeRoundedStar
-                    : HugeIcons.strokeRoundedContact01,
+                child: Icon(
+                    c.isPrimary
+                        ? HugeIcons.strokeRoundedStar
+                        : HugeIcons.strokeRoundedContact01,
                     size: 18,
                     color: const Color(0xFF1E6FD9)),
               ),
               title: Text(
                 c.contactName + (c.isPrimary ? '  ·  primary' : ''),
-                style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+                style:
+                    const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
               ),
               subtitle: Text(
                 '${c.relationship} · ${c.phone}',
@@ -1301,13 +1323,15 @@ class _DetailSheetState extends State<_DetailSheet> {
                       children: [
                         IconButton(
                           tooltip: 'Edit',
-                          icon: const Icon(HugeIcons.strokeRoundedPencilEdit01, size: 18),
+                          icon: const Icon(HugeIcons.strokeRoundedPencilEdit01,
+                              size: 18),
                           onPressed: () => _editContact(c),
                         ),
                         IconButton(
                           tooltip: 'Remove',
                           color: const Color(0xFFB3261E),
-                          icon: const Icon(HugeIcons.strokeRoundedDelete02, size: 18),
+                          icon: const Icon(HugeIcons.strokeRoundedDelete02,
+                              size: 18),
                           onPressed: () => _removeContact(c),
                         ),
                       ],
@@ -1327,12 +1351,11 @@ class _DetailSheetState extends State<_DetailSheet> {
               SizedBox(
                 width: 120,
                 child: Text(label,
-                    style: const TextStyle(
-                        color: Colors.black45, fontSize: 13)),
+                    style:
+                        const TextStyle(color: Colors.black45, fontSize: 13)),
               ),
               Expanded(
-                child: Text(value ?? '—',
-                    style: const TextStyle(fontSize: 13)),
+                child: Text(value ?? '—', style: const TextStyle(fontSize: 13)),
               ),
             ],
           ),
@@ -1343,12 +1366,16 @@ class _DetailSheetState extends State<_DetailSheet> {
       children: [
         row('Department', d.department),
         row('Position', d.position),
-        row('Status', d.employmentStatus != null
-            ? titleCaseOption(d.employmentStatus!)
-            : null),
+        row(
+            'Status',
+            d.employmentStatus != null
+                ? titleCaseOption(d.employmentStatus!)
+                : null),
         row('Hired', d.dateHired),
-        row('Emergency contact',
-            (d.emergencyContactName != null && d.emergencyContactName!.isNotEmpty)
+        row(
+            'Emergency contact',
+            (d.emergencyContactName != null &&
+                    d.emergencyContactName!.isNotEmpty)
                 ? '${d.emergencyContactName}'
                     '${d.emergencyContactPhone != null && d.emergencyContactPhone!.isNotEmpty ? ' · ${d.emergencyContactPhone}' : ''}'
                 : null),
@@ -1357,9 +1384,11 @@ class _DetailSheetState extends State<_DetailSheet> {
           spacing: 8,
           runSpacing: 6,
           children: [
-            StatusBadge(label: d.hasQr ? 'QR' : 'no QR',
+            StatusBadge(
+                label: d.hasQr ? 'QR' : 'no QR',
                 color: d.hasQr ? const Color(0xFF1E6FD9) : Colors.black38),
-            StatusBadge(label: d.hasRfid ? 'RFID' : 'no RFID',
+            StatusBadge(
+                label: d.hasRfid ? 'RFID' : 'no RFID',
                 color: d.hasRfid ? const Color(0xFF1E6FD9) : Colors.black38),
             if (d.isTeaching == true)
               const StatusBadge(label: 'Teaching', color: Color(0xFF0F766E))

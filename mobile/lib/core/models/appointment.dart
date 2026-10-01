@@ -66,10 +66,9 @@ class Appointment {
 
   final String createdAt;
 
-  String get patientLabel =>
-      (patientName != null && patientName!.isNotEmpty)
-          ? '$patientName (#$patientSchoolId)'
-          : 'Patient #$patientSchoolId';
+  String get patientLabel => (patientName != null && patientName!.isNotEmpty)
+      ? '$patientName (#$patientSchoolId)'
+      : 'Patient #$patientSchoolId';
 
   String get providerLabel => (providerName != null && providerName!.isNotEmpty)
       ? providerName!

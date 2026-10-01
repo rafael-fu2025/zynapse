@@ -97,8 +97,7 @@ class ApiClient {
             if (ok) {
               final token = _accessToken;
               if (token != null && token.isNotEmpty) {
-                error.requestOptions.headers['Authorization'] =
-                    'Bearer $token';
+                error.requestOptions.headers['Authorization'] = 'Bearer $token';
               }
               try {
                 final resp = await _dio.fetch<dynamic>(error.requestOptions);

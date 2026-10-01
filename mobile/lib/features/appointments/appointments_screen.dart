@@ -381,15 +381,17 @@ class _AppointmentCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final color = appointmentStatusColor(appointment.status);
-    final actions =
-        staffMode ? _actions : const <(String, String, IconData)>[];
+    final actions = staffMode ? _actions : const <(String, String, IconData)>[];
     return Card(
       elevation: 0,
       margin: EdgeInsets.zero,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
         side: BorderSide(
-          color: Theme.of(context).colorScheme.outlineVariant.withValues(alpha: 0.5),
+          color: Theme.of(context)
+              .colorScheme
+              .outlineVariant
+              .withValues(alpha: 0.5),
         ),
       ),
       child: ListTile(
@@ -696,7 +698,8 @@ class _StaffScheduleDialogState extends State<_StaffScheduleDialog> {
                         onTap: () {
                           setState(() {
                             _selected = s;
-                            _patientController.text = '${s.name} — ${s.schoolId}';
+                            _patientController.text =
+                                '${s.name} — ${s.schoolId}';
                             _suggestions = [];
                           });
                         },
@@ -760,7 +763,8 @@ class _StaffScheduleDialogState extends State<_StaffScheduleDialog> {
                 Expanded(
                   child: OutlinedButton.icon(
                     onPressed: _submitting ? null : _pickDate,
-                    icon: const Icon(HugeIcons.strokeRoundedCalendar01, size: 18),
+                    icon:
+                        const Icon(HugeIcons.strokeRoundedCalendar01, size: 18),
                     label: Text(toDateInput(_date)),
                   ),
                 ),
@@ -802,9 +806,8 @@ class _StaffScheduleDialogState extends State<_StaffScheduleDialog> {
               mainAxisAlignment: MainAxisAlignment.end,
               children: [
                 TextButton(
-                  onPressed: _submitting
-                      ? null
-                      : () => Navigator.of(context).pop(),
+                  onPressed:
+                      _submitting ? null : () => Navigator.of(context).pop(),
                   child: const Text('Cancel'),
                 ),
                 const SizedBox(width: 8),
@@ -1012,7 +1015,8 @@ class _BookingDialogState extends State<_BookingDialog> {
                 Expanded(
                   child: OutlinedButton.icon(
                     onPressed: _submitting ? null : _pickDate,
-                    icon: const Icon(HugeIcons.strokeRoundedCalendar01, size: 18),
+                    icon:
+                        const Icon(HugeIcons.strokeRoundedCalendar01, size: 18),
                     label: Text(toDateInput(_date)),
                   ),
                 ),
@@ -1065,9 +1069,8 @@ class _BookingDialogState extends State<_BookingDialog> {
               mainAxisAlignment: MainAxisAlignment.end,
               children: [
                 TextButton(
-                  onPressed: _submitting
-                      ? null
-                      : () => Navigator.of(context).pop(),
+                  onPressed:
+                      _submitting ? null : () => Navigator.of(context).pop(),
                   child: const Text('Cancel'),
                 ),
                 const SizedBox(width: 8),

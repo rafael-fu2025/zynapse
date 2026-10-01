@@ -87,7 +87,8 @@ class _NotificationsScreenState extends State<NotificationsScreen>
     if (_loadingMore || _nextCursor == null) return;
     setState(() => _loadingMore = true);
     try {
-      final page = await ApiService.I.notifications(limit: 25, cursor: _nextCursor);
+      final page =
+          await ApiService.I.notifications(limit: 25, cursor: _nextCursor);
       setState(() {
         _items = [..._items, ...page.items];
         _nextCursor = page.meta?.nextCursor;
@@ -128,13 +129,19 @@ class _NotificationsScreenState extends State<NotificationsScreen>
   Future<void> _open(AppNotification n) async {
     await _markRead(n);
     if (!n.templateCode.startsWith('appointment.') || !mounted) return;
-    final session=context.read<AuthController>().session;
+    final session = context.read<AuthController>().session;
     final Widget page;
-    if(session?.hasPermission('portal.appointments.read')??false){page=const PortalScreen();}
-    else if(n.context?['destination']=='counselling'&&(session?.hasPermission('counselling.schedule.read')??false)){page=const CounsellingScreen();}
-    else if(session?.hasPermission('clinic.appointments.read')??false){page=const AppointmentsScreen();}
-    else{return;}
-    await Navigator.of(context).push(MaterialPageRoute(builder:(_)=>page));
+    if (session?.hasPermission('portal.appointments.read') ?? false) {
+      page = const PortalScreen();
+    } else if (n.context?['destination'] == 'counselling' &&
+        (session?.hasPermission('counselling.schedule.read') ?? false)) {
+      page = const CounsellingScreen();
+    } else if (session?.hasPermission('clinic.appointments.read') ?? false) {
+      page = const AppointmentsScreen();
+    } else {
+      return;
+    }
+    await Navigator.of(context).push(MaterialPageRoute(builder: (_) => page));
   }
 
   Future<void> _markAllRead() async {

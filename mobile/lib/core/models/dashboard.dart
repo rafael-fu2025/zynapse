@@ -39,7 +39,8 @@ class DashboardCounters {
 }
 
 class ClinicCounters {
-  ClinicCounters({required this.openEncounters, required this.closedEncounters});
+  ClinicCounters(
+      {required this.openEncounters, required this.closedEncounters});
   factory ClinicCounters.fromJson(Map<String, dynamic> json) => ClinicCounters(
         openEncounters: (json['open_encounters'] ?? 0) as int,
         closedEncounters: (json['closed_encounters'] ?? 0) as int,
@@ -49,7 +50,8 @@ class ClinicCounters {
 }
 
 class CounsellingCounters {
-  CounsellingCounters({required this.openSessions, required this.closedSessions});
+  CounsellingCounters(
+      {required this.openSessions, required this.closedSessions});
   factory CounsellingCounters.fromJson(Map<String, dynamic> json) =>
       CounsellingCounters(
         openSessions: (json['open_sessions'] ?? 0) as int,

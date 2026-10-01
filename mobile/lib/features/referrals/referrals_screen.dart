@@ -86,7 +86,8 @@ class _ReferralsScreenState extends State<ReferralsScreen>
     if (_loadingMore || _nextCursor == null) return;
     setState(() => _loadingMore = true);
     try {
-      final page = await ApiService.I.referrals(status: _status, cursor: _nextCursor);
+      final page =
+          await ApiService.I.referrals(status: _status, cursor: _nextCursor);
       setState(() {
         _items = [..._items, ...page.items];
         _nextCursor = page.meta?.nextCursor;
@@ -224,8 +225,7 @@ class _ReferralsScreenState extends State<ReferralsScreen>
             style: FilledButton.styleFrom(
               backgroundColor: const Color(0xFF800000),
             ),
-            onPressed: () =>
-                Navigator.of(ctx).pop(controller.text.trim()),
+            onPressed: () => Navigator.of(ctx).pop(controller.text.trim()),
             child: const Text('Verify'),
           ),
         ],
@@ -461,7 +461,10 @@ class _ReferralTile extends StatelessWidget {
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
         side: BorderSide(
-          color: Theme.of(context).colorScheme.outlineVariant.withValues(alpha: 0.5),
+          color: Theme.of(context)
+              .colorScheme
+              .outlineVariant
+              .withValues(alpha: 0.5),
         ),
       ),
       child: ListTile(
@@ -484,8 +487,10 @@ class _ReferralTile extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text('${titleCaseOption(referral.sourceModule)} → ${titleCaseOption(referral.targetModule)}'),
-              Text('${titleCaseOption(referral.artifactType)} · ${fmtUtcShort(referral.createdAt)}'),
+              Text(
+                  '${titleCaseOption(referral.sourceModule)} → ${titleCaseOption(referral.targetModule)}'),
+              Text(
+                  '${titleCaseOption(referral.artifactType)} · ${fmtUtcShort(referral.createdAt)}'),
               if (referral.providerName != null)
                 Text('Provider: ${referral.providerName}'),
               if (referral.qrRevoked)
@@ -520,12 +525,10 @@ class _ReferralTile extends StatelessWidget {
                     const PopupMenuItem(
                         value: 'acknowledge', child: Text('Acknowledge')),
                   if (referral.status == 'acknowledged')
-                    const PopupMenuItem(
-                        value: 'review', child: Text('Review')),
+                    const PopupMenuItem(value: 'review', child: Text('Review')),
                   if (referral.status == 'acknowledged' ||
                       referral.status == 'under_review')
-                    const PopupMenuItem(
-                        value: 'close', child: Text('Close')),
+                    const PopupMenuItem(value: 'close', child: Text('Close')),
                   if (referral.qrExpiresAt == null)
                     const PopupMenuItem(
                         value: 'issue_qr', child: Text('Issue QR')),
@@ -651,11 +654,13 @@ class _ReferralCreateSheetState extends State<_ReferralCreateSheet> {
     final target = _target;
     final artifact = _artifactController.text.trim();
     if (patientId.isEmpty) {
-      setState(() => _submitError = 'Patient is required — pick a suggestion or type the school/employee ID.');
+      setState(() => _submitError =
+          'Patient is required — pick a suggestion or type the school/employee ID.');
       return;
     }
     if (source == null || target == null || source == target) {
-      setState(() => _submitError = 'Source and target modules must be different.');
+      setState(
+          () => _submitError = 'Source and target modules must be different.');
       return;
     }
     if (artifact.isEmpty) {
@@ -928,7 +933,9 @@ class _ReferralCreateSheetState extends State<_ReferralCreateSheet> {
   /// `PRESET_ARTIFACT[source]`).
   void _prefillArtifact() {
     final source = _source;
-    if (!_customArtifact && source != null && _artifactController.text.trim().isEmpty) {
+    if (!_customArtifact &&
+        source != null &&
+        _artifactController.text.trim().isEmpty) {
       _artifactController.text = _presetArtifacts[source] ?? '';
     }
   }

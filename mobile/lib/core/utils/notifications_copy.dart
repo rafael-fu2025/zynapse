@@ -39,8 +39,10 @@ String notificationDetail(
     final appointmentAt = context['appointment_at']?.toString();
     if (appointmentAt != null) {
       final dt = DateTime.tryParse(appointmentAt)?.toLocal();
-      final destination = context['destination'] == 'counselling' ? 'Guidance' : 'Clinic';
-      if (dt != null) return '$destination · ${DateFormat('MMM d, h:mm a').format(dt)}';
+      final destination =
+          context['destination'] == 'counselling' ? 'Guidance' : 'Clinic';
+      if (dt != null)
+        return '$destination · ${DateFormat('MMM d, h:mm a').format(dt)}';
     }
     final queueNumber = context['queue_number']?.toString();
     if (queueNumber != null) return queueNumber;
@@ -48,9 +50,8 @@ String notificationDetail(
     final module = context['source_module']?.toString();
     if (resource != null && module != null) {
       final target = context['target_module']?.toString();
-      final arrow = (target != null && target != module)
-          ? '$module → $target'
-          : module;
+      final arrow =
+          (target != null && target != module) ? '$module → $target' : module;
       return '#$resource · $arrow';
     }
     if (resource != null) return '#$resource';

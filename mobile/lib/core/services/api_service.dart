@@ -243,33 +243,69 @@ class ApiService {
   Future<List<MyQueueStatus>> myQueues() async {
     final res = await _dio.get<Map<String, dynamic>>('/me/queues');
     final data = res.data?['data'] as Map<String, dynamic>?;
-    return (data?['queues'] as List? ?? []).whereType<Map<String, dynamic>>().map(MyQueueStatus.fromJson).toList();
+    return (data?['queues'] as List? ?? [])
+        .whereType<Map<String, dynamic>>()
+        .map(MyQueueStatus.fromJson)
+        .toList();
   }
 
   Future<List<PortalAppointment>> portalAppointments() async {
-    final res=await _dio.get<Map<String,dynamic>>('/me/appointments',queryParameters:{'department':'all'});
-    final data=res.data?['data'] as Map<String,dynamic>?;
-    return (data?['appointments'] as List? ?? []).whereType<Map<String,dynamic>>().map(PortalAppointment.fromJson).toList();
+    final res = await _dio.get<Map<String, dynamic>>('/me/appointments',
+        queryParameters: {'department': 'all'});
+    final data = res.data?['data'] as Map<String, dynamic>?;
+    return (data?['appointments'] as List? ?? [])
+        .whereType<Map<String, dynamic>>()
+        .map(PortalAppointment.fromJson)
+        .toList();
   }
-  Future<List<PortalAppointmentSlot>> portalAppointmentSlots(String department,String date) async {
-    final res=await _dio.get<Map<String,dynamic>>('/me/appointment-slots',queryParameters:{'department':department,'from':date,'to':date});
-    final data=res.data?['data'] as Map<String,dynamic>?;
-    return (data?['slots'] as List? ?? []).whereType<Map<String,dynamic>>().map(PortalAppointmentSlot.fromJson).toList();
+
+  Future<List<PortalAppointmentSlot>> portalAppointmentSlots(
+      String department, String date) async {
+    final res = await _dio.get<Map<String, dynamic>>('/me/appointment-slots',
+        queryParameters: {'department': department, 'from': date, 'to': date});
+    final data = res.data?['data'] as Map<String, dynamic>?;
+    return (data?['slots'] as List? ?? [])
+        .whereType<Map<String, dynamic>>()
+        .map(PortalAppointmentSlot.fromJson)
+        .toList();
   }
-  Future<void> bookPortalAppointment(PortalAppointmentSlot slot,{String? reason,String type='initial'}) async {
-    await _dio.post<Map<String,dynamic>>('/me/appointments',data:{'department':slot.department,'starts_at':slot.startsAt.toUtc().toIso8601String(),'type':type,if(reason!=null&&reason.isNotEmpty)'reason':reason});
+
+  Future<void> bookPortalAppointment(PortalAppointmentSlot slot,
+      {String? reason, String type = 'initial'}) async {
+    await _dio.post<Map<String, dynamic>>('/me/appointments', data: {
+      'department': slot.department,
+      'starts_at': slot.startsAt.toUtc().toIso8601String(),
+      'type': type,
+      if (reason != null && reason.isNotEmpty) 'reason': reason
+    });
   }
+
   Future<void> cancelPortalAppointment(PortalAppointment appointment) async {
-    await _dio.post<Map<String,dynamic>>('/me/appointments/${appointment.department}/${appointment.id}/cancel');
+    await _dio.post<Map<String, dynamic>>(
+        '/me/appointments/${appointment.department}/${appointment.id}/cancel');
   }
 
   Future<List<GuidanceQueueEntry>> guidanceQueue() async {
     final res = await _dio.get<Map<String, dynamic>>('/counselling/queue');
-    return _unwrapList(res).whereType<Map<String, dynamic>>().map(GuidanceQueueEntry.fromJson).toList();
+    return _unwrapList(res)
+        .whereType<Map<String, dynamic>>()
+        .map(GuidanceQueueEntry.fromJson)
+        .toList();
   }
-  Future<void> callNextGuidance() async { await _dio.post<Map<String,dynamic>>('/counselling/queue/call-next'); }
-  Future<void> transitionGuidanceQueue(int id,String action) async { await _dio.post<Map<String,dynamic>>('/counselling/queue/$id/transition',data:{'action':action}); }
-  Future<void> repairGuidanceQueue(int id) async { await _dio.post<Map<String,dynamic>>('/counselling/queue/$id/repair-session'); }
+
+  Future<void> callNextGuidance() async {
+    await _dio.post<Map<String, dynamic>>('/counselling/queue/call-next');
+  }
+
+  Future<void> transitionGuidanceQueue(int id, String action) async {
+    await _dio.post<Map<String, dynamic>>('/counselling/queue/$id/transition',
+        data: {'action': action});
+  }
+
+  Future<void> repairGuidanceQueue(int id) async {
+    await _dio
+        .post<Map<String, dynamic>>('/counselling/queue/$id/repair-session');
+  }
 
   // ---------------------------------------------------------------------
   // Notifications
@@ -610,13 +646,26 @@ class ApiService {
       '/facilities/units',
       queryParameters: query,
     );
-    final body = res.data;
+    return _bmgPage<BmgUnit>(res.data, BmgUnit.fromJson);
+  }
+
+  /// Read a paginated BMG list response.
+  ///
+  /// The BMG controllers flatten the service's `{data, next}` page into
+  /// the codebase-standard envelope: a bare row array in `data` and the
+  /// cursor in `meta.pagination.next_cursor`. `res.data` here is still
+  /// the FULL envelope (Dio does not unwrap like the web's axios
+  /// interceptor), so the rows live one level down at `envelope['data']`.
+  static ApiPage<T> _bmgPage<T>(
+    Map<String, dynamic>? envelope,
+    T Function(Map<String, dynamic>) fromJson,
+  ) {
     return ApiPage(
-      items: (body?['data'] as List? ?? [])
+      items: (envelope?['data'] as List? ?? const [])
           .whereType<Map<String, dynamic>>()
-          .map(BmgUnit.fromJson)
+          .map(fromJson)
           .toList(),
-      meta: PaginationMeta.fromJson(body?['meta'] as Map<String, dynamic>?),
+      meta: PaginationMeta.fromJson(envelope?['meta'] as Map<String, dynamic>?),
     );
   }
 
@@ -1358,7 +1407,7 @@ class ApiService {
 
   /// `POST /clinic/inventory/{id}/receive` — quantity + shortage_note.
   Future<void> receiveInventoryStock(
-    int id, Map<String, dynamic> payload) async {
+      int id, Map<String, dynamic> payload) async {
     await _dio.post<Map<String, dynamic>>('/clinic/inventory/$id/receive',
         data: payload);
   }
@@ -1368,8 +1417,7 @@ class ApiService {
   // ---------------------------------------------------------------------
 
   /// `POST /clinic/equipment`
-  Future<EquipmentDetail> createEquipment(
-      Map<String, dynamic> payload) async {
+  Future<EquipmentDetail> createEquipment(Map<String, dynamic> payload) async {
     final res = await _dio.post<Map<String, dynamic>>(
       '/clinic/equipment',
       data: payload,
@@ -1548,9 +1596,11 @@ class ApiService {
         await _dio.get<Map<String, dynamic>>('/counselling/availability');
     return _unwrapList(res).whereType<Map<String, dynamic>>().toList();
   }
-  Future<List<Map<String,dynamic>>> counsellingProviders() async {
-    final res=await _dio.get<Map<String,dynamic>>('/counselling/counsellors');
-    return _unwrapList(res).whereType<Map<String,dynamic>>().toList();
+
+  Future<List<Map<String, dynamic>>> counsellingProviders() async {
+    final res =
+        await _dio.get<Map<String, dynamic>>('/counselling/counsellors');
+    return _unwrapList(res).whereType<Map<String, dynamic>>().toList();
   }
 
   /// `POST /counselling/availability` — body `{ day_of_week (0-6),
@@ -1662,7 +1712,7 @@ class ApiService {
         data: payload);
   }
 
-  /// `POST /facilities/batches/{id}/{action}` — action: finish | cancel | curing.
+  /// `POST /facilities/batches/{id}/{action}` — action: finish | cancel.
   Future<void> transitionFacilityBatch(int batchId, String action,
       {Map<String, dynamic>? body}) async {
     await _dio.post<Map<String, dynamic>>(
@@ -1671,16 +1721,21 @@ class ApiService {
     );
   }
 
-  /// `POST /facilities/batches/{id}/release` — QA grade/maturity.
-  Future<void> releaseFacilityBatch(
-      int batchId, Map<String, dynamic> payload) async {
-    await _dio.post<Map<String, dynamic>>(
-        '/facilities/batches/$batchId/release',
-        data: payload);
+  /// `GET /facilities/batches/{id}/logs` — the process-log timeline,
+  /// newest first. Fields: `{ id, log_date, event_type, observation_note,
+  /// temperature_celsius, moisture_level, oxygen_pct, device_id,
+  /// calibration_status, session_uid, turns_count, duration_seconds, ... }`.
+  Future<List<Map<String, dynamic>>> facilityProcessLogs(int batchId) async {
+    final res = await _dio
+        .get<Map<String, dynamic>>('/facilities/batches/$batchId/logs');
+    return _unwrapList(res).whereType<Map<String, dynamic>>().toList();
   }
 
-  /// `POST /facilities/batches/{id}/logs` — body `{ event_type,
-  /// observation_note, temperature_celsius, moisture_level, ... }`.
+  /// `POST /facilities/batches/{id}/logs` — richer than the "Add update"
+  /// ledger entry: also carries the sensor / chain-of-custody fields
+  /// (O₂, calibration status, device) that drive the OXYGEN_OUT alert.
+  /// Body: `{ event_type, observation_note, temperature_celsius,
+  /// moisture_level, oxygen_pct, device_id, calibration_status }`.
   Future<void> addFacilityProcessLog(
       int batchId, Map<String, dynamic> payload) async {
     await _dio.post<Map<String, dynamic>>('/facilities/batches/$batchId/logs',
@@ -1710,6 +1765,86 @@ class ApiService {
     final res =
         await _dio.get<Map<String, dynamic>>('/facilities/waste-categories');
     return _unwrapList(res).whereType<Map<String, dynamic>>().toList();
+  }
+
+  /// `POST /facilities/waste-categories/{id}/unarchive` — restore an
+  /// archived category.
+  Future<void> unarchiveWasteCategory(int id) async {
+    await _dio.post<Map<String, dynamic>>(
+        '/facilities/waste-categories/$id/unarchive');
+  }
+
+  /// `DELETE /facilities/waste-categories/{id}` — hard delete. Fails with
+  /// 409 if any batch references it or any drum defaults to it, which is
+  /// why the UI offers "Archive instead" as the recovery path.
+  Future<void> deleteWasteCategory(int id) async {
+    await _dio.delete<Map<String, dynamic>>('/facilities/waste-categories/$id');
+  }
+
+  // ---------------------------------------------------------------------
+  // Devices (mechanized tumblers)
+  // ---------------------------------------------------------------------
+
+  /// `GET /facilities/devices` — the device registry, keyset-paginated.
+  Future<List<BmgDevice>> facilityDevices({
+    String? cursor,
+    int limit = 50,
+    bool includeArchived = false,
+  }) async {
+    final res = await _dio.get<Map<String, dynamic>>(
+      '/facilities/devices',
+      queryParameters: {
+        'limit': limit,
+        if (cursor != null) 'cursor': cursor,
+        if (includeArchived) 'include_archived': 1,
+      },
+    );
+    return _bmgPage<BmgDevice>(res.data, BmgDevice.fromJson).items;
+  }
+
+  /// `POST /facilities/devices` — register a tumbler. Returns
+  /// `{ device, token }`; [token] is the plaintext credential and is
+  /// shown to the technician exactly once, then never retrievable again.
+  Future<({BmgDevice device, String token})> registerFacilityDevice(
+      Map<String, dynamic> payload) async {
+    final res = await _dio.post<Map<String, dynamic>>('/facilities/devices',
+        data: payload);
+    final body = _unwrapObject(res);
+    return (
+      device: BmgDevice.fromJson(
+          (body['device'] as Map<String, dynamic>?) ?? const {}),
+      token: (body['token'] ?? '') as String,
+    );
+  }
+
+  /// `POST /facilities/devices/{id}` — patch the display name and/or the
+  /// drum binding. Rebinding keeps the existing token, so the board does
+  /// not need re-flashing. Passing `unit_id: null` unbinds.
+  Future<void> updateFacilityDevice(
+      int id, Map<String, dynamic> payload) async {
+    await _dio.post<Map<String, dynamic>>('/facilities/devices/$id',
+        data: payload);
+  }
+
+  /// `POST /facilities/devices/{id}/status` — `active` | `disabled`.
+  Future<void> setFacilityDeviceStatus(int id, String status) async {
+    await _dio.post<Map<String, dynamic>>('/facilities/devices/$id/status',
+        data: {'status': status});
+  }
+
+  /// `DELETE /facilities/devices/{id}` — soft-archive. The device stops
+  /// reporting and its drum binding is cleared.
+  Future<void> archiveFacilityDevice(int id) async {
+    await _dio.delete<Map<String, dynamic>>('/facilities/devices/$id');
+  }
+
+  /// `POST /facilities/devices/{id}/regenerate-token` — re-key. Returns
+  /// the new plaintext token (shown once); the old one stops working
+  /// immediately, so the board must be re-flashed.
+  Future<String> regenerateFacilityDeviceToken(int id) async {
+    final res = await _dio
+        .post<Map<String, dynamic>>('/facilities/devices/$id/regenerate-token');
+    return (_unwrapObject(res)['token'] ?? '') as String;
   }
 
   /// `GET /facilities/alerts/open` — open alerts across live batches.
@@ -1758,25 +1893,10 @@ class ApiService {
         data: {'maintenance': maintenance});
   }
 
-  /// `POST /facilities/batches/{id}/output` — record output: Processing →
-  /// Awaiting output. Body `{ output_weight_kg, output_items }` where
-  /// `output_items` is `[{ sku, qty_kg }]` (mirrors the web dialog).
-  Future<void> recordFacilityOutput(int batchId,
-      {required double outputWeightKg,
-      required List<Map<String, dynamic>> outputItems}) async {
-    await _dio.post<Map<String, dynamic>>(
-      '/facilities/batches/$batchId/output',
-      data: {
-        'output_weight_kg': outputWeightKg,
-        'output_items': outputItems,
-      },
-    );
-  }
-
   /// Unified "Add update" — one action that appends an immutable
-  /// output / curing / log ledger entry. Body:
-  /// `{ update_type: output|curing|log, output_weight_kg?, curing_note?,
-  ///    event_type?, observation_note?, temperature_celsius?, moisture_level? }`.
+  /// output / log ledger entry. Body:
+  /// `{ update_type: output|log, output_weight_kg?, event_type?,
+  ///    observation_note?, temperature_celsius?, moisture_level? }`.
   Future<Map<String, dynamic>> addFacilityBatchUpdate(
       int batchId, Map<String, dynamic> payload) async {
     final res = await _dio.post<Map<String, dynamic>>(
@@ -1786,8 +1906,9 @@ class ApiService {
     return (res.data?['data'] as Map<String, dynamic>?) ?? {};
   }
 
-  /// Combined, append-only "Updates" feed for a batch (output / curing /
-  /// log), oldest → newest.
+  /// Combined, append-only "Updates" feed for a batch (output / log, plus
+  /// historical `curing` rows predating that state's retirement),
+  /// oldest → newest.
   Future<List<Map<String, dynamic>>> facilityBatchUpdates(int batchId) async {
     final res = await _dio.get<Map<String, dynamic>>(
       '/facilities/batches/$batchId/updates',
@@ -1796,15 +1917,53 @@ class ApiService {
   }
 
   /// `GET /facilities/batches?limit=` — terminal + historical batch list
-  /// (joined unit + category).
-  Future<List<Map<String, dynamic>>> facilityBatchHistory() async {
+  /// (joined unit + category). [status] narrows to one terminal state
+  /// (`released` / `idle` / `cancelled`); null returns every status.
+  Future<List<Map<String, dynamic>>> facilityBatchHistory({
+    int? unitId,
+    String? status,
+    String? cursor,
+    int limit = 50,
+  }) async {
     final res = await _dio.get<Map<String, dynamic>>(
       '/facilities/batches',
-      queryParameters: {'limit': 50},
+      queryParameters: {
+        'limit': limit,
+        if (unitId != null) 'unit_id': unitId,
+        if (status != null && status.isNotEmpty) 'status': status,
+        if (cursor != null) 'cursor': cursor,
+      },
+    );
+    return _bmgPage<Map<String, dynamic>>(res.data, (row) => row).items;
+  }
+
+  /// `GET /facilities/batches/active` — every in-flight batch, plus the
+  /// server's turning-cadence threshold. Backs the Processing Drums card
+  /// and the drum detail sheet.
+  Future<BmgActiveBatches> facilityActiveBatches() async {
+    final res =
+        await _dio.get<Map<String, dynamic>>('/facilities/batches/active');
+    return BmgActiveBatches.fromJson(_unwrapObject(res));
+  }
+
+  /// `GET /facilities/batches/{id}/analytics` — yield, mass reduction,
+  /// mix-weighted expected duration, and the waste composition table.
+  Future<Map<String, dynamic>> facilityBatchAnalytics(int batchId) async {
+    final res = await _dio.get<Map<String, dynamic>>(
+      '/facilities/batches/$batchId/analytics',
+    );
+    return _unwrapObject(res);
+  }
+
+  /// `GET /facilities/batches/{id}/alerts` — every alert raised against
+  /// one batch, acknowledged or not.
+  Future<List<BmgAlert>> facilityBatchAlerts(int batchId) async {
+    final res = await _dio.get<Map<String, dynamic>>(
+      '/facilities/batches/$batchId/alerts',
     );
     return _unwrapList(res)
         .whereType<Map<String, dynamic>>()
-        .map((e) => e)
+        .map(BmgAlert.fromJson)
         .toList();
   }
 

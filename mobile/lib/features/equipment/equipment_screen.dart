@@ -159,7 +159,8 @@ class _EquipmentScreenState extends State<EquipmentScreen>
     final ok = await runCrudAction(
       context,
       () => ApiService.I.archiveEquipment(item.id, archived: !item.archived),
-      successMessage: item.archived ? 'Equipment restored.' : 'Equipment archived.',
+      successMessage:
+          item.archived ? 'Equipment restored.' : 'Equipment archived.',
     );
     if (ok) _load();
   }
@@ -184,7 +185,8 @@ class _EquipmentScreenState extends State<EquipmentScreen>
     if (ok) _load();
   }
 
-  Future<void> _changeUnitStatus(EquipmentDetail detail, EquipmentUnit unit) async {
+  Future<void> _changeUnitStatus(
+      EquipmentDetail detail, EquipmentUnit unit) async {
     final payload = await showCrudForm(
       context,
       title: 'Unit #${unit.id} — ${detail.equipment.name}',
@@ -271,7 +273,8 @@ class _EquipmentScreenState extends State<EquipmentScreen>
                 if (detail.units.isEmpty)
                   const Padding(
                     padding: EdgeInsets.symmetric(vertical: 24),
-                    child: Text('No units yet. Use Add units on the equipment row.'),
+                    child: Text(
+                        'No units yet. Use Add units on the equipment row.'),
                   ),
               ],
             );
@@ -416,8 +419,10 @@ class _UnitCard extends StatelessWidget {
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
         side: BorderSide(
-          color:
-              Theme.of(context).colorScheme.outlineVariant.withValues(alpha: 0.5),
+          color: Theme.of(context)
+              .colorScheme
+              .outlineVariant
+              .withValues(alpha: 0.5),
         ),
       ),
       child: Padding(

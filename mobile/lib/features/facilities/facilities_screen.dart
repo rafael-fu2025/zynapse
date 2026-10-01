@@ -11,6 +11,8 @@ import '../../core/services/auth_controller.dart';
 import '../common/auto_polling.dart';
 import '../common/crud_form.dart';
 import '../common/widgets.dart';
+import 'composition_sheet.dart';
+import 'drum_detail_sheet.dart';
 import 'waste_categories_screen.dart';
 
 /// Facilities (BMG) — `GET /facilities/units` (paged) with utilization.
@@ -85,7 +87,10 @@ class _FacilitiesScreenState extends State<FacilitiesScreen>
     if (_loadingMore || _nextCursor == null) return;
     setState(() => _loadingMore = true);
     try {
-      final page = await ApiService.I.facilityUnits(cursor: _nextCursor);
+      // The archived filter must carry across pages, or turning it on
+      // silently drops archived drums from page 2 onward.
+      final page = await ApiService.I
+          .facilityUnits(cursor: _nextCursor, includeArchived: _showArchived);
       setState(() {
         _items = [..._items, ...page.items];
         _nextCursor = page.meta?.nextCursor;
@@ -99,11 +104,17 @@ class _FacilitiesScreenState extends State<FacilitiesScreen>
   }
 
   bool get _canManage =>
-      context.read<AuthController>().session?.hasPermission('facilities.units.manage') ??
+      context
+          .read<AuthController>()
+          .session
+          ?.hasPermission('facilities.units.manage') ??
       false;
 
   bool get _canTransition =>
-      context.read<AuthController>().session?.hasPermission('facilities.bmg.transition') ??
+      context
+          .read<AuthController>()
+          .session
+          ?.hasPermission('facilities.bmg.transition') ??
       false;
 
   Future<void> _createUnit() async {
@@ -127,10 +138,23 @@ class _FacilitiesScreenState extends State<FacilitiesScreen>
     if (ok) _load();
   }
 
+  /// Open the per-drum detail sheet (batch summary, analytics, process
+  /// log, losses, alerts). Refreshes the list only if something was
+  /// written from inside it.
+  Future<void> _openDrumDetail(BmgUnit u) async {
+    final changed = await showDrumDetailSheet(
+      context,
+      unitId: u.id,
+      unitLabel: u.displayName,
+    );
+    if (changed ?? false) _load();
+  }
+
   Future<void> _startBatch(BmgUnit u) async {
-    List<Map<String, dynamic>> categories = [];
+    List<BmgWasteCategory> categories = [];
     try {
-      categories = await ApiService.I.facilityWasteCategories();
+      final raw = await ApiService.I.facilityWasteCategories();
+      categories = raw.map(BmgWasteCategory.fromJson).toList();
     } catch (e) {
       if (kDebugMode) debugPrint('FacilitiesScreen.startBatch failed: $e');
     }
@@ -139,45 +163,36 @@ class _FacilitiesScreenState extends State<FacilitiesScreen>
       showCrudMessage(context, 'No waste categories available.', error: true);
       return;
     }
-    final options = categories.map((c) => '${c['id']} · ${c['name']}').toList();
-    final payload = await showCrudForm(
+
+    // A segregated mix: one row per waste category with its loaded
+    // weight. The weight ratios drive the drum's expected duration, so a
+    // single-category form would mis-state the ETA for every mixed load.
+    final result = await showCompositionSheet(
       context,
-      title: 'Start batch — ${u.displayName}',
-      fields: [
-        CrudField.dropdown('category', 'Waste category', options),
-        CrudField.number('weight_kg', 'Weight (kg)',
-            hint: u.specCapacityKg != null
-                ? 'Max ${u.specCapacityKg} kg (drum capacity)'
-                : null),
-      ],
-      submitLabel: 'Start',
+      unitLabel: u.displayName,
+      categories: categories,
+      capacityKg: u.specCapacityKg,
     );
-    if (payload == null || !mounted) return;
-    final idx = options.indexOf(payload['category'] as String? ?? '');
-    if (idx < 0 || idx >= categories.length) return;
-    final weight = (payload['weight_kg'] as num?)?.toDouble() ?? 0;
-    if (weight <= 0) {
-      showCrudMessage(context, 'Weight must be greater than 0.', error: true);
-      return;
-    }
-    if (u.specCapacityKg != null && u.specCapacityKg! > 0 && weight > u.specCapacityKg!) {
-      showCrudMessage(
-        context,
-        'Total input weight ($weight kg) exceeds this drum\'s capacity '
-        '(${u.specCapacityKg} kg).',
-        error: true,
-      );
-      return;
-    }
-    final body = <String, dynamic>{
-      'total_input_weight_kg': weight,
-      'composition': [
-        {'category_id': categories[idx]['id'], 'weight_kg': weight},
-      ],
-    };
+    if (result == null || !mounted) return;
+
+    final composition = result
+        .where((r) => r.containsKey('category_id'))
+        .map((r) => <String, dynamic>{
+              'category_id': r['category_id'],
+              'weight_kg': r['weight_kg'],
+            })
+        .toList();
+    final total = (result.firstWhere((r) => r.containsKey('__total'),
+            orElse: () => <String, dynamic>{})['__total'] as double? ??
+        0.0);
+    if (composition.isEmpty || total <= 0) return;
+
     final ok = await runCrudAction(
       context,
-      () => ApiService.I.startFacilityBatch(u.id, body),
+      () => ApiService.I.startFacilityBatch(u.id, {
+        'total_input_weight_kg': total,
+        'composition': composition,
+      }),
       successMessage: 'Batch started.',
     );
     if (ok) _load();
@@ -193,7 +208,11 @@ class _FacilitiesScreenState extends State<FacilitiesScreen>
       title: 'Cancel batch — ${u.code}',
       fields: const [
         CrudField.dropdown('reason_code', 'Reason', [
-          'failed', 'discarded', 'contaminated', 'no_longer_needed', 'other',
+          'failed',
+          'discarded',
+          'contaminated',
+          'no_longer_needed',
+          'other',
         ]),
         CrudField.text('notes', 'Details', required: false, maxLength: 512),
       ],
@@ -211,10 +230,11 @@ class _FacilitiesScreenState extends State<FacilitiesScreen>
     if (!confirmed || !mounted) return;
     final ok = await runCrudAction(
       context,
-      () => ApiService.I.transitionFacilityBatch(batchId, 'cancel',
-          body: {
-            'reason_code': payload['reason_code'] ?? 'unspecified',
-          }),
+      () => ApiService.I.transitionFacilityBatch(batchId, 'cancel', body: {
+        'reason_code': payload['reason_code'] ?? 'unspecified',
+        if ((payload['notes'] as String?)?.isNotEmpty ?? false)
+          'notes': payload['notes'],
+      }),
       successMessage: 'Batch cancelled.',
     );
     if (ok) _load();
@@ -246,7 +266,6 @@ class _FacilitiesScreenState extends State<FacilitiesScreen>
             _ => 'available',
           },
         ),
-        const CrudField.text('notes', 'Notes', required: false),
       ],
       submitLabel: 'Update',
     );
@@ -284,8 +303,13 @@ class _FacilitiesScreenState extends State<FacilitiesScreen>
       title: 'Record loss — ${u.displayName}',
       fields: const [
         CrudField.dropdown('category_code', 'Category', [
-          'evaporation', 'off_gas', 'sampling', 'spill', 'cleaning',
-          'mechanical_holdup', 'other',
+          'evaporation',
+          'off_gas',
+          'sampling',
+          'spill',
+          'cleaning',
+          'mechanical_holdup',
+          'other',
         ]),
         CrudField.number('weight_kg', 'Weight (kg)'),
         CrudField.text('note', 'Note', required: false, maxLength: 255),
@@ -348,15 +372,28 @@ class _FacilitiesScreenState extends State<FacilitiesScreen>
       title: 'Add update — ${u.code}',
       fields: const [
         // Log entry only — output (yield) is captured when finishing.
-        CrudField.dropdown('event_type', 'Log type', [
-          'observation', 'turning', 'aeration', 'moisture_adjustment',
-          'other',
-        ], required: false),
+        CrudField.dropdown(
+            'event_type',
+            'Log type',
+            [
+              'observation',
+              'turning',
+              'aeration',
+              'moisture_adjustment',
+              'other',
+            ],
+            required: false),
         CrudField.number('temperature_celsius', 'Temperature (°C)',
             required: false),
-        CrudField.dropdown('moisture_level', 'Moisture level', [
-          'low', 'normal', 'high',
-        ], required: false),
+        CrudField.dropdown(
+            'moisture_level',
+            'Moisture level',
+            [
+              'low',
+              'normal',
+              'high',
+            ],
+            required: false),
         CrudField.text('observation_note', 'Notes',
             required: false, maxLength: 1000),
       ],
@@ -495,10 +532,10 @@ class _FacilitiesScreenState extends State<FacilitiesScreen>
         // Final output (yield) is recorded at finish.
         CrudField.number('output_weight_kg', 'Output weight (kg)',
             required: false),
-        CrudField.dropdown('quality_grade', 'Quality grade',
-            ['excellent', 'good', 'fair']),
-        CrudField.dropdown('maturity_level', 'Maturity',
-            ['mature', 'maturing', 'immature']),
+        CrudField.dropdown(
+            'quality_grade', 'Quality grade', ['excellent', 'good', 'fair']),
+        CrudField.dropdown(
+            'maturity_level', 'Maturity', ['mature', 'maturing', 'immature']),
       ],
       submitLabel: 'Finish',
     );
@@ -515,15 +552,13 @@ class _FacilitiesScreenState extends State<FacilitiesScreen>
     if (!confirmed || !mounted) return;
     final ok = await runCrudAction(
       context,
-      () => ApiService.I.transitionFacilityBatch(batchId, 'finish',
-          body: {
-            'quality_grade': payload['quality_grade'],
-            'maturity_level': payload['maturity_level'],
-            if (payload['output_weight_kg'] is num &&
-                (payload['output_weight_kg'] as num) > 0)
-              'output_weight_kg': (payload['output_weight_kg'] as num)
-                  .toDouble(),
-          }),
+      () => ApiService.I.transitionFacilityBatch(batchId, 'finish', body: {
+        'quality_grade': payload['quality_grade'],
+        'maturity_level': payload['maturity_level'],
+        if (payload['output_weight_kg'] is num &&
+            (payload['output_weight_kg'] as num) > 0)
+          'output_weight_kg': (payload['output_weight_kg'] as num).toDouble(),
+      }),
       successMessage: 'Batch finished (released).',
     );
     if (ok) _load();
@@ -534,9 +569,9 @@ class _FacilitiesScreenState extends State<FacilitiesScreen>
       context,
       title: 'Edit unit — ${u.code}',
       fields: [
-        CrudField.text('code', 'Code', initial: u.code),
-        CrudField.text('display_name', 'Display name',
-            initial: u.displayName),
+        // `code` is the drum's immutable identity — the web tier shows it
+        // disabled and never sends it on an update.
+        CrudField.text('display_name', 'Display name', initial: u.displayName),
         CrudField.text('location_code', 'Location',
             required: false, initial: u.locationCode ?? ''),
         CrudField.number('spec_capacity_kg', 'Capacity (kg)',
@@ -545,6 +580,7 @@ class _FacilitiesScreenState extends State<FacilitiesScreen>
       submitLabel: 'Save',
     );
     if (payload == null || !mounted) return;
+    payload.remove('code');
     final ok = await runCrudAction(
       context,
       () => ApiService.I.updateFacilityUnit(u.id, payload),
@@ -575,12 +611,42 @@ class _FacilitiesScreenState extends State<FacilitiesScreen>
   Future<void> _showBatchHistory() async {
     List<Map<String, dynamic>> batches = [];
     String? error;
-    try {
-      batches = await ApiService.I.facilityBatchHistory();
-    } catch (e) {
-      error = mapDioError(e).message;
+    // Terminal states, matching the web history filter. Null = every status.
+    String? statusFilter;
+
+    Future<void> reload() async {
+      batches = [];
+      error = null;
+      try {
+        batches = await ApiService.I.facilityBatchHistory(status: statusFilter);
+      } catch (e) {
+        error = mapDioError(e).message;
+      }
     }
+
+    await reload();
     if (!mounted) return;
+
+    Future<void> pickFilter() async {
+      final res = await showCrudForm(
+        context,
+        title: 'Filter history',
+        fields: [
+          CrudField.dropdown(
+            'status',
+            'Status',
+            const ['all', 'released', 'idle', 'cancelled'],
+            initial: statusFilter ?? 'all',
+          ),
+        ],
+        submitLabel: 'Apply',
+      );
+      if (res == null || !mounted) return;
+      final chosen = res['status'] as String?;
+      statusFilter = (chosen == null || chosen == 'all') ? null : chosen;
+      await reload();
+    }
+
     await showSynapseSheet<void>(
       context,
       builder: (ctx) => Padding(
@@ -589,10 +655,28 @@ class _FacilitiesScreenState extends State<FacilitiesScreen>
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            const SheetHeader(title: 'Batch history'),
-            const SizedBox(height: 12),
+            SheetHeader(
+              title: 'Batch history',
+              subtitle: statusFilter == null
+                  ? 'Every finished, cancelled and released batch.'
+                  : 'Filtered to ${titleCaseOption(statusFilter!)} batches.',
+            ),
+            const SizedBox(height: 4),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                onPressed: pickFilter,
+                icon: const Icon(HugeIcons.strokeRoundedFilter, size: 16),
+                label: Text(statusFilter == null
+                    ? 'Filter by status'
+                    : 'Status: ${titleCaseOption(statusFilter!)}'),
+              ),
+            ),
+            const SizedBox(height: 4),
             if (error != null)
-              Text(error,
+              // `error` is reassigned inside `reload`, so Dart cannot
+              // promote it across this null check.
+              Text(error!,
                   style: TextStyle(
                       color: Theme.of(ctx).colorScheme.error, fontSize: 13))
             else if (batches.isEmpty)
@@ -660,9 +744,9 @@ class _FacilitiesScreenState extends State<FacilitiesScreen>
                       color: Theme.of(ctx).colorScheme.error, fontSize: 13))
             else if (c != null) ...[
               _ComplianceRow(
-                  label: 'Batch',
-                  value: c['reference_code'] as String? ?? '—'),
-              _ComplianceRow(label: 'Status',
+                  label: 'Batch', value: c['reference_code'] as String? ?? '—'),
+              _ComplianceRow(
+                  label: 'Status',
                   value: titleCaseOption(c['status'] as String? ?? '—')),
               _ComplianceRow(
                   label: 'Thermophilic days',
@@ -688,17 +772,17 @@ class _FacilitiesScreenState extends State<FacilitiesScreen>
                   value: '${c['unaccounted_kg'] ?? '—'} kg'),
               _ComplianceRow(
                   label: 'Yield',
-                  value: c['yield_pct'] != null
-                      ? '${c['yield_pct']}%'
-                      : '—'),
+                  value: c['yield_pct'] != null ? '${c['yield_pct']}%' : '—'),
               if (c['quality_grade'] != null)
                 _ComplianceRow(
                     label: 'QA grade',
-                    value: titleCaseOption(c['quality_grade'] as String? ?? '—')),
+                    value:
+                        titleCaseOption(c['quality_grade'] as String? ?? '—')),
               if (c['maturity_level'] != null)
                 _ComplianceRow(
                     label: 'Maturity',
-                    value: titleCaseOption(c['maturity_level'] as String? ?? '—')),
+                    value:
+                        titleCaseOption(c['maturity_level'] as String? ?? '—')),
             ],
           ],
         ),
@@ -742,8 +826,7 @@ class _FacilitiesScreenState extends State<FacilitiesScreen>
               const PopupMenuItem(
                   value: 'batch_history', child: Text('Batch history')),
               const PopupMenuItem(
-                  value: 'waste_categories',
-                  child: Text('Waste categories')),
+                  value: 'waste_categories', child: Text('Waste categories')),
             ],
           ),
         ],
@@ -794,6 +877,7 @@ class _FacilitiesScreenState extends State<FacilitiesScreen>
           unit: _items[i],
           canManage: _canManage,
           canTransition: _canTransition,
+          onOpenDetail: () => _openDrumDetail(_items[i]),
           onStart: () => _startBatch(_items[i]),
           onUpdate: () => _addUpdate(_items[i]),
           onFinish: () => _finishBatch(_items[i]),
@@ -816,7 +900,6 @@ Color _unitStatusColor(String status) => switch (status) {
       'idle' => const Color(0xFF1B7A43),
       'processing' => const Color(0xFF1E6FD9),
       'awaiting_output' => const Color(0xFF8A5A00),
-      'curing' => const Color(0xFF5B4BA6),
       'maintenance' => const Color(0xFFB3261E),
       'cancelled' => Colors.grey,
       _ => Colors.grey,
@@ -827,6 +910,7 @@ class _UnitTile extends StatelessWidget {
     required this.unit,
     required this.canManage,
     required this.canTransition,
+    this.onOpenDetail,
     this.onStart,
     this.onUpdate,
     this.onFinish,
@@ -844,6 +928,7 @@ class _UnitTile extends StatelessWidget {
   final BmgUnit unit;
   final bool canManage;
   final bool canTransition;
+  final VoidCallback? onOpenDetail;
   final VoidCallback? onStart;
   final VoidCallback? onUpdate;
   final VoidCallback? onFinish;
@@ -890,37 +975,51 @@ class _UnitTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final utilization = unit.utilizationPct ?? 0;
     return Card(
+      // Tapping the card opens the drum's detail sheet — the mobile
+      // counterpart of the web's `/facilities/drums/:unitId` page. The
+      // overflow menu's own taps are absorbed by the popup, so the two
+      // don't fight.
+      clipBehavior: Clip.antiAlias,
       elevation: 0,
       margin: EdgeInsets.zero,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
         side: BorderSide(
-          color: Theme.of(context).colorScheme.outlineVariant.withValues(alpha: 0.5),
+          color: Theme.of(context)
+              .colorScheme
+              .outlineVariant
+              .withValues(alpha: 0.5),
         ),
       ),
-      child: Padding(
-        padding: const EdgeInsets.all(14),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    unit.displayName,
-                    style: const TextStyle(
-                      fontWeight: FontWeight.w700,
-                      fontSize: 15,
+      child: InkWell(
+        onTap: onOpenDetail,
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      unit.displayName,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w700,
+                        fontSize: 15,
+                      ),
                     ),
                   ),
-                ),
-                StatusBadge(
-                  label: titleCaseOption(unit.status),
-                  color: _unitStatusColor(unit.status),
-                ),
-                if (canManage || canTransition) ...[
+                  StatusBadge(
+                    label: titleCaseOption(unit.status),
+                    color: _unitStatusColor(unit.status),
+                  ),
+                  // The overflow renders for EVERYONE — a read-only
+                  // operator still needs the read-only items (history,
+                  // certificate, updates). Permissions gate each ITEM, not
+                  // the menu, so hiding the menu also hides the things the
+                  // viewer is actually allowed to do.
                   const SizedBox(width: 4),
-                  _primaryActionButton(),
+                  if (canManage || canTransition) _primaryActionButton(),
                   PopupMenuButton<String>(
                     icon: const Icon(HugeIcons.strokeRoundedMore),
                     onSelected: (v) {
@@ -954,74 +1053,102 @@ class _UnitTile extends StatelessWidget {
                     itemBuilder: (_) => [
                       // 1. Start a batch (drum must be Available/Idle).
                       if (canTransition && unit.status == 'idle')
-                        const PopupMenuItem(value: 'start', child: Text('Start batch')),
-                      // 2. Add update (active batch) — output/curing/log.
+                        const PopupMenuItem(
+                            value: 'start', child: Text('Start batch')),
+                      // 2. Add update (active batch) — appends an immutable log entry.
+                      if (canTransition && unit.isActive)
+                        const PopupMenuItem(
+                            value: 'update', child: Text('Add update')),
+                      // 6a. Updates feed (active batch) — read-only.
                       if (unit.isActive)
-                        const PopupMenuItem(value: 'update', child: Text('Add update')),
-                      // 6a. Updates feed (active batch).
-                      if (unit.isActive)
-                        const PopupMenuItem(value: 'updates', child: Text('View updates')),
+                        const PopupMenuItem(
+                            value: 'updates', child: Text('View updates')),
                       // 6b. View history (read-only, any state).
-                      const PopupMenuItem(value: 'history', child: Text('View history')),
+                      const PopupMenuItem(
+                          value: 'history', child: Text('View history')),
                       // 3. Finish = graded release (active batch).
-                      if (unit.isActive)
-                        const PopupMenuItem(value: 'finish', child: Text('Finish batch')),
+                      if (canTransition && unit.isActive)
+                        const PopupMenuItem(
+                            value: 'finish', child: Text('Finish batch')),
                       // 4. Cancel a batch (before Finish).
-                      if (unit.isActive)
-                        const PopupMenuItem(value: 'cancel', child: Text('Cancel batch')),
+                      if (canTransition && unit.isActive)
+                        const PopupMenuItem(
+                            value: 'cancel', child: Text('Cancel batch')),
                       // 5. Drum status toggle (no active batch only).
-                      if (!unit.isActive)
-                        const PopupMenuItem(value: 'status', child: Text('Drum status')),
+                      if (canTransition && !unit.isActive)
+                        const PopupMenuItem(
+                            value: 'status', child: Text('Drum status')),
                       if (unit.isActive)
-                        const PopupMenuItem(value: 'compliance', child: Text('Certificate / compliance')),
-                      if (unit.isActive)
-                        const PopupMenuItem(value: 'loss', child: Text('Record loss')),
+                        const PopupMenuItem(
+                            value: 'compliance',
+                            child: Text('Certificate / compliance')),
+                      if (canTransition && unit.isActive)
+                        const PopupMenuItem(
+                            value: 'loss', child: Text('Record loss')),
                       if (canManage) ...[
-                        const PopupMenuItem(value: 'edit', child: Text('Edit unit')),
-                        const PopupMenuItem(value: 'archive', child: Text('Archive')),
+                        const PopupMenuItem(
+                            value: 'edit', child: Text('Edit unit')),
+                        const PopupMenuItem(
+                            value: 'archive', child: Text('Archive')),
                       ],
-                      const PopupMenuItem(value: 'alerts', child: Text('Acknowledge alert')),
+                      // Acknowledge is a WRITE (facilities.bmg.logs.record).
+                      if (canTransition)
+                        const PopupMenuItem(
+                            value: 'alerts', child: Text('Acknowledge alert')),
                     ],
                   ),
                 ],
-              ],
-            ),
-            const SizedBox(height: 4),
-            Text(
-              '${unit.code}'
-              '${unit.locationCode != null && unit.locationCode!.isNotEmpty ? ' · ${unit.locationCode}' : ''}'
-              '${unit.defaultCategoryName != null ? ' · ${unit.defaultCategoryName}' : ''}',
-              style: const TextStyle(color: Colors.black54, fontSize: 12),
-            ),
-            if (unit.isActive) ...[
-              // Progress toward expected completion (In Use indicator).
-              const SizedBox(height: 10),
-              ClipRRect(
-                borderRadius: BorderRadius.circular(4),
-                child: LinearProgressIndicator(
-                  value: ((unit.activeBatchProgressPct ?? 0) / 100)
-                      .clamp(0.0, 1.0),
-                  minHeight: 6,
-                  backgroundColor:
-                      Theme.of(context).colorScheme.surfaceContainerHighest,
-                ),
               ),
               const SizedBox(height: 4),
               Text(
-                '${unit.activeBatchProgressPct ?? 0}% toward expected completion'
-                '${unit.activeBatchExpectedCompletionDate != null ? ' · ETA ${unit.activeBatchExpectedCompletionDate!.substring(0, 10)}' : ''}',
-                style: const TextStyle(fontSize: 11, color: Colors.black54),
+                '${unit.code}'
+                '${unit.locationCode != null && unit.locationCode!.isNotEmpty ? ' · ${unit.locationCode}' : ''}'
+                '${unit.defaultCategoryName != null ? ' · ${unit.defaultCategoryName}' : ''}',
+                style: const TextStyle(color: Colors.black54, fontSize: 12),
               ),
+              if (unit.isActive) ...[
+                // Progress toward expected completion (In Use indicator).
+                const SizedBox(height: 10),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(4),
+                  child: LinearProgressIndicator(
+                    value: ((unit.activeBatchProgressPct ?? 0) / 100)
+                        .clamp(0.0, 1.0),
+                    minHeight: 6,
+                    backgroundColor:
+                        Theme.of(context).colorScheme.surfaceContainerHighest,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  '${unit.activeBatchProgressPct ?? 0}% toward expected completion'
+                  '${unit.activeBatchExpectedCompletionDate != null ? ' · ETA ${unit.activeBatchExpectedCompletionDate!.substring(0, 10)}' : ''}',
+                  style: const TextStyle(fontSize: 11, color: Colors.black54),
+                ),
+              ],
+              if (unit.isActive && unit.specCapacityKg != null) ...[
+                const SizedBox(height: 6),
+                Text(
+                  'Drum $utilization% full '
+                  '(${unit.activeBatchWeightKg?.toStringAsFixed(0) ?? '?'}/${unit.specCapacityKg!.toStringAsFixed(0)} kg)',
+                  style: const TextStyle(fontSize: 11, color: Colors.black54),
+                ),
+              ],
+              if (onOpenDetail != null) ...[
+                const SizedBox(height: 8),
+                const Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    Text('View details',
+                        style:
+                            TextStyle(fontSize: 11, color: Color(0xFF800000))),
+                    Icon(HugeIcons.strokeRoundedArrowRight01,
+                        size: 13, color: Color(0xFF800000)),
+                  ],
+                ),
+              ],
             ],
-            if (unit.isActive && unit.specCapacityKg != null) ...[
-              const SizedBox(height: 6),
-              Text(
-                'Drum $utilization% full '
-                '(${unit.activeBatchWeightKg?.toStringAsFixed(0) ?? '?'}/${unit.specCapacityKg!.toStringAsFixed(0)} kg)',
-                style: const TextStyle(fontSize: 11, color: Colors.black54),
-              ),
-            ],
-          ],
+          ),
         ),
       ),
     );

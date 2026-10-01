@@ -308,8 +308,7 @@ class _AuditScreenState extends State<AuditScreen>
     final now = DateTime.now();
     final initial = _from != null && _to != null
         ? DateTimeRange(start: _from!, end: _to!)
-        : DateTimeRange(
-            start: now.subtract(const Duration(days: 6)), end: now);
+        : DateTimeRange(start: now.subtract(const Duration(days: 6)), end: now);
     final picked = await showDateRangePicker(
       context: context,
       firstDate: DateTime(2024),
@@ -377,7 +376,8 @@ class _AuditScreenState extends State<AuditScreen>
           Row(
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
-              Icon(HugeIcons.strokeRoundedShield01, size: 20, color: scheme.primary),
+              Icon(HugeIcons.strokeRoundedShield01,
+                  size: 20, color: scheme.primary),
               const SizedBox(width: 8),
               Text(
                 'Audit evidence',
@@ -540,8 +540,7 @@ class _AuditScreenState extends State<AuditScreen>
                     const DropdownMenuItem<String?>(
                         value: null, child: Text('All actions')),
                     for (final code in _facets?.actionCodes ?? <String>[])
-                      DropdownMenuItem<String?>(
-                          value: code, child: Text(code)),
+                      DropdownMenuItem<String?>(value: code, child: Text(code)),
                   ],
                   onChanged: (v) {
                     setState(() => _action = v);
@@ -566,8 +565,7 @@ class _AuditScreenState extends State<AuditScreen>
               setState(() => _query = v.trim());
               // Debounce like the SPA so we don't hit the API per keystroke.
               _searchDebounce?.cancel();
-              _searchDebounce =
-                  Timer(const Duration(milliseconds: 300), _load);
+              _searchDebounce = Timer(const Duration(milliseconds: 300), _load);
             },
             decoration: const InputDecoration(
               hintText: 'Search by action, actor, or event context',
@@ -1040,8 +1038,7 @@ class _EventDetailSheetState extends State<_EventDetailSheet> {
               if (event.payload != null)
                 TextButton.icon(
                   onPressed: () => _copy(
-                    const JsonEncoder.withIndent('  ')
-                        .convert(event.payload),
+                    const JsonEncoder.withIndent('  ').convert(event.payload),
                     'Payload',
                   ),
                   icon: const Icon(HugeIcons.strokeRoundedCopy01, size: 16),
@@ -1056,7 +1053,8 @@ class _EventDetailSheetState extends State<_EventDetailSheet> {
             decoration: BoxDecoration(
               color: scheme.surfaceContainerHighest.withValues(alpha: 0.4),
               borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: scheme.outlineVariant.withValues(alpha: 0.4)),
+              border: Border.all(
+                  color: scheme.outlineVariant.withValues(alpha: 0.4)),
             ),
             child: SelectableText(
               event.payload == null

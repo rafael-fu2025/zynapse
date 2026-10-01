@@ -143,7 +143,9 @@ class _QueueScreenState extends State<QueueScreen>
     try {
       await ApiService.I.queueTransition(id: entry.id, action: action);
       messenger.showSnackBar(
-        SnackBar(content: Text('Queue ${formatQueueNumber(entry.position)} ${action}ed.')),
+        SnackBar(
+            content: Text(
+                'Queue ${formatQueueNumber(entry.position)} ${action}ed.')),
       );
       _reload();
     } on ApiException catch (e) {

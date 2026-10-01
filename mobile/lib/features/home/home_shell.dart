@@ -76,11 +76,15 @@ class HomeShell extends StatelessWidget {
         // Modules. My portal mirrors the SPA sidebar's
         // `['employee.portal.read', 'student.portal.read']` gate and is
         // hidden from the admin `*` holder (no portal row).
-        const _Tab('My Portal', HugeIcons.strokeRoundedUserCircle,
-            PortalScreen(), ['employee.portal.read', 'student.portal.read'],
+        const _Tab(
+            'My Portal',
+            HugeIcons.strokeRoundedUserCircle,
+            PortalScreen(),
+            ['employee.portal.read', 'student.portal.read'],
             true),
         const _Tab('Queue', HugeIcons.strokeRoundedUserGroup, QueueScreen()),
-        const _Tab('Modules', HugeIcons.strokeRoundedLayout02, ModuleHubScreen()),
+        const _Tab(
+            'Modules', HugeIcons.strokeRoundedLayout02, ModuleHubScreen()),
       ],
     ];
 
@@ -396,102 +400,103 @@ class _IdentityChip extends StatelessWidget {
               children: [
                 const SheetHeader(title: 'Change password'),
                 const SizedBox(height: 16),
-              TextField(
-                controller: currentController,
-                obscureText: true,
-                decoration: const InputDecoration(
-                  labelText: 'Current password',
-                  border: OutlineInputBorder(),
-                ),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: newController,
-                obscureText: true,
-                decoration: const InputDecoration(
-                  labelText: 'New password (min 12)',
-                  border: OutlineInputBorder(),
-                ),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: confirmController,
-                obscureText: true,
-                decoration: const InputDecoration(
-                  labelText: 'Confirm new password',
-                  border: OutlineInputBorder(),
-                ),
-              ),
-              if (error != null) ...[const SizedBox(height: 8), Text(error!)],
-              const SizedBox(height: 12),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.end,
-                children: [
-                  TextButton(
-                    onPressed: busy ? null : () => Navigator.pop(ctx),
-                    child: const Text('Cancel'),
+                TextField(
+                  controller: currentController,
+                  obscureText: true,
+                  decoration: const InputDecoration(
+                    labelText: 'Current password',
+                    border: OutlineInputBorder(),
                   ),
-                  const SizedBox(width: 8),
-                  FilledButton(
-                    onPressed: busy
-                        ? null
-                        : () async {
-                            if (newController.text != confirmController.text) {
-                              setDialogState(
-                                () => error = 'Passwords do not match.',
-                              );
-                              return;
-                            }
-                            if (newController.text.length < 12) {
-                              setDialogState(
-                                () => error =
-                                    'New password must be at least 12 characters.',
-                              );
-                              return;
-                            }
-                            setDialogState(() {
-                              busy = true;
-                              error = null;
-                            });
-                            try {
-                              await auth.changePassword(
-                                currentPassword: currentController.text,
-                                newPassword: newController.text,
-                              );
-                              if (ctx.mounted) {
-                                Navigator.pop(ctx);
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(
-                                    content: Text('Password changed.'),
-                                  ),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: newController,
+                  obscureText: true,
+                  decoration: const InputDecoration(
+                    labelText: 'New password (min 12)',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: confirmController,
+                  obscureText: true,
+                  decoration: const InputDecoration(
+                    labelText: 'Confirm new password',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                if (error != null) ...[const SizedBox(height: 8), Text(error!)],
+                const SizedBox(height: 12),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    TextButton(
+                      onPressed: busy ? null : () => Navigator.pop(ctx),
+                      child: const Text('Cancel'),
+                    ),
+                    const SizedBox(width: 8),
+                    FilledButton(
+                      onPressed: busy
+                          ? null
+                          : () async {
+                              if (newController.text !=
+                                  confirmController.text) {
+                                setDialogState(
+                                  () => error = 'Passwords do not match.',
                                 );
+                                return;
                               }
-                            } on ApiException catch (e) {
+                              if (newController.text.length < 12) {
+                                setDialogState(
+                                  () => error =
+                                      'New password must be at least 12 characters.',
+                                );
+                                return;
+                              }
                               setDialogState(() {
-                                busy = false;
-                                error = e.message;
+                                busy = true;
+                                error = null;
                               });
-                            } catch (e) {
-                              setDialogState(() {
-                                busy = false;
-                                error = '$e';
-                              });
-                            }
-                          },
-                    child: busy
-                        ? const SizedBox(
-                            width: 18,
-                            height: 18,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : const Text('Change'),
-                  ),
-                ],
-              ),
-            ],
+                              try {
+                                await auth.changePassword(
+                                  currentPassword: currentController.text,
+                                  newPassword: newController.text,
+                                );
+                                if (ctx.mounted) {
+                                  Navigator.pop(ctx);
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(
+                                      content: Text('Password changed.'),
+                                    ),
+                                  );
+                                }
+                              } on ApiException catch (e) {
+                                setDialogState(() {
+                                  busy = false;
+                                  error = e.message;
+                                });
+                              } catch (e) {
+                                setDialogState(() {
+                                  busy = false;
+                                  error = '$e';
+                                });
+                              }
+                            },
+                      child: busy
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Text('Change'),
+                    ),
+                  ],
+                ),
+              ],
+            ),
           ),
         ),
-      ),
       ),
     );
   }
@@ -502,7 +507,8 @@ class _IdentityChip extends StatelessWidget {
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Sign out?'),
-        content: Text('You are signed in as ${session?.identifier ?? session?.email}.'),
+        content: Text(
+            'You are signed in as ${session?.identifier ?? session?.email}.'),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),

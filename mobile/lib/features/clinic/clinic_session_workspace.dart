@@ -246,7 +246,8 @@ class _ClinicSessionWorkspaceState extends State<ClinicSessionWorkspace> {
               _medicineOptions = page.items.where((m) => !m.archived).toList());
         }
       } catch (e) {
-        if (kDebugMode) debugPrint('ClinicSessionWorkspace.searchMedicines failed: $e');
+        if (kDebugMode)
+          debugPrint('ClinicSessionWorkspace.searchMedicines failed: $e');
         if (mounted) setState(() => _medicineOptions = []);
       }
     });

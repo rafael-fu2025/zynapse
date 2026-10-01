@@ -75,12 +75,10 @@ class AuditFacets {
   });
 
   factory AuditFacets.fromJson(Map<String, dynamic>? json) => AuditFacets(
-        actionCodes: (json?['action_codes'] as List? ?? [])
-            .whereType<String>()
-            .toList(),
-        entityTypes: (json?['entity_types'] as List? ?? [])
-            .whereType<String>()
-            .toList(),
+        actionCodes:
+            (json?['action_codes'] as List? ?? []).whereType<String>().toList(),
+        entityTypes:
+            (json?['entity_types'] as List? ?? []).whereType<String>().toList(),
         actors: (json?['actors'] as List? ?? [])
             .whereType<Map<String, dynamic>>()
             .map(AuditActor.fromJson)

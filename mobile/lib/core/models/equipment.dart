@@ -155,7 +155,8 @@ class EquipmentDetail {
             .map((u) => EquipmentUnit.fromJson(u as Map<String, dynamic>))
             .toList(),
         statusLog: ((json['status_log'] ?? const []) as List<dynamic>)
-            .map((l) => EquipmentStatusLogEntry.fromJson(l as Map<String, dynamic>))
+            .map((l) =>
+                EquipmentStatusLogEntry.fromJson(l as Map<String, dynamic>))
             .toList(),
       );
 

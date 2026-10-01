@@ -8,6 +8,7 @@ import '../audit/audit_screen.dart';
 import '../clinic/clinic_screen.dart';
 import '../counselling/counselling_screen.dart';
 import '../equipment/equipment_screen.dart';
+import '../facilities/devices_screen.dart';
 import '../facilities/facilities_screen.dart';
 import '../facilities/waste_categories_screen.dart';
 import '../inventory/inventory_screen.dart';
@@ -52,8 +53,17 @@ const _modules = <_Module>[
       ReferralsScreen(), ['referrals.read']),
   _Module('Facilities', HugeIcons.strokeRoundedFactory01, Color(0xFF37474F),
       FacilitiesScreen(), ['facilities.units.read']),
+  // Matches the web route guard (`/facilities/waste-categories` is gated
+  // on `facilities.units.read`): the screen is readable by any BMG
+  // viewer, and it hides its own write affordances behind
+  // `facilities.categories.manage`.
   _Module('Waste Category', HugeIcons.strokeRoundedRecycle01, Color(0xFF4E5D33),
-      WasteCategoriesScreen(), ['facilities.categories.manage']),
+      WasteCategoriesScreen(), ['facilities.units.read']),
+  // Automated tumblers. Readable by any BMG viewer; the screen hides its
+  // own write affordances behind `facilities.units.manage`, matching how
+  // the web's DevicesPage works.
+  _Module('Devices', HugeIcons.strokeRoundedCpu, Color(0xFF00695C),
+      DevicesScreen(), ['facilities.units.read']),
   _Module('Reports', HugeIcons.strokeRoundedChart01, Color(0xFF6D4C41),
       ReportsScreen(), ['reports.read']),
   _Module('Audit', HugeIcons.strokeRoundedAudit01, Color(0xFF546E7A),
