@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:synapse_mobile/core/models/facilities.dart';
+import 'package:synapse_mobile/features/facilities/turning.dart';
 
 /// Facilities (BMG) model + payload tests.
 ///
@@ -173,6 +174,31 @@ void main() {
       expect(c.referenceDurationDays, 21);
       expect(c.historicalAvgDays, 23.4);
       expect(c.sampleCount, 5);
+    });
+  });
+
+  group('describeTurning', () {
+    test('mirrors the web helper phrasing and stale tone', () {
+      // Cases from describeTurning in frontend/src/lib/bmgFormat.ts.
+      expect(describeTurning(null, 4), (label: 'Never turned', stale: true));
+      expect(describeTurning(0, 4), (label: 'Turned today', stale: false));
+      expect(
+        describeTurning(2, 4),
+        (label: 'Turned 2 days ago', stale: false),
+      );
+      expect(
+        describeTurning(5, 4),
+        (label: 'Turned 5 days ago', stale: true),
+      );
+      // Without the cadence the readout never claims stale.
+      expect(
+        describeTurning(9, null),
+        (label: 'Turned 9 days ago', stale: false),
+      );
+      expect(
+        describeTurning(1, 4),
+        (label: 'Turned 1 day ago', stale: false),
+      );
     });
   });
 }

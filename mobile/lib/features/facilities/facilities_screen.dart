@@ -13,6 +13,7 @@ import '../common/crud_form.dart';
 import '../common/widgets.dart';
 import 'composition_sheet.dart';
 import 'drum_detail_sheet.dart';
+import 'turning.dart';
 import 'waste_categories_screen.dart';
 
 /// Facilities (BMG) — `GET /facilities/units` (paged) with utilization.
@@ -33,6 +34,12 @@ class _FacilitiesScreenState extends State<FacilitiesScreen>
   bool _loadedOnce = false;
   bool _showArchived = false;
 
+  /// Active batches + turning cadence, joined into the unit tiles for the
+  /// "Last turned" readout. Best-effort: a failure here only drops that
+  /// row, never the unit list. (The units payload doesn't carry turn
+  /// data — same shape split the web grid makes.)
+  BmgActiveBatches? _batches;
+
   @override
   void initState() {
     super.initState();
@@ -50,9 +57,17 @@ class _FacilitiesScreenState extends State<FacilitiesScreen>
     try {
       final page =
           await ApiService.I.facilityUnits(includeArchived: _showArchived);
+      final batches = await ApiService.I
+          .facilityActiveBatches()
+          .then<Object?>((v) => v)
+          .catchError((Object e) {
+        if (kDebugMode) debugPrint('FacilitiesScreen.poll batches failed: $e');
+        return null;
+      });
       if (!mounted) return;
       setState(() {
         _items = page.items;
+        _batches = batches is BmgActiveBatches ? batches : _batches;
         _nextCursor = page.meta?.nextCursor;
       });
     } catch (e) {
@@ -67,10 +82,22 @@ class _FacilitiesScreenState extends State<FacilitiesScreen>
       _error = null;
     });
     try {
-      final page =
-          await ApiService.I.facilityUnits(includeArchived: _showArchived);
+      final unitsFuture =
+          ApiService.I.facilityUnits(includeArchived: _showArchived);
+      // Fire together so the turn join adds no extra round-trip latency;
+      // a batches failure must not blank the unit list.
+      final batchesFuture = ApiService.I
+          .facilityActiveBatches()
+          .then<Object?>((v) => v)
+          .catchError((Object e) {
+        if (kDebugMode) debugPrint('FacilitiesScreen.batches failed: $e');
+        return null;
+      });
+      final page = await unitsFuture;
+      final batches = await batchesFuture;
       setState(() {
         _items = page.items;
+        _batches = batches is BmgActiveBatches ? batches : null;
         _nextCursor = page.meta?.nextCursor;
         _loadedOnce = true;
         _loading = false;
@@ -877,6 +904,9 @@ class _FacilitiesScreenState extends State<FacilitiesScreen>
           unit: _items[i],
           canManage: _canManage,
           canTransition: _canTransition,
+          daysSinceLastTurning:
+              _batches?.forUnit(_items[i].id)?.daysSinceLastTurning,
+          turningDueDays: _batches?.turningDueDays,
           onOpenDetail: () => _openDrumDetail(_items[i]),
           onStart: () => _startBatch(_items[i]),
           onUpdate: () => _addUpdate(_items[i]),
@@ -910,6 +940,8 @@ class _UnitTile extends StatelessWidget {
     required this.unit,
     required this.canManage,
     required this.canTransition,
+    this.daysSinceLastTurning,
+    this.turningDueDays,
     this.onOpenDetail,
     this.onStart,
     this.onUpdate,
@@ -928,6 +960,11 @@ class _UnitTile extends StatelessWidget {
   final BmgUnit unit;
   final bool canManage;
   final bool canTransition;
+
+  /// Turn-session join from the batches/active payload — null when the
+  /// drum has no active batch or the envelope failed to load.
+  final int? daysSinceLastTurning;
+  final int? turningDueDays;
   final VoidCallback? onOpenDetail;
   final VoidCallback? onStart;
   final VoidCallback? onUpdate;
@@ -941,6 +978,22 @@ class _UnitTile extends StatelessWidget {
   final VoidCallback? onArchive;
   final VoidCallback? onCompliance;
   final VoidCallback? onLoss;
+
+  /// "Last turned" line under the ETA — mirrors the web drum card's
+  /// FactRow, amber when the turning cadence is blown.
+  Widget _turningRow() {
+    final turning = describeTurning(daysSinceLastTurning, turningDueDays);
+    return Padding(
+      padding: const EdgeInsets.only(top: 2),
+      child: Text(
+        turning.label,
+        style: TextStyle(
+          fontSize: 11,
+          color: turning.stale ? turningStaleColor() : Colors.black54,
+        ),
+      ),
+    );
+  }
 
   /// The operator's most frequent action, surfaced as a visible button
   /// instead of being buried in the overflow menu: "Start batch" when the
@@ -1125,6 +1178,7 @@ class _UnitTile extends StatelessWidget {
                   '${unit.activeBatchExpectedCompletionDate != null ? ' · ETA ${unit.activeBatchExpectedCompletionDate!.substring(0, 10)}' : ''}',
                   style: const TextStyle(fontSize: 11, color: Colors.black54),
                 ),
+                _turningRow(),
               ],
               if (unit.isActive && unit.specCapacityKg != null) ...[
                 const SizedBox(height: 6),

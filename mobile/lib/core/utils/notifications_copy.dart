@@ -14,7 +14,7 @@ const Map<String, String> _labels = {
   'appointment.rescheduled': 'Appointment rescheduled',
   'appointment.confirmed': 'Appointment confirmed',
   'appointment.cancelled': 'Appointment cancelled',
-  'appointment.no_show': 'Patient marked no-show',
+  'appointment.no_show': 'Appointment marked no-show',
   'referral.created': 'New referral to handle',
   'referral.acknowledged': 'Referral acknowledged',
   'referral.closed': 'Referral closed',

@@ -51,7 +51,7 @@ class Appointment {
   /// UTC wall-clock `YYYY-MM-DD HH:mm:ss`.
   final String scheduledAt;
 
-  /// scheduled | checked_in | completed | cancelled | no_show.
+  /// scheduled | confirmed | checked_in | completed | cancelled | no_show.
   final String status;
 
   final String? reason;

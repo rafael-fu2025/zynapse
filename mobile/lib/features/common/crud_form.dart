@@ -55,6 +55,7 @@ class CrudField {
     this.maxLength,
     this.hint,
     this.keyboard,
+    this.derive,
   })  : type = CrudFieldType.text,
         boolInitial = null,
         options = null,
@@ -71,6 +72,7 @@ class CrudField {
         boolInitial = null,
         options = null,
         entries = null,
+        derive = null,
         keyboard = null;
 
   const CrudField.bool(
@@ -82,6 +84,7 @@ class CrudField {
         initial = null,
         options = null,
         entries = null,
+        derive = null,
         maxLength = null,
         hint = null,
         keyboard = null;
@@ -95,6 +98,7 @@ class CrudField {
   })  : type = CrudFieldType.dropdown,
         boolInitial = null,
         entries = null,
+        derive = null,
         maxLength = null,
         hint = null,
         keyboard = null;
@@ -108,6 +112,7 @@ class CrudField {
         boolInitial = null,
         options = null,
         entries = null,
+        derive = null,
         maxLength = null,
         hint = null,
         keyboard = null;
@@ -121,6 +126,7 @@ class CrudField {
         boolInitial = null,
         options = null,
         entries = null,
+        derive = null,
         maxLength = null,
         hint = null,
         keyboard = null;
@@ -134,6 +140,7 @@ class CrudField {
   })  : type = CrudFieldType.picker,
         boolInitial = null,
         options = null,
+        derive = null,
         maxLength = null,
         hint = null,
         keyboard = null;
@@ -149,6 +156,12 @@ class CrudField {
   final List<String>? options;
   final List<TaxonomyEntry>? entries;
   final TextInputType? keyboard;
+
+  /// Recomputes this field's value from the form's current text values on
+  /// every keystroke — until the user edits the field themselves (a
+  /// manual-edit latch, mirroring the web register dialogs' prefill).
+  /// Only honored on text fields; an `initial` is clobbered on open.
+  final String? Function(Map<String, String> values)? derive;
 }
 
 enum CrudFieldType { text, number, bool, dropdown, date, time, picker }
@@ -217,6 +230,8 @@ class _CrudFormSheetState extends State<_CrudFormSheet> {
   final _boolValues = <String, bool>{};
   final _dropdownValues = <String, String?>{};
   final _fieldErrors = <String, String>{};
+  final _manuallyEdited = <String>{};
+  bool _applyingDerived = false;
   final bool _busy = false;
 
   @override
@@ -237,6 +252,42 @@ class _CrudFormSheetState extends State<_CrudFormSheet> {
                 ? f.initial
                 : null;
       }
+    }
+    for (final entry in _controllers.entries) {
+      entry.value.addListener(() => _onTextChanged(entry.key));
+    }
+    _recomputeDerived();
+  }
+
+  /// Keystrokes mark derived fields as manually edited (the latch) and
+  /// refresh every derived field from the current text values. Programmatic
+  /// writes during recompute are skipped by the `_applyingDerived` guard.
+  void _onTextChanged(String key) {
+    if (_applyingDerived) return;
+    if (widget.fields
+        .any((f) => f.key == key && f.derive != null)) {
+      _manuallyEdited.add(key);
+    }
+    _recomputeDerived();
+  }
+
+  void _recomputeDerived() {
+    if (_applyingDerived) return;
+    _applyingDerived = true;
+    try {
+      final values = <String, String>{
+        for (final e in _controllers.entries) e.key: e.value.text,
+      };
+      for (final f in widget.fields) {
+        final derive = f.derive;
+        if (derive == null || _manuallyEdited.contains(f.key)) continue;
+        final controller = _controllers[f.key];
+        if (controller == null) continue;
+        final next = derive(values) ?? '';
+        if (controller.text != next) controller.text = next;
+      }
+    } finally {
+      _applyingDerived = false;
     }
   }
 

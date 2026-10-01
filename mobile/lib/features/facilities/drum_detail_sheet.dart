@@ -17,8 +17,10 @@ import 'package:hugeicons/hugeicons.dart';
 import '../../core/api/api_client.dart';
 import '../../core/models/facilities.dart';
 import '../../core/services/api_service.dart';
+import '../../core/utils/dates.dart';
 import '../common/crud_form.dart';
 import '../common/widgets.dart';
+import 'turning.dart';
 
 /// Loss categories accepted by `POST /batches/{id}/losses`. Mirrors
 /// `BMG_LOSS_CATEGORIES` on the web.
@@ -195,7 +197,7 @@ class _DrumDetailSheetState extends State<DrumDetailSheet> {
           title: '${batch.unitCode} · ${batch.batchCode}',
           subtitle: batch.unitName,
         ),
-        _BatchCard(batch: batch),
+        _BatchCard(batch: batch, turningDueDays: data.active.turningDueDays),
         const SizedBox(height: 12),
         _AnalyticsCard(analytics: data.analytics),
         const SizedBox(height: 12),
@@ -256,13 +258,18 @@ class _DetailData {
 }
 
 class _BatchCard extends StatelessWidget {
-  const _BatchCard({required this.batch});
+  const _BatchCard({required this.batch, required this.turningDueDays});
 
   final BmgActiveBatch batch;
+
+  /// Turning cadence from the batches/active envelope — null-safe input to
+  /// the stale-turning readout.
+  final int? turningDueDays;
 
   @override
   Widget build(BuildContext context) {
     final progress = batch.progressPct.clamp(0, 100) / 100;
+    final turning = describeTurning(batch.daysSinceLastTurning, turningDueDays);
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(14),
@@ -278,13 +285,30 @@ class _BatchCard extends StatelessWidget {
                     : '${batch.outputKg!.toStringAsFixed(2)} kg'),
             _kv('Days active', '${batch.daysActive}'),
             _kv('Expected', batch.etaLabel),
-            _kv(
-                'Last turned',
-                batch.daysSinceLastTurning == null
-                    ? 'Never turned'
-                    : (batch.daysSinceLastTurning == 0
-                        ? 'Turned today'
-                        : 'Turned ${batch.daysSinceLastTurning}d ago')),
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 2),
+              child: Row(
+                children: [
+                  const SizedBox(
+                    width: 96,
+                    child: Text('Last turned',
+                        style:
+                            TextStyle(fontSize: 12, color: Colors.black54)),
+                  ),
+                  Expanded(
+                    child: Text(
+                      turning.label,
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color:
+                            turning.stale ? turningStaleColor() : null,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
             const SizedBox(height: 10),
             ClipRRect(
               borderRadius: BorderRadius.circular(6),
@@ -502,7 +526,21 @@ class _ProcessLogCard extends StatelessWidget {
     final o2 = (l['oxygen_pct'] as num?)?.toDouble();
     if (o2 != null) badges.add('O₂ $o2%');
     final turns = (l['turns_count'] as num?)?.toInt();
-    if (turns != null) badges.add('⚙ $turns rotations');
+    final duration = (l['duration_seconds'] as num?)?.toInt();
+    if (turns != null) {
+      // Web badge shape: `⚙ {n} rotations · {seconds}s`.
+      badges.add(duration != null
+          ? '⚙ $turns rotations · ${duration}s'
+          : '⚙ $turns rotations');
+    }
+    final sessionStarted = l['session_started_at'] as String?;
+    if (sessionStarted != null && sessionStarted.isNotEmpty) {
+      badges.add('started ${fmtUtcToApp(sessionStarted)}');
+    }
+    final deviceId = l['device_id'] as String?;
+    if (deviceId != null && deviceId.isNotEmpty) {
+      badges.add(deviceId);
+    }
 
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 5),

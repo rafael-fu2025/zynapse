@@ -10,6 +10,7 @@ import '../../core/api/api_client.dart';
 import '../../core/models/profile.dart';
 import '../../core/services/api_service.dart';
 import '../../core/services/auth_controller.dart';
+import '../../core/utils/university_email.dart';
 import '../common/crud_form.dart';
 import '../common/widgets.dart';
 
@@ -159,8 +160,14 @@ class _PatientsScreenState extends State<PatientsScreen> {
         CrudField.text('blood_type', 'Blood type',
             required: false, initial: p?.bloodType),
         if (p == null)
-          const CrudField.text('account_email', 'Account email (optional)',
-              required: false, keyboard: TextInputType.emailAddress),
+          CrudField.text('account_email', 'Account email (optional)',
+              required: false,
+              keyboard: TextInputType.emailAddress,
+              // Live prefill from the name fields — the web register
+              // dialogs' university-address convention; editing the field
+              // latches it so the user's value is never overwritten.
+              derive: (values) => deriveUniversityEmail(
+                  values['first_name'], values['last_name'])),
       ];
 
   List<CrudField> _employeeFields([UserProfile? p]) => [
@@ -178,8 +185,12 @@ class _PatientsScreenState extends State<PatientsScreen> {
         if (p == null)
           const CrudField.text('employee_number', 'Employee number'),
         if (p == null)
-          const CrudField.text('account_email', 'Account email (optional)',
-              required: false, keyboard: TextInputType.emailAddress),
+          CrudField.text('account_email', 'Account email (optional)',
+              required: false,
+              keyboard: TextInputType.emailAddress,
+              // Same account-email prefill as the student dialog.
+              derive: (values) => deriveUniversityEmail(
+                  values['first_name'], values['last_name'])),
       ];
 
   Future<void> _create() async {

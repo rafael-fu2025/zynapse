@@ -285,6 +285,7 @@ class _AppointmentsScreenState extends State<AppointmentsScreen>
     const statuses = <(String?, String)>[
       (null, 'All'),
       ('scheduled', 'Scheduled'),
+      ('confirmed', 'Confirmed'),
       ('checked_in', 'Checked in'),
       ('completed', 'Completed'),
       ('cancelled', 'Cancelled'),
@@ -363,9 +364,18 @@ class _AppointmentCard extends StatelessWidget {
   final bool staffMode;
   final ValueChanged<String>? onTransition;
 
-  /// Available status transitions for staff, by current status.
+  /// Available status transitions for staff, by current status. Mirrors
+  /// `AppointmentActions` in `frontend/src/pages/AppointmentsPage.tsx`:
+  /// Confirm is the approval step; completion cascades from the encounter,
+  /// so there is no Complete button on scheduled/confirmed cards.
   List<(String, String, IconData)> get _actions => switch (appointment.status) {
         'scheduled' => [
+            ('confirmed', 'Confirm', HugeIcons.strokeRoundedCheckmarkCircle01),
+            ('checked_in', 'Check in', HugeIcons.strokeRoundedLogin02),
+            ('cancelled', 'Cancel', HugeIcons.strokeRoundedDelete02),
+            ('no_show', 'No show', HugeIcons.strokeRoundedUserRemove01),
+          ],
+        'confirmed' => [
             ('checked_in', 'Check in', HugeIcons.strokeRoundedLogin02),
             ('cancelled', 'Cancel', HugeIcons.strokeRoundedDelete02),
             ('no_show', 'No show', HugeIcons.strokeRoundedUserRemove01),

@@ -15,6 +15,7 @@ import '../models/medicine.dart';
 import '../models/notification.dart';
 import '../models/profile.dart';
 import '../models/queue.dart';
+import '../models/reorder.dart';
 import '../models/appointment_portal.dart';
 import '../models/referral.dart';
 import '../models/report.dart';
@@ -489,6 +490,79 @@ class ApiService {
   }
 
   // ---------------------------------------------------------------------
+  // Purchases / reorders (clinic.reorders.read)
+  // ---------------------------------------------------------------------
+
+  /// `GET /clinic/reorders?limit=&cursor=&status=` — procurement requests,
+  /// newest first. Mirrors the web ReordersTab (Purchases).
+  Future<ApiPage<Reorder>> reorders({
+    String? status,
+    int limit = 25,
+    String? cursor,
+  }) async {
+    final query = <String, dynamic>{
+      'limit': limit,
+      if (status != null && status.isNotEmpty) 'status': status,
+      if (cursor != null && cursor.isNotEmpty) 'cursor': cursor,
+    };
+    final res = await _dio.get<Map<String, dynamic>>(
+      '/clinic/reorders',
+      queryParameters: query,
+    );
+    final body = res.data;
+    return ApiPage(
+      items: (body?['data'] as List? ?? [])
+          .whereType<Map<String, dynamic>>()
+          .map(Reorder.fromJson)
+          .toList(),
+      meta: PaginationMeta.fromJson(body?['meta'] as Map<String, dynamic>?),
+    );
+  }
+
+  /// `POST /clinic/reorders` — [itemType] is `medicine` | `supply`;
+  /// [itemId] lands on `medicine_id` or `supply_item_id` accordingly.
+  Future<Reorder> createReorder({
+    required String itemType,
+    required int itemId,
+    required int quantity,
+    String urgency = 'medium',
+    String? note,
+  }) async {
+    final res = await _dio.post<Map<String, dynamic>>(
+      '/clinic/reorders',
+      data: {
+        'item_type': itemType,
+        if (itemType == 'supply') 'supply_item_id': itemId else 'medicine_id': itemId,
+        'quantity': quantity,
+        'urgency': urgency,
+        if (note != null && note.isNotEmpty) 'note': note,
+      },
+    );
+    return Reorder.fromJson(_unwrapObject(res));
+  }
+
+  /// `POST /clinic/reorders/{id}/transition` — action: approve | order |
+  /// receive | cancel. `order` may carry the supplier's [expectedDeliveryDate]
+  /// (YYYY-MM-DD); every action accepts an optional [note].
+  Future<Reorder> transitionReorder(
+    int id,
+    String action, {
+    String? expectedDeliveryDate,
+    String? note,
+  }) async {
+    final res = await _dio.post<Map<String, dynamic>>(
+      '/clinic/reorders/$id/transition',
+      data: {
+        'action': action,
+        if (expectedDeliveryDate != null && expectedDeliveryDate.isNotEmpty)
+          'expected_delivery_date': expectedDeliveryDate,
+        if (note != null && note.isNotEmpty) 'note': note,
+      },
+    );
+    return Reorder.fromJson(_unwrapObject(res));
+  }
+
+  // ---------------------------------------------------------------------
   // Equipment (clinic.inventory.read) — durable-asset catalog
   // ---------------------------------------------------------------------
 
@@ -892,8 +966,8 @@ class ApiService {
     return Appointment.fromJson(_unwrapObject(res));
   }
 
-  /// `POST /clinic/appointments/{id}/transition` — status: checked_in |
-  /// completed | cancelled | no_show.
+  /// `POST /clinic/appointments/{id}/transition` — status: confirmed |
+  /// checked_in | completed | cancelled | no_show.
   Future<Appointment> appointmentTransition({
     required int id,
     required String status,

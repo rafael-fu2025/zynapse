@@ -295,12 +295,14 @@ class StatusBadge extends StatelessWidget {
   }
 }
 
-/// Maps an appointment status to a badge color (mirrors STATUS_VARIANT).
+/// Maps an appointment status to a badge color (mirrors STATUS_VARIANT in
+/// `frontend/src/pages/AppointmentsPage.tsx`).
 Color appointmentStatusColor(String status) => switch (status) {
       'scheduled' => const Color(0xFF1E6FD9), // info blue
+      'confirmed' => Colors.grey, // web `secondary` — staff approval step
       'checked_in' => const Color(0xFF8A5A00), // amber
       'completed' => const Color(0xFF1B7A43), // green
-      'cancelled' => Colors.grey,
+      'cancelled' => const Color(0xFFB3261E), // destructive
       'no_show' => const Color(0xFFB3261E), // destructive
       _ => Colors.grey,
     };

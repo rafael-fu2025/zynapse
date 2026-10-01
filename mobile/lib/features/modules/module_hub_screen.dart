@@ -12,6 +12,7 @@ import '../facilities/devices_screen.dart';
 import '../facilities/facilities_screen.dart';
 import '../facilities/waste_categories_screen.dart';
 import '../inventory/inventory_screen.dart';
+import '../inventory/purchases_screen.dart';
 import '../medicines/medicines_screen.dart';
 import '../notifications/notifications_screen.dart';
 import '../patients/patients_screen.dart';
@@ -43,6 +44,11 @@ const _modules = <_Module>[
       PatientsScreen(), ['clinic.patients.read']),
   _Module('Inventory', HugeIcons.strokeRoundedPackage02, Color(0xFFB45309),
       InventoryScreen(), ['clinic.inventory.read']),
+  // The reorder/procurement workflow (web ReordersTab) — read gated like
+  // the backend `reordersRead` policy; the screen hides its own write
+  // affordances behind `clinic.reorders.manage`.
+  _Module('Purchases', HugeIcons.strokeRoundedShoppingBag01, Color(0xFF6D4C41),
+      PurchasesScreen(), ['clinic.reorders.read']),
   _Module('Equipment', HugeIcons.strokeRoundedHospitalBed01, Color(0xFF8D6E63),
       EquipmentScreen(), ['clinic.inventory.read']),
   _Module('Medicines', HugeIcons.strokeRoundedMedicine01, Color(0xFF1B7A43),
