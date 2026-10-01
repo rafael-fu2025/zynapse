@@ -666,10 +666,10 @@ export function SurveysTab() {
                 {rows.map((s) => (
                   <TableRow key={s.id}>
                     <TableCell className="max-w-72 px-3">
-                      <p className="flex items-center gap-2 truncate text-sm font-medium">
+                      <div className="flex items-center gap-2 truncate text-sm font-medium">
                         {s.is_required && <Badge variant="warning">Required</Badge>}
                         {s.title}
-                      </p>
+                      </div>
                       <p className="truncate text-xs text-muted-foreground">
                         {s.question_count} question{s.question_count === 1 ? '' : 's'}
                         {s.close_at !== null && ` · closes ${fmtUtcToApp(s.close_at, 'MMM d, yyyy')}`}

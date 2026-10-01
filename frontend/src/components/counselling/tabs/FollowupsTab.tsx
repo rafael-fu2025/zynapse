@@ -310,10 +310,10 @@ export function FollowupsTab() {
                   <TableRow key={f.id}>
                     <TableCell className="px-3 text-sm font-medium">{f.student_name}</TableCell>
                     <TableCell className="max-w-64 px-3">
-                      <p className="truncate text-sm" title={f.risk_reason}>
+                      <div className="truncate text-sm" title={f.risk_reason}>
                         {f.who5_score !== null && <Badge variant="destructive" className="mr-1.5">WHO-5 {f.who5_score}</Badge>}
                         {f.risk_reason}
-                      </p>
+                      </div>
                       {f.outcome_note !== null && (
                         <p className="truncate text-xs text-muted-foreground" title={f.outcome_note}>Outcome: {f.outcome_note}</p>
                       )}

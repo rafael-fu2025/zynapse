@@ -279,11 +279,11 @@ export function AnnouncementsTab() {
                 {rows.map((a) => (
                   <TableRow key={a.id} className={a.severity === 'urgent' ? 'bg-destructive/5' : undefined}>
                     <TableCell className="max-w-72 px-3">
-                      <p className="flex items-center gap-2 truncate text-sm font-medium">
+                      <div className="flex items-center gap-2 truncate text-sm font-medium">
                         {a.severity === 'urgent' && <Badge variant="destructive">Urgent</Badge>}
                         {a.is_required && <Badge variant="warning">Required</Badge>}
                         {a.title}
-                      </p>
+                      </div>
                       <p className="truncate text-xs text-muted-foreground">{a.body}</p>
                     </TableCell>
                     <TableCell className="px-3 text-sm">{AUDIENCE_LABELS[a.audience]}</TableCell>
