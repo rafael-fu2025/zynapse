@@ -130,9 +130,33 @@ final class EmployeePersonServiceTest extends TestCase
         return $rows;
     }
 
+    /**
+     * Dev-DB connection for the DB-backed halves: SYNAPSE_TEST_DB_* env
+     * when provided, else the local dev defaults. Since PHP 8.1 a failed
+     * mysqli_connect THROWS instead of returning false (and `@` does not
+     * suppress exceptions — that broke CI, where the port reaches the
+     * feature-suite MariaDB with the wrong creds), so failures are caught
+     * and returned as false. An unreachable or unauthenticated DB simply
+     * skips these halves; it is never a unit-suite failure.
+     */
+    private static function devDb(): \mysqli|false
+    {
+        try {
+            return @mysqli_connect(
+                getenv('SYNAPSE_TEST_DB_HOST') ?: '127.0.0.1',
+                getenv('SYNAPSE_TEST_DB_USER') ?: 'root',
+                (string) (getenv('SYNAPSE_TEST_DB_PASS') ?: ''),
+                getenv('SYNAPSE_TEST_DB_NAME') ?: 'synapse_zcode',
+                (int) (getenv('SYNAPSE_TEST_DB_PORT') ?: 3306),
+            );
+        } catch (\mysqli_sql_exception) {
+            return false;
+        }
+    }
+
     public function testPrimaryOnlyFilterHidesExactlyTheNonPrimaryDuplicates(): void
     {
-        $m = @mysqli_connect('127.0.0.1', 'root', '', 'synapse_zcode', 3306);
+        $m = self::devDb();
         if ($m === false) {
             self::markTestSkipped('synapse_zcode not reachable on 127.0.0.1:3306');
         }
@@ -165,7 +189,7 @@ final class EmployeePersonServiceTest extends TestCase
 
     public function testAttachRecordsGroupsSiblingsEndToEnd(): void
     {
-        $m = @mysqli_connect('127.0.0.1', 'root', '', 'synapse_zcode', 3306);
+        $m = self::devDb();
         if ($m === false) {
             self::markTestSkipped('synapse_zcode not reachable on 127.0.0.1:3306');
         }
