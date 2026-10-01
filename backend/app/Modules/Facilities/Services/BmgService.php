@@ -1613,7 +1613,9 @@ final class BmgService extends BaseService
             ->where('batch_id', $batchId)
             ->where('code', $code)
             ->where('acknowledged_at', null)
-            ->where('triggered_at', '>=', $since)
+            // CI4 puts the operator in the key, not the third argument —
+            // the CI3 three-arg form lands $since in ?bool $escape (fatal).
+            ->where('triggered_at >=', $since)
             ->countAllResults() > 0;
     }
 

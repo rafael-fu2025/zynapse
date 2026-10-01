@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
-use CodeIgniter\Database\Config;
+use CodeIgniter\Exceptions\PageNotFoundException;
 
 /**
  * Regression cover for the invariants that were documented but not
@@ -56,9 +56,14 @@ final class BmgInvariantsTest extends FeatureTestCase
         return $this->envelope($res);
     }
 
-    private function db(): Config
+    /**
+     * A live connection — `config('Database')` is the bare config object
+     * and has no query methods (that mistake failed CI with "Call to
+     * undefined method Config\Database::table()").
+     */
+    private function db(): \CodeIgniter\Database\BaseConnection
     {
-        return config('Database');
+        return db_connect();
     }
 
     /**
@@ -254,8 +259,10 @@ final class BmgInvariantsTest extends FeatureTestCase
     {
         ['batch' => $batchId] = $this->seedBatch();
 
-        $this->authed($this->token(), 'post', "api/v1/facilities/batches/{$batchId}/curing", [])
-            ->assertStatus(404);
+        // A route the router has never heard of surfaces as
+        // PageNotFoundException inside the call, not as a 404 response.
+        $this->expectException(PageNotFoundException::class);
+        $this->authed($this->token(), 'post', "api/v1/facilities/batches/{$batchId}/curing", []);
     }
 
     public function testHistoricalCuringLedgerRowsStayReadable(): void
