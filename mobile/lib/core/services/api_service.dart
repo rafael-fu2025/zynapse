@@ -359,12 +359,19 @@ class ApiService {
   }
 
   /// `GET /me/clinic-visits` (employee) or `/me/student-clinic-visits` (student).
+  ///
+  /// [recordId] (employees only) reads another of the caller's OWN MIS
+  /// records — the position-history selector; the backend 404s any record
+  /// that is not the same person.
   Future<List<ClinicVisit>> clinicVisits(
-      {required bool student, int limit = 50}) async {
+      {required bool student, int limit = 50, int? recordId}) async {
     final path = student ? '/me/student-clinic-visits' : '/me/clinic-visits';
     final res = await _dio.get<Map<String, dynamic>>(
       path,
-      queryParameters: {'limit': limit},
+      queryParameters: {
+        'limit': limit,
+        if (!student && recordId != null) 'record_id': recordId,
+      },
     );
     return _unwrapList(res)
         .whereType<Map<String, dynamic>>()

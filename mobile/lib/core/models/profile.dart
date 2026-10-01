@@ -53,6 +53,47 @@ class PatientContact {
   final bool isPrimary;
 }
 
+/// One MIS appointment record of an employee person (backend
+/// `EmployeePersonService`). FU MIS issues one record per appointment, so
+/// one human can hold several; `isPrimary` marks the newest one, whose
+/// position the portal card displays. Absent on legacy payloads — all
+/// fields are tolerated-lenient, mirroring `employeeRecordSchema` in
+/// `frontend/src/schemas/patients.ts`.
+class EmployeeRecord {
+  const EmployeeRecord({
+    required this.id,
+    required this.employeeNumber,
+    this.department,
+    this.position,
+    this.positionYear,
+    required this.archived,
+    required this.isPrimary,
+    required this.visitCount,
+  });
+
+  factory EmployeeRecord.fromJson(Map<String, dynamic> json) => EmployeeRecord(
+        id: (json['id'] ?? 0) as int,
+        employeeNumber: (json['employee_number'] ?? '') as String,
+        department: json['department'] as String?,
+        position: json['position'] as String?,
+        positionYear: json['position_year'] as int?,
+        archived: (json['archived'] ?? false) as bool,
+        isPrimary: (json['is_primary'] ?? false) as bool,
+        visitCount: (json['visit_count'] ?? 0) as int,
+      );
+
+  final int id;
+  final String employeeNumber;
+  final String? department;
+  final String? position;
+
+  /// MIS issuance year decoded from the employee number (225082 → 2025).
+  final int? positionYear;
+  final bool archived;
+  final bool isPrimary;
+  final int visitCount;
+}
+
 /// A user profile row — the same `UserDto` shape is returned by both
 /// `/me/employee-profile` and `/me/student-profile` (student/employee
 /// fields are merged on `users`).
@@ -86,6 +127,8 @@ class UserProfile {
     this.emergencyContactName,
     this.emergencyContactPhone,
     this.isTeaching,
+    this.positionYear,
+    this.records = const [],
     this.allergies = const [],
     this.contacts = const [],
   });
@@ -119,6 +162,11 @@ class UserProfile {
         emergencyContactName: json['emergency_contact_name'] as String?,
         emergencyContactPhone: json['emergency_contact_phone'] as String?,
         isTeaching: json['is_teaching'] as bool?,
+        positionYear: json['position_year'] as int?,
+        records: (json['records'] as List? ?? [])
+            .whereType<Map<String, dynamic>>()
+            .map(EmployeeRecord.fromJson)
+            .toList(),
         allergies: (json['allergies'] as List? ?? [])
             .whereType<Map<String, dynamic>>()
             .map(PatientAllergy.fromJson)
@@ -162,6 +210,13 @@ class UserProfile {
   final String? emergencyContactPhone;
   final bool? isTeaching;
 
+  /// MIS issuance year of this record's employee number (employees only).
+  final int? positionYear;
+
+  /// The person's MIS appointment records, newest first (employees only).
+  /// A person holds one record per appointment; see [primaryRecord].
+  final List<EmployeeRecord> records;
+
   /// Student detail only: allergies (safety-critical health data).
   final List<PatientAllergy> allergies;
 
@@ -192,6 +247,18 @@ class UserProfile {
   }
 
   bool get isStudent => kind == 'student';
+
+  /// The person's newest MIS record — the one whose position the UI
+  /// displays (is_primary flag first, else the first record, matching
+  /// `primaryRecordOf` in `frontend/src/utils/employeeRecords.ts`).
+  /// Null when the payload carries no record group.
+  EmployeeRecord? get primaryRecord {
+    if (records.isEmpty) return null;
+    for (final r in records) {
+      if (r.isPrimary) return r;
+    }
+    return records.first;
+  }
 }
 
 /// A clinic encounter on the caller's own record (portal visits list).

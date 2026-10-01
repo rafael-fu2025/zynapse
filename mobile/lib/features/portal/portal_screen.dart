@@ -37,6 +37,9 @@ class _PortalScreenState extends State<PortalScreen>
   UserProfile? _profile;
   List<ClinicVisit> _visits = [];
   bool _loadedOnce = false;
+  // Position-history selector: which of the caller's MIS records the
+  // clinic-visits list shows. Null = the newest record (the primary).
+  int? _selectedRecordId;
 
   @override
   void initState() {
@@ -48,6 +51,13 @@ class _PortalScreenState extends State<PortalScreen>
     startPolling(const Duration(seconds: 30), _silentRefresh);
   }
 
+  /// The MIS record whose clinic visits to show: the user's pick, else
+  /// the person's newest record (the primary) when they hold several.
+  int? _effectiveRecordId(UserProfile profile) {
+    if (_isStudent || profile.records.length <= 1) return null;
+    return _selectedRecordId ?? profile.primaryRecord?.id;
+  }
+
   /// Polled live update: silently refresh the profile + clinic-visit history
   /// so new visits appear without a manual refresh. Transient errors keep the
   /// current data on screen.
@@ -57,7 +67,10 @@ class _PortalScreenState extends State<PortalScreen>
       final profile = _isStudent
           ? await ApiService.I.studentProfile()
           : await ApiService.I.employeeProfile();
-      final visits = await ApiService.I.clinicVisits(student: _isStudent);
+      final visits = await ApiService.I.clinicVisits(
+        student: _isStudent,
+        recordId: _effectiveRecordId(profile),
+      );
       if (!mounted) return;
       setState(() {
         _profile = profile;
@@ -85,7 +98,10 @@ class _PortalScreenState extends State<PortalScreen>
       final profile = _isStudent
           ? await ApiService.I.studentProfile()
           : await ApiService.I.employeeProfile();
-      final visits = await ApiService.I.clinicVisits(student: _isStudent);
+      final visits = await ApiService.I.clinicVisits(
+        student: _isStudent,
+        recordId: _effectiveRecordId(profile),
+      );
       setState(() {
         _profile = profile;
         _visits = visits;
@@ -161,7 +177,7 @@ class _PortalScreenState extends State<PortalScreen>
           const SizedBox(height: 12),
           _ProfileCard(
             profile: profile,
-            avatarAsset: avatarAssetFor(context.read<AuthController>().session),
+            email: context.read<AuthController>().session?.email ?? '',
           ),
           const SizedBox(height: 12),
           if (_isStudent)
@@ -172,19 +188,45 @@ class _PortalScreenState extends State<PortalScreen>
           SectionCard(
             title: 'My clinic visits',
             icon: HugeIcons.strokeRoundedStethoscope,
-            child: _visits.isEmpty
-                ? const Padding(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                // Position-history pills — only when the person holds
+                // several MIS records (mirrors the web portal).
+                if (!_isStudent && profile.records.length > 1) ...[
+                  _RecordSelector(
+                    records: profile.records,
+                    selectedId: _effectiveRecordId(profile),
+                    onSelect: (id) {
+                      setState(() => _selectedRecordId = id);
+                      _load();
+                    },
+                  ),
+                  if (_effectiveRecordId(profile) != profile.id)
+                    const Padding(
+                      padding: EdgeInsets.only(bottom: 8),
+                      child: Text(
+                        'Showing the visits recorded under the selected MIS record.',
+                        style: TextStyle(color: Colors.black54, fontSize: 11),
+                      ),
+                    ),
+                ],
+                if (_visits.isEmpty)
+                  const Padding(
                     padding: EdgeInsets.symmetric(vertical: 12),
                     child: Text(
                       'No clinic visits on record.',
                       style: TextStyle(color: Colors.black54),
                     ),
                   )
-                : Column(
+                else
+                  Column(
                     children: [
                       for (final visit in _visits) _VisitRow(visit: visit),
                     ],
                   ),
+              ],
+            ),
           ),
           const SizedBox(height: 12),
           if (context.read<AuthController>().session?.hasLocalPassword ?? false)
@@ -324,67 +366,308 @@ class _ReferralAction extends StatelessWidget {
   }
 }
 
+/// The ATM-style identity card at the top of the portal — mirrors
+/// `frontend/src/components/PortalProfileCard.tsx`: maroon card face with a
+/// white-faded crest watermark on the right edge (PortalCardArt), uppercase
+/// caption, name, `ID:` line, and the portal's field rows anchored to the
+/// card's bottom edge behind a 248px min-height floor.
 class _ProfileCard extends StatelessWidget {
-  const _ProfileCard({required this.profile, required this.avatarAsset});
+  const _ProfileCard({required this.profile, required this.email});
 
   final UserProfile profile;
-  final String avatarAsset;
+  final String email;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final isStudent = profile.isStudent;
+    // MIS issues one record per appointment — the card shows the person's
+    // newest record (the primary), mirroring the web portal's card.
+    final primary = profile.primaryRecord;
 
-    return SectionCard(
-      title: profile.isStudent ? 'Student profile' : 'Employee profile',
-      icon: HugeIcons.strokeRoundedId,
-      child: Row(
-        children: [
-          CircleAvatar(
-            radius: 28,
-            backgroundColor: Colors.white,
-            // Maroon ring around the crest, matching the header identity
-            // pill so the logo reads clearly against the white card.
-            child: Container(
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                border: Border.all(
-                  color: scheme.primary.withValues(alpha: 0.9),
-                  width: 1.5,
-                ),
+    final rows = <_CardField>[
+      _CardField(
+        'Email',
+        value: email.isEmpty ? null : email,
+        maxLines: 1,
+      ),
+      if (isStudent) ...[
+        _CardField('Course', value: profile.course, emphasized: true),
+        _CardField(
+          'Year level',
+          value: profile.yearLevel?.toString(),
+        ),
+        _CardField('Blood type', value: profile.bloodType),
+        _CardField(
+          'No-shows',
+          value: null,
+          valueWidget: profile.consecutiveNoShows == 0
+              ? const _SolidBadge.light('Clean')
+              : _SolidBadge.light('${profile.consecutiveNoShows}',
+                  background: const Color(0xFFDC2626), foreground: Colors.white),
+        ),
+      ] else ...[
+        _CardField('Department',
+            value: primary?.department ?? profile.department,
+            emphasized: true,
+            maxLines: 1),
+        _CardField('Position',
+            value: primary?.position ?? profile.position, maxLines: 1),
+        _CardField(
+          'Status',
+          value: titleCaseOption(profile.employmentStatus ?? 'active'),
+        ),
+        _CardField(
+          'Type',
+          value: null,
+          valueWidget: profile.isTeaching == true
+              ? const _SolidBadge.outline('Teaching')
+              : const _SolidBadge.light('Non-teaching'),
+        ),
+      ],
+    ];
+
+    // Web name construction: `first [middle] last` with the FULL middle
+    // name (the shared `fullName` getter keeps the mobile-only initial).
+    final name = [
+      profile.firstName,
+      if (profile.middleName != null && profile.middleName!.isNotEmpty)
+        profile.middleName!,
+      profile.lastName,
+    ].where((part) => part.isNotEmpty).join(' ');
+
+    return ConstrainedBox(
+      constraints: const BoxConstraints(minHeight: 248),
+      child: IntrinsicHeight(
+        child: Container(
+          clipBehavior: Clip.hardEdge,
+          decoration: BoxDecoration(
+            color: scheme.primary,
+            borderRadius: BorderRadius.circular(14),
+            boxShadow: const [
+              BoxShadow(
+                color: Color(0x0F000000),
+                offset: Offset(0, 1),
+                blurRadius: 2,
               ),
-              child: ClipOval(
-                child: Image.asset(
-                  avatarAsset,
-                  width: 56,
-                  height: 56,
-                  fit: BoxFit.cover,
-                ),
+              BoxShadow(
+                color: Color(0x47000000),
+                offset: Offset(0, 18),
+                blurRadius: 40,
+                spreadRadius: -12,
               ),
-            ),
+            ],
           ),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  profile.fullName,
-                  style: const TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w700,
+          child: Stack(
+            children: [
+              // PortalCardArt stand-in: the same levin7-white-fade mark the
+              // web card layers over the maroon face, rasterized from
+              // frontend/public/levin7-white-fade.svg. Capped at the web
+              // card's absolute art height (~70% of its 15.5rem min-height)
+              // since this card runs taller with the field rows.
+              Positioned.fill(
+                child: Align(
+                  alignment: Alignment.centerRight,
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxHeight: 176),
+                    child: Image.asset(
+                      'assets/levin7-white-fade.png',
+                      fit: BoxFit.contain,
+                    ),
                   ),
                 ),
-                const SizedBox(height: 2),
-                Text(
-                  profile.isStudent
-                      ? 'Student #${profile.studentNumber ?? '—'}'
-                      : 'Employee #${profile.employeeNumber ?? '—'}',
-                  style: const TextStyle(color: Colors.black54),
+              ),
+              Padding(
+                padding: const EdgeInsets.all(20),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(
+                          HugeIcons.strokeRoundedId,
+                          size: 14,
+                          color: Colors.white.withValues(alpha: 0.7),
+                        ),
+                        const SizedBox(width: 6),
+                        Text(
+                          (isStudent ? 'Student profile' : 'Employee profile')
+                              .toUpperCase(),
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w500,
+                            letterSpacing: 0.6,
+                            color: Colors.white.withValues(alpha: 0.7),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    Text(
+                      name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                        height: 1.25,
+                        color: Colors.white,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      'ID: ${isStudent ? profile.studentNumber ?? '' : profile.employeeNumber ?? ''}',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.white.withValues(alpha: 0.7),
+                        fontFeatures: const [
+                          FontFeature.tabularFigures(),
+                        ],
+                      ),
+                    ),
+                    const Spacer(),
+                    _CardFieldTable(rows: rows),
+                  ],
                 ),
-              ],
-            ),
+              ),
+            ],
           ),
-        ],
+        ),
+      ),
+    );
+  }
+}
+
+/// One label/value row of the identity card — the `<dt>/<dd>` pairs of the
+/// web card's `<dl>` grid. A null [value] renders "N/A" dimmed unless
+/// [valueWidget] supplies a badge instead.
+class _CardField {
+  const _CardField(
+    this.label, {
+    required this.value,
+    this.emphasized = false,
+    this.maxLines,
+    this.valueWidget,
+  });
+
+  final String label;
+  final String? value;
+  final bool emphasized;
+  final int? maxLines;
+  final Widget? valueWidget;
+}
+
+/// Two-column table mirroring the web card's `grid-cols-[max-content_1fr]`
+/// field grid: intrinsic-width label column, values filling the rest.
+class _CardFieldTable extends StatelessWidget {
+  const _CardFieldTable({required this.rows});
+
+  final List<_CardField> rows;
+
+  @override
+  Widget build(BuildContext context) {
+    return Table(
+      columnWidths: const {
+        0: IntrinsicColumnWidth(),
+        1: FlexColumnWidth(),
+      },
+      children: [
+        for (final row in rows)
+          TableRow(
+            children: [
+              Padding(
+                padding: const EdgeInsets.only(right: 12, bottom: 6),
+                child: Text(
+                  row.label,
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: Colors.white.withValues(alpha: 0.6),
+                  ),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.only(bottom: 6),
+                // Table cells force their width onto children — left-align
+                // badges so the pill hugs its label instead of stretching.
+                child: row.valueWidget != null
+                    ? Align(
+                        alignment: Alignment.centerLeft,
+                        child: row.valueWidget,
+                      )
+                    : Text(
+                        row.value ?? 'N/A',
+                        maxLines: row.maxLines,
+                        overflow: row.maxLines == null
+                            ? null
+                            : TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: row.emphasized
+                              ? FontWeight.w500
+                              : FontWeight.w400,
+                          color: row.value == null
+                              ? Colors.white.withValues(alpha: 0.6)
+                              : Colors.white,
+                        ),
+                      ),
+              ),
+            ],
+          ),
+      ],
+    );
+  }
+}
+
+/// Solid pill badge matching shadcn's Badge (secondary/destructive/outline)
+/// on the maroon card face, where the app's tinted [StatusBadge] would lose
+/// contrast.
+class _SolidBadge extends StatelessWidget {
+  const _SolidBadge.light(
+    this.label, {
+    this.background = Colors.white,
+    this.foreground = const Color(0xFF3F3F46),
+  })  : bordered = false,
+        borderColor = null;
+
+  const _SolidBadge.outline(String label)
+      : this._(
+          label,
+          background: Colors.transparent,
+          foreground: Colors.white,
+          bordered: true,
+          borderColor: Colors.white54,
+        );
+
+  const _SolidBadge._(
+    this.label, {
+    required this.background,
+    required this.foreground,
+    required this.bordered,
+    required this.borderColor,
+  });
+
+  final String label;
+  final Color background;
+  final Color foreground;
+  final bool bordered;
+  final Color? borderColor;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      decoration: BoxDecoration(
+        color: background,
+        borderRadius: BorderRadius.circular(999),
+        border: bordered ? Border.all(color: Colors.white54) : null,
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          fontSize: 11,
+          fontWeight: FontWeight.w600,
+          color: foreground,
+        ),
       ),
     );
   }
@@ -397,18 +680,25 @@ class _StudentFields extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Web parity: the portal shows nothing when the mobile-only extras
+    // (section / gender / birth date) are all absent — no empty card.
+    final hasRows = [
+      profile.section,
+      profile.gender,
+      profile.dateOfBirth,
+    ].any((v) => v != null && v.isNotEmpty);
+    if (!hasRows) return const SizedBox.shrink();
     return SectionCard(
       title: 'Details',
       icon: HugeIcons.strokeRoundedBook02,
       child: _InfoList(
         rows: [
-          ('Course', profile.course),
-          ('Year level', profile.yearLevel?.toString()),
+          // Course / year level / blood type / no-shows now live inside the
+          // identity card (mirroring the web portal card); these are the
+          // mobile-only extras.
           ('Section', profile.section),
-          ('Blood type', profile.bloodType),
           ('Gender', profile.gender),
           ('Birth date', profile.dateOfBirth),
-          ('No-shows', '${profile.consecutiveNoShows}'),
         ],
       ),
     );
@@ -422,21 +712,23 @@ class _EmployeeFields extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Web parity: hide the card when the mobile-only extras (date hired /
+    // emergency contact) are all absent — no empty card.
+    final hasRows = [
+      profile.dateHired,
+      profile.emergencyContactName,
+      profile.emergencyContactPhone,
+    ].any((v) => v != null && v.isNotEmpty);
+    if (!hasRows) return const SizedBox.shrink();
     return SectionCard(
       title: 'Details',
       icon: HugeIcons.strokeRoundedBuilding01,
       child: _InfoList(
         rows: [
-          ('Department', profile.department),
-          ('Position', profile.position),
-          ('Employment status', profile.employmentStatus),
+          // Department / position / status / teaching type now live inside
+          // the identity card (mirroring the web portal card); these are
+          // the mobile-only extras.
           ('Date hired', profile.dateHired),
-          (
-            'Teaching',
-            profile.isTeaching == null
-                ? null
-                : (profile.isTeaching! ? 'Teaching' : 'Non-teaching')
-          ),
           ('Emergency contact', profile.emergencyContactName),
           ('Contact phone', profile.emergencyContactPhone),
         ],
@@ -487,6 +779,46 @@ class _InfoList extends StatelessWidget {
           ),
         ],
       ],
+    );
+  }
+}
+
+/// Position-history pills — one per MIS record of the caller, shown only
+/// when a person holds several records. Selecting one reloads the clinic
+/// visits for that record. Mirrors the web portal's record selector.
+class _RecordSelector extends StatelessWidget {
+  const _RecordSelector({
+    required this.records,
+    required this.selectedId,
+    required this.onSelect,
+  });
+
+  final List<EmployeeRecord> records;
+  final int? selectedId;
+  final ValueChanged<int> onSelect;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Wrap(
+        spacing: 8,
+        runSpacing: 8,
+        children: [
+          for (final r in records)
+            ChoiceChip(
+              selected: r.id == selectedId,
+              onSelected: (_) => onSelect(r.id),
+              label: Text(
+                '${r.positionYear ?? r.employeeNumber}'
+                ' · ${r.position ?? 'No position'}'
+                '${r.isPrimary ? ' (current)' : ''}'
+                ' · ${r.visitCount} visit${r.visitCount == 1 ? '' : 's'}',
+                style: const TextStyle(fontSize: 11),
+              ),
+            ),
+        ],
+      ),
     );
   }
 }

@@ -696,6 +696,13 @@ class _PatientTile extends StatelessWidget {
                 label: '${person.consecutiveNoShows}× no-show',
                 color: const Color(0xFFB45309),
               ),
+            // MIS issues one record per appointment — flag employees who
+            // hold several (the row itself is the newest record).
+            if (!isStudent && person.records.length > 1)
+              StatusBadge(
+                label: '${person.records.length} records',
+                color: const Color(0xFF1E6FD9),
+              ),
             if (tag != null) StatusBadge(label: tag, color: tagColor),
             if (person.archived)
               const StatusBadge(label: 'Archived', color: Colors.black45),
