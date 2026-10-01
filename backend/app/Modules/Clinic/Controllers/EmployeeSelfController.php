@@ -50,7 +50,14 @@ final class EmployeeSelfController extends ApiController
                 ['code' => 'validation.field', 'message' => 'limit must be 1..200.', 'field' => 'limit'],
             ]);
         }
-        return $this->ok($this->service->listMyClinicVisits($limit));
+        // Position-history accordion: read another of the CALLING
+        // employee's own MIS records. Anything that is not the caller's
+        // same-person record 404s in the service.
+        $recordIdRaw = (string) ($this->request->getGet('record_id') ?? '');
+        $recordId = $recordIdRaw !== '' && preg_match('/^\d+$/', $recordIdRaw) === 1
+            ? (int) $recordIdRaw
+            : null;
+        return $this->ok($this->service->listMyClinicVisits($limit, $recordId));
     }
 
     /**

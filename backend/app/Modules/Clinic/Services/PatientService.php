@@ -30,11 +30,14 @@ final class PatientService extends BaseService
 {
     private const USER_COLS = 'id, kind, first_name, last_name, middle_name, qr_code, rfid_tag, date_of_birth, gender, address, archived_at, student_number, course, year_level, section, blood_type, consecutive_no_shows, employee_number, department, position, date_hired, employment_status, hr_synced_at, emergency_contact_name, emergency_contact_phone, is_teaching, created_at, updated_at';
 
+    private readonly EmployeePersonService $person;
+
     public function __construct(
         private readonly ClinicPolicy $policy,
         private readonly AuditOutboxService $audit,
     ) {
         parent::__construct();
+        $this->person = new EmployeePersonService($this->db);
     }
 
     // ----------------------------------------------------------- students
@@ -773,13 +776,20 @@ final class PatientService extends BaseService
 
         $this->applyEmployeeFacetFilters($builder, $department, $position);
 
+        // One row per person: the primary record (newest MIS appointment —
+        // see EmployeePersonService) is listed; the person's other records
+        // travel in the row's `records` payload for the history accordion.
+        $this->person->applyPrimaryOnlyFilter($builder, $includeArchived);
+
         KeysetPaginator::apply($builder, $cursor, $limit);
 
         $rows  = $builder->get()->getResultArray();
         $final = KeysetPaginator::finalize($rows, $limit);
 
+        $rows = $this->person->attachRecords($final['rows'], ! $includeArchived);
+
         return [
-            'data'  => array_map(static fn (array $r) => UserDto::fromRow($r)->toArray(), $final['rows']),
+            'data'  => array_map(static fn (array $r) => UserDto::fromRow($r)->toArray(), $rows),
             'next'  => $final['nextCursor'],
             'count' => $limit,
         ];
@@ -816,7 +826,10 @@ final class PatientService extends BaseService
     /**
      * Employee facet options — the distinct MIS-supplied `department` and
      * `position` values present in the active tenant's live (non-archived)
-     * employee directory.
+     * PRIMARY employee records (EmployeePersonService). Older records of a
+     * duplicated person hold positions that are only visible through the
+     * row's records accordion, so listing them as filter facets would
+     * offer options that match no listed row.
      *
      * Derived from the synced rows rather than a curated table so every
      * option is guaranteed to return at least one employee. The legacy
@@ -833,16 +846,17 @@ final class PatientService extends BaseService
         // NULL (not TRUE), so NULL and empty-string rows are both excluded
         // without needing an explicit IS NOT NULL branch.
         $pick = function (string $column): array {
-            $rows = $this->db->table('users')
+            $builder = $this->db->table('users')
                 ->where('users.tenant_id', CurrentTenant::id())
                 ->where('kind', 'employee')
                 ->where('archived_at', null)
                 ->where($column . ' !=', '')
                 ->distinct()
                 ->select($column)
-                ->orderBy($column, 'ASC')
-                ->get()
-                ->getResultArray();
+                ->orderBy($column, 'ASC');
+            $this->person->applyPrimaryOnlyFilter($builder, false);
+
+            $rows = $builder->get()->getResultArray();
 
             return array_values(array_map(static fn (array $r): string => (string) $r[$column], $rows));
         };
@@ -1111,6 +1125,9 @@ final class PatientService extends BaseService
                 ['code' => 'resource.not_found', 'message' => "Employee #{$idOrIdentifier} not found."],
             ]);
         }
+        // Detail view keeps archived rows visible, so the primary is
+        // picked among all of the person's records (mirrors the list).
+        $row = $this->person->attachRecords([$row], false)[0];
         return UserDto::fromRow($row);
     }
 
@@ -1159,6 +1176,11 @@ final class PatientService extends BaseService
             ->limit($limit)
             ->get()->getResultArray();
 
+        // Search returns every matching record (an old number must still
+        // find its person), each carrying the full records payload; the
+        // MIS synthetic half needs no grouping — upstream rows are
+        // unique per identifier.
+        $rows      = $this->person->attachRecords($rows, false);
         $localDtos = array_map(static fn (array $r) => UserDto::fromRow($r)->toArray(), $rows);
 
         $knownNumbers = [];
@@ -1224,6 +1246,75 @@ final class PatientService extends BaseService
         }
 
         return $localDtos;
+    }
+
+    /**
+     * One employee record's clinic encounters, newest first — the admin
+     * registry accordion's per-record history. Same shape as the
+     * employee portal's "my clinic visits" (EmployeeSelfService) so the
+     * UI renders both with one table.
+     *
+     * @return list<array<string, mixed>>
+     */
+    public function listEmployeeEncounters(int $userId, int $limit = 50): array
+    {
+        $this->policy->check('patientsRead');
+        $limit = max(1, min($limit, 200));
+
+        $exists = $this->db->table('users')
+            ->select('id')
+            ->where('users.tenant_id', CurrentTenant::id())
+            ->where('id', $userId)
+            ->where('kind', 'employee')
+            ->get()->getRowArray();
+        if ($exists === null) {
+            throw new ApiException('resource.not_found', 404, [
+                ['code' => 'resource.not_found', 'message' => "Employee #{$userId} not found."],
+            ]);
+        }
+
+        $rows = $this->db->table('clinic_encounters')
+            ->select('id, patient_user_id, chief_complaint, triage_priority, status, attending_user_id, started_at, closed_at, created_at')
+            ->where('clinic_encounters.tenant_id', CurrentTenant::id())
+            ->where('patient_user_id', $userId)
+            ->where('archived_at', null)
+            ->orderBy('started_at', 'DESC')
+            ->orderBy('id', 'DESC')
+            ->limit($limit)
+            ->get()->getResultArray();
+
+        $names = [];
+        if ($rows !== []) {
+            $userIds = array_values(array_unique(array_filter(array_map(
+                static fn (array $r) => $r['attending_user_id'] !== null ? (int) $r['attending_user_id'] : null,
+                $rows,
+            ))));
+            if ($userIds !== []) {
+                $uRows = $this->db->table('users')
+                    ->select('id, username')
+                    ->where('users.tenant_id', CurrentTenant::id())
+                    ->whereIn('id', $userIds)
+                    ->get()->getResultArray();
+                foreach ($uRows as $u) {
+                    $names[(int) $u['id']] = (string) $u['username'];
+                }
+            }
+        }
+
+        $out = [];
+        foreach ($rows as $r) {
+            $out[] = [
+                'id'                  => (int)    $r['id'],
+                'chief_complaint'     => (string) $r['chief_complaint'],
+                'triage_priority'     => $r['triage_priority'] !== null ? (string) $r['triage_priority'] : null,
+                'status'              => (string) $r['status'],
+                'attending_username'  => $names[(int) $r['attending_user_id']] ?? null,
+                'started_at'          => (string) $r['started_at'],
+                'closed_at'           => $r['closed_at'] !== null ? (string) $r['closed_at'] : null,
+                'created_at'          => (string) $r['created_at'],
+            ];
+        }
+        return $out;
     }
 
     /**

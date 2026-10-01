@@ -25,7 +25,9 @@ use CodeIgniter\Database\Config;
 final class BmgInvariantsTest extends FeatureTestCase
 {
     /** @var array{token:string, userId:int, email:string} */
-    private array $session = [];
+    // Untyped + protected: CI4's CIUnitTestCase declares $session and a
+    // redeclaration may not narrow visibility or add a type (fatal).
+    protected $session = [];
 
     protected function setUp(): void
     {

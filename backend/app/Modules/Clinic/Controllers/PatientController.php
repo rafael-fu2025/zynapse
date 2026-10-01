@@ -327,6 +327,18 @@ final class PatientController extends ApiController
         ));
     }
 
+    /**
+     * One employee record's clinic encounters — the registry row
+     * accordion's per-record history (a duplicated person holds one
+     * encounter list per MIS appointment record).
+     */
+    public function employeeEncounters(int $id): ResponseInterface
+    {
+        $limit = (int) ($this->request->getGet('limit') ?? 50);
+
+        return $this->ok($this->service->listEmployeeEncounters($id, $limit));
+    }
+
     public function updateEmployee(int $id): ResponseInterface
     {
         $payload = $this->request->getJSON(true) ?? [];

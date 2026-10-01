@@ -71,6 +71,29 @@ final class UserDto extends BaseDTO
             'is_directory_record' => (bool) ($row['is_directory_record'] ?? false),
         ];
 
+        // Employee record group (EmployeePersonService): the MIS issuance
+        // year of this record's employee number and the person's other
+        // appointment records for the position-history accordion. Present
+        // only where the service attached them (employees).
+        if (array_key_exists('position_year', $row)) {
+            $out['position_year'] = $row['position_year'] !== null ? (int) $row['position_year'] : null;
+        }
+        if (array_key_exists('records', $row) && is_array($row['records'])) {
+            $out['records'] = array_map(
+                static fn (array $r): array => [
+                    'id'              => (int) $r['id'],
+                    'employee_number' => (string) ($r['employee_number'] ?? ''),
+                    'department'      => isset($r['department']) && $r['department'] !== null ? (string) $r['department'] : null,
+                    'position'        => isset($r['position']) && $r['position'] !== null ? (string) $r['position'] : null,
+                    'position_year'   => isset($r['position_year']) && $r['position_year'] !== null ? (int) $r['position_year'] : null,
+                    'archived'        => (bool) ($r['archived'] ?? false),
+                    'is_primary'      => (bool) ($r['is_primary'] ?? false),
+                    'visit_count'     => (int) ($r['visit_count'] ?? 0),
+                ],
+                $row['records'],
+            );
+        }
+
         if ($this->allergies !== []) {
             $out['allergies'] = array_map(
                 static fn (array $a): array => [

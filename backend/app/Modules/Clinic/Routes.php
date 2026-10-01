@@ -112,6 +112,10 @@ final class Routes implements BaseRoutes
             $r->post('students/(:num)/contacts/(:num)/delete', 'PatientController::deleteContact/$1/$2');
             $r->get('employees',                             'PatientController::listEmployees');
             $r->get('employees/search',                      'PatientController::searchEmployees');
+            // Per-record encounter history for the registry row accordion.
+            // MUST stay above `employees/(:segment)`, which would otherwise
+            // swallow it as a showEmployee lookup for the id "encounters".
+            $r->get('employees/(:num)/encounters',           'PatientController::employeeEncounters/$1');
             // Facet options for the Employees tab filters. MUST stay above
             // `employees/(:segment)`, which would otherwise swallow it as a
             // showEmployee lookup for the id "facets".

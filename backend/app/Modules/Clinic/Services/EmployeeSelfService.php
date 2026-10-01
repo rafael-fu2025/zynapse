@@ -14,6 +14,7 @@ use App\Auth\CurrentUser;
 use App\Exceptions\ApiException;
 use App\Modules\Shared\BaseService;
 use App\Services\CurrentTenant;
+use CodeIgniter\Database\BaseConnection;
 use DateTimeImmutable;
 use DateTimeZone;
 use Modules\Clinic\DTOs\UserDto;
@@ -25,8 +26,22 @@ final class EmployeeSelfService extends BaseService
 {
     private const USER_COLS = 'id, kind, first_name, last_name, middle_name, qr_code, rfid_tag, date_of_birth, gender, address, archived_at, student_number, course, year_level, section, blood_type, consecutive_no_shows, employee_number, department, position, date_hired, employment_status, hr_synced_at, emergency_contact_name, emergency_contact_phone, is_teaching, created_at, updated_at';
 
+    private readonly EmployeePersonService $person;
+
+    public function __construct(?BaseConnection $db = null)
+    {
+        parent::__construct($db);
+        $this->person = new EmployeePersonService($this->db);
+    }
+
     /**
      * Return the calling user's employee profile, or 404.
+     *
+     * The payload carries the person's full record group: `position_year`
+     * of the calling record and `records` (all of the person's MIS
+     * appointment records, newest first, each with its own position and
+     * clinic visit count). The UI shows the primary record's position on
+     * the card and lists the rest in the position-history accordion.
      */
     public function getMyProfile(): UserDto
     {
@@ -37,6 +52,7 @@ final class EmployeeSelfService extends BaseService
                 ['code' => 'employee.not_registered', 'message' => 'No employee record is linked to your account.'],
             ]);
         }
+        $row = $this->person->attachRecords([$row])[0];
         return UserDto::fromRow($row);
     }
 
@@ -97,9 +113,15 @@ final class EmployeeSelfService extends BaseService
      * The calling employee's clinic encounters (portal "My clinic
      * visits"), newest first. Mirror of StudentSelfService.
      *
+     * `$recordId` selects one of the person's OTHER employee records
+     * (position-history accordion): it is accepted only when it belongs
+     * to the same person group (exact three-part name match — see
+     * EmployeePersonService), otherwise 404. The calling employee's
+     * encounters therefore never leak to a differently-named account.
+     *
      * @return list<array<string, mixed>>
      */
-    public function listMyClinicVisits(int $limit = 50): array
+    public function listMyClinicVisits(int $limit = 50, ?int $recordId = null): array
     {
         $userId = CurrentUser::assert();
         $emp = $this->findEmployeeUser($userId);
@@ -109,10 +131,28 @@ final class EmployeeSelfService extends BaseService
             ]);
         }
 
+        $targetId = $userId;
+        if ($recordId !== null && $recordId !== $userId) {
+            $record = $this->db->table('users')
+                ->select('id, kind, first_name, middle_name, last_name')
+                ->where('users.tenant_id', CurrentTenant::id())
+                ->where('id', $recordId)
+                ->where('kind', 'employee')
+                ->where('archived_at', null)
+                ->get()->getRowArray();
+            if ($record === null
+                || EmployeePersonService::nameKeyFromRow($record) !== EmployeePersonService::nameKeyFromRow($emp)) {
+                throw new ApiException('resource.not_found', 404, [
+                    ['code' => 'employee.not_registered', 'message' => 'No employee record is linked to your account.'],
+                ]);
+            }
+            $targetId = $recordId;
+        }
+
         $rows = $this->db->table('clinic_encounters')
             ->select('id, patient_user_id, chief_complaint, triage_priority, status, attending_user_id, started_at, closed_at, created_at')
             ->where('clinic_encounters.tenant_id', CurrentTenant::id())
-            ->where('patient_user_id', $userId)
+            ->where('patient_user_id', $targetId)
             ->where('archived_at', null)
             ->orderBy('started_at', 'DESC')
             ->orderBy('id', 'DESC')
