@@ -64,9 +64,12 @@ interface AppointmentQrDialogProps {
 /** Legacy localStorage prefix from the pre-2026-09 persisted-token era. */
 const LEGACY_QR_KEY_PREFIX = 'synapse_appointment_qr_';
 
-/** A token still proves a booking only while the visit hasn't resolved. */
+/** A token still proves a booking only while the visit hasn't resolved.
+ * `confirmed` is the staff approval step (see AppointmentService's state
+ * machine: check-in is allowed from scheduled OR confirmed), so an approved
+ * booking's QR stands just like a merely scheduled one. */
 function bookingStillStands(status: string | null): boolean {
-  return status === 'scheduled' || status === 'checked_in';
+  return status === 'scheduled' || status === 'confirmed' || status === 'checked_in';
 }
 
 export function AppointmentQrDialog({
