@@ -55,14 +55,21 @@ export function useReportPalette(): string[] {
 }
 
 function SrOnlyTable({ caption, head, rows }: { caption: string; head: string[]; rows: string[][] }) {
+  // The sr-only box must be a div, not the table itself: `overflow: hidden`
+  // does not apply to table boxes and `height: 1px` acts as a minimum on
+  // tables, so an sr-only <table> keeps its full intrinsic height (the daily
+  // trend's row-per-day table is thousands of px) and inflates
+  // document.scrollHeight with an invisible, scrollable void.
   return (
-    <table className="sr-only">
-      <caption>{caption} data</caption>
-      <thead><tr>{head.map((cell) => <th key={cell} scope="col">{cell}</th>)}</tr></thead>
-      <tbody>
-        {rows.map((row) => <tr key={row.join(':')}>{row.map((cell, index) => <td key={index}>{cell}</td>)}</tr>)}
-      </tbody>
-    </table>
+    <div className="sr-only">
+      <table>
+        <caption>{caption} data</caption>
+        <thead><tr>{head.map((cell) => <th key={cell} scope="col">{cell}</th>)}</tr></thead>
+        <tbody>
+          {rows.map((row) => <tr key={row.join(':')}>{row.map((cell, index) => <td key={index}>{cell}</td>)}</tr>)}
+        </tbody>
+      </table>
+    </div>
   );
 }
 

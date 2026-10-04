@@ -54,14 +54,14 @@ export function notificationLabel(
       const destination = context?.destination === 'counselling' ? 'Guidance' : 'Clinic';
       return `You're up — proceed to ${destination} ${suffix}`.trim();
     }
+    // October 2026 recall window: the sweep resolved a skipped patient's
+    // 60-minute window to no-show with nobody watching the module.
+    case 'queue.skip_expired':
+      return `Skipped patient auto-marked no-show ${suffix}`.trim();
     case 'bmg.alert_triggered':
       return `BMG alert on batch ${suffix}`.trim();
     case 'referral.queue_handoff':
       return `Referral moved to queue ${suffix}`.trim();
-    case 'referral.qr_issued':
-      return `Referral QR issued ${suffix}`.trim();
-    case 'referral.qr_revoked':
-      return `Referral QR revoked ${suffix}`.trim();
     case 'counselling.session_opened':
       return `Guidance session opened ${suffix}`.trim();
     case 'counselling.session_closed':
@@ -97,6 +97,9 @@ export function notificationDetail(
   }
   if ((templateCode === 'queue.called' || templateCode === 'counselling.queue_called') && typeof context.queue_number === 'string') {
     return context.queue_number;
+  }
+  if (templateCode === 'queue.skip_expired' && typeof context.queue_number === 'string') {
+    return `${context.queue_number} · recall window expired`;
   }
   if (
     (templateCode === 'referral.created' || templateCode === 'referral.acknowledged') &&
@@ -145,6 +148,15 @@ export function getNotificationDestination(
   }
   if (template.startsWith('bmg.') && hasPermission(auth, 'facilities.units.read')) {
     return '/facilities';
+  }
+  // The auto-no-show notice is for STAFF, not the patient: it must land
+  // on the clinic queue board where the resolved row lives, not the
+  // patient portal. Checked BEFORE the generic `queue.` branch below —
+  // that one is patient-facing and would swallow this for superadmins
+  // (who hold `portal.queue.read` via the `*` wildcard).
+  if (template === 'queue.skip_expired') {
+    if (hasPermission(auth, 'clinic.queue.read')) return '/clinic?tab=skipped';
+    return null;
   }
   if (
     (template.startsWith('queue.') || template.startsWith('counselling.queue')) &&

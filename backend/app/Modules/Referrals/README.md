@@ -8,12 +8,7 @@ Bridge contract between clinic and counselling. The only table that references b
 Submitted → Acknowledged → UnderReview → Closed
 ```
 
-## QR tokens
-
-- 128-bit CSPRNG, base64url-encoded.
-- `REFERRAL_HMAC_KEY` env supplies the HMAC-SHA256 key.
-- Only the keyed hash is persisted (`qr_token_hash`).
-- TTL clamps 60s–86400s.
+After acknowledge/review the patient can be handed off into the target module's queue (`POST /referrals/{id}/queue-handoff`), and counselling-bound referrals can be booked directly from the Referrals page.
 
 ## Endpoints
 
@@ -24,15 +19,6 @@ Submitted → Acknowledged → UnderReview → Closed
 | POST   | `/api/v1/referrals/{id}/acknowledge`       | api_auth            | `referrals.acknowledge`     |
 | POST   | `/api/v1/referrals/{id}/review`            | api_auth            | `referrals.review`          |
 | POST   | `/api/v1/referrals/{id}/close`             | api_auth            | `referrals.close`           |
-| POST   | `/api/v1/referrals/{id}/issue-qr`          | api_auth            | `referrals.issue_qr`        |
-| POST   | `/api/v1/referrals/verify`                 | **PUBLIC**          | n/a                         |
+| POST   | `/api/v1/referrals/{id}/queue-handoff`     | api_auth            | `referrals.acknowledge` + receiving side |
 
-## Verify endpoint
-
-Returns ONLY the minimum-disclosure envelope:
-
-```json
-{ "status": "Valid|Expired|Revoked", "artifact_type": "…", "issuer": "…" }
-```
-
-NEVER includes patient identifiers, notes, or PII.
+The former per-referral QR token feature (issue/revoke/verify) was removed — see the `DropReferralQrColumns` migration. The clinic appointment QR (`/api/v1/appointments/verify`, public) is a separate feature and is unaffected.

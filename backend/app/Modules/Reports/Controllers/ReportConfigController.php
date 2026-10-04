@@ -37,6 +37,7 @@ final class ReportConfigController extends ApiController
             max(1, (int) ($this->request->getGet('page') ?? 1)),
             max(1, (int) ($this->request->getGet('limit') ?? ReportConfigService::DEFAULT_PAGE_SIZE)),
             $this->queryFilter('module'),
+            $this->visibleModules(),
         ));
     }
 
@@ -57,6 +58,7 @@ final class ReportConfigController extends ApiController
                 ['code' => 'validation.field', 'message' => 'parameters must be an object.', 'field' => 'parameters'],
             ]);
         }
+        $this->authorizeModule((string) $payload['module']);
 
         return $this->ok($this->service->createConfig($payload), null, 201);
     }
@@ -64,6 +66,11 @@ final class ReportConfigController extends ApiController
     public function run(int $id): ResponseInterface
     {
         $this->authorize('reports.configure');
+        $module = $this->service->moduleForConfig($id);
+        if ($module !== null) {
+            $this->authorizeModule($module);
+        }
+
         return $this->ok($this->service->run($id), null, 202);
     }
 
@@ -83,6 +90,9 @@ final class ReportConfigController extends ApiController
             throw ApiException::validationFailure([
                 ['code' => 'validation.field', 'message' => 'parameters must be an object.', 'field' => 'parameters'],
             ]);
+        }
+        if (isset($payload['module']) && is_string($payload['module']) && $payload['module'] !== '') {
+            $this->authorizeModule($payload['module']);
         }
 
         return $this->ok($this->service->updateConfig($id, $payload));
@@ -109,6 +119,7 @@ final class ReportConfigController extends ApiController
             max(1, (int) ($this->request->getGet('limit') ?? ReportConfigService::DEFAULT_PAGE_SIZE)),
             $this->queryFilter('module'),
             $this->queryFilter('status'),
+            $this->visibleModules(),
         ));
     }
 
@@ -116,6 +127,7 @@ final class ReportConfigController extends ApiController
     {
         $this->authorize('reports.export');
         $meta = $this->service->fileForDownload($id);
+        $this->authorizeModule($meta['module']);
 
         Services::auditOutbox()->enqueue(
             'reports.downloaded',
@@ -140,6 +152,37 @@ final class ReportConfigController extends ApiController
             $errs[] = ['code' => 'validation.field', 'message' => (string) $msg, 'field' => (string) $field];
         }
         return $errs;
+    }
+
+    /**
+     * Saved-report listings must not leak even the existence of another
+     * unit's configurations: callers lacking a module's extra read code
+     * (ReportService::MODULE_EXTRA_PERMISSIONS) get that module filtered
+     * out server-side.
+     *
+     * @return array<int, string>
+     */
+    private function visibleModules(): array
+    {
+        $userId = \App\Auth\CurrentUser::assert();
+        $visible = [];
+        foreach (ReportService::MODULES as $module) {
+            $extra = ReportService::MODULE_EXTRA_PERMISSIONS[$module] ?? null;
+            if ($extra === null || $this->permissions->userHas($userId, $extra)) {
+                $visible[] = $module;
+            }
+        }
+
+        return $visible;
+    }
+
+    /** Same gate as ReportController::authorizeModule, for config writes. */
+    private function authorizeModule(string $module): void
+    {
+        $extra = ReportService::MODULE_EXTRA_PERMISSIONS[$module] ?? null;
+        if (is_string($extra)) {
+            $this->authorize($extra);
+        }
     }
 
     private function queryFilter(string $name): ?string

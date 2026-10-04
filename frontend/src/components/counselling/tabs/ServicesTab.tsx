@@ -136,13 +136,18 @@ function ServiceDialog({
                 </SelectContent>
               </Select>
             </div>
-            <div className="flex items-end space-x-2 pb-2">
-              <Checkbox
-                id="svc-active"
-                checked={watch('is_active')}
-                onCheckedChange={(checked) => setValue('is_active', checked === true)}
-              />
-              <Label htmlFor="svc-active" className="cursor-pointer font-normal">Active</Label>
+            {/* Outer keeps the row bottom-anchored to the grid cell (level
+                with the Queue destination select); the inner flex centers
+                the circle against the text so they share one optical midline. */}
+            <div className="flex items-end pb-2">
+              <div className="flex items-center gap-2">
+                <Checkbox
+                  id="svc-active"
+                  checked={watch('is_active')}
+                  onCheckedChange={(checked) => setValue('is_active', checked === true)}
+                />
+                <Label htmlFor="svc-active" className="cursor-pointer font-normal">Active</Label>
+              </div>
             </div>
           </div>
           <div className="space-y-1.5">

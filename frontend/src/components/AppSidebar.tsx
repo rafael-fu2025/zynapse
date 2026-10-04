@@ -173,10 +173,14 @@ const NAV_SECTIONS: ReadonlyArray<{ title: string; items: ReadonlyArray<NavItem>
           return n > 0 ? { count: n, label: `${n} open clinic encounters` } : null;
         },
         // The page's tab strip as an accordion (2026-09-27). Children
-        // match the page's ?tab= values and order.
+        // match the page's ?tab= values and order. `Skipped` joined the
+        // list in the October 2026 recall-window revision; `Archived`
+        // followed with the archive action in the same month.
         children: [
           { label: 'Queue', tab: 'queue', permission: null },
+          { label: 'Skipped', tab: 'skipped', permission: null },
           { label: 'Closed', tab: 'closed', permission: null },
+          { label: 'Archived', tab: 'archived', permission: null },
           { label: 'Staff schedules', tab: 'staff', permission: null },
         ],
       },
@@ -337,10 +341,12 @@ const NAV_SECTIONS: ReadonlyArray<{ title: string; items: ReadonlyArray<NavItem>
         // the module (see childHref).
         children: [
           { label: 'Clinic', tab: 'clinic', permission: null },
-          { label: 'Counselling', tab: 'counselling', permission: null },
+          // Unit-scoped analytics — same gates the backend applies
+          // (ReportService::MODULE_EXTRA_PERMISSIONS).
+          { label: 'Counselling', tab: 'counselling', permission: 'counselling.records.read' },
           { label: 'Inventory', tab: 'inventory', permission: null },
           { label: 'Referrals', tab: 'referrals', permission: null },
-          { label: 'Facilities', tab: 'facilities', permission: null },
+          { label: 'Facilities', tab: 'facilities', permission: 'facilities.units.read' },
         ],
       },
       { label: 'Audit', href: '/audit', icon: ScrollText, permission: 'audit.read' },

@@ -52,6 +52,11 @@ final class ClinicPolicy extends BasePolicy
             'queueRead'         => 'clinic.queue.read',
             'queueManage'       => 'clinic.queue.manage',
             'markNoShow'        => 'clinic.encounters.write',
+            // Archive / restore a completed visit (October 2026). Both
+            // are list-hygiene writes on the encounter record, so they
+            // ride the encounter-write permission and its record gate.
+            'archive'           => 'clinic.encounters.write',
+            'restore'           => 'clinic.encounters.write',
             default          => null,
         };
         if ($code === null) {

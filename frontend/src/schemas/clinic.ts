@@ -24,6 +24,10 @@ export type EncounterOutcome = (typeof ENCOUNTER_OUTCOMES)[number];
  *                  dispensing are only allowed in this state.
  *   - `closed`   : visit finished; terminal for clinic actions.
  *   - `referred` : handed off to another module; terminal.
+ *
+ * `archived_at` (October 2026) is orthogonal to `status`: it is set when
+ * staff archive a finished visit, and it is the flag that moves the row
+ * between the Encounters list and the Archived Encounters view.
  */
 export const encounterSchema = z.object({
   id: z.number().int().positive(),
@@ -46,6 +50,10 @@ export const encounterSchema = z.object({
   attending_user_id: z.number().int().positive(),
   started_at: z.string(),
   closed_at: z.string().nullable(),
+  // Set when staff archive a finished visit (October 2026). The record
+  // keeps its clinical data — this stamp is what moves it between the
+  // Encounters list and the Archived Encounters view.
+  archived_at: z.string().nullable().optional(),
 });
 export type Encounter = z.infer<typeof encounterSchema>;
 

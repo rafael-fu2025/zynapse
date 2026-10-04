@@ -79,6 +79,12 @@ Events::on('post_system', static function (): void {
         \Config\Services::notificationAutoDrain()->maybeDrain();
         // Opportunistic batch sync for student/employee directories (cooldown-gated, default 24h).
         \Config\Services::misAutoSync()->maybeRun();
+        // Clinic skip-window sweep (October 2026): a skipped patient's
+        // 60-minute recall window must flip to no-show even when nobody
+        // has the module open. Cron owns this in production
+        // (`synapse:queue-skip-sweep`); the hook keeps dev/demo honest.
+        // Cooldown-gated (30s) so it is not a write per request.
+        \Config\Services::queueSkipSweep()->maybeRun();
     }
 });
 

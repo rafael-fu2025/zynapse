@@ -54,6 +54,10 @@ final class Routes implements BaseRoutes
             $r->post('encounters/(:num)/close',              'ClinicController::closeEncounter/$1');
             $r->post('encounters/(:num)/assessment',         'ClinicController::setAssessment/$1');
             $r->post('encounters/(:num)/no-show',            'ClinicController::markNoShow/$1');
+            // Archive / restore a finished visit (October 2026) — list
+            // hygiene, not a clinical transition.
+            $r->post('encounters/(:num)/archive',            'ClinicController::archiveEncounter/$1');
+            $r->post('encounters/(:num)/restore',            'ClinicController::restoreEncounter/$1');
             $r->get('encounters/(:num)/treatments',          'ClinicController::listTreatments/$1');
             $r->post('encounters/(:num)/treatments',         'ClinicController::addTreatment/$1');
 
@@ -163,7 +167,7 @@ final class Routes implements BaseRoutes
 
             // Queue (Phase 14 — appointment-fed staff queue).
             $r->get('queue',                                 'QueueController::today');
-            $r->post('queue',                                'QueueController::enqueue');
+            $r->get('queue/skipped',                         'QueueController::skipped');
             $r->post('queue/call-next',                      'QueueController::callNext');
             $r->post('queue/(:num)/transition',              'QueueController::transition/$1');
         });

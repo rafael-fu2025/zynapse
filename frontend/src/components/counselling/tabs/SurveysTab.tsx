@@ -52,6 +52,7 @@ import {
   type SurveyMetaInput,
 } from '@/schemas/surveys';
 import { fmtUtcToApp } from '@/utils/date';
+import { titleCase } from '@/lib/utils';
 
 const AUDIENCE_LABELS: Record<SurveyAudience, string> = {
   all: 'All students',
@@ -59,6 +60,9 @@ const AUDIENCE_LABELS: Record<SurveyAudience, string> = {
   continuing_students: 'Continuing students',
   graduating_students: 'Graduating students',
 };
+
+/** Registry year levels (users.year_level) a survey can target. */
+const YEAR_LEVEL_OPTIONS = [1, 2, 3, 4, 5, 6] as const;
 
 const STATUS_VARIANTS: Record<string, 'success' | 'info' | 'secondary' | 'warning'> = {
   live: 'success',
@@ -163,6 +167,7 @@ function surveyStateSnapshot(meta: SurveyMetaInput, questions: BuilderQuestion[]
     title: meta.title.trim(),
     description: (meta.description ?? '').trim(),
     audience: meta.audience,
+    year_levels: [...(meta.year_levels ?? [])].sort((a, b) => a - b),
     category: meta.category,
     is_required: meta.is_required,
     publish_at: meta.publish_at ?? '',
@@ -195,6 +200,7 @@ function SurveyBuilderForm({
         title: existing.title,
         description: existing.description ?? '',
         audience: existing.audience,
+        year_levels: existing.year_levels ?? [],
         category: existing.category,
         is_required: existing.is_required,
         publish_at: existing.publish_at ?? '',
@@ -204,6 +210,7 @@ function SurveyBuilderForm({
         title: '',
         description: '',
         audience: 'all',
+        year_levels: [],
         category: 'survey',
         is_required: false,
         publish_at: '',
@@ -235,6 +242,7 @@ function SurveyBuilderForm({
           title: existing.title,
           description: existing.description ?? '',
           audience: existing.audience,
+          year_levels: existing.year_levels ?? [],
           category: existing.category,
           is_required: existing.is_required,
           publish_at: existing.publish_at ?? '',
@@ -244,6 +252,7 @@ function SurveyBuilderForm({
           title: '',
           description: '',
           audience: 'all',
+          year_levels: [],
           category: 'survey',
           is_required: false,
           publish_at: '',
@@ -270,6 +279,16 @@ function SurveyBuilderForm({
 
   function patchQuestion(index: number, patch: Partial<BuilderQuestion>) {
     setQuestions((current) => current.map((q, i) => (i === index ? { ...q, ...patch } : q)));
+  }
+
+  function toggleYearLevel(level: number, checked: boolean) {
+    const current = meta.year_levels ?? [];
+    setMeta({
+      ...meta,
+      year_levels: checked
+        ? [...current, level].sort((a, b) => a - b)
+        : current.filter((y) => y !== level),
+    });
   }
 
   function save() {
@@ -314,16 +333,37 @@ function SurveyBuilderForm({
                 </SelectContent>
               </Select>
             </div>
-            <div className="flex items-end space-x-2 pb-2">
-              <Checkbox
-                id="survey-required"
-                checked={meta.is_required}
-                disabled={immutable}
-                onCheckedChange={(checked) => setMeta({ ...meta, is_required: checked === true })}
-              />
-              <Label htmlFor="survey-required" className="cursor-pointer font-normal">
-                Required for clearance signing
-              </Label>
+            {/* Outer keeps the row bottom-anchored to the grid cell (level
+                with the Audience select); the inner flex centers the circle
+                against the text so they share one optical midline. */}
+            <div className="flex items-end pb-2">
+              <div className="flex items-center gap-2">
+                <Checkbox
+                  id="survey-required"
+                  checked={meta.is_required}
+                  disabled={immutable}
+                  onCheckedChange={(checked) => setMeta({ ...meta, is_required: checked === true })}
+                />
+                <Label htmlFor="survey-required" className="cursor-pointer font-normal">
+                  Required for clearance signing
+                </Label>
+              </div>
+            </div>
+            <div className="space-y-1.5 sm:col-span-2">
+              <Label>Year levels <span className="text-muted-foreground">(none selected = every year level)</span></Label>
+              <div className="flex flex-wrap gap-x-4 gap-y-2">
+                {YEAR_LEVEL_OPTIONS.map((level) => (
+                  <div key={level} className="flex items-center gap-2">
+                    <Checkbox
+                      id={`survey-year-${level}`}
+                      checked={(meta.year_levels ?? []).includes(level)}
+                      disabled={immutable}
+                      onCheckedChange={(checked) => toggleYearLevel(level, checked === true)}
+                    />
+                    <Label htmlFor={`survey-year-${level}`} className="cursor-pointer font-normal">Year {level}</Label>
+                  </div>
+                ))}
+              </div>
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="survey-publish">Open at <span className="text-muted-foreground">(optional)</span></Label>
@@ -477,7 +517,9 @@ function AggregateSummary({ survey }: { survey: Survey }) {
 }
 
 function ResponsesDialog({ survey, onClose }: { survey: Survey; onClose: () => void }) {
-  const responses = useSurveyResponses(survey.id);
+  // Dialog-scoped filter (not a page view — no URL param needed).
+  const [yearFilter, setYearFilter] = useState<number | null>(null);
+  const responses = useSurveyResponses(survey.id, yearFilter);
   // The list payload carries no questions — fetch the detail for labels.
   const surveyDetail = useSurvey(survey.id);
   const [selectedId, setSelectedId] = useState<number | null>(null);
@@ -494,6 +536,21 @@ function ResponsesDialog({ survey, onClose }: { survey: Survey; onClose: () => v
             {rows.length} submission{rows.length === 1 ? '' : 's'}. Opening a response records an audit event.
           </DialogDescription>
         </DialogHeader>
+        <div className="flex items-center gap-2">
+          <Label htmlFor="responses-year-filter" className="text-xs text-muted-foreground">Year level</Label>
+          <Select
+            value={yearFilter === null ? 'all' : String(yearFilter)}
+            onValueChange={(v) => setYearFilter(v === 'all' ? null : Number(v))}
+          >
+            <SelectTrigger id="responses-year-filter" className="h-8 w-32"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All years</SelectItem>
+              {YEAR_LEVEL_OPTIONS.map((y) => (
+                <SelectItem key={y} value={String(y)}>Year {y}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
         <AggregateSummary survey={survey} />
         <TableStateBlock
           isLoading={responses.isLoading}
@@ -515,6 +572,7 @@ function ResponsesDialog({ survey, onClose }: { survey: Survey; onClose: () => v
               <TableHeader className="bg-muted/50">
                 <TableRow>
                   <TableHead className="px-3">Student</TableHead>
+                  <TableHead className="px-3">Year</TableHead>
                   <TableHead className="px-3">Submitted</TableHead>
                   <TableHead className="px-3 text-right">Answers</TableHead>
                 </TableRow>
@@ -530,6 +588,9 @@ function ResponsesDialog({ survey, onClose }: { survey: Survey; onClose: () => v
                       <TableCell className="px-3 text-sm">
                         {r.student_name ?? r.email ?? `#${r.student_user_id}`}
                       </TableCell>
+                      <TableCell className="px-3 text-sm tabular-nums">
+                        {r.student_year_level ?? '—'}
+                      </TableCell>
                       <TableCell className="px-3 text-xs">{fmtUtcToApp(r.submitted_at)}</TableCell>
                       <TableCell className="px-3 text-right">
                         <Button size="sm" variant="ghost" aria-label={`Open response ${r.id}`}>
@@ -539,7 +600,7 @@ function ResponsesDialog({ survey, onClose }: { survey: Survey; onClose: () => v
                     </TableRow>
                     {selectedId === r.id && (
                       <TableRow>
-                        <TableCell colSpan={3} className="bg-muted/20 p-4">
+                        <TableCell colSpan={4} className="bg-muted/20 p-4">
                           {detail.isLoading && <Skeleton className="h-16" />}
                           {detail.data !== undefined && (
                             <ul className="space-y-2.5">
@@ -675,11 +736,16 @@ export function SurveysTab() {
                         {s.close_at !== null && ` · closes ${fmtUtcToApp(s.close_at, 'MMM d, yyyy')}`}
                       </p>
                     </TableCell>
-                    <TableCell className="px-3 text-sm">{AUDIENCE_LABELS[s.audience]}</TableCell>
+                    <TableCell className="px-3 text-sm">
+                      {AUDIENCE_LABELS[s.audience]}
+                      {s.year_levels !== null && s.year_levels.length > 0 && (
+                        <span className="text-muted-foreground"> · {s.year_levels.map((y) => `Year ${y}`).join(', ')}</span>
+                      )}
+                    </TableCell>
                     <TableCell className="px-3 text-sm">
                       {s.status === 'draft' ? '—' : `${s.response_count} submitted`}
                     </TableCell>
-                    <TableCell className="px-3"><Badge variant={STATUS_VARIANTS[s.status]}>{s.status}</Badge></TableCell>
+                    <TableCell className="px-3"><Badge variant={STATUS_VARIANTS[s.status]}>{titleCase(s.status)}</Badge></TableCell>
                     <TableCell className="px-3 text-right">
                       <div className="flex justify-end gap-2">
                         {s.status === 'draft' ? (

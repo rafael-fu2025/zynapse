@@ -114,43 +114,6 @@ final class ReferralController extends ApiController
         return $this->ok($this->service->handoffToReceivingQueue($id));
     }
 
-    public function revokeQr(int $id): ResponseInterface
-    {
-        $dto = $this->service->revokeQr($id);
-        return $this->ok($dto->toArray());
-    }
-
-    public function issueQr(int $id): ResponseInterface
-    {
-        $payload = $this->request->getJSON(true) ?? [];
-        $ttl = (int) ($payload['ttl_seconds'] ?? 3600);
-        if ($ttl < 60 || $ttl > 86_400) {
-            throw new ApiException('validation.invalid', 422, [
-                ['code' => 'validation.invalid', 'message' => 'ttl_seconds must be between 60 and 86400.', 'field' => 'ttl_seconds'],
-            ]);
-        }
-        $tok = $this->service->issueQr($id, $ttl);
-        return $this->ok($tok, null, 201);
-    }
-
-    /**
-     * PUBLIC verify endpoint. NO api_auth filter. Returns ONLY
-     * minimum-disclosure envelope — never PII.
-     */
-    public function verify(): ResponseInterface
-    {
-        $payload = $this->request->getJSON(true) ?? [];
-        $token = (string) ($payload['token'] ?? '');
-        if ($token === '') {
-            throw new ApiException('validation.invalid', 422, [
-                ['code' => 'validation.invalid', 'message' => 'token is required.', 'field' => 'token'],
-            ]);
-        }
-
-        $result = $this->service->verify($token);
-        return $this->ok($result);
-    }
-
     private function collectErrors(): array
     {
         $errs = [];

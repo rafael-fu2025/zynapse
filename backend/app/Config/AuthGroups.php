@@ -123,7 +123,6 @@ class AuthGroups extends ShieldAuthGroups
             'referrals.acknowledge',
             'referrals.review',
             'referrals.close',
-            'referrals.issue_qr',
             'rbac.manage',
             'rbac.read',
             'reports.read',
@@ -159,13 +158,12 @@ class AuthGroups extends ShieldAuthGroups
             // Phase 19 (ACTOR_ACCESS_ANALYSIS): the Clinic Staff use case
             // "Receive Counselling Referral" requires acknowledge; the
             // bridge is bidirectional, so the full lifecycle (review /
-            // close / issue QR) is granted to both bridge-side groups.
+            // close) is granted to both bridge-side groups.
             // Per-direction restriction stays a ReferralPolicy record-level
             // decision (see policy docblock).
             'referrals.acknowledge',
             'referrals.review',
             'referrals.close',
-            'referrals.issue_qr',
             'notifications.read',
             'employee.portal.read',
         ],
@@ -200,7 +198,6 @@ class AuthGroups extends ShieldAuthGroups
             'referrals.acknowledge',
             'referrals.review',
             'referrals.close',
-            'referrals.issue_qr',
             'rbac.manage',
             'rbac.read',
             'reports.read',
@@ -260,10 +257,9 @@ class AuthGroups extends ShieldAuthGroups
             'referrals.acknowledge',
             // Phase 19 (ACTOR_ACCESS_ANALYSIS): referral lifecycle beyond
             // acknowledge was previously admin-only; counsellors run the
-            // target-side review/close and issue verification QRs.
+            // target-side review/close.
             'referrals.review',
             'referrals.close',
-            'referrals.issue_qr',
             'notifications.read',
             'employee.portal.read',
         ],
@@ -347,11 +343,10 @@ class AuthGroups extends ShieldAuthGroups
         'employee' => [
             // Identity-consolidation: default role for auto-created
             // employee patient accounts. Self-scoped portal read only.
-            // referrals.read/create let TEACHING employees (faculty)
-            // refer students to counselling; the service-level gate
-            // still requires `is_teaching = 1` for clinic-originated
-            // referrals, so non-teaching staff see the page but cannot
-            // create one (friendly hint in the UI).
+            // referrals.read/create let ALL employees refer students
+            // to counselling (the former `is_teaching = 1` service
+            // gate was removed) — the page is scoped server-side to
+            // their own issued referrals.
             'notifications.read',
             'employee.portal.read',
             'portal.appointments.read',

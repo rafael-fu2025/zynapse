@@ -51,7 +51,7 @@ class Filters extends BaseFilters
      * (a bare `api` would match only the literal URI `api` — Phase 6 fix).
      *
      * `api_auth` is intentionally NOT applied here: public endpoints
-     * (login, refresh, health, referrals/verify) must stay reachable,
+     * (login, refresh, health, appointments/verify) must stay reachable,
      * so authentication is attached per route-group in `Routes.php`.
      */
     public array $filters = [

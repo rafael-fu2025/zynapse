@@ -30,6 +30,16 @@ async function signIn(page: Page, role: 'student' | 'employee'): Promise<void> {
   await page.route('**/api/v1/notifications**', (route) => route.fulfill({
     contentType: 'application/json', body: JSON.stringify({ success: true, data: [], meta: { next_cursor: null } }),
   }));
+  // The portal overview also renders the upcoming-appointment card and the
+  // guidance announcements card, which fetch their own endpoints. Unstubbed
+  // they would 401 against a live dev server and bounce the SPA to /login
+  // (the cascade documented in helpers/auth.ts), so stub them empty here.
+  await page.route('**/api/v1/me/student-appointments**', (route) => route.fulfill({
+    contentType: 'application/json', body: JSON.stringify({ success: true, data: [] }),
+  }));
+  await page.route('**/api/v1/me/guidance/announcements**', (route) => route.fulfill({
+    contentType: 'application/json', body: JSON.stringify({ success: true, data: [] }),
+  }));
   await page.route('**/api/v1/me/appointments**', (route) => route.fulfill({
     contentType: 'application/json',
     body: JSON.stringify({ success: true, data: { appointments: [

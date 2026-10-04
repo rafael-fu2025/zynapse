@@ -35,12 +35,26 @@ use Throwable;
  */
 final class QueueService extends BaseService
 {
+    /**
+     * Recall grace window (October 2026 panel revision): a skipped
+     * patient keeps their place for this long before the sweep marks
+     * them no-show. Mirrored by the SPA countdown; the migration
+     * (`QueueSkipWindow::SKIP_WINDOW_MINUTES`) and
+     * `QueueSkipWindowContractTest` assert the three stay in lockstep.
+     */
+    public const SKIP_WINDOW_MINUTES = 60;
+
     private readonly EncounterCompletionService $completion;
     /** @var array<string, array<int, string>> action => allowed current statuses */
     private const TRANSITIONS = [
         'start'    => ['called'],
         'skip'     => ['called'],
         'complete' => ['in_session'],
+        // Recall-window actions: only a skipped entry can be brought
+        // back, and only while its deadline is still open (enforced
+        // separately — the window is a time condition, not a status).
+        'return'   => ['skipped'],
+        'recall'   => ['skipped'],
     ];
 
     /** @var array<string, string> action => resulting status */
@@ -48,6 +62,22 @@ final class QueueService extends BaseService
         'start'    => 'in_session',
         'skip'     => 'skipped',
         'complete' => 'done',
+        'return'   => 'waiting',
+        'recall'   => 'called',
+    ];
+
+    /**
+     * @var array<string, string> action => audit action code. Explicit
+     * rather than derived from RESULT: `clinic.queue_waiting` /
+     * `clinic.queue_called` would read like status flips instead of the
+     * staff actions they are.
+     */
+    private const AUDIT = [
+        'start'    => 'clinic.queue_in_session',
+        'skip'     => 'clinic.queue_skipped',
+        'complete' => 'clinic.queue_done',
+        'return'   => 'clinic.queue_returned',
+        'recall'   => 'clinic.queue_recalled',
     ];
 
     public function __construct(
@@ -72,6 +102,10 @@ final class QueueService extends BaseService
      * lazy auto-check-in sweep was removed: attendance is a staff
      * action, never a timer.
      *
+     * Side effect (October 2026): expired skip windows are swept so a
+     * patient whose 60 minutes elapsed resolves to no-show even if
+     * nobody opens the Skipped Patients module.
+     *
      * @return array<int, array<string, mixed>>
      */
     public function today(): array
@@ -79,11 +113,72 @@ final class QueueService extends BaseService
         $this->policy->check('queueRead');
 
         $this->autoCloseEarlierOpenEncounters();
+        $this->sweepExpiredSkips();
 
         return array_map(
             fn (array $r): array => $this->row($r),
             $this->todayRows(),
         );
+    }
+
+    /**
+     * Skipped Patients module feed — today's skip cohort, active first.
+     *
+     * Every entry that was skipped today appears exactly once, with a
+     * derived `status` the SPA renders directly:
+     *   - `skipped`  — still inside the recall window; the countdown is
+     *                  live and the row offers Return / Call Again /
+     *                  Mark No-Show.
+     *   - `returned` — staff brought the patient back (queue or recall)
+     *                  before the deadline. Read-only history row.
+     *   - `no_show`  — the window expired (swept automatically) or
+     *                  staff marked the visit no-show. Read-only.
+     *
+     * Resolved rows stay visible for the rest of the Manila day so the
+     * board explains where every skipped patient went; the encounter
+     * itself lives on in the Closed tab. The `server_now` stamp lets the
+     * SPA correct for client-clock skew when rendering countdowns.
+     *
+     * @return array{data: array<int, array<string, mixed>>, server_now: string}
+     */
+    public function skipped(): array
+    {
+        $this->policy->check('queueRead');
+
+        // Opportunistic: resolve anything whose window already closed
+        // before we answer, so the board never shows an expired row as
+        // still actionable.
+        $this->sweepExpiredSkips();
+
+        $rows = $this->db->table('clinic_queue_entries q')
+            ->select('q.id, q.encounter_id, q.position, q.status, q.outcome, q.skipped_at, q.skip_deadline_at, q.returned_at, q.called_at, q.started_at, q.finished_at, e.status AS encounter_status, e.patient_school_id, e.guest_name, e.chief_complaint, e.appointment_id, a.scheduled_at AS appointment_at, a.status AS appointment_status, u.first_name, u.last_name')
+            ->where('q.tenant_id', CurrentTenant::id())
+            ->join('clinic_encounters e', 'e.id = q.encounter_id')
+            ->join(
+                'users u',
+                'u.id = e.patient_user_id'
+                . ' OR (e.patient_user_id IS NULL'
+                .   ' AND (u.student_number = e.patient_school_id'
+                .     ' OR u.employee_number = e.patient_school_id))',
+                'left',
+            )
+            ->join('clinic_appointments a', 'a.id = e.appointment_id', 'left')
+            // An archived visit has left the board — its skip episode is
+            // history, not an actionable window.
+            ->where('e.archived_at', null)
+            ->where('q.queue_date', $this->manilaToday())
+            ->where('q.skipped_at IS NOT NULL', null, false)
+            // Active rows first (soonest deadline at the top), then the
+            // resolved ones. Raw expression: MySQL/MariaDB sort ENUMs by
+            // declaration order, which puts `skipped` last, not first.
+            ->orderBy("CASE WHEN q.`status` = 'skipped' THEN 0 ELSE 1 END", 'ASC', false)
+            ->orderBy('q.skip_deadline_at', 'ASC')
+            ->get()->getResultArray();
+
+        return [
+            'data'       => array_map(fn (array $r): array => $this->skippedRow($r), $rows),
+            'server_now' => $this->utcNow(),
+        ];
     }
 
     /**
@@ -309,7 +404,23 @@ final class QueueService extends BaseService
         ];
     }
 
-    /** start / skip / complete on a called or in-session entry. */
+    /**
+     * start / skip / complete / return / recall on a queue entry.
+     *
+     * Skip is no longer terminal (October 2026 panel revision): it opens
+     * a 60-minute recall window (`skipped_at` + `skip_deadline_at`) and
+     * the entry stays in the Skipped Patients module until staff bring
+     * the patient back (`return` → waiting, `recall` → called) or the
+     * sweep marks the visit no-show.
+     *
+     * The window is a TIME condition, not a status: `return`/`recall`
+     * are rejected once `skip_deadline_at` has passed, even if the sweep
+     * has not run yet. Both sides of that race validate the same two
+     * columns under a row lock, so a return that arrives at the same
+     * moment as the deadline resolves deterministically — whoever holds
+     * the lock first wins, and the loser gets a clean 409 rather than a
+     * silent overwrite.
+     */
     public function transition(int $id, string $action): array
     {
         $this->policy->check('queueManage');
@@ -336,21 +447,50 @@ final class QueueService extends BaseService
 
             $now    = $this->utcNow();
             $update = ['status' => self::RESULT[$action], 'updated_at' => $now];
-            if ($action === 'start') {
-                $update['started_at'] = $now;
-            }
-            if ($action === 'complete') {
-                $update['finished_at'] = $now;
+
+            switch ($action) {
+                case 'start':
+                    $update['started_at'] = $now;
+                    break;
+
+                case 'complete':
+                    $update['finished_at'] = $now;
+                    break;
+
+                case 'skip':
+                    // Open the recall window. Clearing `returned_at` keeps
+                    // a re-skip (skip → return → skip) from rendering as
+                    // already-returned in the module.
+                    $update['skipped_at']       = $now;
+                    $update['skip_deadline_at'] = $this->addMinutes($now, self::SKIP_WINDOW_MINUTES);
+                    $update['returned_at']      = null;
+                    break;
+
+                case 'return':
+                case 'recall':
+                    $this->assertSkipWindowOpen($row, $id);
+                    $update['returned_at'] = $now;
+                    if ($action === 'recall') {
+                        // Calling the patient again is a fresh call — the
+                        // "now serving" slot moves to them, so the row
+                        // carries a new called_at / called_by. The
+                        // single-active-slot invariant from callNext()
+                        // must hold here too.
+                        $this->assertNoActiveSlot($id);
+                        $update['called_at']         = $now;
+                        $update['called_by_user_id'] = $userId;
+                    }
+                    break;
             }
 
             $this->db->table('clinic_queue_entries')->where('clinic_queue_entries.tenant_id', CurrentTenant::id())->where('id', $id)->update($update);
 
             $this->audit->enqueue(
-                'clinic.queue_' . self::RESULT[$action],
+                self::AUDIT[$action],
                 'clinic_queue_entries',
                 $id,
                 $userId,
-                ['outcome' => self::RESULT[$action]],
+                ['previous_status' => $current, 'next_status' => self::RESULT[$action]],
             );
 
             // Panel revision (August 2026): completing an in-session
@@ -363,7 +503,203 @@ final class QueueService extends BaseService
                 $this->completion->complete((int) $row['encounter_id'], $userId, $now, 'queue_complete');
             }
 
+            // Recall re-uses the call-next notification so the patient's
+            // portal card flips back to "you're up" without a new
+            // template.
+            if ($action === 'recall') {
+                $this->notifyPatientCalled($id, $userId);
+            }
+
             return $this->getRow($id);
+        });
+    }
+
+    /**
+     * Guard for `return` / `recall`: the recall window must still be
+     * open. Called with the row already locked, so the deadline cannot
+     * move between this check and the update.
+     *
+     * A skipped row with a NULL deadline is treated as expired — that
+     * state should not exist (skip always writes one), and failing
+     * closed keeps a malformed row from being returned forever.
+     *
+     * @param array<string, mixed> $row
+     */
+    private function assertSkipWindowOpen(array $row, int $id): void
+    {
+        $deadline = $row['skip_deadline_at'] !== null ? (string) $row['skip_deadline_at'] : null;
+        if ($deadline === null || $deadline <= $this->utcNow()) {
+            throw new ApiException('statemachine.queue.skip_window_expired', 409, [
+                ['code' => 'statemachine.queue.skip_window_expired',
+                 'message' => "The 60-minute recall window for queue entry #{$id} has expired; the visit must be marked no-show."],
+            ]);
+        }
+    }
+
+    /**
+     * Guard for `recall`: the clinic serves ONE patient at a time, so
+     * re-calling a skipped patient is refused while another entry is
+     * still `called` / `in_session`. Same invariant and error code as
+     * `callNext()`, so the SPA shows one message for both paths.
+     *
+     * The scan takes the same `FOR UPDATE` lock `callNext()` uses, so a
+     * concurrent call-next / recall cannot claim the slot between this
+     * check and the status update.
+     */
+    private function assertNoActiveSlot(int $exceptId): void
+    {
+        $active = $this->db->query(
+            'SELECT `id`, `status` FROM `clinic_queue_entries`'
+            . ' WHERE `tenant_id` = ? AND `queue_date` = ? AND `status` IN (?, ?) AND `id` <> ?'
+            . ' ORDER BY `position` ASC FOR UPDATE',
+            [CurrentTenant::id(), $this->manilaToday(), 'called', 'in_session', $exceptId],
+        )->getRowArray();
+
+        if ($active !== null) {
+            throw new ApiException('statemachine.queue.already_active', 409, [
+                ['code' => 'statemachine.queue.already_active', 'message' => 'Clinic already has a patient called or in session.'],
+            ]);
+        }
+    }
+
+    /**
+     * Resolve every expired skip window to no-show. Runs opportunistically
+     * from `today()` / `skipped()` so the board is always truthful, and
+     * from `synapse:queue-skip-sweep` so the transition happens even when
+     * no staff member has a page open.
+     *
+     * Cascade (per entry, each in its own transaction — see
+     * `resolveExpiredSkip`): encounter → closed/no_show, linked
+     * appointment → no_show when still eligible, queue entry →
+     * done/no_show, audit `clinic.queue_skip_expired`, and an in-app
+     * notification fanned out to `clinic.queue.manage` holders.
+     *
+     * Idempotency: the candidate scan only selects rows still in
+     * `skipped`, and each candidate is re-validated under a row lock
+     * inside the cascade. Two concurrent sweeps (or a sweep racing a
+     * staff return) therefore produce at most one no-show: the loser
+     * sees a non-`skipped` status and returns without writing.
+     *
+     * Best-effort: one failing row is logged and skipped so the rest of
+     * the batch still resolves.
+     *
+     * @return int number of entries transitioned to no-show
+     */
+    public function sweepExpiredSkips(): int
+    {
+        $candidates = $this->db->table('clinic_queue_entries')
+            ->select('id, encounter_id')
+            ->where('tenant_id', CurrentTenant::id())
+            ->where('status', 'skipped')
+            ->where('skip_deadline_at IS NOT NULL', null, false)
+            ->where('skip_deadline_at <=', $this->utcNow())
+            ->orderBy('id', 'ASC')
+            ->get()->getResultArray();
+
+        $resolved = 0;
+        foreach ($candidates as $c) {
+            try {
+                if ($this->resolveExpiredSkip((int) $c['id'], (int) $c['encounter_id'])) {
+                    $resolved++;
+                }
+            } catch (Throwable $t) {
+                log_message('warning', sprintf(
+                    'QueueService::sweepExpiredSkips: id=%d skipped (%s)',
+                    (int) $c['id'],
+                    $t->getMessage(),
+                ));
+            }
+        }
+        return $resolved;
+    }
+
+    /**
+     * Resolve ONE expired skip inside a single transaction. Returns
+     * false when the entry was already resolved (staff return, manual
+     * no-show, or a concurrent sweep) — that is the duplicate-
+     * suppression path, not an error.
+     *
+     * Lock order follows the established clinic cascade
+     * (encounter → queue, see `ClinicService::markNoShow`): the
+     * encounter lock is taken first, then the guard locks the queue row
+     * and re-validates it. The queue row is finalized HERE (not by the
+     * cascade) because this service owns queue transitions — one writer
+     * per row.
+     */
+    private function resolveExpiredSkip(int $id, int $encounterId): bool
+    {
+        return $this->txn(function () use ($id, $encounterId): bool {
+            // The guard runs with the encounter lock held, before any
+            // write: it locks the queue row and re-validates the skip
+            // window. A staff return that landed between the candidate
+            // scan and here makes it return false, and nothing is
+            // written (not even the encounter cascade).
+            $row = null;
+
+            $cascaded = $this->clinic->markNoShowSystem(
+                $encounterId,
+                'skip_window_expired',
+                function () use ($id, &$row): bool {
+                    $row = $this->selectForUpdate('clinic_queue_entries', ['tenant_id' => CurrentTenant::id(), 'id' => $id]);
+                    if ($row === null || (string) $row['status'] !== 'skipped') {
+                        return false;
+                    }
+                    $deadline = $row['skip_deadline_at'] !== null ? (string) $row['skip_deadline_at'] : null;
+                    if ($deadline === null || $deadline > $this->utcNow()) {
+                        // Deadline moved (or was cleared) after the scan.
+                        return false;
+                    }
+                    return true;
+                },
+            );
+
+            if ($cascaded === null) {
+                // Guard aborted — already resolved by staff.
+                return false;
+            }
+
+            $now    = $this->utcNow();
+            $update = ['status' => 'done', 'finished_at' => $now, 'updated_at' => $now];
+            if ($cascaded === true) {
+                $update['outcome'] = 'no_show';
+            } elseif ($row !== null && $row['returned_at'] === null) {
+                // The encounter was already resolved another way — the
+                // visit did not evaporate, so do NOT stamp a no-show
+                // outcome on the queue row. `returned_at` records that
+                // the skip episode ended with the patient handled.
+                $update['returned_at'] = $now;
+            }
+
+            $this->db->table('clinic_queue_entries')->where('clinic_queue_entries.tenant_id', CurrentTenant::id())->where('id', $id)->update($update);
+
+            $this->audit->enqueue(
+                'clinic.queue_skip_expired',
+                'clinic_queue_entries',
+                $id,
+                null,
+                [
+                    'previous_status' => 'skipped',
+                    'next_status'     => 'done',
+                    'reason_code'     => $cascaded === true ? 'skip_window_expired' : 'encounter_already_resolved',
+                ],
+            );
+
+            if ($cascaded === true && $row !== null) {
+                // In-app notice to authorized clinic staff (October 2026
+                // requirement: automatic no-show must reach staff even
+                // when nobody had the module open).
+                $this->notify->enqueueToPermissions(
+                    ['clinic.queue.manage'],
+                    'queue.skip_expired',
+                    [
+                        'resource_code' => 'queue#' . $id,
+                        'queue_number'  => sprintf('C-%03d', (int) $row['position']),
+                        'next_status'   => 'no_show',
+                    ],
+                );
+            }
+
+            return true;
         });
     }
 
@@ -403,7 +739,7 @@ final class QueueService extends BaseService
     private function todayRows(): array
     {
         return $this->db->table('clinic_queue_entries q')
-            ->select('q.id, q.encounter_id, q.position, q.status, q.outcome, q.called_at, q.started_at, q.finished_at, q.created_at, e.status AS encounter_status, e.patient_user_id, e.patient_school_id, e.guest_name, e.chief_complaint, e.outcome AS encounter_outcome, e.station_id, u.first_name, u.last_name')
+            ->select('q.id, q.encounter_id, q.position, q.status, q.outcome, q.called_at, q.started_at, q.finished_at, q.skipped_at, q.skip_deadline_at, q.returned_at, q.created_at, e.status AS encounter_status, e.patient_user_id, e.patient_school_id, e.guest_name, e.chief_complaint, e.outcome AS encounter_outcome, e.station_id, u.first_name, u.last_name')
             ->where('q.tenant_id', CurrentTenant::id())
             ->join('clinic_encounters e', 'e.id = q.encounter_id')
             // Patients are `users` (identity-consolidated) — one join
@@ -420,6 +756,10 @@ final class QueueService extends BaseService
                 .     ' OR u.employee_number = e.patient_school_id))',
                 'left',
             )
+            // Archived visits leave the operational board (October 2026):
+            // archiving a Done encounter must remove its row from the
+            // Queue tab, not just from the Closed list.
+            ->where('e.archived_at', null)
             ->where('q.queue_date', $this->manilaToday())
             ->orderBy('q.position', 'ASC')
             ->get()->getResultArray();
@@ -428,7 +768,7 @@ final class QueueService extends BaseService
     private function getRow(int $id): array
     {
         $row = $this->db->table('clinic_queue_entries q')
-            ->select('q.id, q.encounter_id, q.position, q.status, q.outcome, q.called_at, q.started_at, q.finished_at, q.created_at, e.status AS encounter_status, e.patient_user_id, e.patient_school_id, e.guest_name, e.chief_complaint, e.outcome AS encounter_outcome, e.station_id, u.first_name, u.last_name')
+            ->select('q.id, q.encounter_id, q.position, q.status, q.outcome, q.called_at, q.started_at, q.finished_at, q.skipped_at, q.skip_deadline_at, q.returned_at, q.created_at, e.status AS encounter_status, e.patient_user_id, e.patient_school_id, e.guest_name, e.chief_complaint, e.outcome AS encounter_outcome, e.station_id, u.first_name, u.last_name')
             ->where('q.tenant_id', CurrentTenant::id())
             ->join('clinic_encounters e', 'e.id = q.encounter_id')
             ->join(
@@ -464,6 +804,11 @@ final class QueueService extends BaseService
             'called_at'         => $r['called_at'] !== null ? (string) $r['called_at'] : null,
             'started_at'        => $r['started_at'] !== null ? (string) $r['started_at'] : null,
             'finished_at'       => $r['finished_at'] !== null ? (string) $r['finished_at'] : null,
+            // Recall-window fields (October 2026): the Queue tab shows a
+            // "skipped · 42m left" hint and gates Return on the deadline.
+            'skipped_at'        => isset($r['skipped_at']) && $r['skipped_at'] !== null ? (string) $r['skipped_at'] : null,
+            'skip_deadline_at'  => isset($r['skip_deadline_at']) && $r['skip_deadline_at'] !== null ? (string) $r['skip_deadline_at'] : null,
+            'returned_at'       => isset($r['returned_at']) && $r['returned_at'] !== null ? (string) $r['returned_at'] : null,
             'patient_school_id' => (string) $r['patient_school_id'],
             'chief_complaint'   => (string) $r['chief_complaint'],
             'station_id'        => $r['station_id'] !== null ? (string) $r['station_id'] : null,
@@ -478,6 +823,63 @@ final class QueueService extends BaseService
             'encounter_outcome' => $r['encounter_outcome'] !== null ? (string) $r['encounter_outcome'] : null,
         ];
         return $out;
+    }
+
+    /**
+     * Skipped Patients module row (October 2026).
+     *
+     * Derives the module's display status from the queue row's raw
+     * state so the SPA never has to re-implement the precedence:
+     *   - raw `skipped`  → `skipped`  (window open; countdown live)
+     *   - `returned_at`  → `returned` (staff brought them back)
+     *   - `outcome=no_show` → `no_show` (expired or manually marked)
+     *
+     * A row can be both returned AND no-show in raw terms only if staff
+     * returned a patient and the visit was later closed another way —
+     * `returned_at` wins there because that is the last staff action on
+     * THIS skip episode.
+     *
+     * @param array<string, mixed> $r
+     * @return array<string, mixed>
+     */
+    private function skippedRow(array $r): array
+    {
+        $raw      = (string) $r['status'];
+        $outcome  = $r['outcome'] !== null ? (string) $r['outcome'] : null;
+        $returned = $r['returned_at'] !== null;
+
+        if ($raw === 'skipped') {
+            $status = 'skipped';
+        } elseif ($returned) {
+            $status = 'returned';
+        } elseif ($outcome === 'no_show') {
+            $status = 'no_show';
+        } else {
+            // Resolved some other way (auto_closed sweep, completion) —
+            // surface the raw queue status rather than inventing one.
+            $status = $raw;
+        }
+
+        return [
+            'id'                 => (int) $r['id'],
+            'queue_number'       => sprintf('C-%03d', (int) $r['position']),
+            'encounter_id'       => (int) $r['encounter_id'],
+            'position'           => (int) $r['position'],
+            'status'             => $status,
+            'queue_status'       => $raw,
+            'display_name'       => $this->displayName($r),
+            'patient_school_id'  => (string) $r['patient_school_id'],
+            'patient_name'       => $this->patientFullName($r),
+            'chief_complaint'    => (string) $r['chief_complaint'],
+            'appointment_id'     => $r['appointment_id'] !== null ? (int) $r['appointment_id'] : null,
+            'appointment_at'     => $r['appointment_at'] !== null ? (string) $r['appointment_at'] : null,
+            'appointment_status' => $r['appointment_status'] !== null ? (string) $r['appointment_status'] : null,
+            'skipped_at'         => $r['skipped_at'] !== null ? (string) $r['skipped_at'] : null,
+            'skip_deadline_at'   => $r['skip_deadline_at'] !== null ? (string) $r['skip_deadline_at'] : null,
+            'returned_at'        => $r['returned_at'] !== null ? (string) $r['returned_at'] : null,
+            'encounter_status'   => (string) $r['encounter_status'],
+            'outcome'            => $outcome,
+        ];
     }
 
     /**
@@ -549,5 +951,17 @@ final class QueueService extends BaseService
     private function utcNow(): string
     {
         return (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
+    }
+
+    /**
+     * `$utcSql` + `$minutes`, returned in the same naive-UTC format the
+     * queue columns use. DateTimeImmutable (not strtotime) so a DST or
+     * month-end edge can never surprise the deadline arithmetic.
+     */
+    private function addMinutes(string $utcSql, int $minutes): string
+    {
+        return (new DateTimeImmutable($utcSql, new DateTimeZone('UTC')))
+            ->modify("+{$minutes} minutes")
+            ->format('Y-m-d H:i:s');
     }
 }

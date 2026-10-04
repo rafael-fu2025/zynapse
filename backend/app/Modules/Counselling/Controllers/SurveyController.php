@@ -81,7 +81,9 @@ final class SurveyController extends ApiController
     public function listResponses(int $id): ResponseInterface
     {
         $this->authorize('counselling.responses.read');
-        return $this->ok($this->service->listResponses($id));
+        $yearParam = $this->request->getGet('year_level');
+        $yearLevel = is_numeric($yearParam) ? (int) $yearParam : null;
+        return $this->ok($this->service->listResponses($id, $yearLevel));
     }
 
     public function responseDetail(int $id, int $responseId): ResponseInterface

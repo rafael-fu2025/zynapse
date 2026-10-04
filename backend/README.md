@@ -99,15 +99,17 @@ Production drains the durable outbox and report queue outside HTTP processes:
 * * * * * cd /path/to/zynapse/backend && php spark synapse:audit-drain --batch=500 --max-batches=10
 * * * * * cd /path/to/zynapse/backend && php spark synapse:reports-drain --limit=10
 * * * * * cd /path/to/zynapse/backend && php spark synapse:appointments-enqueue-due
+* * * * * cd /path/to/zynapse/backend && php spark synapse:queue-skip-sweep
 15 2 * * * cd /path/to/zynapse/backend && php spark synapse:audit-verify
 ```
 
 - The audit drain uses `FOR UPDATE SKIP LOCKED`, carries the hash-chain tail across batches (no N+1), and ejects poison rows via `attempt_count`/`last_error`.
 - The appointment worker is idempotent and promotes Clinic and Guidance bookings into their destination queues at T−15.
+- The skip sweep resolves a skipped clinic patient's 60-minute recall window to no-show. It is idempotent (every candidate re-validated under a row lock), so the `post_system` hook can run the same sweep concurrently on dev/demo machines without double-writing.
 - The reports worker claims queued jobs, streams aggregate CSV rows to disk without holding a transaction open, records provenance and row counts, and expires files after 30 days. Run **one** reports worker unless the claim is upgraded to `SKIP LOCKED`.
 - Route non-zero exits and the nightly `synapse:audit-verify` result to operational alerting.
 
-All nine commands: `synapse:smoke`, `synapse:audit-drain`, `synapse:audit-verify`, `synapse:audit-clear`, `synapse:audit-orphans`, `synapse:reports-drain`, `synapse:appointments-enqueue-due`, `synapse:notify-drain`, `synapse:reorder-auto-check`.
+All ten commands: `synapse:smoke`, `synapse:audit-drain`, `synapse:audit-verify`, `synapse:audit-clear`, `synapse:audit-orphans`, `synapse:reports-drain`, `synapse:appointments-enqueue-due`, `synapse:queue-skip-sweep`, `synapse:notify-drain`, `synapse:reorder-auto-check`.
 
 ## Tests
 

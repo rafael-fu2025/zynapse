@@ -23,6 +23,12 @@ use App\Modules\Shared\BaseDTO;
  *   but never seen; `auto_closed` = leftover from a prior day, swept
  *   by `ClinicService::autoCloseStaleEncounter`. NULL for normal
  *   close / referral outcomes.
+ *
+ * `archived_at` (panel revision, October 2026): set when staff archive
+ *   a finished visit from the Encounters list. The record and its
+ *   clinical children are untouched — this column is the read filter
+ *   that moves the row to the Archived Encounters view. NULL while the
+ *   encounter is active.
  */
 final class EncounterDto extends BaseDTO
 {
@@ -54,6 +60,9 @@ final class EncounterDto extends BaseDTO
             'station_id'        => ($this->row['station_id'] ?? null) !== null ? (string) $this->row['station_id'] : null,
             'started_at'        => (string) $this->row['started_at'],
             'closed_at'         => $this->row['closed_at'] !== null ? (string) $this->row['closed_at'] : null,
+            // Non-null once the visit was archived; drives the Archived
+            // Encounters view and the "Archived" badge on the record.
+            'archived_at'       => ($this->row['archived_at'] ?? null) !== null ? (string) $this->row['archived_at'] : null,
         ];
     }
 

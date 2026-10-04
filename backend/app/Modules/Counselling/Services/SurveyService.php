@@ -35,6 +35,9 @@ final class SurveyService extends BaseService
 {
     private const QUESTION_TYPES = ['single', 'multi', 'likert', 'rating', 'free_text', 'external_url'];
 
+    /** Registry vocabulary: users.year_level (TINYINT 1-6). */
+    private const YEAR_LEVELS = [1, 2, 3, 4, 5, 6];
+
     public function __construct(
         ?\CodeIgniter\Database\BaseConnection $db = null,
         private readonly AuditOutboxService $audit = new AuditOutboxService(),
@@ -291,30 +294,36 @@ final class SurveyService extends BaseService
 
     /**
      * Response list for one survey (identity included — requirements
-     * context). Gated by counselling.responses.read.
+     * context). Gated by counselling.responses.read. Optionally filtered
+     * to one registry year level (1-6).
      *
      * @return array<int, array<string, mixed>>
      */
-    public function listResponses(int $surveyId): array
+    public function listResponses(int $surveyId, ?int $yearLevel = null): array
     {
         $this->assertSurveyInTenant($surveyId);
 
-        $rows = $this->db->table('survey_responses r')
-            ->select('r.id, r.survey_id, r.student_user_id, r.submitted_at, u.username, u.first_name, u.last_name, i.secret AS email')
+        $builder = $this->db->table('survey_responses r')
+            ->select('r.id, r.survey_id, r.student_user_id, r.submitted_at, u.username, u.first_name, u.last_name, u.year_level AS student_year_level, i.secret AS email')
             ->join('users u', 'u.id = r.student_user_id')
             ->join('auth_identities i', "i.user_id = u.id AND i.type = 'email_password'", 'left')
             ->where('r.tenant_id', CurrentTenant::id())
-            ->where('r.survey_id', $surveyId)
+            ->where('r.survey_id', $surveyId);
+        if ($yearLevel !== null) {
+            $builder->where('u.year_level', $yearLevel);
+        }
+        $rows = $builder
             ->orderBy('r.submitted_at', 'DESC')
             ->get()->getResultArray();
 
         return array_map(static fn (array $r): array => [
-            'id'              => (int) $r['id'],
-            'survey_id'       => (int) $r['survey_id'],
-            'student_user_id' => (int) $r['student_user_id'],
-            'student_name'    => trim(((string) $r['first_name']) . ' ' . ((string) $r['last_name'])) ?: null,
-            'email'           => $r['email'] !== null ? (string) $r['email'] : null,
-            'submitted_at'    => (string) $r['submitted_at'],
+            'id'                 => (int) $r['id'],
+            'survey_id'          => (int) $r['survey_id'],
+            'student_user_id'    => (int) $r['student_user_id'],
+            'student_name'       => trim(((string) $r['first_name']) . ' ' . ((string) $r['last_name'])) ?: null,
+            'email'              => $r['email'] !== null ? (string) $r['email'] : null,
+            'student_year_level' => $r['student_year_level'] !== null ? (int) $r['student_year_level'] : null,
+            'submitted_at'       => (string) $r['submitted_at'],
         ], $rows);
     }
 
@@ -328,7 +337,7 @@ final class SurveyService extends BaseService
     {
         $this->assertSurveyInTenant($surveyId);
         $response = $this->db->table('survey_responses r')
-            ->select('r.*, u.username, u.first_name, u.last_name')
+            ->select('r.*, u.username, u.first_name, u.last_name, u.year_level AS student_year_level')
             ->join('users u', 'u.id = r.student_user_id')
             ->where('r.id', $responseId)
             ->where('r.survey_id', $surveyId)
@@ -353,12 +362,13 @@ final class SurveyService extends BaseService
         );
 
         return [
-            'id'              => (int) $response['id'],
-            'survey_id'       => (int) $response['survey_id'],
-            'student_user_id' => (int) $response['student_user_id'],
-            'student_name'    => trim(((string) $response['first_name']) . ' ' . ((string) $response['last_name'])) ?: null,
-            'submitted_at'    => (string) $response['submitted_at'],
-            'answers'         => is_array($snapshot) ? $snapshot : [],
+            'id'                 => (int) $response['id'],
+            'survey_id'          => (int) $response['survey_id'],
+            'student_user_id'    => (int) $response['student_user_id'],
+            'student_name'       => trim(((string) $response['first_name']) . ' ' . ((string) $response['last_name'])) ?: null,
+            'student_year_level' => $response['student_year_level'] !== null ? (int) $response['student_year_level'] : null,
+            'submitted_at'       => (string) $response['submitted_at'],
+            'answers'            => is_array($snapshot) ? $snapshot : [],
         ];
     }
 
@@ -374,6 +384,7 @@ final class SurveyService extends BaseService
     public function availableForStudent(int $studentUserId): array
     {
         $audiences = GuidanceAudience::audiencesFor($this->db, $studentUserId, CurrentTenant::id());
+        $studentYear = $this->studentYearLevel($studentUserId);
         $rows = $this->db->table('surveys s')
             ->select('s.*, sv.id AS version_id')
             ->join('survey_versions sv', 'sv.survey_id = s.id')
@@ -394,6 +405,13 @@ final class SurveyService extends BaseService
         $out = [];
         foreach ($rows as $r) {
             $surveyId = (int) $r['id'];
+            // Year-level targeting: NULL/[] matches everyone; otherwise
+            // the student's registry year level must be listed (a student
+            // with no year level on file only sees untargeted surveys).
+            $targets = self::decodeYearLevels($r['year_levels'] ?? null);
+            if ($targets !== null && ($studentYear === null || ! in_array($studentYear, $targets, true))) {
+                continue;
+            }
             $submitted = $this->db->table('survey_responses')
                 ->where(['survey_id' => $surveyId, 'student_user_id' => $studentUserId])
                 ->countAllResults();
@@ -638,6 +656,7 @@ final class SurveyService extends BaseService
             'description' => $row['description'] !== null ? (string) $row['description'] : null,
             'category'    => (string) $row['category'],
             'audience'    => (string) $row['audience'],
+            'year_levels' => self::decodeYearLevels($row['year_levels'] ?? null),
             'is_required' => (bool) $row['is_required'],
             'publish_at'  => $row['publish_at'] !== null ? (string) $row['publish_at'] : null,
             'close_at'    => $row['close_at'] !== null ? (string) $row['close_at'] : null,
@@ -697,6 +716,7 @@ final class SurveyService extends BaseService
                 $errors[] = ['code' => 'validation.field', 'message' => 'Invalid datetime.', 'field' => $field];
             }
         }
+        $yearLevels = $this->normalizeYearLevels($input['year_levels'] ?? null, $errors);
         if ($errors !== []) {
             throw ApiException::validationFailure($errors);
         }
@@ -708,10 +728,61 @@ final class SurveyService extends BaseService
                 : null,
             'category'    => $category,
             'audience'    => $audience,
+            'year_levels' => $yearLevels,
             'is_required' => ($input['is_required'] ?? false) === true ? 1 : 0,
             'publish_at'  => isset($input['publish_at']) && $input['publish_at'] !== '' ? (string) $input['publish_at'] : null,
             'close_at'    => isset($input['close_at']) && $input['close_at'] !== '' ? (string) $input['close_at'] : null,
         ];
+    }
+
+    /**
+     * Year-level targeting: a JSON list of registry year levels (1-6);
+     * null/empty means "every year level".
+     *
+     * @param list<string> $errors
+     */
+    private function normalizeYearLevels(mixed $raw, array &$errors): ?string
+    {
+        if ($raw === null || $raw === '' || $raw === []) {
+            return null;
+        }
+        $levels = array_values(array_unique(array_map('intval', (array) $raw)));
+        sort($levels);
+        foreach ($levels as $level) {
+            if (! in_array($level, self::YEAR_LEVELS, true)) {
+                $errors[] = ['code' => 'validation.field', 'message' => 'Year levels must be integers 1-6.', 'field' => 'year_levels'];
+                return null;
+            }
+        }
+        return json_encode($levels, JSON_THROW_ON_ERROR);
+    }
+
+    /**
+     * @return list<int>|null null = every year level
+     */
+    private static function decodeYearLevels(mixed $raw): ?array
+    {
+        if ($raw === null || $raw === '' || $raw === '[]') {
+            return null;
+        }
+        $decoded = json_decode((string) $raw, true);
+        $levels = is_array($decoded) ? array_values(array_map('intval', $decoded)) : [];
+        return $levels === [] ? null : $levels;
+    }
+
+    /**
+     * The caller's registry year level (users.year_level — the student
+     * registry lives on users since the identity consolidation); null
+     * when the account carries no year level yet.
+     */
+    private function studentYearLevel(int $studentUserId): ?int
+    {
+        $row = $this->db->table('users')
+            ->select('year_level')
+            ->where('id', $studentUserId)
+            ->where('tenant_id', CurrentTenant::id())
+            ->get()->getRowArray();
+        return ($row === null || $row['year_level'] === null) ? null : (int) $row['year_level'];
     }
 
     /**
@@ -825,6 +896,11 @@ final class SurveyService extends BaseService
             ->get()->getRowArray();
 
         if ($survey === null) {
+            throw ApiException::notFound('resource.not_found');
+        }
+        $targets = self::decodeYearLevels($survey['year_levels'] ?? null);
+        $studentYear = $this->studentYearLevel($studentUserId);
+        if ($targets !== null && ($studentYear === null || ! in_array($studentYear, $targets, true))) {
             throw ApiException::notFound('resource.not_found');
         }
         return $survey;

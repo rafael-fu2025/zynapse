@@ -84,10 +84,17 @@ export function ConfirmDialog({
  *   const [confirm, setConfirm] = useState<ConfirmAction | null>(null);
  * The dialog fires `run()` and the page closes it in the same handler;
  * outcome feedback arrives via the mutation's toasts.
+ *
+ * `destructive` defaults to true because the pattern grew out of
+ * irreversible actions (skip, no-show, delete). Reversible actions —
+ * archiving a visit, for instance — set it false so the confirm button
+ * reads as a normal action rather than a red warning.
  */
 export interface ConfirmAction {
   title: string;
   description?: string | undefined;
   confirmLabel?: string | undefined;
+  /** Renders the confirm button in the destructive variant. Default true. */
+  destructive?: boolean | undefined;
   run: () => void;
 }

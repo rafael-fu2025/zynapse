@@ -27,6 +27,7 @@ use Modules\Clinic\Policies\ClinicPolicy;
 use Modules\Clinic\Services\AppointmentService;
 use Modules\Clinic\Services\ClinicService;
 use Modules\Clinic\Services\QueueService;
+use Modules\Clinic\Services\QueueSkipSweepService;
 use Modules\Clinic\Services\ReorderAutoCheckService;
 
 /**
@@ -225,5 +226,19 @@ class Services extends CoreServices
             new ClinicService(new ClinicPolicy(), static::auditOutbox(), static::notificationOutbox()),
             static::notificationOutbox(),
         );
+    }
+
+    /**
+     * Expired skip-window sweep (October 2026): resolves a skipped
+     * patient's 60-minute recall window to no-show. Runs from cron
+     * (`synapse:queue-skip-sweep`) and, in dev/demo, from the
+     * `post_system` hook on a cooldown.
+     */
+    public static function queueSkipSweep(bool $getShared = true): QueueSkipSweepService
+    {
+        if ($getShared) {
+            return static::getSharedInstance('queueSkipSweep');
+        }
+        return new QueueSkipSweepService();
     }
 }

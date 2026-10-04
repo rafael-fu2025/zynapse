@@ -5,6 +5,25 @@ export const REPORT_MODULES = ['clinic', 'counselling', 'inventory', 'referrals'
 export const reportModuleSchema = z.enum(REPORT_MODULES);
 export type ReportModule = z.infer<typeof reportModuleSchema>;
 
+/**
+ * Module visibility beyond `reports.read` — mirrors
+ * ReportService::MODULE_EXTRA_PERMISSIONS server-side. Each unit's
+ * analytics follow its own unit's read code (counselling → guidance,
+ * facilities → BMG); everything else opens with `reports.read` alone.
+ */
+export const REPORT_MODULE_PERMISSIONS: Partial<Record<ReportModule, string>> = {
+  counselling: 'counselling.records.read',
+  facilities: 'facilities.units.read',
+};
+
+/** The report modules the viewer may open, in sidebar order. */
+export function visibleReportModules(hasPermissionCode: (code: string) => boolean): ReportModule[] {
+  return REPORT_MODULES.filter((module) => {
+    const extra = REPORT_MODULE_PERMISSIONS[module];
+    return extra === undefined || hasPermissionCode(extra);
+  });
+}
+
 const reportDateSchema = z.string()
   .regex(/^\d{4}-\d{2}-\d{2}$/)
   .refine((value) => {
@@ -42,12 +61,14 @@ export const reportSummarySchema = z.object({
     previous_encounters: z.number().int(),
     encounters_delta_pct: deltaSchema,
   }),
+  // Omitted entirely for callers without the module's read code
+  // (ReportService::MODULE_EXTRA_PERMISSIONS filters the summary).
   counselling: z.object({
     appointments: z.number().int(),
     previous_appointments: z.number().int(),
     appointments_delta_pct: deltaSchema,
     sessions: z.number().int(),
-  }),
+  }).optional(),
   inventory: z.object({
     active_batches: z.number().int(),
     dispensed_qty: z.number().int(),
@@ -60,13 +81,23 @@ export const reportSummarySchema = z.object({
     previous_created: z.number().int(),
     created_delta_pct: deltaSchema,
   }),
+  // Unit-gated modules (REPORT_MODULE_PERMISSIONS) are omitted entirely
+  // for callers without the module's read code.
   facilities: z.object({
     completed_batches: z.number().int(),
     previous_completed_batches: z.number().int(),
     completed_delta_pct: deltaSchema,
-  }),
+  }).optional(),
 });
 export type ReportSummary = z.infer<typeof reportSummarySchema>;
+
+/** Any per-module analytics payload, as returned by /reports/{module}. */
+export type AnyReport =
+  | ClinicReport
+  | CounsellingReport
+  | InventoryReport
+  | ReferralReport
+  | FacilitiesReport;
 
 export const clinicReportSchema = z.object({
   range: reportRangeSchema,

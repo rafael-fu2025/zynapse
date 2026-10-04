@@ -39,8 +39,6 @@ final class ReferralDto extends BaseDTO
                 ? (string) $this->row['queue_handoff_at'] : null,
             'created_at'        => (string) $this->row['created_at'],
             'updated_at'        => (string) $this->row['updated_at'],
-            'qr_expires_at'     => $this->row['qr_expires_at'] !== null ? (string) $this->row['qr_expires_at'] : null,
-            'qr_revoked_at'     => ($this->row['qr_revoked_at'] ?? null) !== null ? (string) $this->row['qr_revoked_at'] : null,
         ];
     }
 }

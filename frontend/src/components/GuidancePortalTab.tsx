@@ -1,23 +1,21 @@
 /**
  * GuidancePortalTab — student-facing guidance feed (parity plan Phase
- * A/B): the clearance requirements checklist, targeted announcements
- * with action links, open surveys/interviews, and the CMO service
- * catalogue.
+ * A/B): the clearance requirements checklist, open surveys/interviews,
+ * and the CMO service catalogue. Targeted announcements moved to the
+ * portal overview (2026-10-02) — this tab no longer repeats them.
  */
-import { AlertCircle, ClipboardList, ExternalLink, Megaphone } from 'lucide-react';
+import { AlertCircle, ClipboardList } from 'lucide-react';
 import { useState } from 'react';
-import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { QueryErrorState } from '@/components/QueryErrorState';
 import { Skeleton } from '@/components/ui/skeleton';
 import { TakeSurveyDialog } from '@/components/TakeSurveyDialog';
-import { useMyGuidanceAnnouncements, useMyGuidanceServices } from '@/hooks/useGuidanceContent';
+import { useMyGuidanceServices } from '@/hooks/useGuidanceContent';
 import { useMySurveys } from '@/hooks/useSurveys';
 import { fmtUtcToApp } from '@/utils/date';
 
 export function GuidancePortalTab() {
-  const announcements = useMyGuidanceAnnouncements();
   const services = useMyGuidanceServices();
   const surveys = useMySurveys();
   const [takingSurveyId, setTakingSurveyId] = useState<number | null>(null);
@@ -48,64 +46,13 @@ export function GuidancePortalTab() {
             <div key={s.id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-300/70 bg-amber-50/60 p-3.5 dark:border-amber-800 dark:bg-amber-950/30">
               <div className="min-w-0">
                 <p className="text-sm font-medium text-foreground">{s.title}</p>
+                {s.description !== null && <p className="text-xs text-muted-foreground">{s.description}</p>}
                 <p className="text-xs text-muted-foreground">
                   {s.close_at !== null ? `Closes ${fmtUtcToApp(s.close_at, 'MMM d, yyyy')}` : 'No deadline set'}
                 </p>
               </div>
               <Button size="sm" onClick={() => setTakingSurveyId(s.id)}>Take survey</Button>
             </div>
-          ))}
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Megaphone className="size-4" aria-hidden /> Announcements
-          </CardTitle>
-          <CardDescription>Guidance office posts for you.</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          {announcements.isLoading && <Skeleton className="h-20" />}
-          {announcements.isError && (
-            <QueryErrorState message="Failed to load announcements." onRetry={() => void announcements.refetch()} pending={announcements.isFetching} />
-          )}
-          {announcements.data !== undefined && announcements.data.length === 0 && (
-            <p className="py-3 text-sm text-muted-foreground">No announcements for you right now.</p>
-          )}
-          {announcements.data !== undefined && announcements.data.map((a) => (
-            <article
-              key={a.id}
-              className={
-                a.severity === 'urgent'
-                  ? 'rounded-lg border border-destructive/60 bg-destructive/5 p-4'
-                  : 'rounded-lg border bg-background p-4'
-              }
-            >
-              <div className="flex flex-wrap items-center gap-2">
-                {/* Red = urgent (2026-09-25 meeting); amber stays reserved
-                    for the clearance "Required" flag. */}
-                {a.severity === 'urgent' && <Badge variant="destructive">Urgent</Badge>}
-                {a.is_required && <Badge variant="warning">Required</Badge>}
-                <h3 className="text-sm font-medium text-foreground">{a.title}</h3>
-              </div>
-              <p className="mt-1.5 text-sm text-muted-foreground">{a.body}</p>
-              <div className="mt-2.5 flex flex-wrap items-center gap-3">
-                {a.publish_at !== null && (
-                  <p className="text-xs text-muted-foreground">{fmtUtcToApp(a.publish_at, 'MMM d, yyyy')}</p>
-                )}
-                {a.action_url !== null && (
-                  <a
-                    href={a.action_url}
-                    target="_blank"
-                    rel="noreferrer noopener"
-                    className="inline-flex items-center gap-1 text-xs font-medium text-primary underline underline-offset-2"
-                  >
-                    {a.action_label ?? 'Open link'} <ExternalLink className="size-3" aria-hidden />
-                  </a>
-                )}
-              </div>
-            </article>
           ))}
         </CardContent>
       </Card>

@@ -39,7 +39,6 @@ import {
   useUpdateReportConfig,
 } from '@/hooks/useReports';
 import {
-  REPORT_MODULES,
   reportModuleSchema,
   type GeneratedReport,
   type ReportConfig,
@@ -53,6 +52,9 @@ interface Props {
   end: string;
   canConfigure: boolean;
   canExport: boolean;
+  /** Modules the viewer may see (ReportsPage filters by permission) — the
+      server applies the same scope, this only trims the UI. */
+  modules: ReportModule[];
 }
 
 function moduleLabel(module: ReportModule): string {
@@ -96,7 +98,8 @@ function statusVariant(status: GeneratedReport['status']): BadgeProps['variant']
   return 'warning';
 }
 
-export function SavedReportsSection({ start, end, canConfigure, canExport }: Props) {
+export function SavedReportsSection({ start, end, canConfigure, canExport, modules }: Props) {
+  const defaultModule: ReportModule = modules[0] ?? 'clinic';
   const [showArchived, setShowArchived] = useState(false);
   const [configPage, setConfigPage] = useState(1);
   const [generatedPage, setGeneratedPage] = useState(1);
@@ -117,7 +120,7 @@ export function SavedReportsSection({ start, end, canConfigure, canExport }: Pro
   const download = useDownloadGeneratedReport();
   const [editingId, setEditingId] = useState<number | null>(null);
   const [name, setName] = useState('');
-  const [module, setModule] = useState<ReportModule>('clinic');
+  const [module, setModule] = useState<ReportModule>(defaultModule);
   const [configStart, setConfigStart] = useState(start);
   const [configEnd, setConfigEnd] = useState(end);
   const [summarize, setSummarize] = useState(true);
@@ -138,7 +141,7 @@ export function SavedReportsSection({ start, end, canConfigure, canExport }: Pro
   function resetForm(): void {
     setEditingId(null);
     setName('');
-    setModule('clinic');
+    setModule(defaultModule);
     setConfigStart(start);
     setConfigEnd(end);
     setSummarize(true);
@@ -194,7 +197,7 @@ export function SavedReportsSection({ start, end, canConfigure, canExport }: Pro
                 <SelectTrigger className="h-8 w-[145px]" aria-label="Filter configurations by module"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All Modules</SelectItem>
-                  {REPORT_MODULES.map((item) => <SelectItem key={item} value={item}>{moduleLabel(item)}</SelectItem>)}
+                  {modules.map((item) => <SelectItem key={item} value={item}>{moduleLabel(item)}</SelectItem>)}
                 </SelectContent>
               </Select>
               <Button
@@ -235,7 +238,7 @@ export function SavedReportsSection({ start, end, canConfigure, canExport }: Pro
                 }}>
                   <SelectTrigger aria-labelledby="report-config-module-label"><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    {REPORT_MODULES.map((item) => <SelectItem key={item} value={item}>{moduleLabel(item)}</SelectItem>)}
+                    {modules.map((item) => <SelectItem key={item} value={item}>{moduleLabel(item)}</SelectItem>)}
                   </SelectContent>
                 </Select>
               </div>
@@ -356,7 +359,7 @@ export function SavedReportsSection({ start, end, canConfigure, canExport }: Pro
                 <SelectTrigger className="h-8 w-[130px]" aria-label="Filter generated reports by module"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All Modules</SelectItem>
-                  {REPORT_MODULES.map((item) => <SelectItem key={item} value={item}>{moduleLabel(item)}</SelectItem>)}
+                  {modules.map((item) => <SelectItem key={item} value={item}>{moduleLabel(item)}</SelectItem>)}
                 </SelectContent>
               </Select>
               <Select value={generatedStatus} onValueChange={(value) => {

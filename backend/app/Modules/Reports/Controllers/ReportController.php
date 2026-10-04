@@ -33,13 +33,22 @@ final class ReportController extends ApiController
     public function summary(): ResponseInterface
     {
         $this->authorize('reports.read');
-        return $this->ok($this->service->summary($this->rangeFromQuery()));
+        $data = $this->service->summary($this->rangeFromQuery());
+        // Unit-gated modules disappear from the overview entirely — a
+        // caller without the module's read code never sees its counts.
+        foreach (array_keys(ReportService::MODULE_EXTRA_PERMISSIONS) as $module) {
+            if (! $this->canViewModule((string) $module)) {
+                unset($data[$module]);
+            }
+        }
+
+        return $this->ok($data);
     }
 
     public function module(string $module): ResponseInterface
     {
         $this->authorize('reports.read');
-        $this->assertModule($module);
+        $this->authorizeModule($module);
 
         $range = $this->rangeFromQuery();
         $data = match ($module) {
@@ -84,7 +93,7 @@ final class ReportController extends ApiController
     public function narrative(string $module): ResponseInterface
     {
         $this->authorize('reports.configure');
-        $this->assertModule($module);
+        $this->authorizeModule($module);
 
         $payload = $this->request->getJSON(true) ?? [];
         $range = $this->service->range(
@@ -105,7 +114,7 @@ final class ReportController extends ApiController
     public function export(string $module): ResponseInterface
     {
         $this->authorize('reports.export');
-        $this->assertModule($module);
+        $this->authorizeModule($module);
 
         $range = $this->rangeFromQuery();
         [$headers, $rows] = $this->service->exportStream($module, $range);
@@ -153,5 +162,26 @@ final class ReportController extends ApiController
                 ['code' => 'resource.not_found', 'message' => "Unknown report module '{$module}'."],
             ]);
         }
+    }
+
+    /**
+     * Unit-scoped module gate on top of the surface permission:
+     * `reports.read`/`reports.export` opens the shared analytics, but a
+     * module in ReportService::MODULE_EXTRA_PERMISSIONS additionally
+     * requires its unit's read code.
+     */
+    private function authorizeModule(string $module): void
+    {
+        $this->assertModule($module);
+        $extra = ReportService::MODULE_EXTRA_PERMISSIONS[$module] ?? null;
+        if (is_string($extra)) {
+            $this->authorize($extra);
+        }
+    }
+
+    private function canViewModule(string $module): bool
+    {
+        $extra = ReportService::MODULE_EXTRA_PERMISSIONS[$module] ?? null;
+        return ! is_string($extra) || $this->permissions->userHas(\App\Auth\CurrentUser::assert(), $extra);
     }
 }

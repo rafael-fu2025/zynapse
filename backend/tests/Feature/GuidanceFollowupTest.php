@@ -43,6 +43,10 @@ final class GuidanceFollowupTest extends FeatureTestCase
      * published it already) and returns its questions keyed by stable
      * question-text prefixes (the payload does not expose question_key).
      *
+     * The survey is selected by TITLE, not by "first interview category":
+     * the SurveyYearLevels migration also seeds four paper intake
+     * interviews with the same category, and those carry no WHO-5 block.
+     *
      * @return array{id: int, version_id: int, by_key: array<string, array<string, mixed>>, admin: array{token: string, userId: int, email: string}}
      */
     private function publishRoutineInterview(): array
@@ -53,7 +57,7 @@ final class GuidanceFollowupTest extends FeatureTestCase
         $rows = $this->envelope($list)['data'] ?? [];
         $survey = null;
         foreach ($rows as $r) {
-            if (($r['category'] ?? '') === 'interview') {
+            if (str_starts_with((string) ($r['title'] ?? ''), 'Routine Interview')) {
                 $survey = $r;
                 break;
             }

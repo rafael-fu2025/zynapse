@@ -45,6 +45,17 @@ final class QueueController extends ApiController
         return $this->ok($this->service->today());
     }
 
+    /**
+     * Skipped Patients module feed (October 2026 panel revision):
+     * today's skip cohort with the recall window, plus a `server_now`
+     * stamp the SPA uses to keep countdowns honest against client-clock
+     * skew.
+     */
+    public function skipped(): ResponseInterface
+    {
+        return $this->ok($this->service->skipped());
+    }
+
     public function callNext(): ResponseInterface
     {
         return $this->ok($this->service->callNext());
@@ -54,7 +65,7 @@ final class QueueController extends ApiController
     {
         $payload = $this->request->getJSON(true) ?? [];
 
-        if (! $this->makeValidation(['action' => 'required|in_list[start,skip,complete]'])->run($payload)) {
+        if (! $this->makeValidation(['action' => 'required|in_list[start,skip,complete,return,recall]'])->run($payload)) {
             throw ApiException::validationFailure($this->collectErrors());
         }
 

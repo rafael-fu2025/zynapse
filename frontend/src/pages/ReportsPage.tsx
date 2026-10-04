@@ -18,7 +18,16 @@ import ReportPdfView from '@/components/reports/ReportPdfView';
 import { ReportDataTable, type ReportTableRow } from '@/components/reports/ReportDataTable';
 import { SavedReportsSection } from '@/components/reports/SavedReportsSection';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import { DateRangePicker } from '@/components/ui/date-range-picker';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -41,11 +50,12 @@ import {
   useReportNarrative,
   useReportPdfExport,
   useReportSummary,
+  type PdfExportJob,
 } from '@/hooks/useReports';
 import {
-  REPORT_MODULES,
   reportModuleSchema,
   reportRangeSchema,
+  visibleReportModules,
   type ReportModule,
   type ReportNarrative,
 } from '@/schemas/reports';
@@ -148,6 +158,16 @@ export default function ReportsPage() {
   const auth = useAuthStore();
   const canExport = hasPermission(auth, 'reports.export');
   const canConfigure = hasPermission(auth, 'reports.configure');
+  // Unit-scoped modules (REPORT_MODULE_PERMISSIONS → backend
+  // ReportService::MODULE_EXTRA_PERMISSIONS): a viewer without the extra
+  // read code never sees the module — not in the sidebar, not in the
+  // overview strip, not via a hand-typed ?tab= URL.
+  const allowedModules = useMemo(
+    () => visibleReportModules((code) => hasPermission(auth, code)),
+    // The auth store object identity changes with its permission set.
+    [auth],
+  );
+  const activeTab: ReportModule = allowedModules.includes(tab) ? tab : (allowedModules[0] ?? 'clinic');
 
   useEffect(() => {
     if (
@@ -155,40 +175,46 @@ export default function ReportsPage() {
       || !rangeValid
       || params.get('start') !== start
       || params.get('end') !== end
+      || tab !== activeTab
     ) {
       const canonical = new URLSearchParams(params);
-      if (tab === 'clinic') canonical.delete('tab');
-      else canonical.set('tab', tab);
+      if (activeTab === 'clinic') canonical.delete('tab');
+      else canonical.set('tab', activeTab);
       canonical.set('start', start);
       canonical.set('end', end);
       setParams(canonical, { replace: true });
     }
-  }, [end, params, parsedTab.success, rangeValid, setParams, start, tab]);
+  }, [activeTab, end, params, parsedTab.success, rangeValid, setParams, start, tab]);
 
   useEffect(() => setDraftRange({ start, end }), [start, end]);
 
   const summary = useReportSummary(start, end);
-  const clinic = useClinicReport(start, end, tab === 'clinic');
-  const counselling = useCounsellingReport(start, end, tab === 'counselling');
-  const inventory = useInventoryReport(start, end, tab === 'inventory');
-  const forecast = useInventoryForecast(tab === 'inventory');
-  const purchases = useInventoryPurchases(start, end, tab === 'inventory');
-  const referrals = useReferralReport(start, end, tab === 'referrals');
-  const facilities = useFacilitiesReport(start, end, tab === 'facilities');
+  const clinic = useClinicReport(start, end, activeTab === 'clinic');
+  const counselling = useCounsellingReport(start, end, activeTab === 'counselling');
+  const inventory = useInventoryReport(start, end, activeTab === 'inventory');
+  const forecast = useInventoryForecast(activeTab === 'inventory');
+  const purchases = useInventoryPurchases(start, end, activeTab === 'inventory');
+  const referrals = useReferralReport(start, end, activeTab === 'referrals');
+  const facilities = useFacilitiesReport(start, end, activeTab === 'facilities');
   const exporter = useReportExport();
   const pdfExporter = useReportPdfExport();
   const pdfNodeRef = useRef<HTMLDivElement>(null);
+  // Multi-module export: the dialog picks modules (all checked by default);
+  // the PDF builder renders each module into the off-screen node in turn.
+  const [exportDialog, setExportDialog] = useState<'pdf' | 'csv' | null>(null);
+  const [selectedModules, setSelectedModules] = useState<ReportModule[]>([]);
+  const [pdfJob, setPdfJob] = useState<PdfExportJob | null>(null);
   const narrative = useReportNarrative();
   const [narratives, setNarratives] = useState<Record<string, ReportNarrative>>({});
-  const narrativeKey = tab + ':' + start + ':' + end;
+  const narrativeKey = activeTab + ':' + start + ':' + end;
 
-  const activeQuery = tab === 'clinic'
+  const activeQuery = activeTab === 'clinic'
     ? clinic
-    : tab === 'counselling'
+    : activeTab === 'counselling'
       ? counselling
-      : tab === 'inventory'
+      : activeTab === 'inventory'
         ? inventory
-        : tab === 'referrals'
+        : activeTab === 'referrals'
           ? referrals
           : facilities;
 
@@ -205,7 +231,7 @@ export default function ReportsPage() {
 
   function setTab(next: string): void {
     const parsed = reportModuleSchema.safeParse(next);
-    if (!parsed.success) return;
+    if (!parsed.success || !allowedModules.includes(parsed.data)) return;
     const nextParams = new URLSearchParams(params);
     if (parsed.data === 'clinic') nextParams.delete('tab');
     else nextParams.set('tab', parsed.data);
@@ -228,30 +254,57 @@ export default function ReportsPage() {
 
   function generateSummary(): void {
     narrative.mutate(
-      { module: tab, start, end },
+      { module: activeTab, start, end },
       { onSuccess: (result) => setNarratives((current) => ({ ...current, [narrativeKey]: result })) },
     );
   }
 
-  function exportCurrent(): void {
-    exporter.mutate({ module: tab, start, end });
+  function openExportDialog(format: 'pdf' | 'csv'): void {
+    // Default: every module the viewer may see is checked.
+    setSelectedModules(allowedModules);
+    setExportDialog(format);
   }
 
-  function exportPdf(): void {
-    // Capture the ReportPdfView root (first child of the fixed wrapper), NOT
-    // the wrapper itself — the wrapper carries `left: -20000px` and
-    // html-to-image clones at that offset, producing a blank PDF. The inner
-    // node has its own width (794px) and captures correctly with the clone
-    // style override in useReportPdfExport.
-    const inner = pdfNodeRef.current?.firstElementChild as HTMLElement | null;
-    if (inner === null) {
-      toast.error('Report is not ready to export yet.');
+  function toggleSelectedModule(module: ReportModule, checked: boolean): void {
+    setSelectedModules((current) =>
+      checked
+        ? allowedModules.filter((m) => m === module || current.includes(m))
+        : current.filter((m) => m !== module),
+    );
+  }
+
+  function runExport(): void {
+    if (exportDialog === null || selectedModules.length === 0) return;
+    const modules = allowedModules.filter((m) => selectedModules.includes(m));
+    if (exportDialog === 'csv') {
+      exporter.mutate(
+        { modules, start, end },
+        { onSettled: () => setExportDialog(null) },
+      );
       return;
     }
-    pdfExporter.mutate({ module: tab, start, end, node: inner });
+    pdfExporter.mutate(
+      {
+        modules,
+        start,
+        end,
+        // Render the job's module into the off-screen capture node and let
+        // React commit before the hook rasterizes it.
+        prepare: (job) => {
+          setPdfJob(job);
+          return new Promise<void>((resolve) => {
+            requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(resolve, 50)));
+          });
+        },
+        getNode: () => pdfNodeRef.current?.firstElementChild as HTMLElement | null,
+      },
+      {
+        onSuccess: () => setPdfJob(null),
+        onError: () => setPdfJob(null),
+        onSettled: () => setExportDialog(null),
+      },
+    );
   }
-
-  const pdfData = activeQuery.data;
 
   const currentNarrative = narratives[narrativeKey];
 
@@ -277,19 +330,17 @@ export default function ReportsPage() {
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button size="sm" variant="outline" disabled={exporter.isPending || pdfExporter.isPending}>
-                    {exporter.isPending || pdfExporter.isPending ? <Loader2 className="animate-spin" /> : <Download />} Export {moduleLabel(tab)}
+                    {exporter.isPending || pdfExporter.isPending ? <Loader2 className="animate-spin" /> : <Download />} Export
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="w-52">
-                  <DropdownMenuItem onClick={exportCurrent} disabled={exporter.isPending || activeQuery.data === undefined}>
-                    <Download className="size-4" />
-                    <span className="flex-1">Export CSV</span>
-                    {exporter.isPending && <Loader2 className="size-4 animate-spin" />}
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onClick={exportPdf} disabled={pdfExporter.isPending || activeQuery.data === undefined}>
+                  <DropdownMenuItem onClick={() => openExportDialog('pdf')}>
                     <FileText className="size-4" />
-                    <span className="flex-1">Export PDF</span>
-                    {pdfExporter.isPending && <Loader2 className="size-4 animate-spin" />}
+                    <span className="flex-1">Export PDF…</span>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => openExportDialog('csv')}>
+                    <Download className="size-4" />
+                    <span className="flex-1">Export CSV…</span>
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
@@ -333,7 +384,7 @@ export default function ReportsPage() {
           </div>
         ) : summary.isLoading ? (
           <div className="grid gap-px bg-border sm:grid-cols-2 xl:grid-cols-5" role="status">
-            {REPORT_MODULES.map((module) => (
+            {allowedModules.map((module) => (
               <div key={module} className="space-y-2 bg-card p-4">
                 <Skeleton className="h-3 w-24" />
                 <Skeleton className="h-7 w-16" />
@@ -346,10 +397,14 @@ export default function ReportsPage() {
           <>
             <dl className="grid divide-y sm:grid-cols-2 sm:divide-x sm:divide-y-0 xl:grid-cols-5">
               <Metric label="Clinic Encounters" value={summary.data.clinic.encounters} delta={summary.data.clinic.encounters_delta_pct} prior={summary.data.clinic.previous_encounters} />
-              <Metric label="Counselling Appointments" value={summary.data.counselling.appointments} detail={summary.data.counselling.sessions + ' sessions opened'} delta={summary.data.counselling.appointments_delta_pct} prior={summary.data.counselling.previous_appointments} />
+              {summary.data.counselling !== undefined && (
+                <Metric label="Counselling Appointments" value={summary.data.counselling.appointments} detail={summary.data.counselling.sessions + ' sessions opened'} delta={summary.data.counselling.appointments_delta_pct} prior={summary.data.counselling.previous_appointments} />
+              )}
               <Metric label="Units Dispensed" value={summary.data.inventory.dispensed_qty} detail={summary.data.inventory.active_batches + ' active batches'} delta={summary.data.inventory.dispensed_delta_pct} prior={summary.data.inventory.previous_dispensed_qty} />
               <Metric label="Referrals Created" value={summary.data.referrals.created} detail="New referral activity" delta={summary.data.referrals.created_delta_pct} prior={summary.data.referrals.previous_created} />
-              <Metric label="Facilities Batches Completed" value={summary.data.facilities.completed_batches} detail="Completion activity" delta={summary.data.facilities.completed_delta_pct} prior={summary.data.facilities.previous_completed_batches} />
+              {summary.data.facilities !== undefined && (
+                <Metric label="Facilities Batches Completed" value={summary.data.facilities.completed_batches} detail="Completion activity" delta={summary.data.facilities.completed_delta_pct} prior={summary.data.facilities.previous_completed_batches} />
+              )}
             </dl>
             <p className="border-t px-4 py-2 text-xs text-muted-foreground">
               Inventory snapshot retrieved {fmtUtcToApp(summary.data.snapshot_at)}.
@@ -517,17 +572,63 @@ export default function ReportsPage() {
         </TabsContent>
       </Tabs>
 
-      <SavedReportsSection start={start} end={end} canConfigure={canConfigure} canExport={canExport} />
+      <SavedReportsSection start={start} end={end} canConfigure={canConfigure} canExport={canExport} modules={allowedModules} />
 
-      {/* Off-screen printable node for the PDF export. Kept mounted (not
-          display:none) so html-to-image can rasterize it on demand. */}
+      {/* Off-screen printable node for the PDF export. Normally shows the
+          active tab; during a multi-module export the hook drives it via
+          `prepare`. Kept mounted (not display:none) so html-to-image can
+          rasterize it on demand. */}
       <div
         ref={pdfNodeRef}
         aria-hidden
         style={{ position: 'fixed', left: -20000, top: 0, zIndex: -1, pointerEvents: 'none' }}
       >
-        <ReportPdfView module={tab} start={start} end={end} data={pdfData} />
+        <ReportPdfView
+          module={pdfJob?.module ?? activeTab}
+          start={start}
+          end={end}
+          data={pdfJob?.data ?? activeQuery.data}
+        />
       </div>
+
+      <Dialog open={exportDialog !== null} onOpenChange={(open) => { if (!open) setExportDialog(null); }}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Export {exportDialog === 'csv' ? 'CSV' : 'PDF'}</DialogTitle>
+            <DialogDescription>
+              {exportDialog === 'csv'
+                ? 'Downloads one CSV file per selected module for ' + start + ' to ' + end + '.'
+                : 'Generates one PDF containing the selected modules for ' + start + ' to ' + end + ', each starting on its own page.'}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-1.5" role="group" aria-label="Modules to export">
+            {allowedModules.map((module) => (
+              <label
+                key={module}
+                className="flex cursor-pointer items-center gap-2.5 rounded-lg border px-3 py-2.5 text-sm"
+              >
+                <Checkbox
+                  checked={selectedModules.includes(module)}
+                  onCheckedChange={(checked) => toggleSelectedModule(module, checked === true)}
+                />
+                {moduleLabel(module)}
+              </label>
+            ))}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setExportDialog(null)}>Cancel</Button>
+            <Button
+              onClick={runExport}
+              disabled={selectedModules.length === 0 || exporter.isPending || pdfExporter.isPending}
+            >
+              {exporter.isPending || pdfExporter.isPending
+                ? <Loader2 className="animate-spin" />
+                : <Download />}
+              Export {selectedModules.length} {selectedModules.length === 1 ? 'module' : 'modules'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </main>
   );
 }

@@ -24,6 +24,21 @@ final class ReportService extends BaseService
     public const MODULES = ['clinic', 'counselling', 'inventory', 'referrals', 'facilities'];
     public const MAX_EXPORT_ROWS = 50000;
 
+    /**
+     * Module visibility beyond `reports.read`: module => extra permission
+     * code. Each unit's analytics follow its own unit's read code —
+     * counselling aggregates the confidential guidance unit and
+     * facilities belongs to BMG, so clinic/BMG/guidance report holders
+     * must not read across units. Analytics endpoints, narratives, CSV
+     * export, AND saved-report configurations all enforce this map (the
+     * sidebar mirrors it). Modules absent from the map need
+     * `reports.read` alone.
+     */
+    public const MODULE_EXTRA_PERMISSIONS = [
+        'counselling' => 'counselling.records.read',
+        'facilities'  => 'facilities.units.read',
+    ];
+
     private readonly ReportRange $ranges;
 
     public function __construct(?\CodeIgniter\Database\BaseConnection $db = null, ?ReportRange $ranges = null)

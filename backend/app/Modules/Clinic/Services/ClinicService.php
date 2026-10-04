@@ -34,6 +34,10 @@ final class ClinicService extends BaseService
     }
 
     /**
+     * @param string|null $status `open` / `closed` / `referred` to
+     *        filter by clinical status, `archived` for the Archived
+     *        Encounters list, or null for the default "active" slice
+     *        (every non-archived encounter).
      * @return array{data: array<int, array<string, mixed>>, next: ?string, count: int}
      */
     public function listEncounters(?string $cursor, int $limit, ?string $status = null): array
@@ -42,7 +46,7 @@ final class ClinicService extends BaseService
 
         $builder = $this->db->table('clinic_encounters e')
             ->where('e.tenant_id', CurrentTenant::id())
-            ->select("e.id, e.patient_user_id, e.patient_school_id, e.appointment_id, e.chief_complaint, e.triage_priority, e.triage_override, e.diagnosis, e.status, e.attending_user_id, e.station_id, e.started_at, e.closed_at, e.created_at, u.first_name, u.last_name")
+            ->select("e.id, e.patient_user_id, e.patient_school_id, e.appointment_id, e.chief_complaint, e.triage_priority, e.triage_override, e.diagnosis, e.status, e.attending_user_id, e.station_id, e.started_at, e.closed_at, e.created_at, e.archived_at, u.first_name, u.last_name")
             // Patients are `users` (identity-consolidated) — the join
             // powers the patient-name tooltip in the Closed tab. When
             // the encounter only carries a school id (legacy/demo
@@ -59,14 +63,24 @@ final class ClinicService extends BaseService
                 .     ' OR u.employee_number = e.patient_school_id))',
                 'left',
             )
-            ->where('e.archived_at', null)
             ->orderBy('e.created_at', 'DESC')
             ->orderBy('e.id', 'DESC');
 
-        if ($status !== null && in_array($status, ['open', 'closed', 'referred'], true)) {
-            // Qualify against the `users` join — both tables have a
-            // `status` column, so an unqualified WHERE would be ambiguous.
-            $builder->where('e.status', $status);
+        if ($status === 'archived') {
+            // Archived Encounters list (October 2026). Newest archive
+            // first — `archived_at` is set at archive time, so it orders
+            // the way staff expect ("what did I just put away").
+            $builder->where('e.archived_at IS NOT NULL', null, false)
+                ->orderBy('e.archived_at', 'DESC');
+        } else {
+            // Every other slice is active-only; archiving is what makes
+            // a row disappear from Encounters.
+            $builder->where('e.archived_at', null);
+            if ($status !== null && in_array($status, ['open', 'closed', 'referred'], true)) {
+                // Qualify against the `users` join — both tables have a
+                // `status` column, so an unqualified WHERE would be ambiguous.
+                $builder->where('e.status', $status);
+            }
         }
 
         // Alias-qualified keyset columns keep the WHERE unambiguous
@@ -418,8 +432,10 @@ final class ClinicService extends BaseService
      * `{resource_code, next_status}` (within the existing whitelist).
      *
      * Validates encounter is still `open`; the queue entry, if
-     * present, must be in `waiting` (a queue entry that's already
-     * `in_session` means the patient was seen and is not a no-show).
+     * present, must be in `waiting`, `called`, `in_session`, or
+     * `skipped` (October 2026: the Skipped Patients module's explicit
+     * "Mark No-Show" action — a queue entry that's already `in_session`
+     * means the patient was seen and is not a no-show).
      */
     public function markNoShow(int $encounterId): EncounterDto
     {
@@ -454,7 +470,7 @@ final class ClinicService extends BaseService
             )->getRowArray();
             if ($queueRow !== null) {
                 $queue = (string) $queueRow['status'];
-                if (! in_array($queue, ['waiting', 'called', 'in_session'], true)) {
+                if (! in_array($queue, ['waiting', 'called', 'in_session', 'skipped'], true)) {
                     throw new ApiException('statemachine.clinic.queue_already_closed', 409, [
                         ['code' => 'statemachine.clinic.queue_already_closed',
                          'message' => "Queue entry is already {$queue}; cannot mark no-show."],
@@ -462,52 +478,9 @@ final class ClinicService extends BaseService
                 }
             }
 
-            // 1) Encounter → closed + outcome=no_show
-            $this->db->table('clinic_encounters')
-                ->where('clinic_encounters.tenant_id', CurrentTenant::id())
-                ->where('id', $encounterId)
-                ->update([
-                    'status'     => 'closed',
-                    'closed_at'  => $now,
-                    'outcome'    => 'no_show',
-                    'updated_at' => $now,
-                ]);
+            $this->cascadeEncounterNoShow($enc, $userId, 'encounter_no_show', $now);
 
-            // 2) Linked appointment → no_show (if linked + still
-            //    eligible per the widened TRANSITIONS map).
-            if (isset($enc['appointment_id']) && $enc['appointment_id'] !== null) {
-                $apptId = (int) $enc['appointment_id'];
-                $appt = $this->selectForUpdate('clinic_appointments', [
-                    'tenant_id'   => CurrentTenant::id(),
-                    'id'          => $apptId,
-                    'archived_at' => null,
-                ]);
-                if ($appt !== null && in_array((string) $appt['status'], ['scheduled', 'checked_in'], true)) {
-                    $this->db->table('clinic_appointments')
-                        ->where('clinic_appointments.tenant_id', CurrentTenant::id())
-                        ->where('id', $apptId)
-                        ->update(['status' => 'no_show', 'updated_at' => $now]);
-                    $this->audit->enqueue(
-                        'clinic.appointment_no_show',
-                        'clinic_appointments',
-                        $apptId,
-                        $userId,
-                        ['previous_status' => (string) $appt['status'], 'next_status' => 'no_show',
-                         'reason_code'     => 'encounter_no_show'],
-                    );
-                    // Same-transaction provider notification (within
-                    // the NotificationOutboxService whitelist).
-                    if ($appt['provider_user_id'] !== null) {
-                        $this->notify->enqueue(
-                            (int) $appt['provider_user_id'],
-                            'appointment.no_show',
-                            ['resource_code' => 'appointment#' . $apptId, 'next_status' => 'no_show'],
-                        );
-                    }
-                }
-            }
-
-            // 3) Queue entry → done + outcome=no_show (if linked).
+            // Queue entry → done + outcome=no_show (if linked).
             if ($queueRow !== null) {
                 $this->db->table('clinic_queue_entries')
                     ->where('clinic_queue_entries.tenant_id', CurrentTenant::id())
@@ -520,17 +493,128 @@ final class ClinicService extends BaseService
                     ]);
             }
 
-            $this->audit->enqueue(
-                'clinic.encounter_no_show',
-                'clinic_encounters',
-                $encounterId,
-                $userId,
-                ['previous_status' => 'open', 'next_status' => 'closed', 'outcome' => 'no_show'],
-            );
-
             $row = $this->db->table('clinic_encounters')->where('clinic_encounters.tenant_id', CurrentTenant::id())->where('id', $encounterId)->get()->getRowArray();
             return EncounterDto::fromRow($row);
         });
+    }
+
+    /**
+     * System no-show cascade — no authenticated user (October 2026).
+     *
+     * Used by the skip-window sweep: when a skipped patient's 60-minute
+     * recall window expires, the visit resolves to no-show even though
+     * no staff member is present. Writes the same cascade as the manual
+     * `markNoShow()`, but with `actor_user_id = NULL` and the caller's
+     * `$reasonCode` on the audit rows, and skips the policy check (there
+     * is no user to authorize).
+     *
+     * LOCK PROTOCOL — this method must be called inside the caller's
+     * transaction, and it locks the encounter row FIRST (the same order
+     * `markNoShow()` uses: encounter → queue). `$guard` then runs with
+     * the encounter lock held and before ANY write; the caller uses it
+     * to lock and re-validate its own row (the queue entry) under the
+     * same transaction. Nothing is written unless the guard returns
+     * true, so a guard that aborts leaves the encounter untouched.
+     *
+     * Returns:
+     *   - `null`  — guard aborted; the caller must do nothing
+     *   - `false` — queue-side resolution only; the encounter was
+     *               already closed by another path (staff completion,
+     *               referral, a concurrent sweep), so it is left alone
+     *   - `true`  — the full encounter + appointment cascade was applied
+     *
+     * @param callable(): bool $guard
+     */
+    public function markNoShowSystem(int $encounterId, string $reasonCode, callable $guard): ?bool
+    {
+        $enc = $this->selectForUpdate('clinic_encounters', ['tenant_id' => CurrentTenant::id(), 'id' => $encounterId, 'archived_at' => null]);
+
+        if (! $guard()) {
+            return null;
+        }
+
+        if ($enc === null || (string) $enc['status'] !== 'open') {
+            // Already resolved elsewhere — the caller still finalizes its
+            // own row, but the encounter is not touched again.
+            return false;
+        }
+
+        $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
+        $this->cascadeEncounterNoShow($enc, null, $reasonCode, $now);
+
+        return true;
+    }
+
+    /**
+     * Shared encounter + appointment half of the no-show cascade.
+     *
+     * The caller must already hold the encounter lock, have validated
+     * the transition, and own the linked queue row (the queue update is
+     * deliberately NOT done here — `QueueService` owns queue
+     * transitions, and the sweep needs to finalize the queue row in the
+     * same transaction).
+     *
+     * @param array<string, mixed> $enc locked `clinic_encounters` row
+     */
+    private function cascadeEncounterNoShow(array $enc, ?int $actorUserId, string $reasonCode, string $now): void
+    {
+        $encounterId = (int) $enc['id'];
+
+        // 1) Encounter → closed + outcome=no_show
+        $this->db->table('clinic_encounters')
+            ->where('clinic_encounters.tenant_id', CurrentTenant::id())
+            ->where('id', $encounterId)
+            ->update([
+                'status'     => 'closed',
+                'closed_at'  => $now,
+                'outcome'    => 'no_show',
+                'updated_at' => $now,
+            ]);
+
+        // 2) Linked appointment → no_show (if linked + still
+        //    eligible per the widened TRANSITIONS map).
+        if (isset($enc['appointment_id']) && $enc['appointment_id'] !== null) {
+            $apptId = (int) $enc['appointment_id'];
+            $appt = $this->selectForUpdate('clinic_appointments', [
+                'tenant_id'   => CurrentTenant::id(),
+                'id'          => $apptId,
+                'archived_at' => null,
+            ]);
+            if ($appt !== null && in_array((string) $appt['status'], ['scheduled', 'checked_in'], true)) {
+                $this->db->table('clinic_appointments')
+                    ->where('clinic_appointments.tenant_id', CurrentTenant::id())
+                    ->where('id', $apptId)
+                    ->update(['status' => 'no_show', 'updated_at' => $now]);
+                $this->audit->enqueue(
+                    'clinic.appointment_no_show',
+                    'clinic_appointments',
+                    $apptId,
+                    $actorUserId,
+                    ['previous_status' => (string) $appt['status'], 'next_status' => 'no_show',
+                     'reason_code'     => $reasonCode],
+                );
+                // Same-transaction provider notification (within
+                // the NotificationOutboxService whitelist).
+                if ($appt['provider_user_id'] !== null) {
+                    $this->notify->enqueue(
+                        (int) $appt['provider_user_id'],
+                        'appointment.no_show',
+                        ['resource_code' => 'appointment#' . $apptId, 'next_status' => 'no_show'],
+                    );
+                }
+            }
+        }
+
+        // 3) Encounter audit — the single event that records the
+        //    closure itself, whoever caused it.
+        $this->audit->enqueue(
+            'clinic.encounter_no_show',
+            'clinic_encounters',
+            $encounterId,
+            $actorUserId,
+            ['previous_status' => 'open', 'next_status' => 'closed', 'outcome' => 'no_show',
+             'reason_code'     => $reasonCode],
+        );
     }
 
     /**
@@ -617,6 +701,124 @@ final class ClinicService extends BaseService
                 $t->getMessage(),
             ));
         }
+    }
+
+    // ------------------------------------------------------- archiving
+
+    /**
+     * Archive a FINISHED encounter (October 2026 panel revision).
+     *
+     * Archiving is list hygiene, not a clinical action: the record and
+     * its vitals/treatments stay intact, the row just leaves the active
+     * Encounters list. `archived_at` was already the read filter on
+     * `listEncounters` / `getEncounter` / `previousHeightWeight`, so
+     * setting it is the whole "move".
+     *
+     * Gate: the visit must be finished — `closed` or `referred`. An
+     * `open` encounter is still in flight (its patient may be on the
+     * queue), and archiving it would hide live clinical work while the
+     * queue kept serving it. The UI only offers the button for Done
+     * rows; this is the server-side half of that rule.
+     *
+     * The linked queue row is deliberately left alone: it is the
+     * operational record of how the visit flowed, and the queue feed is
+     * scoped to today anyway.
+     *
+     * Idempotent — archiving an archived encounter returns it unchanged
+     * rather than erroring, so a double-click or a stale tab is safe.
+     */
+    public function archiveEncounter(int $encounterId): EncounterDto
+    {
+        $userId = \App\Auth\CurrentUser::assert();
+
+        return $this->txn(function () use ($encounterId, $userId): EncounterDto {
+            // NOTE: unlike the action paths this read deliberately does
+            // NOT filter `archived_at` — re-archiving must resolve to the
+            // same row (idempotent), not a 404.
+            $enc = $this->selectForUpdate('clinic_encounters', ['tenant_id' => CurrentTenant::id(), 'id' => $encounterId]);
+            if ($enc === null) {
+                throw new ApiException('resource.not_found', 404, [
+                    ['code' => 'resource.not_found', 'message' => "Encounter #{$encounterId} not found."],
+                ]);
+            }
+
+            $this->policy->check('archive', $enc);
+
+            if ($enc['archived_at'] !== null) {
+                return EncounterDto::fromRow($enc);
+            }
+
+            $status = (string) $enc['status'];
+            if (! in_array($status, ['closed', 'referred'], true)) {
+                throw new ApiException('statemachine.clinic.encounter_not_finished', 409, [
+                    ['code' => 'statemachine.clinic.encounter_not_finished',
+                     'message' => "Encounter #{$encounterId} is {$status}; only a finished encounter can be archived."],
+                ]);
+            }
+
+            $now = $this->utcNow();
+            $this->db->table('clinic_encounters')
+                ->where('clinic_encounters.tenant_id', CurrentTenant::id())
+                ->where('id', $encounterId)
+                ->update(['archived_at' => $now, 'updated_at' => $now]);
+
+            $this->audit->enqueue(
+                'clinic.encounter_archived',
+                'clinic_encounters',
+                $encounterId,
+                $userId,
+                ['previous_status' => $status, 'next_status' => $status, 'reason_code' => 'staff_archive'],
+            );
+
+            $row = $this->db->table('clinic_encounters')->where('clinic_encounters.tenant_id', CurrentTenant::id())->where('id', $encounterId)->get()->getRowArray();
+            return EncounterDto::fromRow($row);
+        });
+    }
+
+    /**
+     * Restore an archived encounter to the active list. Symmetric with
+     * {@see archiveEncounter()}: idempotent, permission-gated on the
+     * encounter-write permission, and audited.
+     *
+     * Restoring is allowed regardless of the encounter's clinical
+     * status — a closed visit comes back to the Closed tab, which is
+     * the only place it could have left from.
+     */
+    public function restoreEncounter(int $encounterId): EncounterDto
+    {
+        $userId = \App\Auth\CurrentUser::assert();
+
+        return $this->txn(function () use ($encounterId, $userId): EncounterDto {
+            $enc = $this->selectForUpdate('clinic_encounters', ['tenant_id' => CurrentTenant::id(), 'id' => $encounterId]);
+            if ($enc === null) {
+                throw new ApiException('resource.not_found', 404, [
+                    ['code' => 'resource.not_found', 'message' => "Encounter #{$encounterId} not found."],
+                ]);
+            }
+
+            $this->policy->check('restore', $enc);
+
+            if ($enc['archived_at'] === null) {
+                return EncounterDto::fromRow($enc);
+            }
+
+            $now = $this->utcNow();
+            $this->db->table('clinic_encounters')
+                ->where('clinic_encounters.tenant_id', CurrentTenant::id())
+                ->where('id', $encounterId)
+                ->update(['archived_at' => null, 'updated_at' => $now]);
+
+            $this->audit->enqueue(
+                'clinic.encounter_restored',
+                'clinic_encounters',
+                $encounterId,
+                $userId,
+                ['previous_status' => (string) $enc['status'], 'next_status' => (string) $enc['status'], 'reason_code' => 'staff_restore'],
+            );
+
+            $row = $this->db->table('clinic_encounters')->where('clinic_encounters.tenant_id', CurrentTenant::id())->where('id', $encounterId)->get()->getRowArray();
+            return EncounterDto::fromRow($row);
+        });
     }
 
     // ---------------------------------------------- triage + diagnosis

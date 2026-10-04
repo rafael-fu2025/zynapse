@@ -34,6 +34,7 @@ function metaPayload(input: SurveyMetaInput): Record<string, unknown> {
     title: input.title,
     description: input.description?.trim() || null,
     audience: input.audience,
+    year_levels: input.year_levels?.length ? input.year_levels : null,
     category: input.category,
     is_required: input.is_required,
     publish_at: input.publish_at?.trim() || null,
@@ -149,12 +150,15 @@ export function useArchiveSurvey() {
 
 // ---- staff: responses ------------------------------------------------
 
-export function useSurveyResponses(surveyId: number | null) {
+export function useSurveyResponses(surveyId: number | null, yearLevel: number | null = null) {
   return useQuery<SurveyResponseRow[], ApiEnvelopeError>({
-    queryKey: ['guidance', 'surveys', surveyId, 'responses'],
+    queryKey: ['guidance', 'surveys', surveyId, 'responses', yearLevel],
     enabled: surveyId !== null,
     queryFn: async () => {
-      const res = await apiClient.get<unknown[]>(`/counselling/surveys/${surveyId}/responses`);
+      const url = yearLevel !== null
+        ? `/counselling/surveys/${surveyId}/responses?year_level=${yearLevel}`
+        : `/counselling/surveys/${surveyId}/responses`;
+      const res = await apiClient.get<unknown[]>(url);
       return z.array(surveyResponseRowSchema).parse(res.data);
     },
     placeholderData: keepPreviousData,

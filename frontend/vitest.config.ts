@@ -4,8 +4,9 @@ import { fileURLToPath } from 'node:url';
 /**
  * Unit-test runner. Node environment on purpose: these tests cover pure
  * logic (schemas, envelope normalization, date conversion, error-code
- * mapping). Component tests would need jsdom + @testing-library — add
- * them when the first component test lands.
+ * mapping) plus component markup rendered through `react-dom/server`
+ * (no DOM needed — assertions run against static markup). The day a
+ * test needs to INTERACT (click, type), add jsdom + @testing-library.
  */
 export default defineConfig({
   resolve: {
@@ -15,6 +16,6 @@ export default defineConfig({
   },
   test: {
     environment: 'node',
-    include: ['src/**/*.test.ts'],
+    include: ['src/**/*.test.ts', 'src/**/*.test.tsx'],
   },
 });
