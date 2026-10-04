@@ -41,6 +41,7 @@ class _QueueScreenState extends State<QueueScreen>
   bool _staffMode = false;
   bool _canQueue = false;
   bool _isStudent = false;
+  bool _canWriteEncounters = false;
   bool _bootstrapped = false;
   bool _loadedOnce = false;
 
@@ -59,6 +60,8 @@ class _QueueScreenState extends State<QueueScreen>
         (session.hasPermission('employee.portal.read') ||
             session.hasPermission('student.portal.read'));
     if (_canQueue) _isStudent = session!.isStudent;
+    _canWriteEncounters =
+        session?.hasPermission('clinic.encounters.write') ?? false;
     final staff = session?.hasPermission('clinic.queue.manage') ?? false;
     if (staff != _staffMode) {
       _staffMode = staff;
@@ -155,6 +158,43 @@ class _QueueScreenState extends State<QueueScreen>
     }
   }
 
+  /// Archives a completed encounter directly from the queue board.
+  Future<void> _archiveEncounter(QueueEntry entry) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Archive Encounter?'),
+        content: const Text(
+          'Are you sure you want to archive this completed encounter?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Archive'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    try {
+      await ApiService.I.archiveEncounter(entry.encounterId);
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Encounter archived.')),
+      );
+      _reload();
+    } on ApiException catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text(e.message)));
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text(mapDioError(e).message)));
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return RefreshIndicator(
@@ -178,6 +218,7 @@ class _QueueScreenState extends State<QueueScreen>
                 entries: _today ?? const [],
                 onCallNext: _callNext,
                 onAction: _queueAction,
+                onArchive: _canWriteEncounters ? _archiveEncounter : null,
                 onRefresh: _reload,
               ),
           ],
@@ -194,12 +235,14 @@ class _StaffQueueCard extends StatelessWidget {
     required this.entries,
     required this.onCallNext,
     required this.onAction,
+    this.onArchive,
     required this.onRefresh,
   });
 
   final List<QueueEntry> entries;
   final VoidCallback onCallNext;
   final void Function(QueueEntry entry, String action) onAction;
+  final void Function(QueueEntry entry)? onArchive;
   final VoidCallback onRefresh;
 
   @override
@@ -231,7 +274,11 @@ class _StaffQueueCard extends StatelessWidget {
               )
             else
               for (final entry in entries)
-                _QueueRow(entry: entry, onAction: onAction),
+                _QueueRow(
+                  entry: entry,
+                  onAction: onAction,
+                  onArchive: onArchive,
+                ),
           ],
         ),
       ),
@@ -240,10 +287,15 @@ class _StaffQueueCard extends StatelessWidget {
 }
 
 class _QueueRow extends StatelessWidget {
-  const _QueueRow({required this.entry, required this.onAction});
+  const _QueueRow({
+    required this.entry,
+    required this.onAction,
+    this.onArchive,
+  });
 
   final QueueEntry entry;
   final void Function(QueueEntry entry, String action) onAction;
+  final void Function(QueueEntry entry)? onArchive;
 
   @override
   Widget build(BuildContext context) {
@@ -305,6 +357,19 @@ class _QueueRow extends StatelessWidget {
               onPressed: () => onAction(entry, 'skip'),
               child: const Text('Skip'),
             )
+          else if (entry.canArchive && onArchive != null) ...[
+            StatusBadge(label: titleCaseOption(entry.status), color: color),
+            const SizedBox(width: 4),
+            TextButton.icon(
+              style: TextButton.styleFrom(
+                visualDensity: VisualDensity.compact,
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+              ),
+              onPressed: () => onArchive!(entry),
+              icon: const Icon(Icons.archive_outlined, size: 16),
+              label: const Text('Archive'),
+            ),
+          ]
           else
             StatusBadge(label: titleCaseOption(entry.status), color: color),
         ],

@@ -5,6 +5,7 @@ import 'package:hugeicons/hugeicons.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/api/api_client.dart';
+import '../../core/api/api_envelope.dart';
 import '../../core/services/api_service.dart';
 import '../../core/services/auth_controller.dart';
 import '../../core/utils/dates.dart';
@@ -157,6 +158,10 @@ class _ClinicScreenState extends State<ClinicScreen>
                 value: e['closed_at'] != null
                     ? fmtUtcToApp(e['closed_at'] as String)
                     : '—'),
+            if (e['archived_at'] != null)
+              _Detail(
+                  label: 'Archived',
+                  value: fmtUtcToApp(e['archived_at'] as String)),
             if (e['station_id'] != null)
               _Detail(label: 'Station', value: e['station_id'] as String),
             const SizedBox(height: 8),
@@ -197,10 +202,114 @@ class _ClinicScreenState extends State<ClinicScreen>
                     style: const TextStyle(color: Colors.black54, fontSize: 12),
                   ),
                 ),
+            if (_canWriteEncounters) ...[
+              const SizedBox(height: 16),
+              if (e['archived_at'] != null)
+                FilledButton.icon(
+                  onPressed: () {
+                    Navigator.of(ctx).pop();
+                    _restoreEncounter(e);
+                  },
+                  icon: const Icon(Icons.unarchive_outlined),
+                  label: const Text('Restore encounter'),
+                )
+              else if (e['status'] == 'closed' || e['status'] == 'referred')
+                OutlinedButton.icon(
+                  onPressed: () {
+                    Navigator.of(ctx).pop();
+                    _archiveEncounter(e);
+                  },
+                  icon: const Icon(Icons.archive_outlined),
+                  label: const Text('Archive encounter'),
+                ),
+            ],
           ],
         ),
       ),
     );
+  }
+
+  bool get _canWriteEncounters =>
+      context
+          .read<AuthController>()
+          .session
+          ?.hasPermission('clinic.encounters.write') ??
+      false;
+
+  Future<void> _archiveEncounter(Map<String, dynamic> encounter) async {
+    final id = encounter['id'] as int? ?? 0;
+    if (id <= 0) return;
+    final messenger = ScaffoldMessenger.of(context);
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Archive Encounter?'),
+        content: const Text(
+          'Are you sure you want to archive this completed encounter?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Archive'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    try {
+      await ApiService.I.archiveEncounter(id);
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Encounter archived.')),
+      );
+      await _load();
+    } on ApiException catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text(e.message)));
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text(mapDioError(e).message)));
+    }
+  }
+
+  Future<void> _restoreEncounter(Map<String, dynamic> encounter) async {
+    final id = encounter['id'] as int? ?? 0;
+    if (id <= 0) return;
+    final messenger = ScaffoldMessenger.of(context);
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Restore Encounter?'),
+        content: const Text(
+          'Are you sure you want to restore this encounter?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Restore'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    try {
+      await ApiService.I.restoreEncounter(id);
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Encounter restored.')),
+      );
+      await _load();
+    } on ApiException catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text(e.message)));
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text(mapDioError(e).message)));
+    }
   }
 
   Future<void> _openWorkspace(Map<String, dynamic> encounter) async {
@@ -264,12 +373,19 @@ class _ClinicScreenState extends State<ClinicScreen>
     (null, 'All'),
     ('open', 'Open'),
     ('closed', 'Closed'),
+    ('archived', 'Archived'),
   ];
 
   Widget _buildBody() {
     if (_loading) return AsyncState.loading();
     if (_error != null) return AsyncState.error(_error!, onRetry: _load);
-    if (_items.isEmpty) return AsyncState.empty('No encounters in this view.');
+    if (_items.isEmpty) {
+      return AsyncState.empty(
+        _status == 'archived'
+            ? 'No archived encounters.'
+            : 'No encounters in this view.',
+      );
+    }
 
     return ListView.separated(
       padding: const EdgeInsets.all(16),
@@ -296,10 +412,20 @@ class _ClinicScreenState extends State<ClinicScreen>
           );
         }
         final e = _items[i];
+        final isArchived = e['archived_at'] != null;
+        final canArchive =
+            (e['status'] == 'closed' || e['status'] == 'referred') &&
+                !isArchived;
         return _EncounterTile(
           encounter: e,
           onView: () => _openWorkspace(e),
           onQuickView: () => _view(e),
+          onArchive: _canWriteEncounters && canArchive
+              ? () => _archiveEncounter(e)
+              : null,
+          onRestore: _canWriteEncounters && isArchived
+              ? () => _restoreEncounter(e)
+              : null,
         );
       },
     );
@@ -501,11 +627,15 @@ class _EncounterTile extends StatelessWidget {
     required this.encounter,
     required this.onView,
     required this.onQuickView,
+    this.onArchive,
+    this.onRestore,
   });
 
   final Map<String, dynamic> encounter;
   final VoidCallback onView;
   final VoidCallback onQuickView;
+  final VoidCallback? onArchive;
+  final VoidCallback? onRestore;
 
   Color get _statusColor => switch (encounter['status']) {
         'open' => const Color(0xFF1E6FD9),
@@ -516,6 +646,7 @@ class _EncounterTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isArchived = encounter['archived_at'] != null;
     return Card(
       elevation: 0,
       margin: EdgeInsets.zero,
@@ -542,7 +673,7 @@ class _EncounterTile extends StatelessWidget {
             children: [
               Text(
                 '${encounter['patient_name'] ?? encounter['patient_school_id'] ?? '—'}'
-                ' · ${fmtUtcToApp(encounter['started_at'] as String? ?? '')}',
+                ' · ${isArchived ? 'Archived ${fmtUtcToApp(encounter['archived_at'] as String)}' : fmtUtcToApp(encounter['started_at'] as String? ?? '')}',
                 style: const TextStyle(color: Colors.black54, fontSize: 12),
               ),
               if (encounter['diagnosis'] != null)
@@ -557,9 +688,23 @@ class _EncounterTile extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             StatusBadge(
-              label: titleCaseOption(encounter['status'] as String? ?? '—'),
-              color: _statusColor,
+              label: isArchived
+                  ? 'Archived'
+                  : titleCaseOption(encounter['status'] as String? ?? '—'),
+              color: isArchived ? Colors.grey : _statusColor,
             ),
+            if (onRestore != null)
+              IconButton(
+                tooltip: 'Restore encounter',
+                onPressed: onRestore,
+                icon: const Icon(Icons.unarchive_outlined, size: 20),
+              ),
+            if (onArchive != null)
+              IconButton(
+                tooltip: 'Archive encounter',
+                onPressed: onArchive,
+                icon: const Icon(Icons.archive_outlined, size: 20),
+              ),
             IconButton(
               tooltip: 'Quick record view',
               onPressed: onQuickView,

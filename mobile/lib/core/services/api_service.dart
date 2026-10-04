@@ -1231,6 +1231,22 @@ class ApiService {
     return ClinicEncounter.fromJson(_unwrapObject(res));
   }
 
+  /// `POST /clinic/encounters/{id}/archive` — move a completed encounter to archive.
+  Future<ClinicEncounter> archiveEncounter(int encounterId) async {
+    final res = await _dio.post<Map<String, dynamic>>(
+      '/clinic/encounters/$encounterId/archive',
+    );
+    return ClinicEncounter.fromJson(_unwrapObject(res));
+  }
+
+  /// `POST /clinic/encounters/{id}/restore` — restore an archived encounter.
+  Future<ClinicEncounter> restoreEncounter(int encounterId) async {
+    final res = await _dio.post<Map<String, dynamic>>(
+      '/clinic/encounters/$encounterId/restore',
+    );
+    return ClinicEncounter.fromJson(_unwrapObject(res));
+  }
+
   // ---------------------------------------------------------------------
   // Staff schedules (clinic.schedules.manage / clinic.schedules.read)
   // ---------------------------------------------------------------------
