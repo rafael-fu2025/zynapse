@@ -91,6 +91,9 @@ class QueueEntry {
     this.calledAt,
     this.startedAt,
     this.finishedAt,
+    this.skippedAt,
+    this.skipDeadlineAt,
+    this.returnedAt,
     required this.encounterStatus,
   });
 
@@ -107,6 +110,9 @@ class QueueEntry {
         calledAt: json['called_at'] as String?,
         startedAt: json['started_at'] as String?,
         finishedAt: json['finished_at'] as String?,
+        skippedAt: json['skipped_at'] as String?,
+        skipDeadlineAt: json['skip_deadline_at'] as String?,
+        returnedAt: json['returned_at'] as String?,
         encounterStatus: (json['encounter_status'] ?? 'open') as String,
       );
 
@@ -125,6 +131,9 @@ class QueueEntry {
   final String? calledAt;
   final String? startedAt;
   final String? finishedAt;
+  final String? skippedAt;
+  final String? skipDeadlineAt;
+  final String? returnedAt;
 
   /// open | closed | referred (linked encounter).
   final String encounterStatus;
@@ -132,4 +141,8 @@ class QueueEntry {
   bool get canStart => status == 'called';
   bool get canComplete => status == 'in_session';
   bool get canSkip => status == 'called' || status == 'waiting';
+  bool get canArchive =>
+      status == 'done' &&
+      encounterId > 0 &&
+      (encounterStatus == 'closed' || encounterStatus == 'referred');
 }

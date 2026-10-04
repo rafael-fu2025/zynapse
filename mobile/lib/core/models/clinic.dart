@@ -16,6 +16,7 @@ class ClinicEncounter {
     this.diagnosis,
     this.outcome,
     this.closedAt,
+    this.archivedAt,
     this.queueEntryId,
     this.queueNumber,
     this.queueStatus,
@@ -42,6 +43,7 @@ class ClinicEncounter {
         attendingUserId: (json['attending_user_id'] ?? 0) as int,
         startedAt: (json['started_at'] ?? '') as String,
         closedAt: json['closed_at'] as String?,
+        archivedAt: json['archived_at'] as String?,
         queueEntryId: json['queue_entry_id'] as int?,
         queueNumber: json['queue_number'] as String?,
         queueStatus: json['queue_status'] as String?,
@@ -69,6 +71,7 @@ class ClinicEncounter {
   final int attendingUserId;
   final String startedAt;
   final String? closedAt;
+  final String? archivedAt;
   final int? queueEntryId;
   final String? queueNumber;
   final String? queueStatus;
@@ -79,6 +82,10 @@ class ClinicEncounter {
   final Referral? outgoingReferral;
 
   bool get isOpen => status == 'open';
+  bool get isArchived => archivedAt != null;
+  bool get canArchive =>
+      (status == 'closed' || status == 'referred') && !isArchived;
+  bool get canRestore => isArchived;
   String get patientDisplayName =>
       patientName?.trim().isNotEmpty == true ? patientName! : patientSchoolId;
 }
