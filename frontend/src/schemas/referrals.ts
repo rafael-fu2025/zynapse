@@ -25,8 +25,6 @@ export const referralSchema = z.object({
   queue_handoff_at: z.string().nullable().optional(),
   created_at: z.string(),
   updated_at: z.string(),
-  qr_expires_at: z.string().nullable(),
-  qr_revoked_at: z.string().nullable().optional(),
 });
 export type Referral = z.infer<typeof referralSchema>;
 
@@ -42,18 +40,3 @@ export const createReferralSchema = z.object({
   path: ['target_module'],
 });
 export type CreateReferralInput = z.infer<typeof createReferralSchema>;
-
-export const issueQrSchema = z.object({
-  ttl_seconds: z.number().int().min(60).max(86_400).default(3600),
-});
-
-export const verifyTokenSchema = z.object({
-  token: z.string().min(1),
-});
-
-export const verifyResultSchema = z.object({
-  status: z.enum(['valid', 'expired', 'revoked']),
-  artifact_type: z.string().nullable(),
-  issuer: z.string().nullable(),
-});
-export type VerifyResult = z.infer<typeof verifyResultSchema>;

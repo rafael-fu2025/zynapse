@@ -59,10 +59,20 @@ final class EncounterCompletionService extends BaseService
             'SELECT `id`, `status` FROM `clinic_queue_entries` WHERE `tenant_id` = ? AND `encounter_id` = ? ORDER BY `id` DESC LIMIT 1 FOR UPDATE',
             [CurrentTenant::id(), $encounterId],
         )->getRowArray();
-        if ($queue !== null && in_array((string) $queue['status'], ['waiting', 'called', 'in_session'], true)) {
-            $this->db->table('clinic_queue_entries')->where('clinic_queue_entries.tenant_id', CurrentTenant::id())->where('id', (int) $queue['id'])->update([
+        // `skipped` is included (October 2026): a visit whose encounter is
+        // completed while the patient sits in the 60-minute recall window
+        // must not leave a countdown ticking against a closed encounter.
+        // `returned_at` marks the episode as ended by staff action rather
+        // than by a no-show, so the Skipped Patients module shows
+        // "Returned" and the expiry sweep leaves the row alone.
+        if ($queue !== null && in_array((string) $queue['status'], ['waiting', 'called', 'in_session', 'skipped'], true)) {
+            $final = [
                 'status' => 'done', 'finished_at' => $now, 'updated_at' => $now,
-            ]);
+            ];
+            if ((string) $queue['status'] === 'skipped') {
+                $final['returned_at'] = $now;
+            }
+            $this->db->table('clinic_queue_entries')->where('clinic_queue_entries.tenant_id', CurrentTenant::id())->where('id', (int) $queue['id'])->update($final);
             $this->audit->enqueue('clinic.queue_done', 'clinic_queue_entries', (int) $queue['id'], $userId, [
                 'previous_status' => (string) $queue['status'], 'next_status' => 'done', 'reason_code' => $reasonCode,
             ]);

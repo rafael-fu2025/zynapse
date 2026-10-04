@@ -984,10 +984,9 @@ function EditEmployeeDialog({ employee, onClose }: { employee: Employee; onClose
           </Select>
         </div>
         {/*
-          Teaching flag. Faculty (teaching=1) can refer students to
-          counselling; non-teaching staff cannot. The backend gates
-          the referral policy on this flag — see the migration
-          `EmployeeIsTeaching` for the column.
+          Teaching flag — informational classification (teaching vs
+          non-teaching staff, e.g. for directory triage). All employees
+          can refer students to counselling regardless of this flag.
         */}
         <label className="flex items-center gap-2 rounded-md border bg-background px-3 py-2 text-sm">
           <input
@@ -997,7 +996,7 @@ function EditEmployeeDialog({ employee, onClose }: { employee: Employee; onClose
             className="size-4"
             aria-label="Teaching employee"
           />
-          <span>Teaching employee (faculty — can refer students to counselling)</span>
+          <span>Teaching employee (faculty)</span>
         </label>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <div className="space-y-1.5">

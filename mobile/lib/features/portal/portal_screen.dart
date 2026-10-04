@@ -14,6 +14,7 @@ import '../common/widgets.dart';
 import '../queue/your_queue_section.dart';
 import '../referrals/referrals_screen.dart';
 import 'portal_appointments_section.dart';
+import 'portal_surveys_section.dart';
 
 /// My Portal — the caller's identity profile + clinic-visit history.
 ///
@@ -174,6 +175,12 @@ class _PortalScreenState extends State<PortalScreen>
           // portal's YourQueueCard) so the caller can track their turn.
           YourQueueSection(student: _isStudent),
           const PortalAppointmentsSection(),
+          // Guidance office surveys & interviews — students only (the
+          // /me/guidance/* feeds are student-scoped on the backend).
+          if (_isStudent) ...[
+            const SizedBox(height: 12),
+            const PortalSurveysSection(),
+          ],
           const SizedBox(height: 12),
           _ProfileCard(
             profile: profile,
@@ -250,17 +257,20 @@ class _PortalScreenState extends State<PortalScreen>
             ),
           if (!_isStudent) ...[
             const SizedBox(height: 12),
-            // Teaching-only quick action — mirrors the web employee
-            // portal's "Refer a student to counselling" button. The
-            // backend enforces `is_teaching=1` with a 403
-            // (code: referral.teaching_required), so we hide/enable it
-            // preemptively by the profile flag.
-            _ReferralAction(
-              teaching: profile.isTeaching == true,
-              onRefer: () => Navigator.of(context).push(
+            // Quick action — mirrors the web employee portal's "Refer a
+            // student to counselling" button. Every employee can refer
+            // (the former teaching-only service gate was removed);
+            // `referrals.create` is what governs access.
+            OutlinedButton.icon(
+              onPressed: () => Navigator.of(context).push(
                 MaterialPageRoute(
                   builder: (_) => const ReferralsScreen(),
                 ),
+              ),
+              icon: const Icon(HugeIcons.strokeRoundedShare01),
+              label: const Text('Refer a student to counselling'),
+              style: OutlinedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(vertical: 14),
               ),
             ),
           ],
@@ -312,56 +322,6 @@ class _NotOnRegistry extends StatelessWidget {
           ],
         ),
       ),
-    );
-  }
-}
-
-/// "Refer a student to counselling" quick action (teaching employees).
-///
-/// Mirrors `frontend/src/pages/EmployeePortalPage.tsx`: teaching faculty
-/// get a working button that opens the Referrals screen (where "New
-/// referral" creates a clinic→counselling referral); non-teaching staff
-/// get a disabled button + explanatory caption.
-class _ReferralAction extends StatelessWidget {
-  const _ReferralAction({required this.teaching, required this.onRefer});
-
-  final bool teaching;
-  final VoidCallback onRefer;
-
-  @override
-  Widget build(BuildContext context) {
-    if (teaching) {
-      return OutlinedButton.icon(
-        onPressed: onRefer,
-        icon: const Icon(HugeIcons.strokeRoundedShare01),
-        label: const Text('Refer a student to counselling'),
-        style: OutlinedButton.styleFrom(
-          padding: const EdgeInsets.symmetric(vertical: 14),
-        ),
-      );
-    }
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        OutlinedButton.icon(
-          onPressed: null,
-          icon: const Icon(HugeIcons.strokeRoundedShare01),
-          label: const Text('Refer a student to counselling'),
-          style: OutlinedButton.styleFrom(
-            padding: const EdgeInsets.symmetric(vertical: 14),
-          ),
-        ),
-        const SizedBox(height: 6),
-        Text(
-          'Only teaching employees (faculty) can refer students to '
-          'counselling. Talk to your supervisor if you believe this is '
-          'in error.',
-          style: Theme.of(context)
-              .textTheme
-              .bodySmall
-              ?.copyWith(color: Colors.black45),
-        ),
-      ],
     );
   }
 }

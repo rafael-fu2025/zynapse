@@ -29,7 +29,9 @@ final class ClinicController extends ApiController
         $cursor = (string) ($this->request->getGet('cursor') ?? '');
         $limit  = (int)    ($this->request->getGet('limit')  ?? 25);
         $status = $this->request->getGet('status');
-        $status = is_string($status) && in_array($status, ['open', 'closed', 'referred'], true) ? $status : null;
+        // `archived` selects the Archived Encounters list; the clinical
+        // statuses select their slice of the ACTIVE list (October 2026).
+        $status = is_string($status) && in_array($status, ['open', 'closed', 'referred', 'archived'], true) ? $status : null;
         $page = $this->service->listEncounters($cursor !== '' ? $cursor : null, $limit, $status);
 
         return $this->ok(
@@ -127,6 +129,25 @@ final class ClinicController extends ApiController
     {
         $dto = $this->service->markNoShow($encounterId);
         return $this->ok($dto->toArray());
+    }
+
+    /**
+     * Archive a finished encounter (October 2026 panel revision).
+     *
+     * List hygiene only: the record and its clinical children are kept,
+     * the row moves from Encounters to the Archived Encounters view.
+     * Only `closed` / `referred` encounters qualify — an `open` visit is
+     * still in flight. Idempotent.
+     */
+    public function archiveEncounter(int $encounterId): ResponseInterface
+    {
+        return $this->ok($this->service->archiveEncounter($encounterId)->toArray());
+    }
+
+    /** Restore an archived encounter to the active list. Idempotent. */
+    public function restoreEncounter(int $encounterId): ResponseInterface
+    {
+        return $this->ok($this->service->restoreEncounter($encounterId)->toArray());
     }
 
     public function setAssessment(int $encounterId): ResponseInterface

@@ -1,5 +1,5 @@
 /**
- * Referrals hooks — list, create, lifecycle transitions, QR issuance, verify.
+ * Referrals hooks — list, create, lifecycle transitions.
  */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { z } from 'zod';
@@ -8,13 +8,9 @@ import { apiClient } from '@/api/client';
 import type { ApiEnvelopeError } from '@/api/envelope';
 import {
   createReferralSchema,
-  issueQrSchema,
   referralSchema,
-  verifyResultSchema,
-  verifyTokenSchema,
   type CreateReferralInput,
   type Referral,
-  type VerifyResult,
 } from '@/schemas/referrals';
 import { kioskLookupSchema, type KioskLookupResult } from '@/hooks/usePatientLookup';
 
@@ -26,7 +22,7 @@ interface ReferralPage {
 /**
  * Patient autocomplete for the referral form — narrow, referrals-scoped
  * lookup (`GET /referrals/patient-lookup`), gated by `referrals.create`
- * so teaching employees can search patients without broad clinic access.
+ * so referrer employees can search patients without broad clinic access.
  */
 export function useReferralPatientLookup(query: string) {
   const q = query.trim();
@@ -150,62 +146,5 @@ export function useCreateContextualReferral(context: { module: 'clinic'; encount
       toast.success('Referral submitted.');
     },
     onError: (error) => toast.error(error.errors[0]?.message ?? 'Failed to submit referral.'),
-  });
-}
-
-interface IssuedQr {
-  referral_id: number;
-  token: string;
-  expires_at: string;
-  artifact_type: string;
-}
-
-export function useIssueQr() {
-  const qc = useQueryClient();
-  return useMutation<IssuedQr, ApiEnvelopeError, { id: number; ttlSeconds: number }>({
-    mutationFn: async ({ id, ttlSeconds }) => {
-      const valid = issueQrSchema.parse({ ttl_seconds: ttlSeconds });
-      const res = await apiClient.post<IssuedQr>(`/referrals/${id}/issue-qr`, valid);
-      return res.data;
-    },
-    onSuccess: () => {
-      // Refresh the list so the QR state (and the "Revoke QR code"
-      // action) reflects immediately after issuing.
-      void qc.invalidateQueries({ queryKey: ['referrals'] });
-    },
-    onError: (err) => {
-      toast.error(err.errors[0]?.message ?? 'Failed to issue QR.');
-    },
-  });
-}
-
-/** Revoke the referral's current QR token (POST /referrals/{id}/revoke-qr). */
-export function useRevokeReferralQr() {
-  const qc = useQueryClient();
-  return useMutation<Referral, ApiEnvelopeError, number>({
-    mutationFn: async (id) => {
-      const res = await apiClient.post<Referral>(`/referrals/${id}/revoke-qr`);
-      return referralSchema.parse(res.data);
-    },
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ['referrals'] });
-      toast.success('QR token revoked.');
-    },
-    onError: (err) => {
-      toast.error(err.errors[0]?.message ?? 'Failed to revoke QR.');
-    },
-  });
-}
-
-/**
- * Public verify — no auth needed. Hits the public endpoint.
- */
-export function useVerifyQr() {
-  return useMutation<VerifyResult, ApiEnvelopeError, string>({
-    mutationFn: async (token) => {
-      const valid = verifyTokenSchema.parse({ token });
-      const res = await apiClient.post<VerifyResult>('/referrals/verify', valid);
-      return verifyResultSchema.parse(res.data);
-    },
   });
 }

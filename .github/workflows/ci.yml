@@ -107,6 +107,9 @@ jobs:
           npx playwright install chromium --with-deps
           npx playwright test \
             e2e/clinic-session-workflow.spec.ts \
+            e2e/clinic-skip-workflow.spec.ts \
+            e2e/clinic-archive-workflow.spec.ts \
+            e2e/dashboard-vertical-overflow.spec.ts \
             e2e/destination-queues.spec.ts \
             e2e/guidance-session-workflow.spec.ts \
             e2e/login-errors.spec.ts \

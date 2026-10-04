@@ -33,7 +33,6 @@ class _ReferralsScreenState extends State<ReferralsScreen>
   String? _nextCursor;
   bool _loadingMore = false;
   bool _loadedOnce = false;
-  bool _verifying = false;
 
   @override
   void initState() {
@@ -100,19 +99,9 @@ class _ReferralsScreenState extends State<ReferralsScreen>
     }
   }
 
-  /// Non-teaching employees (faculty flag `is_teaching != true`) cannot
-  /// create clinic→counselling referrals — the server enforces
-  /// `is_teaching = 1` (403 `referral.teaching_required`). Mirror the web
-  /// ReferralsPage and hide the FAB + show a friendly notice instead.
-  bool get _isNonTeachingEmployee {
-    final s = context.read<AuthController>().session;
-    return s != null && s.personKind == 'employee' && s.isTeaching != true;
-  }
-
   bool get _canCreate {
     final s = context.read<AuthController>().session;
     if (s == null || !s.hasPermission('referrals.create')) return false;
-    if (_isNonTeachingEmployee) return false;
     return true;
   }
 
@@ -162,151 +151,11 @@ class _ReferralsScreenState extends State<ReferralsScreen>
     if (ok) _load();
   }
 
-  Future<void> _issueQr(Referral r) async {
-    final payload = await showCrudForm(
-      context,
-      title: 'Issue QR — referral #${r.id}',
-      fields: const [
-        CrudField.number('ttl_seconds', 'Valid for (seconds)', initial: '3600'),
-      ],
-      submitLabel: 'Issue',
-    );
-    if (payload == null || !mounted) return;
-    final ok = await runCrudAction(
-      context,
-      () => ApiService.I.issueReferralQr(r.id,
-          ttlSeconds: (payload['ttl_seconds'] as int?) ?? 3600),
-      successMessage: 'QR issued (1-hour expiry).',
-    );
-    if (ok) _load();
-  }
-
-  Future<void> _revokeQr(Referral r) async {
-    final confirmed = await showCrudConfirm(
-      context,
-      title: 'Revoke QR?',
-      message: 'Revoke the QR for referral #${r.id}? It will no longer verify.',
-      confirmLabel: 'Revoke',
-      destructive: true,
-    );
-    if (!confirmed || !mounted) return;
-    final ok = await runCrudAction(
-      context,
-      () => ApiService.I.revokeReferralQr(r.id),
-      successMessage: 'QR revoked.',
-    );
-    if (ok) _load();
-  }
-
-  /// Verify a referral QR token (mirrors the web "Verify (scan)" dialog's
-  /// manual-token entry — public endpoint, minimum-disclosure result).
-  Future<void> _verify() async {
-    final controller = TextEditingController();
-    final token = await showDialog<String>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Verify a referral'),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          maxLength: 512,
-          decoration: const InputDecoration(
-            labelText: 'QR token',
-            hintText: 'Paste or type the referral QR token',
-            border: OutlineInputBorder(),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            style: FilledButton.styleFrom(
-              backgroundColor: const Color(0xFF800000),
-            ),
-            onPressed: () => Navigator.of(ctx).pop(controller.text.trim()),
-            child: const Text('Verify'),
-          ),
-        ],
-      ),
-    );
-    controller.dispose();
-    if (token == null || token.isEmpty || !mounted) return;
-
-    setState(() => _verifying = true);
-    Map<String, dynamic>? result;
-    try {
-      result = await ApiService.I.verifyReferralToken(token);
-    } catch (e) {
-      if (mounted) {
-        showCrudMessage(context, mapDioError(e).message, error: true);
-      }
-    } finally {
-      if (mounted) setState(() => _verifying = false);
-    }
-    if (result == null || !mounted) return;
-
-    final status = (result['status'] ?? '') as String;
-    final (label, color) = switch (status) {
-      'valid' => ('Valid referral', const Color(0xFF1B7A43)),
-      'expired' => ('Expired referral', const Color(0xFFB45309)),
-      'revoked' => ('Revoked referral', const Color(0xFFB3261E)),
-      _ => ('Unknown status', Colors.grey),
-    };
-    final artifact = result['artifact_type'] as String?;
-    final issuer = result['issuer'] as String?;
-    await showDialog<void>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        icon: Icon(
-          status == 'valid'
-              ? HugeIcons.strokeRoundedCheckmarkCircle01
-              : HugeIcons.strokeRoundedAlert02,
-          color: color,
-          size: 32,
-        ),
-        title: Text(label, style: TextStyle(color: color)),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            if (artifact != null && artifact.isNotEmpty)
-              Text('Artifact: $artifact'),
-            if (issuer != null && issuer.isNotEmpty) Text('Issuer: $issuer'),
-          ],
-        ),
-        actions: [
-          FilledButton(
-            style: FilledButton.styleFrom(
-              backgroundColor: const Color(0xFF800000),
-            ),
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text('Done'),
-          ),
-        ],
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Referrals'),
-        actions: [
-          IconButton(
-            tooltip: 'Verify referral',
-            icon: _verifying
-                ? const SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Icon(HugeIcons.strokeRoundedShield01),
-            onPressed: _verifying ? null : _verify,
-          ),
-        ],
       ),
       floatingActionButton: _canCreate
           ? FloatingActionButton.extended(
@@ -319,33 +168,6 @@ class _ReferralsScreenState extends State<ReferralsScreen>
           : null,
       body: Column(
         children: [
-          if (_isNonTeachingEmployee) ...[
-            const Padding(
-              padding: EdgeInsets.fromLTRB(16, 12, 16, 0),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Icon(
-                    HugeIcons.strokeRoundedShield01,
-                    size: 16,
-                    color: Color(0xFF92400E),
-                  ),
-                  SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      'Only teaching employees (faculty) can refer students '
-                      'to counselling.',
-                      style: TextStyle(
-                        color: Color(0xFF78350F),
-                        fontSize: 12,
-                        height: 1.35,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
             child: SizedBox(
@@ -422,8 +244,6 @@ class _ReferralsScreenState extends State<ReferralsScreen>
           referral: _items[i],
           canHandle: _canHandle,
           onTransition: (a) => _transition(_items[i], a),
-          onIssueQr: () => _issueQr(_items[i]),
-          onRevokeQr: () => _revokeQr(_items[i]),
         );
       },
     );
@@ -443,15 +263,11 @@ class _ReferralTile extends StatelessWidget {
     required this.referral,
     required this.canHandle,
     this.onTransition,
-    this.onIssueQr,
-    this.onRevokeQr,
   });
 
   final Referral referral;
   final bool canHandle;
   final void Function(String action)? onTransition;
-  final VoidCallback? onIssueQr;
-  final VoidCallback? onRevokeQr;
 
   @override
   Widget build(BuildContext context) {
@@ -493,12 +309,6 @@ class _ReferralTile extends StatelessWidget {
                   '${titleCaseOption(referral.artifactType)} · ${fmtUtcShort(referral.createdAt)}'),
               if (referral.providerName != null)
                 Text('Provider: ${referral.providerName}'),
-              if (referral.qrRevoked)
-                const Text('QR revoked',
-                    style: TextStyle(
-                      color: Color(0xFFB3261E),
-                      fontWeight: FontWeight.w600,
-                    )),
             ],
           ),
         ),
@@ -514,10 +324,6 @@ class _ReferralTile extends StatelessWidget {
                       onTransition?.call('review');
                     case 'close':
                       onTransition?.call('close');
-                    case 'issue_qr':
-                      onIssueQr?.call();
-                    case 'revoke_qr':
-                      onRevokeQr?.call();
                   }
                 },
                 itemBuilder: (_) => [
@@ -529,12 +335,6 @@ class _ReferralTile extends StatelessWidget {
                   if (referral.status == 'acknowledged' ||
                       referral.status == 'under_review')
                     const PopupMenuItem(value: 'close', child: Text('Close')),
-                  if (referral.qrExpiresAt == null)
-                    const PopupMenuItem(
-                        value: 'issue_qr', child: Text('Issue QR')),
-                  if (referral.qrExpiresAt != null && !referral.qrRevoked)
-                    const PopupMenuItem(
-                        value: 'revoke_qr', child: Text('Revoke QR')),
                 ],
               )
             : null,
@@ -559,7 +359,7 @@ const _presetArtifacts = <String, String>{
 ///
 /// The patient field is a debounced typeahead backed by the
 /// referral-scoped `GET /referrals/patient-lookup` (gated by
-/// `referrals.create`, so teaching employees — who lack
+/// `referrals.create`, so referrer employees — who lack
 /// `clinic.patients.read` — can still search by number or name). The
 /// submitted `patient_school_id` is the picked patient's exact school id,
 /// or the raw typed value when the lookup misses (same as the web).

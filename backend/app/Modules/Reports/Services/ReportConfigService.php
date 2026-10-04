@@ -38,6 +38,7 @@ final class ReportConfigService extends BaseService
         int $page = 1,
         int $limit = self::DEFAULT_PAGE_SIZE,
         ?string $module = null,
+        array $moduleScope = [],
     ): array
     {
         [$page, $limit] = $this->normalizePage($page, $limit);
@@ -53,6 +54,12 @@ final class ReportConfigService extends BaseService
         if (! $includeArchived) {
             $countBuilder->where('is_active', 1);
             $builder->where('is_active', 1);
+        }
+        // Unit scope (ReportService::MODULE_EXTRA_PERMISSIONS): callers
+        // without a module's read code never see its configurations.
+        if ($moduleScope !== []) {
+            $countBuilder->whereIn('module', $moduleScope);
+            $builder->whereIn('module', $moduleScope);
         }
         if ($module !== null) {
             $countBuilder->where('module', $module);
@@ -253,6 +260,7 @@ final class ReportConfigService extends BaseService
         int $limit = self::DEFAULT_PAGE_SIZE,
         ?string $module = null,
         ?string $status = null,
+        array $moduleScope = [],
     ): array
     {
         [$page, $limit] = $this->normalizePage($page, $limit);
@@ -270,6 +278,10 @@ final class ReportConfigService extends BaseService
             ->where('generated_reports.tenant_id', CurrentTenant::id())
             ->select('id, config_id, module, file_path, format, status, row_count, parameters_used, ai_summary, error_message, generated_at, started_at, completed_at, expires_at')
             ->orderBy('generated_at', 'DESC')->orderBy('id', 'DESC');
+        if ($moduleScope !== []) {
+            $countBuilder->whereIn('module', $moduleScope);
+            $builder->whereIn('module', $moduleScope);
+        }
         foreach (['module' => $module, 'status' => $status] as $column => $value) {
             if ($value !== null) {
                 $countBuilder->where($column, $value);
@@ -286,7 +298,19 @@ final class ReportConfigService extends BaseService
         );
     }
 
-    /** @return array{path: string, name: string} */
+    /** The module of a saved configuration, or null when it does not exist
+        (lets the controller apply ReportService::MODULE_EXTRA_PERMISSIONS
+        before run() queues any generation). */
+    public function moduleForConfig(int $configId): ?string
+    {
+        $row = $this->db->table('report_configurations')
+            ->where('report_configurations.tenant_id', CurrentTenant::id())
+            ->select('module')->where('id', $configId)->get()->getRowArray();
+
+        return is_array($row) ? (string) $row['module'] : null;
+    }
+
+    /** @return array{path: string, name: string, module: string} */
     public function fileForDownload(int $id): array
     {
         $row = $this->db->table('generated_reports')
@@ -314,7 +338,7 @@ final class ReportConfigService extends BaseService
                 ['code' => 'resource.not_found', 'message' => 'The report file is no longer available.'],
             ]);
         }
-        return ['path' => $full, 'name' => $filename];
+        return ['path' => $full, 'name' => $filename, 'module' => (string) $row['module']];
     }
 
     /** @return array<string, mixed>|null */

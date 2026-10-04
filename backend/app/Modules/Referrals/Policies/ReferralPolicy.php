@@ -15,7 +15,6 @@ use App\Modules\Shared\BasePolicy;
  *   - referrals.acknowledge  → acknowledge
  *   - referrals.review       → review
  *   - referrals.close        → close
- *   - referrals.issue_qr     → issue QR token
  *
  * @noRecordCheck — No record-level ownership. Issuers can acknowledge / review
  * their own referrals without a separate permission today; that's a future
@@ -65,7 +64,6 @@ final class ReferralPolicy extends BasePolicy
             'acknowledge' => 'referrals.acknowledge',
             'review'      => 'referrals.review',
             'close'       => 'referrals.close',
-            'issueQr'     => 'referrals.issue_qr',
             'handoff'     => 'referrals.acknowledge',
             default       => null,
         };

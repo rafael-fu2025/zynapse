@@ -19,6 +19,7 @@ import {
   reportConfigSchema,
   reportNarrativeSchema,
   reportSummarySchema,
+  type AnyReport,
   type ClinicReport,
   type CounsellingReport,
   type FacilitiesReport,
@@ -162,6 +163,28 @@ export function useReportNarrative() {
   });
 }
 
+/**
+ * Fetch + validate one module's analytics payload on demand. The multi-
+ * module PDF export needs modules whose dashboards were never opened —
+ * their query hooks stay disabled until the tab is active.
+ */
+export async function fetchReportModule(module: ReportModule, start: string, end: string): Promise<AnyReport> {
+  const res = await apiClient.get<unknown>('/reports/' + module + '?' + rangeParams(start, end));
+  switch (module) {
+    case 'clinic':
+      return clinicReportSchema.parse(res.data);
+    case 'counselling':
+      return counsellingReportSchema.parse(res.data);
+    case 'inventory':
+      return inventoryReportSchema.parse(res.data);
+    case 'referrals':
+      return referralReportSchema.parse(res.data);
+    case 'facilities':
+      return facilitiesReportSchema.parse(res.data);
+  }
+  throw new Error('Unknown report module.');
+}
+
 async function parseBlobError(error: unknown): Promise<Error> {
   if (!axios.isAxiosError<Blob>(error)) {
     return error instanceof Error ? error : new Error('Download failed.');
@@ -213,52 +236,63 @@ async function download(path: string, fallback: string): Promise<{ filename: str
 
 export function useReportExport() {
   return useMutation<
-    { filename: string; size: number },
+    { files: number },
     Error,
-    { module: ReportModule; start: string; end: string }
+    { modules: ReportModule[]; start: string; end: string }
   >({
-    mutationFn: ({ module, start, end }) =>
-      download('/reports/export/' + module + '?' + rangeParams(start, end), 'synapse-report-' + module + '.csv'),
-    onSuccess: ({ filename }) => toast.success('Exported ' + filename + '.'),
+    mutationFn: async ({ modules, start, end }) => {
+      // The export endpoint streams ONE module per request, so a
+      // multi-module export means several sequential CSV downloads.
+      let files = 0;
+      for (const module of modules) {
+        await download('/reports/export/' + module + '?' + rangeParams(start, end), 'synapse-report-' + module + '.csv');
+        files += 1;
+      }
+      return { files };
+    },
+    onSuccess: ({ files }) => toast.success(files === 1 ? 'Exported 1 file.' : 'Exported ' + files + ' files.'),
     onError: (error) => toast.error(error.message),
   });
 }
 
 export type PdfExportResult = { filename: string; size: number; shared: boolean };
+export type PdfExportJob = { module: ReportModule; data: AnyReport };
 
 /**
- * useReportPdfExport — rasterizes a printable node (`ReportPdfView`) into a
- * multi-page A4 PDF and shares or downloads it.
+ * useReportPdfExport — rasterizes the printable node (`ReportPdfView`)
+ * once per selected module into ONE multi-page A4 PDF (each module starts
+ * on its own page), downloads it, and additionally offers the native
+ * share sheet when the browser supports it.
  *
- * Generation is fully client-side (html-to-image → jsPDF): the node is
- * captured at 2x, then sliced across A4 pages. When the browser supports the
- * Web Share API with files (navigator.share({files})), the PDF is handed to
- * the native share sheet; otherwise it falls back to a direct download.
+ * Generation is fully client-side (html-to-image → jsPDF). The caller
+ * supplies `prepare(job)` — which renders that module's view into the
+ * off-screen capture node and resolves once committed — and `getNode()`
+ * to read the node back; that keeps the React render cycle on the page.
+ * The file is ALWAYS saved to disk via a download anchor first; when the
+ * browser supports the Web Share API with files (navigator.share({files})),
+ * the same file is then handed to the native share sheet. Cancelling the
+ * share sheet keeps the download.
  */
 export function useReportPdfExport() {
-  return useMutation<PdfExportResult, Error, { module: ReportModule; start: string; end: string; node: HTMLElement }>({
-    mutationFn: async ({ module, start, end, node }) => {
-      const filename = 'synapse-report-' + module + '-' + start + '_' + end + '.pdf';
-      // The printable node lives off-screen (left: -20000px) so it never
-      // flashes over the page. html-to-image clones it into an SVG at the
-      // node's own offset, which would push the content outside the capture
-      // viewport and produce a BLANK PDF. The `style` option repositions the
-      // CLONE to 0,0 while the source stays off-screen — verified: corner
-      // pixel renders maroon instead of all-white.
-      const dataUrl = await toPng(node, {
-        pixelRatio: 2,
-        backgroundColor: '#ffffff',
-        cacheBust: true,
-        style: { position: 'absolute', left: '0', top: '0', margin: '0' },
-      });
+  return useMutation<
+    PdfExportResult,
+    Error,
+    {
+      modules: ReportModule[];
+      start: string;
+      end: string;
+      prepare: (job: PdfExportJob) => Promise<void>;
+      getNode: () => HTMLElement | null;
+    }
+  >({
+    mutationFn: async ({ modules, start, end, prepare, getNode }) => {
+      const filename = 'synapse-report-'
+        + (modules.length === 1 ? modules[0] : 'full')
+        + '-' + start + '_' + end + '.pdf';
 
-      // Render the PNG into a canvas so we can measure it and multi-page.
-      const image = new Image();
-      image.src = dataUrl;
-      await image.decode();
-      const imgW = image.width;
-      const imgH = image.height;
-      if (imgW === 0 || imgH === 0) throw new Error('Failed to render the report PDF.');
+      const jobs: PdfExportJob[] = await Promise.all(
+        modules.map(async (module) => ({ module, data: await fetchReportModule(module, start, end) })),
+      );
 
       // A4 portrait, 210×297mm, 10mm margins.
       const pageW = 210;
@@ -266,50 +300,89 @@ export function useReportPdfExport() {
       const margin = 10;
       const contentW = pageW - margin * 2;
       const contentH = pageH - margin * 2;
-      // Scale the captured image to the printable width, then compute pages.
-      const drawH = contentW * (imgH / imgW);
-      const pages = Math.max(1, Math.ceil(drawH / contentH));
 
       const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4', compress: true });
       const canvas = document.createElement('canvas');
       const ctx = canvas.getContext('2d');
       if (ctx === null) throw new Error('Canvas is not available.');
+      let pagesAdded = 0;
 
-      for (let page = 0; page < pages; page++) {
-        if (page > 0) doc.addPage();
-        // Slice the source image for this page.
-        const sliceHpx = Math.ceil((imgH * contentH) / drawH);
-        const srcY = page * sliceHpx;
-        const actualSlice = Math.min(sliceHpx, imgH - srcY);
-        if (actualSlice <= 0) continue;
-        canvas.width = imgW;
-        canvas.height = actualSlice;
-        ctx.fillStyle = '#ffffff';
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-        ctx.drawImage(image, 0, srcY, imgW, actualSlice, 0, 0, imgW, actualSlice);
-        const pageDataUrl = canvas.toDataURL('image/png');
-        doc.addImage(
-          pageDataUrl,
-          'PNG',
-          margin,
-          margin,
-          contentW,
-          contentW * (actualSlice / imgW),
-          undefined,
-          'FAST',
-        );
+      for (const job of jobs) {
+        await prepare(job);
+        // Capture the ReportPdfView root (first child of the fixed wrapper),
+        // NOT the wrapper itself — the wrapper carries `left: -20000px` and
+        // html-to-image clones at that offset, producing a blank PDF. The
+        // inner node has its own width (794px) and captures correctly with
+        // the clone style override below.
+        const node = getNode();
+        if (node === null) throw new Error('Report is not ready to export yet.');
+
+        // The `style` option repositions the CLONE to 0,0 while the source
+        // stays off-screen — without it the clone's offset pushes the
+        // content outside the capture viewport and produces a BLANK PDF.
+        // Verified: corner pixel renders maroon instead of all-white.
+        const dataUrl = await toPng(node, {
+          pixelRatio: 2,
+          backgroundColor: '#ffffff',
+          cacheBust: true,
+          style: { position: 'absolute', left: '0', top: '0', margin: '0' },
+        });
+
+        const image = new Image();
+        image.src = dataUrl;
+        await image.decode();
+        const imgW = image.width;
+        const imgH = image.height;
+        if (imgW === 0 || imgH === 0) throw new Error('Failed to render the report PDF.');
+
+        // Scale the captured image to the printable width, then compute pages.
+        const drawH = contentW * (imgH / imgW);
+        const pages = Math.max(1, Math.ceil(drawH / contentH));
+        for (let page = 0; page < pages; page++) {
+          if (pagesAdded > 0) doc.addPage();
+          const sliceHpx = Math.ceil((imgH * contentH) / drawH);
+          const srcY = page * sliceHpx;
+          const actualSlice = Math.min(sliceHpx, imgH - srcY);
+          if (actualSlice > 0) {
+            canvas.width = imgW;
+            canvas.height = actualSlice;
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.drawImage(image, 0, srcY, imgW, actualSlice, 0, 0, imgW, actualSlice);
+            const pageDataUrl = canvas.toDataURL('image/png');
+            doc.addImage(
+              pageDataUrl,
+              'PNG',
+              margin,
+              margin,
+              contentW,
+              contentW * (actualSlice / imgW),
+              undefined,
+              'FAST',
+            );
+          }
+          pagesAdded += 1;
+        }
       }
       canvas.width = 0;
       canvas.height = 0;
 
+      // Institutional footer + page numbers, drawn as real PDF text so it
+      // stays crisp on every page (the body itself is a raster capture).
+      const pageCount = doc.getNumberOfPages();
+      doc.setFontSize(8);
+      doc.setTextColor(107, 101, 98);
+      for (let page = 1; page <= pageCount; page++) {
+        doc.setPage(page);
+        doc.text('Foundation University · SYNAPSE Reports & Analytics', margin, pageH - 4);
+        doc.text('Page ' + page + ' of ' + pageCount, pageW - margin, pageH - 4, { align: 'right' });
+      }
+
       const blob = doc.output('blob');
       const file = new File([blob], filename, { type: 'application/pdf' });
-      const nav = navigator as Navigator & { canShare?: (data?: ShareData) => boolean };
-      const shareData = { files: [file], title: filename };
-      if (typeof nav.canShare === 'function' && nav.canShare(shareData)) {
-        await nav.share(shareData);
-        return { filename, size: blob.size, shared: true };
-      }
+
+      // Download first so the file is on disk regardless of what the share
+      // sheet does afterwards.
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement('a');
       anchor.href = url;
@@ -318,10 +391,24 @@ export function useReportPdfExport() {
       anchor.click();
       anchor.remove();
       URL.revokeObjectURL(url);
-      return { filename, size: blob.size, shared: false };
+
+      // Share is best-effort on top of the download: a dismissed sheet
+      // (AbortError) or a share failure must not surface as an error toast.
+      let shared = false;
+      const nav = navigator as Navigator & { canShare?: (data?: ShareData) => boolean };
+      const shareData = { files: [file], title: filename };
+      if (typeof nav.canShare === 'function' && nav.canShare(shareData)) {
+        try {
+          await nav.share(shareData);
+          shared = true;
+        } catch {
+          // Share cancelled or failed — the download already succeeded.
+        }
+      }
+      return { filename, size: blob.size, shared };
     },
     onSuccess: ({ filename, shared }) =>
-      toast.success(shared ? 'Sharing ' + filename + '…' : 'Downloaded ' + filename + '.'),
+      toast.success(shared ? 'Downloaded ' + filename + ' · share sheet opened.' : 'Downloaded ' + filename + '.'),
     onError: (error) => toast.error(error.message),
   });
 }

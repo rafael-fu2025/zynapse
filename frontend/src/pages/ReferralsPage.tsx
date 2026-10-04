@@ -4,22 +4,15 @@
  * - List referrals with keyset pagination + status filter (shadcn Select).
  * - Create referral (shadcn Dialog + RHF + Zod).
  * - Lifecycle buttons (Acknowledge / Review / Close).
- * - Issue QR (qrcode.react renders the plaintext token; the backend
- *   stores only the HMAC hash).
- * - Verify endpoint (PUBLIC) — minimum-disclosure envelope.
  */
 import { zodResolver } from '@hookform/resolvers/zod';
-import { CalendarPlus, Camera, ChevronDown, ChevronLeft, ChevronRight, CircleAlert, ClipboardPaste, Loader2, Plus, QrCode, ShieldCheck, UserRound, X } from 'lucide-react';
-import { QRCodeCanvas } from 'qrcode.react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { CalendarPlus, ChevronDown, ChevronLeft, ChevronRight, CircleAlert, Loader2, Plus, UserRound, X } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
 import { useForm } from 'react-hook-form';
-import { Html5Qrcode } from 'html5-qrcode';
-import { toast } from 'sonner';
 
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
-import { CopyButton } from '@/components/CopyButton';
 import { TableStateRows } from '@/components/TableStates';
 import {
   Dialog,
@@ -53,13 +46,10 @@ import {
   useAcknowledgeReferral,
   useCloseReferral,
   useCreateReferral,
-  useIssueQr,
   useReferralPatientLookup,
   useQueueHandoff,
   useReferrals,
   useReviewReferral,
-  useRevokeReferralQr,
-  useVerifyQr,
 } from '@/hooks/useReferrals';
 import { useAvailability, useBookAppointment } from '@/hooks/useSchedule';
 import { useDashboardCounters } from '@/hooks/useDashboard';
@@ -72,7 +62,6 @@ import {
   createReferralSchema,
   type CreateReferralInput,
   type Referral,
-  type VerifyResult,
 } from '@/schemas/referrals';
 import { fmtUtcToApp } from '@/utils/date';
 import { statusLabel } from '@/utils/status';
@@ -324,227 +313,6 @@ function CreateReferralDialog({ onClose }: { onClose: () => void }) {
   );
 }
 
-function QrDialog({ referral, onClose }: { referral: Referral; onClose: () => void }) {
-  const issue = useIssueQr();
-  const revoke = useRevokeReferralQr();
-  const [token, setToken] = useState<string | null>(null);
-  const [expiresAt, setExpiresAt] = useState<string | null>(null);
-  const [artifactType, setArtifactType] = useState<string | null>(null);
-  const [revoked, setRevoked] = useState(false);
-
-  function go() {
-    issue.mutate(
-      { id: referral.id, ttlSeconds: 3600 },
-      {
-        onSuccess: (res) => {
-          setToken(res.token);
-          setExpiresAt(res.expires_at);
-          setArtifactType(res.artifact_type);
-          setRevoked(false);
-          toast.success('QR issued. Token shown once.');
-        },
-      },
-    );
-  }
-
-  return (
-    <DialogContent>
-      <DialogHeader>
-        <DialogTitle className="flex items-center gap-2">
-          <QrCode className="size-4" /> QR — referral #{referral.id}
-        </DialogTitle>
-      </DialogHeader>
-      {token === null && (
-        <div className="space-y-3">
-          <p className="text-sm text-muted-foreground">
-            Issue a 1-hour QR token. Only the HMAC-SHA256 hash is stored; the
-            plaintext token is shown ONCE below.
-          </p>
-          <Button onClick={go} disabled={issue.isPending}>
-            {issue.isPending && <Loader2 className="animate-spin" />} Issue QR
-          </Button>
-        </div>
-      )}
-      {token !== null && !revoked && (
-        <div className="flex flex-col items-center gap-3">
-          <QRCodeCanvas value={token} size={192} includeMargin />
-          <div className="flex items-center gap-2">
-            <p className="break-all tabular-nums text-xs text-foreground">{token}</p>
-            <CopyButton value={token} label="Copy QR token" successMessage="QR token copied." />
-          </div>
-          <p className="text-xs text-muted-foreground">
-            Expires {fmtUtcToApp(expiresAt ?? new Date().toISOString())} · artifact {artifactType}
-          </p>
-        </div>
-      )}
-      {revoked && (
-        <div role="alert" className="flex items-center gap-2 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2.5 text-sm text-destructive">
-          <CircleAlert className="size-4 shrink-0" /> This QR token has been revoked and can no longer be verified.
-        </div>
-      )}
-      <DialogFooter>
-        <div className="flex w-full justify-end gap-2">
-          {token !== null && !revoked && (
-            <Button variant="destructive" disabled={revoke.isPending} onClick={() => revoke.mutate(referral.id, { onSuccess: () => setRevoked(true) })}>
-              {revoke.isPending && <Loader2 className="animate-spin" />} Revoke QR
-            </Button>
-          )}
-          <Button variant="outline" onClick={onClose}>Close</Button>
-        </div>
-      </DialogFooter>
-    </DialogContent>
-  );
-}
-
-function ScanDialog({ onClose, onResult }: { onClose: () => void; onResult: (r: VerifyResult) => void }) {
-  const instRef = useRef<Html5Qrcode | null>(null);
-  // Paste is the default: the camera only starts on an explicit click,
-  // which avoids a Radix-portal timing race (html5-qrcode needs its
-  // target element present before `start`).
-  const [mode, setMode] = useState<'camera' | 'paste'>('paste');
-  const [running, setRunning] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-  const [tokenInput, setTokenInput] = useState('');
-  const verify = useVerifyQr();
-
-  async function startCamera() {
-    try {
-      if (document.getElementById('synapse-qr-reader') === null) {
-        throw new Error('Camera area is not ready — try again.');
-      }
-      const inst = new Html5Qrcode('synapse-qr-reader');
-      instRef.current = inst;
-      setRunning(true);
-      await inst.start(
-        { facingMode: 'environment' },
-        { fps: 10, qrbox: { width: 240, height: 240 } },
-        (decoded) => {
-          void (async () => {
-            await stopCamera();
-            verify.mutate(decoded, {
-              onSuccess: (r) => {
-                onResult(r);
-                onClose();
-              },
-              onError: (e) => setErr(e.errors[0]?.message ?? 'Verify failed.'),
-            });
-          })();
-        },
-        () => { /* ignore frame errors */ },
-      );
-    } catch (e) {
-      setErr((e as Error).message);
-      setRunning(false);
-    }
-  }
-
-  async function stopCamera() {
-    const inst = instRef.current;
-    instRef.current = null;
-    if (inst) {
-      try { await inst.stop(); } catch { /* noop */ }
-      try { inst.clear(); } catch { /* noop */ }
-    }
-    setRunning(false);
-  }
-
-  // Stop the camera on unmount.
-  useEffect(() => () => { void stopCamera(); }, []);
-
-  function verifyToken(raw: string) {
-    const token = raw.trim();
-    if (token === '') {
-      setErr('Paste or type the QR token first.');
-      return;
-    }
-    setErr(null);
-    verify.mutate(token, {
-      onSuccess: (r) => {
-        onResult(r);
-        onClose();
-      },
-      onError: (e) => setErr(e.errors[0]?.message ?? 'Verify failed.'),
-    });
-  }
-
-  return (
-    <DialogContent lockDismiss>
-      <DialogHeader>
-        <DialogTitle className="flex items-center gap-2">
-          <ShieldCheck className="size-4" /> Verify a referral
-        </DialogTitle>
-      </DialogHeader>
-
-      <div className="flex flex-wrap gap-2">
-        <Button
-          type="button"
-          size="sm"
-          variant={mode === 'camera' ? 'default' : 'outline'}
-          onClick={() => { setMode('camera'); setErr(null); void startCamera(); }}
-        >
-          <Camera className="size-3.5" aria-hidden /> Scan with camera
-        </Button>
-        <Button
-          type="button"
-          size="sm"
-          variant={mode === 'paste' ? 'default' : 'outline'}
-          onClick={() => { setMode('paste'); setErr(null); void stopCamera(); }}
-        >
-          <ClipboardPaste className="size-3.5" aria-hidden /> Paste token
-        </Button>
-      </div>
-
-      {/* The reader div must stay in the DOM for html5-qrcode to find it
-          (hidden only when the user is in paste mode). */}
-      <div
-        id="synapse-qr-reader"
-        className={`rounded-md border ${mode !== 'camera' ? 'hidden' : ''}`}
-      />
-      {mode === 'camera' && running && (
-        <p className="mt-2 text-xs text-muted-foreground">Point your camera at the QR…</p>
-      )}
-
-      {mode === 'paste' && (
-        <div className="space-y-2">
-          <Label htmlFor="verify-token">QR token</Label>
-          <Input
-            id="verify-token"
-            autoFocus
-            placeholder="Paste the copied QR token here…"
-            value={tokenInput}
-            onChange={(e) => setTokenInput(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); verifyToken(tokenInput); } }}
-          />
-          <Button className="w-full" onClick={() => verifyToken(tokenInput)} disabled={verify.isPending}>
-            {verify.isPending && <Loader2 className="animate-spin" aria-hidden />}
-            <ShieldCheck aria-hidden /> Verify token
-          </Button>
-        </div>
-      )}
-
-      {err !== null && <p role="alert" className="mt-2 text-xs text-destructive">{err}</p>}
-
-      <DialogFooter>
-        <Button variant="outline" onClick={onClose}>Close</Button>
-      </DialogFooter>
-    </DialogContent>
-  );
-}
-
-function VerifyResultBadge({ result }: { result: VerifyResult }) {
-  const variant =
-    result.status === 'valid' ? 'success'
-      : result.status === 'expired' ? 'warning'
-      : 'destructive';
-  return (
-    <Badge variant={variant}>
-      <ShieldCheck className="mr-1 size-3" />
-      {statusLabel(result.status)} · {titleCase(result.artifact_type ?? '—')}
-      {result.issuer !== null ? ` · issuer=${result.issuer}` : ''}
-    </Badge>
-  );
-}
-
 /**
  * ReferralBookingDialog — bridges an accepted clinic→counselling
  * referral into an actual counselling appointment (audit fix: ack-
@@ -674,12 +442,6 @@ export default function ReferralsPage() {
   const canAcknowledge = (r: Referral): boolean => hasPerm('referrals.acknowledge') && canHandler(r);
   const canReview = (r: Referral): boolean => hasPerm('referrals.review') && canHandler(r);
   const canClose = (r: Referral): boolean => hasPerm('referrals.close') && canHandler(r);
-  const canIssueQr = (r: Referral): boolean => hasPerm('referrals.issue_qr') && canHandler(r);
-  // Non-teaching staff can open the page but cannot create a clinic→
-  // counselling referral (server enforces `is_teaching = 1`); show a
-  // friendly hint instead of a confusing 403 on submit.
-  const isNonTeachingEmployee =
-    me.data?.person_kind === 'employee' && me.data?.is_teaching !== true;
   // Referrers (employee group) are scoped server-side to their own
   // referrals; handlers (clinic/counselling staff, admin) see all.
   const isReferrerScoped = me.data?.person_kind === 'employee';
@@ -688,16 +450,10 @@ export default function ReferralsPage() {
   // ?status= survives a refresh and can be shared (PRODUCT principle 5).
   const [statusFilter, setStatusFilter] = useUrlFilter('status', { default: 'all' });
   const [openCreate, setOpenCreate] = useState(false);
-  const [openQr, setOpenQr] = useState<Referral | null>(null);
-  const [openScan, setOpenScan] = useState(false);
-  const [verifyResult, setVerifyResult] = useState<VerifyResult | null>(null);
   const [closing, setClosing] = useState<Referral | null>(null);
-  const [revoking, setRevoking] = useState<Referral | null>(null);
   // Audit fix: accepted counselling-bound referrals can be turned into
   // a counselling appointment right from this page.
   const [bookingFor, setBookingFor] = useState<Referral | null>(null);
-
-  const revokeQr = useRevokeReferralQr();
 
   const list = useReferrals(cursor, statusFilter === 'all' ? null : statusFilter, 25);
   // Status counts come from the same dashboard counters the sidebar
@@ -738,20 +494,9 @@ export default function ReferralsPage() {
         title="Referrals"
         description="Referrals hand off care between Clinic and Counselling — each side keeps its own records."
         actions={
-          <>
-            <Button variant="outline" onClick={() => setOpenScan(true)}>
-              <Camera /> Verify (scan)
-            </Button>
-            {isNonTeachingEmployee ? (
-              <span className="inline-flex max-w-xs items-center gap-1.5 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-                <ShieldCheck className="size-3.5 shrink-0" /> Only teaching employees (faculty) can refer students to counselling.
-              </span>
-            ) : (
-              <Button onClick={() => setOpenCreate(true)}>
-                <Plus /> New referral
-              </Button>
-            )}
-          </>
+          <Button onClick={() => setOpenCreate(true)}>
+            <Plus /> New referral
+          </Button>
         }
         toolbar={
           <div className="flex flex-wrap items-center gap-3">
@@ -771,7 +516,6 @@ export default function ReferralsPage() {
                 <SelectItem value="closed">{labelWithCount('Closed', refCounts?.closed)}</SelectItem>
               </SelectContent>
             </Select>
-            {verifyResult !== null && <VerifyResultBadge result={verifyResult} />}
           </div>
         }
       />
@@ -876,20 +620,6 @@ export default function ReferralsPage() {
                           </Button>
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end" className="w-48">
-                          {(r.status === 'under_review' || r.status === 'acknowledged') && canIssueQr(r) && (
-                            <DropdownMenuItem className="min-h-11" onSelect={() => setOpenQr(r)}>
-                              <QrCode /> Issue QR code
-                            </DropdownMenuItem>
-                          )}
-                          {r.qr_expires_at !== null && (r.qr_revoked_at ?? null) === null && canIssueQr(r) && (
-                            <DropdownMenuItem
-                              className="min-h-11 text-destructive focus:text-destructive"
-                              disabled={revokeQr.isPending}
-                              onSelect={() => setRevoking(r)}
-                            >
-                              <X /> Revoke QR code
-                            </DropdownMenuItem>
-                          )}
                           {/* Close is only legal from acknowledged|under_review —
                               offering it from `submitted` was a guaranteed 409
                               (2026-09 audit). */}
@@ -931,19 +661,9 @@ export default function ReferralsPage() {
           <CreateReferralDialog onClose={() => setOpenCreate(false)} />
         </Dialog>
       )}
-      {openQr !== null && (
-        <Dialog open onOpenChange={(o) => !o && setOpenQr(null)}>
-          <QrDialog referral={openQr} onClose={() => setOpenQr(null)} />
-        </Dialog>
-      )}
       {bookingFor !== null && (
         <Dialog open onOpenChange={(o) => !o && setBookingFor(null)}>
           <ReferralBookingDialog referral={bookingFor} onClose={() => setBookingFor(null)} />
-        </Dialog>
-      )}
-      {openScan && (
-        <Dialog open onOpenChange={(o) => !o && setOpenScan(false)}>
-          <ScanDialog onClose={() => setOpenScan(false)} onResult={(r) => setVerifyResult(r)} />
         </Dialog>
       )}
 
@@ -957,18 +677,6 @@ export default function ReferralsPage() {
           if (closing !== null) close.mutate(closing.id, { onSuccess: () => setClosing(null) });
         }}
         onCancel={() => setClosing(null)}
-      />
-
-      <ConfirmDialog
-        open={revoking !== null}
-        title={revoking !== null ? `Revoke QR for referral #${revoking.id}?` : ''}
-        description="The printed QR token becomes invalid immediately and can no longer be verified."
-        confirmLabel="Revoke QR"
-        pending={revokeQr.isPending}
-        onConfirm={() => {
-          if (revoking !== null) revokeQr.mutate(revoking.id, { onSuccess: () => setRevoking(null) });
-        }}
-        onCancel={() => setRevoking(null)}
       />
     </main>
   );

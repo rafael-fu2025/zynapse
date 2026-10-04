@@ -8,10 +8,13 @@
  */
 import {
   ArrowRight,
+  CalendarDays,
   CheckCircle2,
+  ExternalLink,
   GraduationCap,
-  IdCard,
+  KeyRound,
   Mail,
+  Megaphone,
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { Badge } from '@/components/ui/badge';
@@ -29,11 +32,17 @@ import { GuidancePortalTab } from '@/components/GuidancePortalTab';
 import { useTabParam } from '@/hooks/useTabParam';
 import { PortalAppointments } from '@/components/PortalAppointments';
 import { useMe } from '@/hooks/useAuth';
+import { useMyGuidanceAnnouncements } from '@/hooks/useGuidanceContent';
 import { useNotifications } from '@/hooks/useNotifications';
-import { useMyStudentClinicVisits, useMyStudentProfile } from '@/hooks/useStudentPortal';
+import {
+  useMyStudentAppointments,
+  useMyStudentClinicVisits,
+  useMyStudentProfile,
+} from '@/hooks/useStudentPortal';
 import { notificationDetail, notificationLabel } from '@/utils/notifications';
-import { fmtUtcToApp } from '@/utils/date';
+import { fmtUtcToApp, parseUtc } from '@/utils/date';
 import { statusLabel } from '@/utils/status';
+import type { StudentAppointment } from '@/schemas/studentPortal';
 
 /** Portal sections — sidebar on wide screens, pills on mobile. */
 
@@ -62,6 +71,153 @@ function ProfileSkeleton() {
       <Skeleton className="h-48 lg:col-span-1" />
       <Skeleton className="h-48 lg:col-span-2" />
     </div>
+  );
+}
+
+/**
+ * Announcements — the student's targeted Guidance announcements. The
+ * portal overview is the only surface for these (the Guidance tab no
+ * longer repeats the feed), so it renders every post in full, newest
+ * first as the backend orders it.
+ */
+function GuidanceAnnouncementsCard() {
+  const announcements = useMyGuidanceAnnouncements();
+
+  return (
+    <Card className="xl:col-span-2">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <Megaphone className="size-4" aria-hidden /> Announcements
+        </CardTitle>
+        <CardDescription>Guidance office posts for you.</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {announcements.isLoading && <Skeleton className="h-20" />}
+        {announcements.isError && (
+          <QueryErrorState
+            message="Failed to load announcements."
+            onRetry={() => void announcements.refetch()}
+            pending={announcements.isFetching}
+          />
+        )}
+        {announcements.data !== undefined && announcements.data.length === 0 && (
+          <p className="py-3 text-sm text-muted-foreground">No announcements right now.</p>
+        )}
+        {announcements.data?.map((a) => (
+          <article
+            key={a.id}
+            className={
+              a.severity === 'urgent'
+                ? 'rounded-lg border border-destructive/60 bg-destructive/5 p-3.5'
+                : 'rounded-lg border bg-background p-3.5'
+            }
+          >
+            <div className="flex flex-wrap items-center gap-2">
+              {/* Red = urgent (2026-09-25 meeting); amber stays reserved
+                  for the clearance "Required" flag. */}
+              {a.severity === 'urgent' && <Badge variant="destructive">Urgent</Badge>}
+              {a.is_required && <Badge variant="warning">Required</Badge>}
+              <h3 className="text-sm font-medium text-foreground">{a.title}</h3>
+            </div>
+            <p className="mt-1.5 text-sm text-muted-foreground">{a.body}</p>
+            <div className="mt-2.5 flex flex-wrap items-center gap-3">
+              {a.publish_at !== null && (
+                <p className="text-xs text-muted-foreground">
+                  {fmtUtcToApp(a.publish_at, 'MMM d, yyyy')}
+                </p>
+              )}
+              {a.action_url !== null && (
+                <a
+                  href={a.action_url}
+                  target="_blank"
+                  rel="noreferrer noopener"
+                  className="inline-flex items-center gap-1 text-xs font-medium text-primary underline underline-offset-2"
+                >
+                  {a.action_label ?? 'Open link'} <ExternalLink className="size-3" aria-hidden />
+                </a>
+              )}
+            </div>
+          </article>
+        ))}
+      </CardContent>
+    </Card>
+  );
+}
+
+/**
+ * Live (not yet resolved) appointment statuses — mirrors
+ * LIVE_STATUSES in appointmentLiveState. The clinic domain has no
+ * "pending": a portal booking starts at `scheduled` and becomes
+ * `confirmed` when staff approve it.
+ */
+const UPCOMING_APPOINTMENT_STATUSES: ReadonlySet<string> = new Set(['scheduled', 'confirmed']);
+
+/** Nearest future appointment that staff have not resolved yet. */
+function nextUpcomingAppointment(rows: StudentAppointment[]): StudentAppointment | null {
+  const now = Date.now();
+  const upcoming = rows
+    .filter(
+      (a) =>
+        UPCOMING_APPOINTMENT_STATUSES.has(a.status) && parseUtc(a.scheduled_at).getTime() >= now,
+    )
+    .sort((a, b) => parseUtc(a.scheduled_at).getTime() - parseUtc(b.scheduled_at).getTime());
+  return upcoming[0] ?? null;
+}
+
+/**
+ * UpcomingAppointmentCard — the student's next scheduled/confirmed
+ * clinic appointment, one click from the appointments tab.
+ */
+function UpcomingAppointmentCard() {
+  const appointments = useMyStudentAppointments();
+  const next = appointments.data !== undefined ? nextUpcomingAppointment(appointments.data) : null;
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <CalendarDays className="size-4" aria-hidden /> Upcoming appointment
+        </CardTitle>
+        <CardDescription>Your next clinic slot.</CardDescription>
+      </CardHeader>
+      <CardContent>
+        {appointments.isLoading && <Skeleton className="h-16" />}
+        {appointments.isError && (
+          <QueryErrorState
+            message="Failed to load your appointments."
+            onRetry={() => void appointments.refetch()}
+            pending={appointments.isFetching}
+          />
+        )}
+        {appointments.data !== undefined && next !== null && (
+          <Link
+            to="?tab=appointments"
+            className="block rounded-lg border bg-background p-3.5 transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+          >
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-sm font-semibold text-foreground">{fmtUtcToApp(next.scheduled_at)}</p>
+              <Badge variant="secondary">{statusLabel(next.status)}</Badge>
+            </div>
+            {next.provider_name !== null && (
+              <p className="mt-1 text-xs text-muted-foreground">With {next.provider_name}</p>
+            )}
+            <p className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-primary">
+              View details <ArrowRight className="size-3" aria-hidden />
+            </p>
+          </Link>
+        )}
+        {appointments.data !== undefined && next === null && (
+          <div className="space-y-3">
+            <p className="text-sm text-muted-foreground">No upcoming appointment.</p>
+            <Button asChild size="sm" variant="outline">
+              <Link to="?tab=appointments">
+                Book one <ArrowRight className="size-3.5" />
+              </Link>
+            </Button>
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -100,10 +256,14 @@ export default function StudentPortalPage() {
           <Tabs value={tab} onValueChange={setTab}>
 
             <TabsContent value="overview" className="space-y-6 pt-4">
-              {/* Profile & Clinic Digital Pass */}
-              <div className="grid max-w-96 gap-6 xl:max-w-none xl:grid-cols-[minmax(0,24rem)_minmax(0,1fr)]">
+              {/* Student profile fixed at its original 24rem (centered,
+                  never stretched, while stacked below `xl`), upcoming
+                  appointment beside it from `xl` up, announcements
+                  running underneath both. */}
+              <div className="grid gap-6 xl:grid-cols-[minmax(0,24rem)_minmax(0,1fr)]">
                 <PortalProfileCard
                   caption="Student Profile"
+                  className="w-full max-w-96 justify-self-center"
                   name={`${profile.data.first_name} ${profile.data.middle_name !== null ? `${profile.data.middle_name} ` : ''}${profile.data.last_name}`}
                   idValue={profile.data.student_number}
                 >
@@ -135,48 +295,29 @@ export default function StudentPortalPage() {
                   </dl>
                 </PortalProfileCard>
 
-                <Card>
-                  <CardHeader>
-                    <CardTitle className="flex items-center gap-2">
-                      <IdCard className="size-4" aria-hidden /> Account access
-                    </CardTitle>
-                    <CardDescription>
-                      Book clinic appointments online and check in at the desk — no pass or scanner needed.
-                    </CardDescription>
-                  </CardHeader>
-                  <CardContent className="space-y-4">
-                    <div className="flex flex-col items-center gap-4 sm:flex-row sm:items-start">
-                      <div className="min-w-0 flex-1 space-y-2.5 text-center sm:text-left">
-                        <p className="text-sm font-medium text-foreground">
-                          Book, then check in at the desk
-                        </p>
-                        <p className="text-xs text-muted-foreground leading-relaxed">
-                          Your appointment check-in is handled by clinic staff at the reception desk.
-                        </p>
-                        {profile.data.has_qr && (
-                          <p className="flex items-center justify-center gap-1.5 text-xs text-emerald-600 dark:text-emerald-400 sm:justify-start">
-                            <CheckCircle2 className="size-3.5 shrink-0" /> Verified clinic QR pass active
-                          </p>
-                        )}
-                        <div className="pt-1">
-                          {me.data?.has_local_password === true ? (
-                            <Button asChild size="sm" variant="outline">
-                              <Link to="/change-password">
-                                Change password
-                                <ArrowRight className="size-3.5" />
-                              </Link>
-                            </Button>
-                          ) : (
-                            <p className="text-xs text-muted-foreground leading-relaxed">
-                              Your password is managed by the university — to reset it, email
-                              helpdesk@foundationu.com.
-                            </p>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
+                {/* Upcoming-appointment shortcut beside the profile;
+                    the announcements preview runs underneath both. */}
+                <UpcomingAppointmentCard />
+
+                <GuidanceAnnouncementsCard />
+
+                {/* Password entry point — kept from the old Account access card. */}
+                <p className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground xl:col-span-2">
+                  <KeyRound className="size-3" aria-hidden />
+                  {me.data?.has_local_password === true ? (
+                    <>
+                      Account access —{' '}
+                      <Link className="underline underline-offset-2" to="/change-password">
+                        Change password
+                      </Link>
+                    </>
+                  ) : (
+                    <span>
+                      Your password is managed by the university — to reset it, email
+                      helpdesk@foundationu.com.
+                    </span>
+                  )}
+                </p>
               </div>
             </TabsContent>
 

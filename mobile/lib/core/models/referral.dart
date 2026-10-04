@@ -15,8 +15,6 @@ class Referral {
     this.providerName,
     required this.createdAt,
     required this.updatedAt,
-    this.qrExpiresAt,
-    this.qrRevokedAt,
   });
 
   factory Referral.fromJson(Map<String, dynamic> json) => Referral(
@@ -31,8 +29,6 @@ class Referral {
         providerName: json['provider_name'] as String?,
         createdAt: (json['created_at'] ?? '') as String,
         updatedAt: (json['updated_at'] ?? '') as String,
-        qrExpiresAt: json['qr_expires_at'] as String?,
-        qrRevokedAt: json['qr_revoked_at'] as String?,
       );
 
   final int id;
@@ -51,11 +47,6 @@ class Referral {
   final String? providerName;
   final String createdAt;
   final String updatedAt;
-  final String? qrExpiresAt;
-  final String? qrRevokedAt;
 
   String get flow => '$sourceModule → $targetModule';
-
-  bool get hasQr => qrExpiresAt != null && qrExpiresAt!.isNotEmpty;
-  bool get qrRevoked => qrRevokedAt != null && qrRevokedAt!.isNotEmpty;
 }

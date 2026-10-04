@@ -233,6 +233,73 @@ final class SurveyTest extends FeatureTestCase
         $form->assertStatus(404);
     }
 
+    /**
+     * Give the user a registry year level (users.year_level) — the
+     * anchor year-level targeting matches against.
+     */
+    private function linkStudent(int $userId, ?int $yearLevel): void
+    {
+        db_connect()->table('users')->where('id', $userId)->update(['year_level' => $yearLevel]);
+    }
+
+    public function testYearLevelTargetingGatesAvailabilityAndForm(): void
+    {
+        $ctx = $this->createPublishedSurvey(bin2hex(random_bytes(3)), ['year_levels' => [2]]);
+
+        $outside = $this->login([]);
+        db_connect()->table('users')->where('id', $outside['userId'])->update(['kind' => 'student']);
+        $this->linkStudent($outside['userId'], 1);
+
+        $inside = $this->login([]);
+        db_connect()->table('users')->where('id', $inside['userId'])->update(['kind' => 'student']);
+        $this->linkStudent($inside['userId'], 2);
+
+        // A year-1 student neither sees the survey in the list nor can
+        // open its form.
+        $mine = $this->authed($outside['token'], 'get', 'api/v1/me/guidance/surveys');
+        $ids = array_map(static fn (array $r): int => (int) $r['id'], $this->envelope($mine)['data'] ?? []);
+        $this->assertNotContains($ctx['id'], $ids, 'A survey targeted to year 2 is hidden from a year-1 student.');
+        $this->authed($outside['token'], 'get', 'api/v1/me/guidance/surveys/' . $ctx['id'])->assertStatus(404);
+
+        // A year-2 student gets it, and the staff list echoes the targets.
+        $mineInside = $this->authed($inside['token'], 'get', 'api/v1/me/guidance/surveys');
+        $insideIds = array_map(static fn (array $r): int => (int) $r['id'], $this->envelope($mineInside)['data'] ?? []);
+        $this->assertContains($ctx['id'], $insideIds, 'A year-2 student sees the survey targeted to year 2.');
+
+        $shown = $this->authed($ctx['admin']['token'], 'get', 'api/v1/counselling/surveys/' . $ctx['id']);
+        $this->assertSame([2], $this->envelope($shown)['data']['year_levels']);
+    }
+
+    public function testResponseListCarriesYearLevelAndFilters(): void
+    {
+        $ctx = $this->createPublishedSurvey(bin2hex(random_bytes(3)), ['year_levels' => [3]]);
+        $student = $this->login([]);
+        db_connect()->table('users')->where('id', $student['userId'])->update(['kind' => 'student']);
+        $this->linkStudent($student['userId'], 3);
+
+        $form = $this->authed($student['token'], 'get', 'api/v1/me/guidance/surveys/' . $ctx['id']);
+        $form->assertStatus(200);
+        $questions = $this->envelope($form)['data']['questions'];
+        $this->authed($student['token'], 'post', 'api/v1/me/guidance/surveys/' . $ctx['id'] . '/submit', [
+            'answers' => [['question_id' => $questions[0]['id'], 'value' => 4]],
+        ])->assertStatus(201);
+
+        $list = $this->authed($ctx['admin']['token'], 'get', 'api/v1/counselling/surveys/' . $ctx['id'] . '/responses');
+        $list->assertStatus(200);
+        $rows = $this->envelope($list)['data'] ?? [];
+        $this->assertSame(1, count($rows));
+        $this->assertSame(3, $rows[0]['student_year_level']);
+
+        // Year-level filter: matching level keeps the row, others empty.
+        $filtered = $this->authed($ctx['admin']['token'], 'get', 'api/v1/counselling/surveys/' . $ctx['id'] . '/responses?year_level=3');
+        $this->assertSame(1, count($this->envelope($filtered)['data'] ?? []));
+        $mismatch = $this->authed($ctx['admin']['token'], 'get', 'api/v1/counselling/surveys/' . $ctx['id'] . '/responses?year_level=1');
+        $this->assertSame(0, count($this->envelope($mismatch)['data'] ?? []));
+
+        $detail = $this->authed($ctx['admin']['token'], 'get', 'api/v1/counselling/surveys/' . $ctx['id'] . '/responses/' . $rows[0]['id']);
+        $this->assertSame(3, $this->envelope($detail)['data']['student_year_level']);
+    }
+
     public function testResponseAccessControl(): void
     {
         $ctx = $this->createPublishedSurvey(bin2hex(random_bytes(3)));

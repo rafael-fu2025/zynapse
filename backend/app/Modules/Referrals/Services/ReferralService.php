@@ -55,7 +55,7 @@ final class ReferralService extends BaseService
 
         $builder = $this->db->table('referral_referrals AS r')
             ->where('r.tenant_id', CurrentTenant::id())
-            ->select('r.id, r.patient_school_id, r.source_encounter_id, r.source_session_id, r.source_module, r.target_module, r.artifact_type, r.status, r.reason_code, r.provider_user_id, r.queue_handoff_destination, r.queue_handoff_entry_id, r.queue_handoff_at, r.created_at, r.updated_at, r.qr_expires_at, r.qr_revoked_at, u.username AS provider_name')
+            ->select('r.id, r.patient_school_id, r.source_encounter_id, r.source_session_id, r.source_module, r.target_module, r.artifact_type, r.status, r.reason_code, r.provider_user_id, r.queue_handoff_destination, r.queue_handoff_entry_id, r.queue_handoff_at, r.created_at, r.updated_at, u.username AS provider_name')
             ->join('users AS u', 'u.id = r.provider_user_id', 'left')
             ->where('r.archived_at', null);
 
@@ -115,28 +115,6 @@ final class ReferralService extends BaseService
             || $sourceModule === $targetModule) {
             throw new ApiException('validation.invalid', 422, [
                 ['code' => 'validation.invalid', 'message' => 'source_module and target_module must differ and be one of clinic|counselling.'],
-            ]);
-        }
-
-        // Phase 12 (extension of Phase 11): teaching-only referral gate.
-        //
-        // When the referral is clinic-originated AND the issuer is on
-        // the employee registry, the issuer must be a teaching employee
-        // (`is_teaching = 1`). The check is intentionally a NEGATIVE
-        // gate: an issuer who is NOT on the employee registry (e.g. an
-        // admin user without a `patients_employees` link) is NOT
-        // affected by this rule — the existing `referrals.create`
-        // permission is what governs them. Only clinic staff who are
-        // ALSO listed as employees (and whose type is non-teaching —
-        // e.g. School Nurse, IT, facilities) are blocked.
-        //
-        // We resolve the issuer's employee record by the
-        // `patients_employees.user_id` UNIQUE link (Phase 11). If the
-        // link is NULL, the issuer has no employee record and the gate
-        // is a no-op.
-        if (! $clinicalStaffContext && $sourceModule === 'clinic' && ! $this->issuerIsTeachingEmployee($userId)) {
-            throw new ApiException('rbac.referrals.forbidden', 403, [
-                ['code' => 'referral.teaching_required', 'message' => 'Only teaching employees (faculty) can refer students to counselling.'],
             ]);
         }
 
@@ -527,156 +505,6 @@ final class ReferralService extends BaseService
     }
 
     /**
-     * Issues a QR token. The plaintext token is returned ONCE; only the
-     * keyed HMAC hash is persisted.
-     */
-    public function issueQr(int $id, int $ttlSeconds): array
-    {
-        $this->policy->check('issueQr');
-        $userId = \App\Auth\CurrentUser::assert();
-
-        return $this->txn(function () use ($id, $ttlSeconds, $userId): array {
-            $row = $this->selectForUpdate('referral_referrals', ['tenant_id' => CurrentTenant::id(), 'id' => $id, 'archived_at' => null]);
-
-            if ($row === null) {
-                throw new ApiException('resource.not_found', 404, [
-                    ['code' => 'resource.not_found', 'message' => "Referral #{$id} not found."],
-                ]);
-            }
-
-            // 128-bit CSPRNG token, base64url-encoded.
-            $plain = rtrim(strtr(base64_encode(random_bytes(16)), '+/', '-_'), '=');
-            $hash  = $this->hashToken($plain);
-
-            $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')));
-            $expires = $now->modify('+' . $ttlSeconds . ' seconds')->format('Y-m-d H:i:s');
-
-            $this->db->table('referral_referrals')
-                ->where('referral_referrals.tenant_id', CurrentTenant::id())
-                ->where('id', $id)
-                ->update([
-                    'qr_token_hash' => $hash,
-                    'qr_expires_at' => $expires,
-                    'qr_revoked_at' => null,
-                    'updated_at'    => $now->format('Y-m-d H:i:s'),
-                ]);
-
-            $this->audit->enqueue(
-                'referral.qr_issued',
-                'referral_referrals',
-                $id,
-                $userId,
-                ['resource_code' => 'referral#' . $id],
-            );
-
-            return [
-                'referral_id' => $id,
-                'token'       => $plain,
-                'expires_at'  => $expires,
-                'artifact_type' => (string) $row['artifact_type'],
-            ];
-        });
-    }
-
-    /**
-     * Revokes the currently issued QR token for a referral. A revoked
-     * token reports `status=revoked` on the PUBLIC verify endpoint —
-     * useful when a printed token was misplaced or a hand-off fell
-     * through. Gated by the same `referrals.issue_qr` permission as
-     * issuing; re-issuing later resets the revocation.
-     */
-    public function revokeQr(int $id): ReferralDto
-    {
-        $this->policy->check('issueQr');
-        $userId = \App\Auth\CurrentUser::assert();
-
-        return $this->txn(function () use ($id, $userId): ReferralDto {
-            $row = $this->selectForUpdate('referral_referrals', ['tenant_id' => CurrentTenant::id(), 'id' => $id, 'archived_at' => null]);
-
-            if ($row === null) {
-                throw new ApiException('resource.not_found', 404, [
-                    ['code' => 'resource.not_found', 'message' => "Referral #{$id} not found."],
-                ]);
-            }
-            if (($row['qr_token_hash'] ?? null) === null) {
-                throw new ApiException('referral.qr_not_issued', 409, [
-                    ['code' => 'referral.qr_not_issued', 'message' => 'No QR token has been issued for this referral.'],
-                ]);
-            }
-            if (($row['qr_revoked_at'] ?? null) !== null) {
-                throw new ApiException('referral.qr_already_revoked', 409, [
-                    ['code' => 'referral.qr_already_revoked', 'message' => 'The QR token has already been revoked.'],
-                ]);
-            }
-
-            $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
-            $this->db->table('referral_referrals')
-                ->where('referral_referrals.tenant_id', CurrentTenant::id())
-                ->where('id', $id)
-                ->update(['qr_revoked_at' => $now, 'updated_at' => $now]);
-
-            $this->audit->enqueue(
-                'referral.qr_revoked',
-                'referral_referrals',
-                $id,
-                $userId,
-                ['resource_code' => 'referral#' . $id],
-            );
-
-            $fresh = $this->db->table('referral_referrals')->where('referral_referrals.tenant_id', CurrentTenant::id())->where('id', $id)->get()->getRowArray();
-            return ReferralDto::fromRow($fresh);
-        });
-    }
-
-    /**
-     * MINIMUM-DISCLOSURE verify endpoint.
-     *
-     * Returns ONLY { status, artifact_type, issuer }. NEVER returns PII.
-     */
-    public function verify(string $plainToken): array
-    {
-        $hash = $this->hashToken($plainToken);
-
-        $row = $this->db->table('referral_referrals')
-            ->where('referral_referrals.tenant_id', CurrentTenant::id())
-            ->select('id, artifact_type, issuer_user_id, qr_token_hash, qr_expires_at, qr_revoked_at')
-            ->where('qr_token_hash', $hash)
-            ->where('archived_at', null)
-            ->get()->getRowArray();
-
-        if ($row === null) {
-            return ['status' => 'expired', 'artifact_type' => null, 'issuer' => null];
-        }
-        if ($row['qr_revoked_at'] !== null) {
-            return ['status' => 'revoked', 'artifact_type' => (string) $row['artifact_type'], 'issuer' => null];
-        }
-        if ($row['qr_expires_at'] !== null && strtotime((string) $row['qr_expires_at']) < time()) {
-            return ['status' => 'expired', 'artifact_type' => (string) $row['artifact_type'], 'issuer' => null];
-        }
-
-        $issuer = $this->db->table('users')
-            ->where('users.tenant_id', CurrentTenant::id())
-            ->select('username')
-            ->where('id', $row['issuer_user_id'])
-            ->get()->getRowArray();
-
-        return [
-            'status'        => 'valid',
-            'artifact_type' => (string) $row['artifact_type'],
-            'issuer'        => $issuer['username'] ?? null,
-        ];
-    }
-
-    private function hashToken(string $plain): string
-    {
-        $key = (string) (getenv('REFERRAL_HMAC_KEY') ?: '');
-        if ($key === '') {
-            throw new \RuntimeException('REFERRAL_HMAC_KEY is not configured.');
-        }
-        return hash_hmac('sha256', $plain, $key);
-    }
-
-    /**
      * Validate a provider user id: NULL passes through; a non-null id
      * must reference an existing user. Providers are the handling
      * staff (nurse / counsellor) on the referral's receiving side.
@@ -706,41 +534,5 @@ final class ReferralService extends BaseService
         }
         [, $patient] = (new \Modules\Clinic\Services\PatientLookupService())->findByIdentifier($identifier);
         return $patient !== null ? (int) $patient['id'] : null;
-    }
-
-    /**
-     * Resolve the issuer's employee profile directly from `users`
-     * (identity-consolidated — the employee IS the user). Returns TRUE
-     * only when the issuer is a non-archived employee flagged as
-     * teaching. Returns FALSE in three cases:
-     *
-     *   1. The issuer has no employee profile (admin / external user).
-     *      The teaching gate is a no-op for them.
-     *   2. The employee profile is archived.
-     *   3. The employee profile is active but `is_teaching = 0`
-     *      (e.g. School Nurse, IT, facilities).
-     *
-     * Used by `create()` to enforce the clinic-origin teaching-only
-     * rule (Phase 12 follow-up to Phase 11).
-     */
-    private function issuerIsTeachingEmployee(int $userId): bool
-    {
-        $row = $this->db->table('users')
-            ->where('users.tenant_id', CurrentTenant::id())
-            ->select('is_teaching, archived_at')
-            ->where('id', $userId)
-            ->where('kind', 'employee')
-            ->get()->getRowArray();
-
-        if ($row === null) {
-            // Not on the employee registry — gate is a no-op.
-            return true;
-        }
-        if ($row['archived_at'] !== null) {
-            // Archived employees cannot refer. (Treat as non-teaching
-            // so the gate rejects; the audit trail records the attempt.)
-            return false;
-        }
-        return (int) $row['is_teaching'] === 1;
     }
 }

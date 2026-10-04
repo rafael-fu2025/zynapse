@@ -26,6 +26,12 @@ describe('notificationLabel', () => {
     expect(notificationLabel('queue.called', { destination: 'clinic' })).toBe("You're up — proceed to Clinic");
   });
 
+  it('formats the skip-window auto no-show notice', () => {
+    expect(notificationLabel('queue.skip_expired', { resource_code: 'queue#12' })).toBe(
+      'Skipped patient auto-marked no-show (queue#12)',
+    );
+  });
+
   it('falls back to raw template code for unknown codes', () => {
     expect(notificationLabel('custom.unknown_event', null)).toBe('custom.unknown_event');
   });
@@ -50,6 +56,12 @@ describe('notificationDetail', () => {
     expect(
       notificationDetail('referral.created', { source_module: 'Clinic', target_module: 'Guidance' }),
     ).toBe('Clinic → Guidance');
+  });
+
+  it('formats the skip-window detail with the queue number', () => {
+    expect(notificationDetail('queue.skip_expired', { queue_number: 'C-004' })).toBe(
+      'C-004 · recall window expired',
+    );
   });
 });
 
@@ -99,6 +111,23 @@ describe('getNotificationDestination', () => {
       const auth = mockAuth(['portal.queue.read']);
       expect(getNotificationDestination('queue.called', null, auth)).toBe('/me');
       expect(getNotificationDestination('counselling.queue_called', null, auth)).toBe('/me');
+    });
+
+    it('routes the skip-window auto no-show to the clinic board for staff, never the portal', () => {
+      // A clinic manager sees the board where the resolved row lives …
+      const staff = mockAuth(['clinic.queue.read', 'clinic.queue.manage']);
+      expect(getNotificationDestination('queue.skip_expired', null, staff)).toBe('/clinic?tab=skipped');
+
+      // … and even a superadmin (wildcard * includes portal.queue.read)
+      // must land on the clinic board, not the patient portal.
+      expect(getNotificationDestination('queue.skip_expired', null, mockAuth(['*']))).toBe(
+        '/clinic?tab=skipped',
+      );
+
+      // A patient without clinic permissions gets no destination at all
+      // (this template is never sent to patients, but the mapping must
+      // not fall through to the portal branch).
+      expect(getNotificationDestination('queue.skip_expired', null, mockAuth(['portal.queue.read']))).toBeNull();
     });
 
     it('routes counselling.* to the Queue board for guidance counselors', () => {

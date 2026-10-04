@@ -56,7 +56,7 @@ CI (`.github/workflows/ci.yml`) runs three parallel jobs and mirrors these exact
 - Async work runs through spark commands, not request threads:
   `synapse:notify-drain`, `synapse:audit-drain`, `synapse:reports-drain`,
   `synapse:appointments-enqueue-due`, `synapse:reorder-auto-check`,
-  `synapse:bmg-device-watchdog`,
+  `synapse:bmg-device-watchdog`, `synapse:queue-skip-sweep`,
   `synapse:smoke`, `synapse:audit-verify`, `synapse:audit-clear`,
   `synapse:audit-orphans`.
 

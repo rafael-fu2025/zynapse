@@ -99,7 +99,6 @@ final class PermissionsAndGroupsSeeder extends Seeder
         'referrals.acknowledge'                      => 'referrals',
         'referrals.review'                           => 'referrals',
         'referrals.close'                            => 'referrals',
-        'referrals.issue_qr'                         => 'referrals',
 
         // Audit
         'audit.read'                                 => 'audit',

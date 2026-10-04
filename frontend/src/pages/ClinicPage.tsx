@@ -1,11 +1,15 @@
 /**
  * ClinicPage — queue-first clinic surface (panel revision, August 2026).
  *
- * Tabs: **Queue (today)** → **Closed** → **Staff schedules**. The legacy
- * "Open" tab is gone — every encounter is queued at creation (walk-in)
- * or auto-checked-in at appointment time, so the Queue tab IS the open
- * encounters view. Action buttons (Care, Record vitals, Close encounter,
- * Mark no-show) live on each queue row.
+ * Tabs: **Queue (today)** → **Skipped** → **Closed** → **Staff
+ * schedules**. The legacy "Open" tab is gone — every encounter is queued
+ * at creation (walk-in) or auto-checked-in at appointment time, so the
+ * Queue tab IS the open encounters view. Action buttons (Care, Record
+ * vitals, Close encounter, Mark no-show) live on each queue row.
+ *
+ * October 2026: **Skipped** hosts patients who were skipped from the
+ * queue and are inside their 60-minute recall window — see
+ * `SkippedPatientsTab`.
  *
  * Lazy side effect on `/clinic/queue` staff read: stale `open`
  * encounters from prior days are auto-closed (their linked appointments
@@ -47,8 +51,11 @@ import { TableStateRows } from '@/components/TableStates';
 import { SessionProgressTracker, type SessionProgressStep } from '@/components/SessionProgressTracker';
 import { MobileCardList, MobileCard, MobileCardField, MobileCardActions } from '@/components/MobileCardList';
 import { PatientIdCell } from '@/components/PatientIdCell';
+import { SkippedPatientsSummary, SkippedPatientsTab } from '@/components/clinic/SkippedPatientsTab';
 import { WeekdayCheckboxes } from '@/components/WeekdayCheckboxes';
 import { formatQueueNumber } from '@/lib/queueFormat';
+import { remainingMinutes } from '@/lib/queueSkip';
+import { canArchiveQueueRow, canArchiveEncounter } from '@/lib/encounterArchive';
 import { DatePicker } from '@/components/ui/date-picker';
 import { TimePicker } from '@/components/ui/time-picker';
 import {
@@ -86,6 +93,7 @@ import { Tabs, TabsContent } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import {
   useAddTreatment,
+  useArchiveEncounter,
   useCloseEncounter,
   useDecideTriage,
   useEncounterNoShow,
@@ -94,6 +102,7 @@ import {
   useEncounterVitals,
   useRecordVitals,
   usePreviousHeightWeight,
+  useRestoreEncounter,
   useSetAssessment,
   useSuggestTriage,
   useTreatments,
@@ -131,7 +140,7 @@ import {
 } from '@/schemas/staffSchedule';
 import { fmtTimeRange, fmtUtcToApp } from '@/utils/date';
 import { statusLabel } from '@/utils/status';
-import { titleCase } from '@/lib/utils';
+import { cn, titleCase } from '@/lib/utils';
 
 const TRIAGE_VARIANT: Record<TriagePriority, 'secondary' | 'info' | 'warning' | 'destructive'> = {
   low: 'secondary',
@@ -690,6 +699,27 @@ const QUEUE_STATUS_VARIANT = {
   skipped: 'secondary',
 } as const;
 
+/**
+ * Live "~42m left" hint beside a skipped row's status badge in the
+ * Queue tab. The row's deadline is server-stamped; this only renders
+ * the remainder, re-read on every poll (the queue query re-fetches
+ * every 10s) and on a 1s tick while the tab is mounted.
+ */
+function SkippedCountdownHint({ deadline }: { deadline: string | null | undefined }) {
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(new Date()), 1_000);
+    return () => window.clearInterval(id);
+  }, []);
+  const minutes = remainingMinutes(deadline, now);
+  if (minutes === null) return null;
+  return (
+    <span className={cn('ml-1.5 tabular-nums text-xs', minutes <= 10 ? 'text-destructive' : 'text-muted-foreground')}>
+      {minutes === 0 ? 'expiring…' : `~${minutes}m left`}
+    </span>
+  );
+}
+
 interface QueueTabProps {
   onOpenEncounter: (encounterId: number) => void;
 }
@@ -714,6 +744,7 @@ function QueueTab({ onOpenEncounter }: QueueTabProps) {
   const queue = useQueueToday();
   const transition = useQueueTransition();
   const noShow = useEncounterNoShow();
+  const archive = useArchiveEncounter();
   const [confirm, setConfirm] = useState<ConfirmAction | null>(null);
 
   // `queue.data` is a fresh array on every React Query refetch tick,
@@ -747,7 +778,7 @@ function QueueTab({ onOpenEncounter }: QueueTabProps) {
   // already in flight; harmless to share across rows because the
   // spinner only renders on the row that triggered it.
   const destructivePending = noShow.isPending;
-  const anyPending = transition.isPending || destructivePending;
+  const anyPending = transition.isPending || destructivePending || archive.isPending;
 
   return (
     <div className="space-y-4">
@@ -779,6 +810,7 @@ function QueueTab({ onOpenEncounter }: QueueTabProps) {
             />
             {sortedRows.map((q) => {
               const canNoShow = q.encounter_status === 'open';
+              const canArchive = canArchiveQueueRow(q.status, q.encounter_status);
               return (
                 <TableRow key={q.id}>
                   <TableCell className="px-3 tabular-nums text-sm font-semibold">{formatQueueNumber(q.position)}</TableCell>
@@ -797,6 +829,9 @@ function QueueTab({ onOpenEncounter }: QueueTabProps) {
                     {q.encounter_outcome !== undefined && q.encounter_outcome !== null && (
                       <Badge variant="secondary" className="ml-1.5">{titleCase(q.encounter_outcome)}</Badge>
                     )}
+                    {q.status === 'skipped' && (
+                      <SkippedCountdownHint deadline={q.skip_deadline_at} />
+                    )}
                   </TableCell>
                   <TableCell className="px-3 text-right">
                     <div className="flex justify-end gap-1">
@@ -809,7 +844,7 @@ function QueueTab({ onOpenEncounter }: QueueTabProps) {
                           <Button size="sm" variant="outline" disabled={transition.isPending}
                             onClick={() => setConfirm({
                               title: `Skip ${formatQueueNumber(q.position)} in the queue?`,
-                              description: 'Skipped entries are removed from the active queue and cannot be recovered from here.',
+                              description: 'The patient moves to Skipped Patients with a 60-minute recall window. If they have not returned by then, the visit is marked No-Show automatically.',
                               confirmLabel: 'Skip',
                               run: () => transition.mutate({ id: q.id, action: 'skip' }),
                             })}>
@@ -847,6 +882,30 @@ function QueueTab({ onOpenEncounter }: QueueTabProps) {
                           </DropdownMenuItem>
                         </DropdownMenuContent>
                       </DropdownMenu>
+                      {/* Archive sits beside Actions, and only on a
+                          finished visit (October 2026). Neutral outline
+                          styling keeps it visually quieter than the
+                          status badges so it never competes with them. */}
+                      {canArchive && (
+                        <Button
+                          className="min-h-11"
+                          size="sm"
+                          variant="outline"
+                          disabled={anyPending}
+                          aria-label={`Archive encounter for queue ${formatQueueNumber(q.position)}`}
+                          onClick={() => setConfirm({
+                            title: 'Archive Encounter?',
+                            description: 'Are you sure you want to archive this completed encounter?',
+                            confirmLabel: 'Archive',
+                            // Reversible (Restore brings it back), so the
+                            // confirm button reads as a normal action.
+                            destructive: false,
+                            run: () => archive.mutate(q.encounter_id),
+                          })}
+                        >
+                          <Archive /> Archive
+                        </Button>
+                      )}
                     </div>
                   </TableCell>
                 </TableRow>
@@ -874,6 +933,7 @@ function QueueTab({ onOpenEncounter }: QueueTabProps) {
       <MobileCardList>
         {sortedRows.map((q) => {
           const canNoShow = q.encounter_status === 'open';
+          const canArchive = canArchiveQueueRow(q.status, q.encounter_status);
           return (
             <MobileCard key={q.id} aria-label={`Queue ${formatQueueNumber(q.position)}`}>
               <div className="mb-1 flex items-center justify-between gap-2">
@@ -883,6 +943,7 @@ function QueueTab({ onOpenEncounter }: QueueTabProps) {
                   {q.encounter_outcome !== undefined && q.encounter_outcome !== null && (
                     <Badge variant="secondary">{titleCase(q.encounter_outcome)}</Badge>
                   )}
+                  {q.status === 'skipped' && <SkippedCountdownHint deadline={q.skip_deadline_at} />}
                 </div>
               </div>
               <p className="text-sm font-medium text-foreground">{q.display_name}</p>
@@ -899,7 +960,7 @@ function QueueTab({ onOpenEncounter }: QueueTabProps) {
                     <Button size="sm" variant="outline" disabled={transition.isPending}
                       onClick={() => setConfirm({
                         title: `Skip ${formatQueueNumber(q.position)} in the queue?`,
-                        description: 'Skipped entries are removed from the active queue and cannot be recovered from here.',
+                        description: 'The patient moves to Skipped Patients with a 60-minute recall window. If they have not returned by then, the visit is marked No-Show automatically.',
                         confirmLabel: 'Skip',
                         run: () => transition.mutate({ id: q.id, action: 'skip' }),
                       })}>
@@ -937,6 +998,24 @@ function QueueTab({ onOpenEncounter }: QueueTabProps) {
                     </DropdownMenuItem>
                   </DropdownMenuContent>
                 </DropdownMenu>
+                {canArchive && (
+                  <Button
+                    className="min-h-11"
+                    size="sm"
+                    variant="outline"
+                    disabled={anyPending}
+                    aria-label={`Archive encounter for queue ${formatQueueNumber(q.position)}`}
+                    onClick={() => setConfirm({
+                      title: 'Archive Encounter?',
+                      description: 'Are you sure you want to archive this completed encounter?',
+                      confirmLabel: 'Archive',
+                      destructive: false,
+                      run: () => archive.mutate(q.encounter_id),
+                    })}
+                  >
+                    <Archive /> Archive
+                  </Button>
+                )}
               </MobileCardActions>
             </MobileCard>
           );
@@ -948,6 +1027,8 @@ function QueueTab({ onOpenEncounter }: QueueTabProps) {
         title={confirm?.title ?? ''}
         description={confirm?.description}
         confirmLabel={confirm?.confirmLabel}
+        // Archiving is reversible; skip / no-show stay destructive.
+        destructive={confirm?.destructive ?? true}
         // Spinner covers whichever mutation the confirm is about to run.
         pending={anyPending}
         onConfirm={() => {
@@ -1365,8 +1446,10 @@ export default function ClinicPage() {
   // drives from the encounter list.
   const [searchParams, setSearchParams] = useSearchParams();
   const requestedTab = searchParams.get('tab');
-  const tab: 'queue' | 'closed' | 'staff' =
-    requestedTab === 'closed' || requestedTab === 'staff' ? requestedTab : 'queue';
+  const tab: 'queue' | 'skipped' | 'closed' | 'archived' | 'staff' =
+    requestedTab === 'skipped' || requestedTab === 'closed' || requestedTab === 'archived' || requestedTab === 'staff'
+      ? requestedTab
+      : 'queue';
   const [openVitals, setOpenVitals] = useState<Encounter | null>(null);
   const [openCare, setOpenCare] = useState<Encounter | null>(null);
   const [openView, setOpenView] = useState<Encounter | null>(null);
@@ -1374,11 +1457,16 @@ export default function ClinicPage() {
   // the tab bar (right-aligned), so their state must be lifted here.
   const [openAddShift, setOpenAddShift] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
+  // Archive / restore confirmations for the Closed and Archived tabs —
+  // the Queue tab owns its own instance for the per-row button.
+  const [archiveConfirm, setArchiveConfirm] = useState<ConfirmAction | null>(null);
+  const archiveEncounter = useArchiveEncounter();
+  const restoreEncounter = useRestoreEncounter();
   // Server-side status filter: the Closed tab fetches its own slice
   // instead of client-filtering one shared page (which made tab counts
   // misleading and could hide rows on later pages). The Queue tab
   // drives its data from the queue feed, not this list.
-  const status = tab === 'closed' ? 'closed' : null;
+  const status = tab === 'closed' ? 'closed' : tab === 'archived' ? 'archived' : null;
   const list = useEncounters(cursor, 25, status);
   // The page-level queue/counters instances that fed the old tab-strip
   // badges retired with the strip (2026-09-27): section navigation is an
@@ -1437,10 +1525,17 @@ export default function ClinicPage() {
         <div className="md:shrink-0">
         <PageHeader
           title="Clinic"
-          description="Encounters are the anchor for clinic actions — isolated from counselling."
+          description={
+            tab === 'skipped'
+              ? 'Patients skipped from the queue keep a 60-minute recall window — return them or let the window lapse to No-Show.'
+              : tab === 'archived'
+                ? 'Archived visits keep their full clinical record — restore one to bring it back to the active list.'
+                : 'Encounters are the anchor for clinic actions — isolated from counselling.'
+          }
           actions={
             <>
               {tab === 'queue' && <CallNextButton />}
+              {tab === 'skipped' && <SkippedPatientsSummary />}
               {tab === 'staff' && (
                 <div className="flex items-center gap-2">
                   <Button size="sm" onClick={() => setOpenAddShift(true)}>
@@ -1466,17 +1561,13 @@ export default function ClinicPage() {
             the selected section, driven by the same ?tab= URL. */}
         <TabsContent value="queue" className="md:flex-1 md:min-h-0 md:overflow-y-auto">
           <div className="space-y-4">
-            <Dialog open={focusId !== null} onOpenChange={(o) => !o && selectEncounter(null)}>
-              {focusId !== null && (
-                <ClinicEncounterWorkspace
-                  encounterId={focusId}
-                  onClose={() => selectEncounter(null)}
-                  onOpenCare={setOpenCare}
-                  onOpenVitals={setOpenVitals}
-                />
-              )}
-            </Dialog>
             <QueueTab onOpenEncounter={(encounterId) => selectEncounter(encounterId)} />
+          </div>
+        </TabsContent>
+
+        <TabsContent value="skipped" className="md:flex-1 md:min-h-0 md:overflow-y-auto">
+          <div className="space-y-4">
+            <SkippedPatientsTab onOpenEncounter={(encounterId) => selectEncounter(encounterId)} />
           </div>
         </TabsContent>
 
@@ -1494,9 +1585,85 @@ export default function ClinicPage() {
             canPrev={history.length > 1}
             canNext={list.data?.next !== null && list.data?.next !== undefined}
             actions={(e) => (
-              <Button size="sm" variant="outline" onClick={() => setOpenView(e)}>
-                <Stethoscope className="size-3.5" /> View
-              </Button>
+              <div className="flex justify-end gap-1">
+                <Button size="sm" variant="outline" onClick={() => setOpenView(e)}>
+                  <Stethoscope className="size-3.5" /> View
+                </Button>
+                {/* Archive mirrors the Queue-tab action, for staff working
+                    from the Closed list instead of the board. */}
+                {canArchiveEncounter(e.status, e.archived_at) && (
+                  <Button
+                    className="min-h-11"
+                    size="sm"
+                    variant="outline"
+                    disabled={archiveEncounter.isPending}
+                    aria-label={`Archive encounter ${e.id}`}
+                    onClick={() => setArchiveConfirm({
+                      title: 'Archive Encounter?',
+                      description: 'Are you sure you want to archive this completed encounter?',
+                      confirmLabel: 'Archive',
+                      destructive: false,
+                      run: () => archiveEncounter.mutate(e.id),
+                    })}
+                  >
+                    <Archive /> Archive
+                  </Button>
+                )}
+              </div>
+            )}
+          />
+        </TabsContent>
+
+        <TabsContent value="archived" className="md:min-h-0 md:flex-1 md:flex md:flex-col">
+          <EncounterTable
+            rows={rows}
+            focusId={focusId}
+            isLoading={list.isLoading}
+            isError={list.isError}
+            onRetry={() => void list.refetch()}
+            retrying={list.isFetching}
+            page={history.length}
+            onPrev={prevPage}
+            onNext={nextPage}
+            canPrev={history.length > 1}
+            canNext={list.data?.next !== null && list.data?.next !== undefined}
+            ariaLabel="Archived clinic encounters"
+            empty={{
+              title: 'No archived encounters.',
+              description: 'Archive a completed visit from the Queue or Closed tab to keep it out of the active list.',
+            }}
+            dateColumn={{
+              header: 'Archived',
+              value: (e) => (
+                <span className="text-xs text-muted-foreground">
+                  {e.archived_at !== null && e.archived_at !== undefined
+                    ? fmtUtcToApp(e.archived_at)
+                    : '—'}
+                </span>
+              ),
+            }}
+            actions={(e) => (
+              <div className="flex justify-end gap-1">
+                <Button size="sm" variant="outline" onClick={() => setOpenView(e)}>
+                  <Stethoscope className="size-3.5" /> View
+                </Button>
+                <Button
+                  className="min-h-11"
+                  size="sm"
+                  variant="outline"
+                  disabled={restoreEncounter.isPending}
+                  aria-label={`Restore encounter ${e.id}`}
+                  onClick={() => setArchiveConfirm({
+                    title: 'Restore Encounter?',
+                    description: 'This returns the archived encounter to the active Encounters list.',
+                    confirmLabel: 'Restore',
+                    destructive: false,
+                    run: () => restoreEncounter.mutate(e.id),
+                  })}
+                >
+                  <ArchiveRestore /> Restore
+                </Button>
+              </div>
             )}
           />
         </TabsContent>
@@ -1509,6 +1676,35 @@ export default function ClinicPage() {
           />
         </TabsContent>
       </Tabs>
+
+      <ConfirmDialog
+        open={archiveConfirm !== null}
+        title={archiveConfirm?.title ?? ''}
+        description={archiveConfirm?.description}
+        confirmLabel={archiveConfirm?.confirmLabel}
+        destructive={false}
+        pending={archiveEncounter.isPending || restoreEncounter.isPending}
+        onConfirm={() => {
+          archiveConfirm?.run();
+          setArchiveConfirm(null);
+        }}
+        onCancel={() => setArchiveConfirm(null)}
+      />
+
+      {/* Deep-linked encounter workspace (`?encounter=N`). Hoisted out of
+          the tab bodies so Queue and Skipped share one instance — the
+          param is the single source of truth for what is open, and both
+          tabs hand it the same `selectEncounter`. */}
+      <Dialog open={focusId !== null} onOpenChange={(o) => !o && selectEncounter(null)}>
+        {focusId !== null && (
+          <ClinicEncounterWorkspace
+            encounterId={focusId}
+            onClose={() => selectEncounter(null)}
+            onOpenCare={setOpenCare}
+            onOpenVitals={setOpenVitals}
+          />
+        )}
+      </Dialog>
 
       {openVitals !== null && (
         <Dialog open onOpenChange={(o) => !o && setOpenVitals(null)}>
@@ -1545,15 +1741,29 @@ interface EncounterTableProps {
   onPrev: () => void;
   onNext: () => void;
   actions: (e: Encounter) => React.ReactNode;
+  /** Accessible table name — differs per view (Closed / Archived). */
+  ariaLabel?: string;
+  /** Empty-state copy — differs per view. */
+  empty?: { title: string; description: string };
+  /**
+   * When set, the last data column shows this timestamp instead of the
+   * close time — the Archived view uses it for the archive date.
+   */
+  dateColumn?: { header: string; value: (e: Encounter) => React.ReactNode };
 }
 
 function EncounterTable(props: EncounterTableProps) {
   const showEmpty = !props.isLoading && props.isError !== true && props.rows.length === 0;
+  const ariaLabel = props.ariaLabel ?? 'Closed clinic encounters';
+  const empty = props.empty ?? {
+    title: 'No closed encounters.',
+    description: 'Encounters appear here once they are completed or referred.',
+  };
   return (
     <>
       <section className="hidden overflow-hidden rounded-xl border bg-card md:block md:min-h-0 md:flex-1">
         <Table
-          ariaLabel="Closed clinic encounters"
+          ariaLabel={ariaLabel}
           wrapperClassName="h-full overflow-y-auto"
           className="[&_td]:py-1.5"
         >
@@ -1563,7 +1773,7 @@ function EncounterTable(props: EncounterTableProps) {
               <TableHead className="px-3">Patient</TableHead>
               <TableHead className="px-3">Chief complaint</TableHead>
               <TableHead className="px-3">Started</TableHead>
-              <TableHead className="px-3">Closed</TableHead>
+              <TableHead className="px-3">{props.dateColumn?.header ?? 'Closed'}</TableHead>
               <TableHead className="px-3 text-right">Actions</TableHead>
             </TableRow>
           </TableHeader>
@@ -1577,10 +1787,7 @@ function EncounterTable(props: EncounterTableProps) {
               pending={props.retrying === true}
               errorMessage="Failed to load encounters."
               loadingLabel="Loading encounters"
-              empty={{
-                title: 'No closed encounters.',
-                description: 'Encounters appear here once they are completed or referred.',
-              }}
+              empty={empty}
             />
             {props.rows.map((e) => {
               const prio = e.triage_priority as TriagePriority | undefined;
@@ -1615,7 +1822,11 @@ function EncounterTable(props: EncounterTableProps) {
                   </TableCell>
                   <TableCell className="px-3 text-xs text-muted-foreground">{fmtUtcToApp(e.started_at)}</TableCell>
                   <TableCell className="px-3 text-xs text-muted-foreground">
-                    {e.closed_at === null ? <Badge variant="info">{statusLabel(e.status)}</Badge> : fmtUtcToApp(e.closed_at)}
+                    {props.dateColumn !== undefined
+                      ? props.dateColumn.value(e)
+                      : e.closed_at === null
+                        ? <Badge variant="info">{statusLabel(e.status)}</Badge>
+                        : fmtUtcToApp(e.closed_at)}
                   </TableCell>
                   <TableCell className="px-3 text-right">{props.actions(e)}</TableCell>
                 </TableRow>
@@ -1659,9 +1870,11 @@ function EncounterTable(props: EncounterTableProps) {
             >
               <div className="mb-1 flex items-center justify-between gap-2">
                 <span className="tabular-nums text-xs text-muted-foreground">#{e.id}</span>
-                {e.closed_at === null
-                  ? <Badge variant="info">{statusLabel(e.status)}</Badge>
-                  : <span className="text-xs text-muted-foreground">Closed {fmtUtcToApp(e.closed_at)}</span>}
+                {props.dateColumn !== undefined
+                  ? props.dateColumn.value(e)
+                  : e.closed_at === null
+                    ? <Badge variant="info">{statusLabel(e.status)}</Badge>
+                    : <span className="text-xs text-muted-foreground">Closed {fmtUtcToApp(e.closed_at)}</span>}
               </div>
               <p className="text-sm font-medium text-foreground">{e.chief_complaint}</p>
               <div className="mt-1 flex flex-wrap gap-1.5">

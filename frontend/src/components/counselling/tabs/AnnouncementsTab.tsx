@@ -41,6 +41,7 @@ import {
 import type { GuidanceAnnouncement } from '@/schemas/guidanceContent';
 import { announcementInputSchema, type AnnouncementAudience, type AnnouncementInput, type AnnouncementSeverity } from '@/schemas/guidanceContent';
 import { fmtUtcToApp } from '@/utils/date';
+import { titleCase } from '@/lib/utils';
 
 const AUDIENCE_LABELS: Record<AnnouncementAudience, string> = {
   all: 'All students',
@@ -144,15 +145,20 @@ function AnnouncementDialog({
                 </SelectContent>
               </Select>
             </div>
-            <div className="flex items-end space-x-2 pb-2">
-              <Checkbox
-                id="ann-required"
-                checked={isRequired}
-                onCheckedChange={(checked) => setValue('is_required', checked === true)}
-              />
-              <Label htmlFor="ann-required" className="cursor-pointer font-normal">
-                Required for clearance signing
-              </Label>
+            {/* Outer keeps the row bottom-anchored to the grid cell (level
+                with the Audience select); the inner flex centers the circle
+                against the text so they share one optical midline. */}
+            <div className="flex items-end pb-2">
+              <div className="flex items-center gap-2">
+                <Checkbox
+                  id="ann-required"
+                  checked={isRequired}
+                  onCheckedChange={(checked) => setValue('is_required', checked === true)}
+                />
+                <Label htmlFor="ann-required" className="cursor-pointer font-normal">
+                  Required for clearance signing
+                </Label>
+              </div>
             </div>
           </div>
           <div className="space-y-1.5">
@@ -292,7 +298,7 @@ export function AnnouncementsTab() {
                         ? 'Always'
                         : `${a.publish_at === null ? '—' : fmtUtcToApp(a.publish_at, 'MMM d, yyyy')} → ${a.unpublish_at === null ? '—' : fmtUtcToApp(a.unpublish_at, 'MMM d, yyyy')}`}
                     </TableCell>
-                    <TableCell className="px-3"><Badge variant={STATUS_VARIANTS[a.status]}>{a.status}</Badge></TableCell>
+                    <TableCell className="px-3"><Badge variant={STATUS_VARIANTS[a.status]}>{titleCase(a.status)}</Badge></TableCell>
                     <TableCell className="px-3 text-right">
                       <div className="flex justify-end gap-2">
                         <Button size="sm" variant="outline" onClick={() => { setEditing(a); setDialogOpen(true); }}>

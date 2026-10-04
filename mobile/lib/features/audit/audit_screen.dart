@@ -38,8 +38,6 @@ String auditActionLabel(String code) {
     'referral.created': 'Referral created',
     'referral.acknowledged': 'Referral acknowledged',
     'referral.closed': 'Referral closed',
-    'referral.qr_issued': 'QR issued',
-    'referral.qr_revoked': 'QR revoked',
     'bmg.batch_started': 'Batch started',
     'bmg.batch_cancelled': 'Batch cancelled',
     'bmg.batch_released': 'Batch released',

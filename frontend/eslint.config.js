@@ -15,9 +15,16 @@ export default tseslint.config(
   js.configs.recommended,
   ...tseslint.configs.recommendedTypeChecked,
   // Plain JS files (this config, postcss.config.js) and TS files outside
-  // the tsconfig project (Playwright e2e) cannot use typed rules.
+  // the tsconfig project (Playwright e2e + the capture harness) cannot use
+  // typed rules.
   {
-    files: ['**/*.{js,cjs,mjs}', 'e2e/**/*.ts', 'playwright.config.ts'],
+    files: [
+      '**/*.{js,cjs,mjs}',
+      'e2e/**/*.ts',
+      'capture/**/*.ts',
+      'playwright.config.ts',
+      'playwright.capture.config.ts',
+    ],
     ...tseslint.configs.disableTypeChecked,
     languageOptions: {
       globals: {
@@ -36,7 +43,7 @@ export default tseslint.config(
   },
   {
     files: ['**/*.{ts,tsx}'],
-    ignores: ['e2e/**', 'playwright.config.ts'],
+    ignores: ['e2e/**', 'capture/**', 'playwright.config.ts', 'playwright.capture.config.ts'],
     languageOptions: {
       parserOptions: {
         project: ['./tsconfig.json'],

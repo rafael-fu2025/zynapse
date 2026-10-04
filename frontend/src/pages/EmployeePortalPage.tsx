@@ -166,11 +166,9 @@ export default function EmployeePortalPage() {
                           </Link>
                         </Button>
                       )}
-                      {profile.data.is_teaching && (
-                        <Button asChild size="sm" variant="outline">
-                          <Link to="/referrals">Refer a student to counselling</Link>
-                        </Button>
-                      )}
+                      <Button asChild size="sm" variant="outline">
+                        <Link to="/referrals">Refer a student to counselling</Link>
+                      </Button>
                     </div>
                     {me.data?.has_local_password !== true && (
                       <p className="text-xs text-muted-foreground leading-relaxed">

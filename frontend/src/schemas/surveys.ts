@@ -33,6 +33,8 @@ export const surveySchema = z.object({
   description: z.string().nullable(),
   category: z.enum(['survey', 'interview']),
   audience: surveyAudienceSchema,
+  /** Targeted registry year levels (1-6); null = every year level. */
+  year_levels: z.array(z.number().int().min(1).max(6)).nullable(),
   is_required: z.boolean(),
   publish_at: z.string().nullable(),
   close_at: z.string().nullable(),
@@ -52,6 +54,7 @@ export const surveyResponseRowSchema = z.object({
   student_user_id: z.number().int().positive(),
   student_name: z.string().nullable(),
   email: z.string().nullable(),
+  student_year_level: z.number().int().min(1).max(6).nullable(),
   submitted_at: z.string(),
 });
 export type SurveyResponseRow = z.infer<typeof surveyResponseRowSchema>;
@@ -61,6 +64,7 @@ export const surveyResponseDetailSchema = z.object({
   survey_id: z.number().int().positive(),
   student_user_id: z.number().int().positive(),
   student_name: z.string().nullable(),
+  student_year_level: z.number().int().min(1).max(6).nullable(),
   submitted_at: z.string(),
   answers: z.array(z.object({
     question_id: z.number().int().positive(),
@@ -105,6 +109,8 @@ export const surveyMetaInputSchema = z.object({
   title: z.string().min(1, 'Title is required.').max(200),
   description: z.string().max(1000).optional(),
   audience: surveyAudienceSchema,
+  /** Targeted registry year levels; empty = every year level. */
+  year_levels: z.array(z.number().int().min(1).max(6)).max(6).optional(),
   category: z.enum(['survey', 'interview']),
   is_required: z.boolean(),
   publish_at: z.string().optional(),

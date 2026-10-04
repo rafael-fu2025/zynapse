@@ -43,10 +43,19 @@ interface EncounterPage {
   next: string | null;
 }
 
+/**
+ * Encounter list slice.
+ *   - a clinical status (`open` / `closed` / `referred`) selects that
+ *     slice of the ACTIVE list;
+ *   - `archived` selects the Archived Encounters view;
+ *   - `null` is the default active list (every non-archived encounter).
+ */
+export type EncounterListStatus = 'open' | 'closed' | 'referred' | 'archived' | null;
+
 export function useEncounters(
   cursor: string | null,
   limit = 25,
-  status: 'open' | 'closed' | null = null,
+  status: EncounterListStatus = null,
 ) {
   return useQuery<EncounterPage, ApiEnvelopeError>({
     // Status is part of the cache key so switching tabs refetches the
@@ -170,6 +179,51 @@ export function useEncounterNoShow() {
     },
     onError: (err) => {
       toast.error(err.errors[0]?.message ?? 'Failed to mark encounter as no-show.');
+    },
+  });
+}
+
+/**
+ * Archive a finished encounter (October 2026) — moves the row from the
+ * Encounters list to the Archived Encounters view without touching the
+ * clinical record.
+ *
+ * Invalidates the whole `clinic` key AND the queue: the row leaves the
+ * Queue tab too, so the operator's board must refresh with it.
+ */
+export function useArchiveEncounter() {
+  const qc = useQueryClient();
+  return useMutation<Encounter, ApiEnvelopeError, number>({
+    mutationFn: async (encounterId) => {
+      const res = await apiClient.post<Encounter>(`/clinic/encounters/${encounterId}/archive`, {});
+      return encounterSchema.parse(res.data);
+    },
+    onSuccess: (data) => {
+      void qc.invalidateQueries({ queryKey: ['clinic'] });
+      void qc.invalidateQueries({ queryKey: ['queue'] });
+      toast.success(`Encounter #${data.id} archived.`);
+    },
+    onError: (err) => {
+      toast.error(err.errors[0]?.message ?? 'Failed to archive the encounter.');
+    },
+  });
+}
+
+/** Restore an archived encounter to the active list. Idempotent. */
+export function useRestoreEncounter() {
+  const qc = useQueryClient();
+  return useMutation<Encounter, ApiEnvelopeError, number>({
+    mutationFn: async (encounterId) => {
+      const res = await apiClient.post<Encounter>(`/clinic/encounters/${encounterId}/restore`, {});
+      return encounterSchema.parse(res.data);
+    },
+    onSuccess: (data) => {
+      void qc.invalidateQueries({ queryKey: ['clinic'] });
+      void qc.invalidateQueries({ queryKey: ['queue'] });
+      toast.success(`Encounter #${data.id} restored.`);
+    },
+    onError: (err) => {
+      toast.error(err.errors[0]?.message ?? 'Failed to restore the encounter.');
     },
   });
 }

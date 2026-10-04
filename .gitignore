@@ -69,6 +69,7 @@ dev-fast.ps1
 
 # --- E2E / test artifacts ---
 /frontend/e2e/artifacts/
+/frontend/capture/.artifacts/
 
 # --- Reports / drafts that aren't ready ---
 /writable/reports/
@@ -88,6 +89,7 @@ SCREEN_AUDIT.md
 # are added later.
 
 # --- AI tool / test runner state at workspace root ---
+.video_agent/
 .workbuddy-ai/
 .zcodeignore
 /test-results/

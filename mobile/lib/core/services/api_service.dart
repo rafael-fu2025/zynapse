@@ -19,6 +19,7 @@ import '../models/reorder.dart';
 import '../models/appointment_portal.dart';
 import '../models/referral.dart';
 import '../models/report.dart';
+import '../models/survey.dart';
 
 /// A paginated page of items plus keyset cursor metadata.
 class ApiPage<T> {
@@ -292,6 +293,37 @@ class ApiService {
         .whereType<Map<String, dynamic>>()
         .map(GuidanceQueueEntry.fromJson)
         .toList();
+  }
+
+  // ---------------------------------------------------------------------
+  // Student guidance surveys (/me/guidance/surveys)
+  // ---------------------------------------------------------------------
+
+  /// Open surveys & interviews for the caller (mirrors the web's
+  /// `useMySurveys` — required items are the clearance checklist).
+  Future<List<MySurvey>> myGuidanceSurveys() async {
+    final res = await _dio.get<Map<String, dynamic>>('/me/guidance/surveys');
+    return _unwrapList(res)
+        .whereType<Map<String, dynamic>>()
+        .map(MySurvey.fromJson)
+        .toList();
+  }
+
+  /// The answerable form (published version snapshot with questions).
+  Future<MySurveyForm> mySurveyForm(int surveyId) async {
+    final res =
+        await _dio.get<Map<String, dynamic>>('/me/guidance/surveys/$surveyId');
+    return MySurveyForm.fromJson(_unwrapObject(res));
+  }
+
+  /// Submits answers (`[{question_id, value}]`); the backend enforces
+  /// required questions and one submission per student (409 otherwise).
+  Future<void> submitSurvey(
+      int surveyId, List<Map<String, dynamic>> answers) async {
+    await _dio.post<Map<String, dynamic>>(
+      '/me/guidance/surveys/$surveyId/submit',
+      data: {'answers': answers},
+    );
   }
 
   Future<void> callNextGuidance() async {
@@ -1547,7 +1579,7 @@ class ApiService {
 
   /// `GET /referrals/patient-lookup?q=&limit=` — referral-scoped patient
   /// search (gated by `referrals.create`, NOT `clinic.patients.read`) so
-  /// teaching employees — who hold `referrals.create` but not
+  /// referrer employees — who hold `referrals.create` but not
   /// `clinic.patients.read` — can find a patient by number or name when
   /// writing a referral.
   Future<List<PatientLookupResult>> referralPatientLookup(String q,
@@ -1560,17 +1592,6 @@ class ApiService {
         .whereType<Map<String, dynamic>>()
         .map(PatientLookupResult.fromJson)
         .toList();
-  }
-
-  /// `POST /referrals/verify` — PUBLIC, minimum-disclosure QR verify
-  /// (no auth). Body `{ token }`; returns `{ status: valid|expired|
-  /// revoked, artifact_type, issuer }` — never PII.
-  Future<Map<String, dynamic>> verifyReferralToken(String token) async {
-    final res = await _dio.post<Map<String, dynamic>>(
-      '/referrals/verify',
-      data: {'token': token.trim()},
-    );
-    return _unwrapObject(res);
   }
 
   /// `POST /referrals` — create a referral.
@@ -1588,21 +1609,6 @@ class ApiService {
       data: body ?? const <String, dynamic>{},
     );
     return Referral.fromJson(_unwrapObject(res));
-  }
-
-  /// `POST /referrals/{id}/issue-qr` — body `{ ttl_seconds }`.
-  Future<Map<String, dynamic>> issueReferralQr(int id,
-      {int ttlSeconds = 3600}) async {
-    final res = await _dio.post<Map<String, dynamic>>(
-      '/referrals/$id/issue-qr',
-      data: {'ttl_seconds': ttlSeconds},
-    );
-    return _unwrapObject(res);
-  }
-
-  /// `POST /referrals/{id}/revoke-qr`
-  Future<void> revokeReferralQr(int id) async {
-    await _dio.post<Map<String, dynamic>>('/referrals/$id/revoke-qr');
   }
 
   // ---------------------------------------------------------------------
