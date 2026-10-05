@@ -2,6 +2,22 @@
 /// (`bmgUnitSchema`) and `BmgUnitDto`.
 library;
 
+/// One designated waste category of a drum (set at drum setup; batches
+/// on the drum may only mix these). Mirrors the unit payload's
+/// `categories` entries.
+class BmgUnitCategory {
+  const BmgUnitCategory({required this.id, required this.name});
+
+  factory BmgUnitCategory.fromJson(Map<String, dynamic> json) =>
+      BmgUnitCategory(
+        id: (json['id'] as num).toInt(),
+        name: (json['name'] ?? '') as String,
+      );
+
+  final int id;
+  final String name;
+}
+
 class BmgUnit {
   BmgUnit({
     required this.id,
@@ -10,6 +26,8 @@ class BmgUnit {
     required this.status,
     this.locationCode,
     this.specCapacityKg,
+    this.drumOneCapacityKg,
+    this.drumTwoCapacityKg,
     this.defaultCategoryId,
     this.defaultCategoryName,
     this.notes,
@@ -21,6 +39,10 @@ class BmgUnit {
     this.activeBatchExpectedCompletionDate,
     this.activeBatchProgressPct,
     this.utilizationPct,
+    this.deviceId,
+    this.deviceCode,
+    this.deviceDisplayName,
+    this.categories = const [],
   });
 
   factory BmgUnit.fromJson(Map<String, dynamic> json) => BmgUnit(
@@ -43,6 +65,15 @@ class BmgUnit {
             json['active_batch_expected_completion_date'] as String?,
         activeBatchProgressPct: json['active_batch_progress_pct'] as int?,
         utilizationPct: json['utilization_pct'] as int?,
+        deviceId: (json['device_id'] as num?)?.toInt(),
+        deviceCode: json['device_code'] as String?,
+        deviceDisplayName: json['device_display_name'] as String?,
+        drumOneCapacityKg: (json['drum_one_capacity_kg'] as num?)?.toDouble(),
+        drumTwoCapacityKg: (json['drum_two_capacity_kg'] as num?)?.toDouble(),
+        categories: ((json['categories'] as List<Object?>?) ?? const [])
+            .whereType<Map<String, dynamic>>()
+            .map(BmgUnitCategory.fromJson)
+            .toList(),
       );
 
   final int id;
@@ -71,6 +102,22 @@ class BmgUnit {
 
   /// 0-100 how full the drum is vs spec capacity (Audit #8).
   final int? utilizationPct;
+
+  /// The drum's integrated ESP32 (1:1 — the backend enforces a unique
+  /// device→drum binding). Null when unbound (e.g. a dead board was
+  /// unassigned and its replacement not yet attached).
+  final int? deviceId;
+  final String? deviceCode;
+  final String? deviceDisplayName;
+
+  /// The two drums' individual capacities; [specCapacityKg] is their
+  /// sum. Null on drums profiled before the split.
+  final double? drumOneCapacityKg;
+  final double? drumTwoCapacityKg;
+
+  /// Waste categories the drum is designated for (set at setup; the
+  /// start-batch mix is restricted to them). Empty = any mix.
+  final List<BmgUnitCategory> categories;
 
   bool get isActive => switch (status) {
         'processing' || 'awaiting_output' => true,

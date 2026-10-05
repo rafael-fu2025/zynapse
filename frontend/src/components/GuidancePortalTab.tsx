@@ -6,6 +6,7 @@
  */
 import { AlertCircle, ClipboardList } from 'lucide-react';
 import { useState } from 'react';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { QueryErrorState } from '@/components/QueryErrorState';
@@ -66,17 +67,20 @@ export function GuidancePortalTab() {
             <CardDescription>Optional forms currently open for you.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
-            {openSurveys.filter((s) => !s.is_required).map((s) => (
-              <div key={s.id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-background p-3.5">
-                <div className="min-w-0">
-                  <p className="text-sm font-medium text-foreground">{s.title}</p>
-                  {s.description !== null && <p className="truncate text-xs text-muted-foreground">{s.description}</p>}
-                </div>
-                <Button size="sm" variant="outline" onClick={() => setTakingSurveyId(s.id)}>
-                  Take survey
-                </Button>
+          {openSurveys.filter((s) => !s.is_required).map((s) => (
+            <div key={s.id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-background p-3.5">
+              <div className="min-w-0">
+                <p className="flex items-center gap-2 text-sm font-medium text-foreground">
+                  {s.title}
+                  {s.submitted && <Badge variant="success">Submitted</Badge>}
+                </p>
+                {s.description !== null && <p className="truncate text-xs text-muted-foreground">{s.description}</p>}
               </div>
-            ))}
+              <Button size="sm" variant="outline" onClick={() => setTakingSurveyId(s.id)}>
+                {s.submitted ? 'Add optional proof' : 'Take survey'}
+              </Button>
+            </div>
+          ))}
           </CardContent>
         </Card>
       )}

@@ -142,7 +142,10 @@ function RegisterDeviceDialog({ onClose }: { onClose: () => void }) {
   // the parent) so it can outlive the form's state on success.
   const [minted, setMinted] = useState<{ device: BmgDevice; token: string } | null>(null);
 
-  const unitOptions = units.data?.data.filter((u) => u.archived_at == null) ?? [];
+  // A drum integrates exactly ONE ESP32 — only drums without a device
+  // can take a new binding here. Reassignment for a drum that already
+  // holds a board belongs to the drum's Edit form, which swaps boards.
+  const unitOptions = units.data?.data.filter((u) => u.archived_at == null && u.device_id == null) ?? [];
 
   if (minted !== null) {
     return <DeviceTokenDialog device={minted.device} token={minted.token} onClose={onClose} />;
@@ -154,7 +157,8 @@ function RegisterDeviceDialog({ onClose }: { onClose: () => void }) {
         <DialogHeader>
           <DialogTitle>Register device</DialogTitle>
           <DialogDescription>
-            The ESP32 tumbler reports a turning session here after every completed rotation cycle.
+            The ESP32 tumbler reports a turning session here after every completed rotation cycle, and polls for
+            queued commands — starting a batch on its drum sends it a start command.
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-3">
@@ -228,7 +232,12 @@ function EditDeviceDialog({ device, onClose }: { device: BmgDevice; onClose: () 
   const nameId = useId();
   const unitIdFieldId = useId();
 
-  const unitOptions = (units.data?.data ?? []).filter((u) => u.archived_at == null);
+  // Offer only free drums plus the one this device already holds — a
+  // drum bound to ANOTHER board is hidden, because stealing that
+  // binding is refused server-side (1:1 drum ↔ device).
+  const unitOptions = (units.data?.data ?? []).filter(
+    (u) => u.archived_at == null && (u.device_id == null || u.device_id === device.unit_id),
+  );
 
   function submit() {
     if (name.trim() === '') {

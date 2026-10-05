@@ -7,13 +7,14 @@
  * status badge and roll back on error. shadcn Table / Dialog /
  * Textarea primitives.
  */
-import { Play, StopCircle, Loader2, Ban, ChevronDown, ChevronLeft, ChevronRight, Boxes, LineChart, Plus, Wrench, Pencil, Archive, ArchiveRestore, X, FileCheck2, TriangleAlert, History, Sparkles, SquarePen, List } from 'lucide-react';
-import { useId, useMemo, useState } from 'react';
+import { Play, StopCircle, Loader2, Ban, ChevronDown, ChevronLeft, ChevronRight, Boxes, Cpu, Info, LineChart, Plus, Wrench, Pencil, Archive, ArchiveRestore, FileCheck2, TriangleAlert, History, Sparkles, SquarePen, List } from 'lucide-react';
+import { useId, useState, type ReactNode } from 'react';
 import { Link, Navigate, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import { useKeysetPagination } from '@/hooks/useKeysetPagination';
 import { useUrlFilter } from '@/hooks/useUrlFilter';
 import { Badge } from '@/components/ui/badge';
+import { Checkbox } from '@/components/ui/checkbox';
 import { PageHeader } from '@/components/PageHeader';
 import { Button } from '@/components/ui/button';
 import { ConfirmDialog, type ConfirmAction } from '@/components/ConfirmDialog';
@@ -54,6 +55,12 @@ import {
 } from '@/components/ui/table';
 import { Textarea } from '@/components/ui/textarea';
 import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip';
+import {
   useAcknowledgeAlert,
   useActiveBatches,
   useAddBatchIo,
@@ -65,13 +72,13 @@ import {
   useBatchUpdates,
   useBlendCn,
   useBmgUnits,
+  useBmgDevices,
   useCancelBatch,
   useCreateUnit,
   useFinishBatch,
   useOpenAlerts,
   useSetUnitMaintenance,
   useStartBatch,
-  useSuggestUnit,
   useUnarchiveUnit,
   useUpdateUnit,
   useWasteCategories,
@@ -96,7 +103,7 @@ import { fmtHumanDate, fmtUtcToApp } from '@/utils/date';
 import { slugify, uniqueSlug } from '@/utils/slug';
 import { statusLabel } from '@/utils/status';
 import { titleCase } from '@/lib/utils';
-import { bmgActionAvailability } from '@/lib/bmgActions';
+import { bmgActionAvailability, availableBmgDevices } from '@/lib/bmgActions';
 
 function unitStatusVariant(status: BmgUnit['status']): 'default' | 'info' | 'warning' | 'success' | 'destructive' | 'secondary' {
   switch (status) {
@@ -109,55 +116,53 @@ function unitStatusVariant(status: BmgUnit['status']): 'default' | 'info' | 'war
   }
 }
 
+/**
+ * FieldInfo — hoverable info icon that sits beside a form label and
+ * carries the field's explanation. Keeps long helper text out of the
+ * form body (same tooltip pattern as the PageHeader description);
+ * the trigger is a real button so keyboard focus reveals it too.
+ */
+function FieldInfo({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <TooltipProvider delayDuration={150}>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            type="button"
+            aria-label={label}
+            className="rounded-full text-muted-foreground/70 transition-colors hover:text-foreground focus-visible:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <Info aria-hidden className="size-3.5" />
+          </button>
+        </TooltipTrigger>
+        <TooltipContent side="top" className="max-w-xs text-left leading-relaxed">
+          {children}
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  );
+}
+
 function StartBatchDialog({ unit, onClose }: { unit: BmgUnit; onClose: () => void }) {
   const start = useStartBatch();
-  const cats = useWasteCategories(true);
-  // Panel revision: segregated waste composition — one row per waste
-  // category with its loaded weight. The ratios drive the batch ETA.
-  const [rows, setRows] = useState<Array<{ category_id: string; weight_kg: string }>>([
-    { category_id: '', weight_kg: '' },
-  ]);
-  const totalId = useId();
-  const weightBaseId = useId();
-
-  // Audit #8: suggest an idle drum matching the selected waste category.
-  const firstCat = rows.find((r) => r.category_id !== '')?.category_id ?? null;
-  const suggest = useSuggestUnit(firstCat !== null ? Number(firstCat) : null);
-
-  const total = useMemo(
-    () => rows.reduce((s, r) => s + (Number(r.weight_kg) || 0), 0),
-    [rows],
-  );
-
-  function setRow(i: number, patch: Partial<{ category_id: string; weight_kg: string }>) {
-    setRows((rs) => rs.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
-  }
-  function addRow() {
-    setRows((rs) => [...rs, { category_id: '', weight_kg: '' }]);
-  }
-  function removeRow(i: number) {
-    setRows((rs) => (rs.length > 1 ? rs.filter((_, idx) => idx !== i) : rs));
-  }
+  // Starting the drum IS starting the batch — one field, no ceremony.
+  // The waste mix was designated on the drum at setup; the backend
+  // derives the ETA from the drum's first designated category (or the
+  // platform default) and commands the drum's ESP32 to start.
+  const [totalKg, setTotalKg] = useState('');
+  const weightId = useId();
 
   function submit() {
+    const total = Number(totalKg);
+    if (!Number.isFinite(total) || total <= 0) {
+      toast.error('Enter the total input weight (kg).');
+      return;
+    }
     if (unit.spec_capacity_kg !== null && unit.spec_capacity_kg > 0 && total > unit.spec_capacity_kg) {
-      toast.error(`Total input weight (${total.toFixed(2)} kg) exceeds this drum's capacity (${unit.spec_capacity_kg} kg).`);
+      toast.error(`Total input weight (${total.toFixed(2)} kg) exceeds this unit's capacity (${unit.spec_capacity_kg} kg).`);
       return;
     }
-    const composition = rows
-      .filter((r) => r.category_id !== '' && r.weight_kg !== '')
-      .map((r) => ({ category_id: Number(r.category_id), weight_kg: Number(r.weight_kg) }));
-    // Empty rows used to be silently dropped and the schema's
-    // min(1, 'Add at least one waste component') got masked by the
-    // total>0 failure — surface the real reason instead.
-    if (composition.length === 0) {
-      toast.error('Add at least one waste component with a weight.');
-      return;
-    }
-    const parsed = startBatchSchema.safeParse({
-      total_input_weight_kg: Number(total.toFixed(2)),
-      composition,
-    });
+    const parsed = startBatchSchema.safeParse({ total_input_weight_kg: total });
     if (!parsed.success) {
       toast.error(parsed.error.issues[0]?.message ?? 'Invalid input.');
       return;
@@ -175,68 +180,27 @@ function StartBatchDialog({ unit, onClose }: { unit: BmgUnit; onClose: () => voi
       </DialogHeader>
       <div className="space-y-3">
         <p className="text-xs text-muted-foreground">
-          Record the waste mix by specific category (meat, rice, bones, yard…). The
-          weight ratios drive this drum’s expected composting duration.
+          Starting this drum starts the batch and commands its ESP32. The waste mix was
+          set on the drum — only the loaded weight is recorded here.
         </p>
-        <div className="space-y-2">
-          {rows.map((r, i) => {
-            const ratio = total > 0 && r.weight_kg !== '' ? ((Number(r.weight_kg) / total) * 100) : null;
-            const weightId = `${weightBaseId}-${i}`;
-            return (
-              <div key={i} className="flex items-end gap-2">
-                <div className="flex-1 space-y-1">
-                  {i === 0 && <Label className="text-xs">Waste category</Label>}
-                  <Select value={r.category_id} onValueChange={(v) => setRow(i, { category_id: v })}>
-                    <SelectTrigger aria-label="Waste category"><SelectValue placeholder="Select category…" /></SelectTrigger>
-                    <SelectContent>
-                      {(cats.data ?? []).map((c) => (
-                        <SelectItem key={c.id} value={String(c.id)}>{c.name}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="w-28 space-y-1">
-                  {i === 0 && <Label htmlFor={weightId} className="text-xs">Weight (kg)</Label>}
-                  <Input
-                    id={i === 0 ? weightId : undefined}
-                    type="number"
-                    min={0}
-                    step={0.01}
-                    aria-label={i === 0 ? undefined : 'Weight (kg)'}
-                    value={r.weight_kg}
-                    onChange={(e) => setRow(i, { weight_kg: e.target.value })}
-                  />
-                </div>
-                <div className="w-14 pb-2 text-right tabular-nums text-xs text-muted-foreground">
-                  {ratio !== null ? `${ratio.toFixed(0)}%` : '—'}
-                </div>
-                <Button size="icon" variant="ghost" className="mb-0.5" disabled={rows.length < 2} onClick={() => removeRow(i)} aria-label="Remove component">
-                  <X className="size-4" />
-                </Button>
-              </div>
-            );
-          })}
-          <Button size="sm" variant="outline" onClick={addRow}><Plus className="size-3" /> Add component</Button>
+        <div className="space-y-1.5">
+          <Label htmlFor={weightId}>Total input weight (kg) *</Label>
+          <Input
+            id={weightId}
+            type="number"
+            min={0}
+            step={0.01}
+            value={totalKg}
+            onChange={(e) => setTotalKg(e.target.value)}
+            placeholder="e.g. 8"
+            autoFocus
+          />
+          {unit.spec_capacity_kg !== null && unit.spec_capacity_kg > 0 && (
+            <p className="text-[0.6875rem] text-muted-foreground">
+              Unit capacity (both drums): {unit.spec_capacity_kg} kg
+            </p>
+          )}
         </div>
-        <div className="flex items-center justify-between rounded-md border bg-muted/40 px-3 py-2">
-          <Label htmlFor={totalId} className="text-xs">Total input weight</Label>
-          <div className="text-right">
-            <span id={totalId} className="tabular-nums text-sm font-semibold">{total.toFixed(2)} kg</span>
-            {unit.spec_capacity_kg !== null && unit.spec_capacity_kg > 0 && (
-              <p className={`text-[0.6875rem] ${total > unit.spec_capacity_kg ? 'font-medium text-destructive' : 'text-muted-foreground'}`}>
-                Drum capacity: {unit.spec_capacity_kg} kg
-              </p>
-            )}
-          </div>
-        </div>
-        {firstCat !== null && suggest.data !== null && suggest.data !== undefined && (
-          <p className="flex items-center gap-1.5 rounded-md border border-primary/20 bg-primary/5 px-3 py-2 text-xs text-foreground">
-            <Sparkles className="size-3.5 text-primary" />
-            Suggested drum for this category: <span className="tabular-nums font-medium">{suggest.data.code}</span>
-            {suggest.data.location_code !== null && ` · ${suggest.data.location_code}`}
-            {suggest.data.spec_capacity_kg !== null && ` · ${suggest.data.spec_capacity_kg} kg cap`}
-          </p>
-        )}
       </div>
       <DialogFooter>
         <Button variant="outline" onClick={onClose}>Cancel</Button>
@@ -615,26 +579,46 @@ function AnalyticsDialog({ unit, batchId, onClose }: { unit: BmgUnit; batchId: n
  * CreateUnitDialog — register a new BMG drum.
  *
  * Mirrors the legacy `bmg/drums/create` form: code, name, location,
- * capacity, notes. `code` is uppercased server-side; submit is blocked
- * until Zod validates.
+ * capacity, notes — plus the REQUIRED ESP32 integration. Every drum
+ * carries exactly one registered device, so when the whole fleet is
+ * bound the form is blocked with a pointer at the Devices screen
+ * (the backend refuses the create for the same reason).
  */
 function CreateUnitDialog({ onClose, existingCodes }: { onClose: () => void; existingCodes: readonly string[] }) {
   const create = useCreateUnit();
   const cats = useWasteCategories(true);
+  const devices = useBmgDevices(null, 100, false);
   const [code, setCode] = useState('');
   const [codeEdited, setCodeEdited] = useState(false);
   const [name, setName] = useState('');
   const [location, setLocation] = useState('');
-  const [capacity, setCapacity] = useState('');
-  const [categoryId, setCategoryId] = useState<string>('unset');
+  const [drumOne, setDrumOne] = useState('');
+  const [drumTwo, setDrumTwo] = useState('');
+  const [selectedCats, setSelectedCats] = useState<string[]>([]);
+  const [deviceId, setDeviceId] = useState<string>('unset');
   const [notes, setNotes] = useState('');
   const [errors, setErrors] = useState<Record<string, string>>({});
   const codeId = useId();
   const nameId = useId();
   const locId = useId();
-  const capId = useId();
-  const catId = useId();
+  const capOneId = useId();
+  const capTwoId = useId();
+  const deviceIdId = useId();
   const notesId = useId();
+
+  const availableDevices = availableBmgDevices(devices.data?.data ?? []);
+  // Fleet gate: a drum cannot be created while every registered ESP32
+  // is bound to another drum. `isSuccess` (not `!isLoading`) so a
+  // failed devices query never reads as "fleet exhausted".
+  const fleetExhausted = devices.isSuccess && availableDevices.length === 0;
+
+  // The unit's rated capacity is the SUM of its two drums — shown live
+  // so the operator sees what the system will enforce.
+  const drumSum = drumOne !== '' && drumTwo !== '' ? (Number(drumOne) + Number(drumTwo)).toFixed(2) : null;
+
+  function toggleCat(id: string) {
+    setSelectedCats((sel) => (sel.includes(id) ? sel.filter((c) => c !== id) : [...sel, id]));
+  }
 
   // `code` is a SLUG (lowercase, hyphen-separated). Auto-generate it
   // from the name — deduped with a `-2`/`-3` suffix against the drums
@@ -663,17 +647,32 @@ function CreateUnitDialog({ onClose, existingCodes }: { onClose: () => void; exi
     // Normalize the slug one final time so the server always receives
     // a clean value even if the field wasn't blurred before submit.
     const cleanCode = slugify(code).slice(0, 32);
+    if (deviceId === 'unset') {
+      setErrors({ device_id: 'Select the ESP32 device to integrate.' });
+      return;
+    }
+    // Drum capacities arrive as a pair — a lone value is a form bug.
+    if ((drumOne === '') !== (drumTwo === '')) {
+      setErrors({ drum_one_capacity_kg: 'Provide both drums\u2019 capacities — the unit capacity is their sum.' });
+      return;
+    }
     const payload = {
       code: cleanCode,
       display_name: name,
       location_code: location,
-      spec_capacity_kg: capacity === '' ? undefined : Number(capacity),
-      default_category_id: categoryId === 'unset' || categoryId === '' ? undefined : Number(categoryId),
+      drum_one_capacity_kg: drumOne === '' ? undefined : Number(drumOne),
+      drum_two_capacity_kg: drumTwo === '' ? undefined : Number(drumTwo),
+      category_ids: selectedCats.map(Number),
       notes,
+      device_id: Number(deviceId),
     };
     // Validate client-side against the shared schema so empty/invalid
     // fields surface inline instead of only as a server-error toast.
-    const parsed = createUnitSchema.safeParse({ ...payload, spec_capacity_kg: capacity === '' ? '' : capacity, default_category_id: categoryId === 'unset' || categoryId === '' ? '' : categoryId });
+    const parsed = createUnitSchema.safeParse({
+      ...payload,
+      drum_one_capacity_kg: drumOne,
+      drum_two_capacity_kg: drumTwo,
+    });
     if (!parsed.success) {
       setErrors(Object.fromEntries(parsed.error.issues.map((i) => [String(i.path[0]), i.message])));
       return;
@@ -684,19 +683,24 @@ function CreateUnitDialog({ onClose, existingCodes }: { onClose: () => void; exi
         setCode('');
         setName('');
         setLocation('');
-        setCapacity('');
-        setCategoryId('unset');
+        setDrumOne('');
+        setDrumTwo('');
+        setSelectedCats([]);
+        setDeviceId('unset');
         setNotes('');
         onClose();
       },
-      // Surface a server-side uniqueness conflict (409 on the `code`
-      // field — e.g. the slug exists on a drum outside the loaded page)
-      // inline under the slug input instead of only a toast.
+      // Surface a server-side conflict inline under its input instead
+      // of only a toast — a slug that exists outside the loaded page
+      // (409 on `code`), or an ESP32 that got bound between page load
+      // and submit (409 on `device_id`).
       onError: (err) => {
         if (err instanceof ApiEnvelopeError) {
-          const field = err.errors.find((e) => e.field === 'code');
+          const field = err.errors.find((e) =>
+            ['code', 'device_id', 'category_ids', 'drum_one_capacity_kg', 'drum_two_capacity_kg'].includes(e.field ?? ''),
+          );
           if (field !== undefined) {
-            setErrors((prev) => ({ ...prev, code: field.message }));
+            setErrors((prev) => ({ ...prev, [field.field ?? 'code']: field.message }));
             return;
           }
         }
@@ -715,7 +719,12 @@ function CreateUnitDialog({ onClose, existingCodes }: { onClose: () => void; exi
       <div className="space-y-3">
         <div className="grid grid-cols-2 gap-3">
           <div className="space-y-1.5">
-            <Label htmlFor={codeId}>Drum code (slug) *</Label>
+            <div className="flex items-center gap-1">
+              <Label htmlFor={codeId}>Drum code (slug) *</Label>
+              <FieldInfo label="About the drum code">
+                URL-safe slug — lowercase, hyphen-separated (e.g. drum-01). Auto-filled from the name; appends a -2 suffix if the slug is taken. Read-only after creation.
+              </FieldInfo>
+            </div>
             <Input
               id={codeId}
               value={code}
@@ -726,10 +735,8 @@ function CreateUnitDialog({ onClose, existingCodes }: { onClose: () => void; exi
               aria-invalid={errors['code'] !== undefined}
               autoFocus
             />
-            {errors['code'] !== undefined ? (
+            {errors['code'] !== undefined && (
               <p role="alert" className="text-xs text-destructive">{errors['code']}</p>
-            ) : (
-              <p className="text-[0.625rem] text-muted-foreground">URL-safe slug — lowercase, hyphen-separated (e.g. drum-01). Auto-filled from the name; appends a -2 suffix if the slug is taken. Read-only after creation.</p>
             )}
           </div>
           <div className="space-y-1.5">
@@ -744,28 +751,114 @@ function CreateUnitDialog({ onClose, existingCodes }: { onClose: () => void; exi
           <Label htmlFor={locId}>Location</Label>
           <Input id={locId} value={location} onChange={(e) => setLocation(e.target.value)} placeholder="North campus, near the canteen" maxLength={64} />
         </div>
-        <div className="grid grid-cols-2 gap-3">
-          <div className="space-y-1.5">
-            <Label htmlFor={capId}>Capacity (kg)</Label>
-            <Input id={capId} type="number" min={0.01} step={0.01} value={capacity} onChange={(e) => setCapacity(e.target.value)} placeholder="120" />
+        <div className="space-y-1.5">
+          <div className="flex items-center gap-1">
+            <Label>Drum capacities (kg)</Label>
+            <FieldInfo label="About the capacities">
+              Each unit has 2 drums — enter EACH drum&rsquo;s capacity (at least 4 kg each). The unit&rsquo;s rated capacity is their sum.
+            </FieldInfo>
           </div>
-          <div className="space-y-1.5">
-            <Label id={catId}>Default waste category</Label>
-            <Select value={categoryId} onValueChange={setCategoryId}>
-              <SelectTrigger aria-labelledby={catId} className="w-full">
-                <SelectValue placeholder="Pick a category…" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="unset">— None —</SelectItem>
-                {(cats.data ?? []).map((c) => (
-                  <SelectItem key={c.id} value={String(c.id)}>
-                    {c.name} <span className="tabular-nums text-xs text-muted-foreground">({c.code})</span>
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <p className="text-[0.625rem] text-muted-foreground">Pre-fills the category on new batches started on this drum.</p>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label htmlFor={capOneId} className="text-xs text-muted-foreground">Drum 1</Label>
+              <Input
+                id={capOneId}
+                type="number"
+                min={4}
+                step={0.01}
+                value={drumOne}
+                onChange={(e) => setDrumOne(e.target.value)}
+                placeholder="at least 4"
+                aria-invalid={errors['drum_one_capacity_kg'] !== undefined || errors['drum_two_capacity_kg'] !== undefined}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor={capTwoId} className="text-xs text-muted-foreground">Drum 2</Label>
+              <Input
+                id={capTwoId}
+                type="number"
+                min={4}
+                step={0.01}
+                value={drumTwo}
+                onChange={(e) => setDrumTwo(e.target.value)}
+                placeholder="at least 4"
+                aria-invalid={errors['drum_one_capacity_kg'] !== undefined || errors['drum_two_capacity_kg'] !== undefined}
+              />
+            </div>
           </div>
+          {drumSum !== null && (
+            <p className="text-xs text-muted-foreground">
+              Unit capacity (sum of both drums): <span className="tabular-nums font-medium text-foreground">{drumSum} kg</span>
+            </p>
+          )}
+          {(errors['drum_one_capacity_kg'] !== undefined || errors['drum_two_capacity_kg'] !== undefined) && (
+            <p role="alert" className="text-xs text-destructive">{errors['drum_one_capacity_kg'] ?? errors['drum_two_capacity_kg']}</p>
+          )}
+        </div>
+        <div className="space-y-1.5">
+          <Label>Waste categories</Label>
+          <div
+            className="max-h-36 space-y-0.5 overflow-y-auto rounded-md border p-2"
+            role="group"
+            aria-label="Waste categories this drum is designated for"
+          >
+            {(cats.data ?? []).length === 0 && (
+              <p className="px-1 py-0.5 text-xs text-muted-foreground">No waste categories yet — the drum will accept any mix.</p>
+            )}
+            {(cats.data ?? []).map((c) => (
+              <label key={c.id} className="flex cursor-pointer items-center gap-2 rounded px-1 py-0.5 text-sm hover:bg-muted/50">
+                <Checkbox
+                  checked={selectedCats.includes(String(c.id))}
+                  onCheckedChange={() => toggleCat(String(c.id))}
+                  aria-label={`Designate ${c.name}`}
+                />
+                <span>{c.name}</span>
+                <span className="tabular-nums text-xs text-muted-foreground">({c.code})</span>
+              </label>
+            ))}
+          </div>
+          <p className="text-[0.625rem] text-muted-foreground">
+            Set at drum setup — batches on this drum may only mix these categories, and the start form pre-fills a weight row per category. Leave empty to accept any mix.
+          </p>
+          {errors['category_ids'] !== undefined && (
+            <p role="alert" className="text-xs text-destructive">{errors['category_ids']}</p>
+          )}
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor={deviceIdId}>ESP32 device *</Label>
+          {fleetExhausted ? (
+            <div className="rounded-md border border-amber-500/40 bg-amber-500/5 p-3 text-xs" role="alert">
+              <p className="flex items-center gap-1.5 font-medium text-foreground">
+                <TriangleAlert className="size-3.5 text-amber-500" /> Every registered ESP32 is already bound to a drum.
+              </p>
+              <p className="mt-1 text-muted-foreground">
+                A drum integrates exactly one device — register another ESP32 first.
+              </p>
+              <Link to="/facilities/devices" className="mt-1.5 inline-flex items-center gap-1 font-medium text-primary underline-offset-2 hover:underline">
+                <Cpu className="size-3" /> Go to Devices
+              </Link>
+            </div>
+          ) : (
+            <>
+              <Select value={deviceId} onValueChange={setDeviceId} disabled={devices.isLoading}>
+                <SelectTrigger id={deviceIdId} aria-invalid={errors['device_id'] !== undefined}>
+                  <SelectValue placeholder={devices.isLoading ? 'Loading devices…' : 'Pick the ESP32…'} />
+                </SelectTrigger>
+                <SelectContent>
+                  {availableDevices.map((d) => (
+                    <SelectItem key={d.id} value={String(d.id)}>
+                      {d.display_name} <span className="font-mono text-xs text-muted-foreground">({d.code})</span>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {errors['device_id'] !== undefined ? (
+                <p role="alert" className="text-xs text-destructive">{errors['device_id']}</p>
+              ) : (
+                <p className="text-[0.625rem] text-muted-foreground">Required — the drum reports turning sessions through this device. Only unbound devices are listed.</p>
+              )}
+            </>
+          )}
         </div>
         <div className="space-y-1.5">
           <Label htmlFor={notesId}>Notes</Label>
@@ -774,7 +867,7 @@ function CreateUnitDialog({ onClose, existingCodes }: { onClose: () => void; exi
       </div>
       <DialogFooter>
         <Button variant="outline" onClick={onClose}>Cancel</Button>
-        <Button onClick={submit} disabled={create.isPending}>
+        <Button onClick={submit} disabled={create.isPending || fleetExhausted}>
           {create.isPending && <Loader2 className="animate-spin" />}
           <Plus /> Create drum
         </Button>
@@ -794,33 +887,65 @@ function CreateUnitDialog({ onClose, existingCodes }: { onClose: () => void; exi
 function EditUnitDialog({ unit, onClose }: { unit: BmgUnit; onClose: () => void }) {
   const update = useUpdateUnit();
   const cats = useWasteCategories(true);
+  const devices = useBmgDevices(null, 100, false);
   const [name, setName] = useState(unit.display_name);
   const [location, setLocation] = useState(unit.location_code ?? '');
-  const [capacity, setCapacity] = useState(
-    unit.spec_capacity_kg !== null ? String(unit.spec_capacity_kg) : '',
+  const [drumOne, setDrumOne] = useState(
+    unit.drum_one_capacity_kg !== null && unit.drum_one_capacity_kg !== undefined
+      ? String(unit.drum_one_capacity_kg) : '',
   );
-  const [categoryId, setCategoryId] = useState<string>(
-    unit.default_category_id !== null && unit.default_category_id !== undefined
-      ? String(unit.default_category_id)
-      : 'unset',
+  const [drumTwo, setDrumTwo] = useState(
+    unit.drum_two_capacity_kg !== null && unit.drum_two_capacity_kg !== undefined
+      ? String(unit.drum_two_capacity_kg) : '',
+  );
+  const [selectedCats, setSelectedCats] = useState<string[]>(
+    (unit.categories ?? []).map((c) => String(c.id)),
+  );
+  const [deviceId, setDeviceId] = useState<string>(
+    unit.device_id !== null && unit.device_id !== undefined ? String(unit.device_id) : 'unset',
   );
   const [notes, setNotes] = useState(unit.notes ?? '');
   const [errors, setErrors] = useState<Record<string, string>>({});
   const nameId = useId();
   const locId = useId();
-  const capId = useId();
-  const catId = useId();
+  const capOneId = useId();
+  const capTwoId = useId();
+  const deviceIdId = useId();
   const notesId = useId();
 
+  const drumSum = drumOne !== '' && drumTwo !== '' ? (Number(drumOne) + Number(drumTwo)).toFixed(2) : null;
+
+  function toggleCat(id: string) {
+    setSelectedCats((sel) => (sel.includes(id) ? sel.filter((c) => c !== id) : [...sel, id]));
+  }
+
+  // Reassignment options: every free board plus the drum's current one
+  // (re-picking it is a no-op, not a conflict). 'unset' = unbind, the
+  // replacement path for a dead board.
+  const deviceOptions = availableBmgDevices(devices.data?.data ?? [], unit.device_id ?? undefined);
+
   function submit() {
+    if ((drumOne === '') !== (drumTwo === '')) {
+      setErrors({ drum_one_capacity_kg: 'Provide both drums\u2019 capacities — the unit capacity is their sum.' });
+      return;
+    }
     const input = {
       display_name: name,
       location_code: location,
-      spec_capacity_kg: capacity === '' ? undefined : Number(capacity),
-      default_category_id: categoryId === 'unset' || categoryId === '' ? undefined : Number(categoryId),
+      // Capacities travel as a pair; the backend recomputes the unit
+      // capacity as their sum. Blank pair = leave the profile unchanged.
+      drum_one_capacity_kg: drumOne === '' ? undefined : Number(drumOne),
+      drum_two_capacity_kg: drumTwo === '' ? undefined : Number(drumTwo),
+      // Always sent — an empty array clears the designation.
+      category_ids: selectedCats.map(Number),
       notes,
+      device_id: deviceId === 'unset' ? null : Number(deviceId),
     };
-    const parsed = updateUnitSchema.safeParse({ ...input, spec_capacity_kg: capacity === '' ? '' : capacity, default_category_id: categoryId === 'unset' || categoryId === '' ? '' : categoryId });
+    const parsed = updateUnitSchema.safeParse({
+      ...input,
+      drum_one_capacity_kg: drumOne,
+      drum_two_capacity_kg: drumTwo,
+    });
     if (!parsed.success) {
       setErrors(Object.fromEntries(parsed.error.issues.map((i) => [String(i.path[0]), i.message])));
       return;
@@ -853,28 +978,102 @@ function EditUnitDialog({ unit, onClose }: { unit: BmgUnit; onClose: () => void 
           <Label htmlFor={locId}>Location</Label>
           <Input id={locId} value={location} onChange={(e) => setLocation(e.target.value)} maxLength={64} />
         </div>
-        <div className="grid grid-cols-2 gap-3">
-          <div className="space-y-1.5">
-            <Label htmlFor={capId}>Capacity (kg)</Label>
-            <Input id={capId} type="number" min={0.01} step={0.01} value={capacity} onChange={(e) => setCapacity(e.target.value)} />
+        <div className="space-y-1.5">
+          <div className="flex items-center gap-1">
+            <Label>Drum capacities (kg)</Label>
+            <FieldInfo label="About the capacities">
+              Each unit has 2 drums — enter EACH drum&rsquo;s capacity (at least 4 kg each). The unit&rsquo;s rated capacity is their sum.
+            </FieldInfo>
           </div>
-          <div className="space-y-1.5">
-            <Label id={catId}>Default waste category</Label>
-            <Select value={categoryId} onValueChange={setCategoryId}>
-              <SelectTrigger aria-labelledby={catId} className="w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="unset">— None —</SelectItem>
-                {(cats.data ?? []).map((c) => (
-                  <SelectItem key={c.id} value={String(c.id)}>
-                    {c.name} <span className="tabular-nums text-xs text-muted-foreground">({c.code})</span>
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <p className="text-[0.625rem] text-muted-foreground">Pre-fills the category on new batches started on this drum.</p>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label htmlFor={capOneId} className="text-xs text-muted-foreground">Drum 1</Label>
+              <Input
+                id={capOneId}
+                type="number"
+                min={4}
+                step={0.01}
+                value={drumOne}
+                onChange={(e) => setDrumOne(e.target.value)}
+                placeholder="at least 4"
+                aria-invalid={errors['drum_one_capacity_kg'] !== undefined || errors['drum_two_capacity_kg'] !== undefined}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor={capTwoId} className="text-xs text-muted-foreground">Drum 2</Label>
+              <Input
+                id={capTwoId}
+                type="number"
+                min={4}
+                step={0.01}
+                value={drumTwo}
+                onChange={(e) => setDrumTwo(e.target.value)}
+                placeholder="at least 4"
+                aria-invalid={errors['drum_one_capacity_kg'] !== undefined || errors['drum_two_capacity_kg'] !== undefined}
+              />
+            </div>
           </div>
+          {drumSum !== null && (
+            <p className="text-xs text-muted-foreground">
+              Unit capacity (sum of both drums): <span className="tabular-nums font-medium text-foreground">{drumSum} kg</span>
+            </p>
+          )}
+          {(errors['drum_one_capacity_kg'] !== undefined || errors['drum_two_capacity_kg'] !== undefined) && (
+            <p role="alert" className="text-xs text-destructive">{errors['drum_one_capacity_kg'] ?? errors['drum_two_capacity_kg']}</p>
+          )}
+        </div>
+        <div className="space-y-1.5">
+          <Label>Waste categories</Label>
+          <div
+            className="max-h-36 space-y-0.5 overflow-y-auto rounded-md border p-2"
+            role="group"
+            aria-label="Waste categories this drum is designated for"
+          >
+            {(cats.data ?? []).length === 0 && (
+              <p className="px-1 py-0.5 text-xs text-muted-foreground">No waste categories yet — the drum will accept any mix.</p>
+            )}
+            {(cats.data ?? []).map((c) => (
+              <label key={c.id} className="flex cursor-pointer items-center gap-2 rounded px-1 py-0.5 text-sm hover:bg-muted/50">
+                <Checkbox
+                  checked={selectedCats.includes(String(c.id))}
+                  onCheckedChange={() => toggleCat(String(c.id))}
+                  aria-label={`Designate ${c.name}`}
+                />
+                <span>{c.name}</span>
+                <span className="tabular-nums text-xs text-muted-foreground">({c.code})</span>
+              </label>
+            ))}
+          </div>
+          <p className="text-[0.625rem] text-muted-foreground">
+            Batches on this drum may only mix these categories; the start form pre-fills a weight row per category. Empty = any mix.
+          </p>
+          {errors['category_ids'] !== undefined && (
+            <p role="alert" className="text-xs text-destructive">{errors['category_ids']}</p>
+          )}
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor={deviceIdId}>ESP32 device</Label>
+          <Select value={deviceId} onValueChange={setDeviceId} disabled={devices.isLoading}>
+            <SelectTrigger id={deviceIdId} aria-invalid={errors['device_id'] !== undefined}>
+              <SelectValue placeholder={devices.isLoading ? 'Loading devices…' : 'Pick the ESP32…'} />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="unset">— None (unbound) —</SelectItem>
+              {deviceOptions.map((d) => (
+                <SelectItem key={d.id} value={String(d.id)}>
+                  {d.display_name} <span className="font-mono text-xs text-muted-foreground">({d.code})</span>
+                  {d.id === unit.device_id ? ' — current' : ''}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          {errors['device_id'] !== undefined ? (
+            <p role="alert" className="text-xs text-destructive">{errors['device_id']}</p>
+          ) : (
+            <p className="text-[0.625rem] text-muted-foreground">
+              The drum's integrated controller — swap it by picking a free board, or unbind it (e.g. a dead board awaiting replacement).
+            </p>
+          )}
         </div>
         <div className="space-y-1.5">
           <Label htmlFor={notesId}>Notes</Label>
@@ -896,6 +1095,15 @@ function EditUnitDialog({ unit, onClose }: { unit: BmgUnit; onClose: () => void 
  * ArchiveUnitDialog — confirm-driven soft archive. The button is
  * disabled while the unit has an active batch (server-side enforces
  * this too — 409 `statemachine.bmg.unit_has_active_batch`).
+ *
+ * When the drum carries an ESP32, the dialog offers to RELOCATE the
+ * ArchiveUnitDialog — confirm-driven soft archive. The button is
+ * disabled while the unit has an active batch (server-side enforces
+ * this too — 409 `statemachine.bmg.unit_has_active_batch`).
+ *
+ * Archiving automatically releases the drum's ESP32 back to the
+ * available pool — no relocation choice here; the board is assigned
+ * to its next drum from that drum's Edit form.
  */
 function ArchiveUnitDialog({ unit, onClose }: { unit: BmgUnit; onClose: () => void }) {
   const archive = useArchiveUnit();
@@ -921,6 +1129,12 @@ function ArchiveUnitDialog({ unit, onClose }: { unit: BmgUnit; onClose: () => vo
         {hasActiveBatch && (
           <p className="rounded-md border border-destructive/30 bg-destructive/5 p-2 text-destructive">
             This drum still has an active batch. Finish or cancel it before archiving.
+          </p>
+        )}
+        {unit.device_code != null && (
+          <p>
+            Its ESP32 (<span className="font-mono text-xs">{unit.device_code}</span>) will be
+            released and can be assigned to another drum from that drum&rsquo;s Edit form.
           </p>
         )}
       </div>
@@ -1373,13 +1587,14 @@ export default function FacilitiesPage() {
               <TableHead className="px-3">Active batch</TableHead>
               <TableHead className="px-3">Utilization</TableHead>
               <TableHead className="px-3">Location</TableHead>
+              <TableHead className="px-3">ESP32</TableHead>
               <TableHead className="px-3">Created</TableHead>
               <TableHead className="px-3 text-right">Actions</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             <TableStateRows
-              colSpan={8}
+              colSpan={9}
               isLoading={units.isLoading}
               isError={units.isError}
               isEmpty={unitRows.length === 0}
@@ -1425,12 +1640,33 @@ export default function FacilitiesPage() {
                   <TableCell className="px-3 text-xs text-muted-foreground">
                     <div className="flex flex-col gap-0.5">
                       <span>{u.location_code ?? '—'}</span>
-                      {u.default_category_name !== null && u.default_category_name !== undefined && (
-                        <span className="inline-flex w-fit items-center gap-1 rounded-md bg-secondary px-1.5 py-0.5 text-[0.625rem] font-medium text-secondary-foreground">
-                          <Boxes className="size-2.5" /> {u.default_category_name}
-                        </span>
+                      {(u.categories ?? []).length > 0 && (
+                        <div className="flex flex-wrap gap-1">
+                          {(u.categories ?? []).slice(0, 2).map((c) => (
+                            <span key={c.id} className="inline-flex w-fit items-center gap-1 rounded-md bg-secondary px-1.5 py-0.5 text-[0.625rem] font-medium text-secondary-foreground">
+                              <Boxes className="size-2.5" /> {c.name}
+                            </span>
+                          ))}
+                          {(u.categories ?? []).length > 2 && (
+                            <span className="self-center text-[0.625rem] text-muted-foreground">+{(u.categories ?? []).length - 2}</span>
+                          )}
+                        </div>
                       )}
                     </div>
+                  </TableCell>
+                  <TableCell className="px-3 text-xs">
+                    {u.device_code != null ? (
+                      <span
+                        className="inline-flex items-center gap-1"
+                        title={u.device_display_name ?? u.device_code}
+                      >
+                        <Cpu className={`size-3 ${u.device_status === 'disabled' ? 'text-muted-foreground' : 'text-primary'}`} />
+                        <span className="font-mono">{u.device_code}</span>
+                        {u.device_status === 'disabled' && <Badge variant="secondary">disabled</Badge>}
+                      </span>
+                    ) : (
+                      <span className="text-muted-foreground">—</span>
+                    )}
                   </TableCell>
                   <TableCell className="px-3 text-xs text-muted-foreground">{fmtUtcToApp(u.created_at)}</TableCell>
                   <TableCell className="px-3 text-right">
@@ -1493,9 +1729,21 @@ export default function FacilitiesPage() {
               <MobileCardField label="Location">
                 <span className="text-xs text-muted-foreground">{u.location_code ?? '—'}</span>
               </MobileCardField>
-              {u.default_category_name !== null && u.default_category_name !== undefined && (
-                <MobileCardField label="Default category">
-                  <span className="inline-flex items-center gap-1 text-xs"><Boxes className="size-3" /> {u.default_category_name}</span>
+              <MobileCardField label="ESP32">
+                {u.device_code != null ? (
+                  <span className="inline-flex items-center gap-1 font-mono text-xs">
+                    <Cpu className="size-3" /> {u.device_code}
+                    {u.device_status === 'disabled' ? ' (disabled)' : ''}
+                  </span>
+                ) : (
+                  <span className="text-xs text-muted-foreground">—</span>
+                )}
+              </MobileCardField>
+              {(u.categories ?? []).length > 0 && (
+                <MobileCardField label="Waste categories">
+                  <span className="inline-flex items-center gap-1 text-xs">
+                    <Boxes className="size-3" /> {(u.categories ?? []).map((c) => c.name).join(', ')}
+                  </span>
                 </MobileCardField>
               )}
               <MobileCardActions>{unitActions(u)}</MobileCardActions>

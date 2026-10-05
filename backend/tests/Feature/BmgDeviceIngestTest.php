@@ -55,7 +55,7 @@ final class BmgDeviceIngestTest extends FeatureTestCase
      * Category → unit → active batch (processing), mirroring
      * BmgWorkflowTest::runLifecycle.
      *
-     * @return array{suffix:string, categoryId:int, unitId:int, batchId:int}
+     * @return array{suffix:string, categoryId:int, unitId:int, batchId:int, board:array{deviceId:int, userId:int, token:string, code:string}}
      */
     private function runLifecycle(): array
     {
@@ -72,10 +72,14 @@ final class BmgDeviceIngestTest extends FeatureTestCase
         ]);
         $categoryId = (int) $category['data']['id'];
 
+        // The drum's integrated ESP32 — the ingest tests below report
+        // through THIS board, and the batch start commands it.
+        $board = $this->createBmgDevice();
         $unit = $post('api/v1/facilities/units', [
             'code'                => "unit-{$suffix}",
             'display_name'        => "Device Test Drum {$suffix}",
             'default_category_id' => $categoryId,
+            'device_id'           => $board['deviceId'],
         ]);
         $unitId = (int) $unit['data']['id'];
 
@@ -85,7 +89,7 @@ final class BmgDeviceIngestTest extends FeatureTestCase
         ]);
         $batchId = (int) $batch['data']['id'];
 
-        return compact('suffix', 'categoryId', 'unitId', 'batchId');
+        return compact('suffix', 'categoryId', 'unitId', 'batchId', 'board');
     }
 
     /**
@@ -204,7 +208,9 @@ final class BmgDeviceIngestTest extends FeatureTestCase
     public function testDisabledDeviceIs403(): void
     {
         $ctx   = $this->runLifecycle();
-        $device = $this->createDevice($ctx['unitId'], status: 'disabled');
+        // A disabled board is refused by the filter before the binding
+        // even matters — an unbound, disabled device is enough here.
+        $device = $this->createDevice(null, status: 'disabled');
 
         $res = $this->devicePost($device['token'], $this->sessionPayload());
         $res->assertStatus(403);
@@ -216,7 +222,7 @@ final class BmgDeviceIngestTest extends FeatureTestCase
     public function testHappyPathCreatesTurningLogOnActiveBatch(): void
     {
         $ctx   = $this->runLifecycle();
-        $device = $this->createDevice($ctx['unitId']);
+        $device = $ctx['board'];
 
         $res = $this->devicePost($device['token'], $this->sessionPayload());
         $res->assertStatus(201);
@@ -244,7 +250,7 @@ final class BmgDeviceIngestTest extends FeatureTestCase
     public function testReplayIsIdempotent(): void
     {
         $ctx   = $this->runLifecycle();
-        $device = $this->createDevice($ctx['unitId']);
+        $device = $ctx['board'];
 
         $payload = $this->sessionPayload();
         $first   = $this->devicePost($device['token'], $payload);
@@ -274,15 +280,16 @@ final class BmgDeviceIngestTest extends FeatureTestCase
     {
         // Unit WITHOUT a batch: the device turns an empty drum.
         $suffix = bin2hex(random_bytes(4));
+        $device = $this->createBmgDevice();
         $res    = $this->authed($this->token(), 'post', 'api/v1/facilities/units', [
             'code'         => "unit-{$suffix}",
             'display_name' => "Idle Drum {$suffix}",
+            'device_id'    => $device['deviceId'],
         ]);
         $res->assertStatus(201);
         $unitId = (int) $this->envelope($res)['data']['id'];
 
-        $device = $this->createDevice($unitId);
-        $res    = $this->devicePost($device['token'], $this->sessionPayload());
+        $res = $this->devicePost($device['token'], $this->sessionPayload());
         $res->assertStatus(409);
         $this->assertErrorCode('statemachine.bmg.log_terminal_batch', $res);
     }
@@ -298,7 +305,7 @@ final class BmgDeviceIngestTest extends FeatureTestCase
     public function testValidationFailureIs422(): void
     {
         $ctx   = $this->runLifecycle();
-        $device = $this->createDevice($ctx['unitId']);
+        $device = $ctx['board'];
 
         $payload = $this->sessionPayload();
         unset($payload['session_uid']);
@@ -313,6 +320,11 @@ final class BmgDeviceIngestTest extends FeatureTestCase
         $ctx   = $this->runLifecycle();
         $mac   = $this->uniqueMac();
         $code  = str_replace(':', '-', $mac);
+
+        // The registration targets this drum, so the drum's integrated
+        // board is pulled first — a drum holds exactly one ESP32.
+        $release = $this->authed($this->token(), 'post', "api/v1/facilities/units/{$ctx['unitId']}", ['device_id' => null]);
+        $release->assertStatus(200);
 
         $command = new RegisterBmgDevice(service('logger'), service('commands'));
         $this->assertSame(0, $command->run([
@@ -351,6 +363,11 @@ final class BmgDeviceIngestTest extends FeatureTestCase
     {
         $ctx = $this->runLifecycle();
         $mac = $this->uniqueMac();
+
+        // The registration targets this drum, so the drum's integrated
+        // board is pulled first — a drum holds exactly one ESP32.
+        $release = $this->authed($this->token(), 'post', "api/v1/facilities/units/{$ctx['unitId']}", ['device_id' => null]);
+        $release->assertStatus(200);
 
         // Register through the same endpoint the UI dialog uses.
         $res = $this->authed($this->token(), 'post', 'api/v1/facilities/devices', [
@@ -406,6 +423,10 @@ final class BmgDeviceIngestTest extends FeatureTestCase
     public function testRegenerateAndStatusViaApi(): void
     {
         $ctx   = $this->runLifecycle();
+        // The registration targets this drum, so the drum's integrated
+        // board is pulled first — a drum holds exactly one ESP32.
+        $release = $this->authed($this->token(), 'post', "api/v1/facilities/units/{$ctx['unitId']}", ['device_id' => null]);
+        $release->assertStatus(200);
         $first = $this->authed($this->token(), 'post', 'api/v1/facilities/devices', [
             'mac'     => $this->uniqueMac(),
             'unit_id' => $ctx['unitId'],
@@ -436,7 +457,7 @@ final class BmgDeviceIngestTest extends FeatureTestCase
     public function testRtcEpochsStampTheSessionWindowAndLogDate(): void
     {
         $ctx   = $this->runLifecycle();
-        $device = $this->createDevice($ctx['unitId']);
+        $device = $ctx['board'];
 
         // Session claims it ran 2 days ago (sane: inside the 7-day
         // horizon). log_date must be the SESSION's Manila day, not the
@@ -466,7 +487,7 @@ final class BmgDeviceIngestTest extends FeatureTestCase
     public function testInsaneEpochsFallBackToServerTime(): void
     {
         $ctx   = $this->runLifecycle();
-        $device = $this->createDevice($ctx['unitId']);
+        $device = $ctx['board'];
 
         // Ended 30 days ago — outside the 7-day offline-queue horizon
         // (an unsynced DS3231). Fall back: today's log_date, nulls.
@@ -487,7 +508,7 @@ final class BmgDeviceIngestTest extends FeatureTestCase
     public function testSilenceWatchdogNotifiesOncePerEpisode(): void
     {
         $ctx   = $this->runLifecycle();
-        $device = $this->createDevice($ctx['unitId']);
+        $device = $ctx['board'];
         $db    = db_connect();
 
         // Backdate the device's last check-in to 3 days ago.
@@ -518,8 +539,11 @@ final class BmgDeviceIngestTest extends FeatureTestCase
     public function testSilenceWatchdogSkipsFreshAndUnboundDevices(): void
     {
         $ctx   = $this->runLifecycle();
-        $fresh = $this->createDevice($ctx['unitId']);   // last_seen = now → not silent
-        $this->createDevice(null);                       // unbound → out of scope
+        // The drum's integrated board is brand-new: last_seen falls back
+        // to created_at (now) → not silent. An unbound device is out of
+        // scope entirely.
+        $fresh = $ctx['board'];
+        $this->createDevice(null);
         $db = db_connect();
 
         $command = new \App\Commands\BmgDeviceWatchdog(service('logger'), service('commands'));

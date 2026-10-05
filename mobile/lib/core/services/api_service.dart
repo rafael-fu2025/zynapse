@@ -1977,7 +1977,8 @@ class ApiService {
   }
 
   /// `DELETE /facilities/units/{id}` — archive a BMG unit (fails while it
-  /// has an active batch).
+  /// has an active batch). The drum's ESP32 is released to the available
+  /// pool server-side.
   Future<void> archiveFacilityUnit(int unitId) async {
     await _dio.delete<Map<String, dynamic>>('/facilities/units/$unitId');
   }

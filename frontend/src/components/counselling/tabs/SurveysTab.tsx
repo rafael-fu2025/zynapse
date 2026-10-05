@@ -2,9 +2,11 @@
  * SurveysTab — guidance surveys builder + responses (parity plan Phase
  * B). Draft → publish (immutable version) → archive; responses per
  * survey are identity-linked (requirements context) and every answer
- * detail read is audited server-side.
+ * detail read is audited server-side. Dynamic links (survey / test /
+ * evaluation) are configured per survey and snapshotted on publish;
+ * published surveys allow a narrow URL/title hot-fix per link.
  */
-import { ClipboardList, Eye, Pencil, Plus, Send, Trash2 } from 'lucide-react';
+import { ClipboardList, Download, Eye, Pencil, Plus, Send, Trash2 } from 'lucide-react';
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { DateTimeField } from '@/components/DateTimeField';
 import { Badge } from '@/components/ui/badge';
@@ -31,21 +33,33 @@ import {
 } from '@/components/ui/select';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { useSurveyAggregate } from '@/hooks/useGuidanceFollowups';
 import {
   useArchiveSurvey,
   useCreateSurvey,
+  usePatchSurveyLink,
   usePublishSurvey,
+  useResponseScreenshotUrl,
   useSurvey,
   useSurveyResponseDetail,
   useSurveyResponses,
   useSurveys,
   useUpdateSurvey,
 } from '@/hooks/useSurveys';
-import type { Survey } from '@/schemas/surveys';
+import { apiClient } from '@/api/client';
+import type {
+  Survey,
+  SurveyLink,
+  SurveyLinkInstrument,
+  SurveyLinkScreenshot,
+  SurveyLinkType,
+  SurveyResponseLink,
+} from '@/schemas/surveys';
 import {
   surveyMetaInputSchema,
+  type BuilderLink,
   type BuilderQuestion,
   type QuestionType,
   type SurveyAudience,
@@ -80,8 +94,87 @@ const TYPE_LABELS: Record<QuestionType, string> = {
   external_url: 'External activity (attest)',
 };
 
+const LINK_TYPE_LABELS: Record<SurveyLinkType, string> = {
+  survey: 'Survey link',
+  test: 'Test link',
+  evaluation: 'Evaluation link',
+};
+
+const INSTRUMENT_LABELS: Record<SurveyLinkInstrument, string> = {
+  new_transferees: 'New & Transferees',
+  mi: 'Multiple Intelligences (MI)',
+  ls: 'Learning Styles (LS)',
+  bfpt: 'Big Five Personality Test (BFPT)',
+  custom: 'Custom assessment',
+};
+
 function emptyQuestion(): BuilderQuestion {
   return { question_text: '', question_type: 'free_text', is_required: false, options_text: '' };
+}
+
+let linkKeySeq = 0;
+function nextLinkKey(): string {
+  linkKeySeq += 1;
+  return `link-${linkKeySeq}`;
+}
+
+function emptyLink(type: SurveyLinkType, overrides: Partial<BuilderLink> = {}): BuilderLink {
+  return {
+    key: nextLinkKey(),
+    type,
+    title: '',
+    description: '',
+    external_url: '',
+    audience: null,
+    instrument_key: type === 'test' ? 'custom' : null,
+    requires_screenshot: false,
+    is_enabled: true,
+    ...overrides,
+  };
+}
+
+/** New surveys start with the canonical assessment set; URLs are admin-entered. */
+function defaultBuilderLinks(): BuilderLink[] {
+  return [
+    emptyLink('test', { title: 'Multiple Intelligences (MI)', instrument_key: 'mi', requires_screenshot: true }),
+    emptyLink('test', { title: 'Learning Styles (LS)', instrument_key: 'ls', requires_screenshot: true }),
+    emptyLink('test', { title: 'Big Five Personality Test (BFPT)', instrument_key: 'bfpt', requires_screenshot: true }),
+    emptyLink('evaluation', {
+      title: 'Evaluation of Guidance Services',
+      description: 'Please complete the evaluation after completing the required survey and assessments.',
+      requires_screenshot: false,
+    }),
+  ];
+}
+
+function savedToBuilderLink(link: SurveyLink): BuilderLink {
+  return {
+    key: `saved-${link.id}`,
+    id: link.id,
+    type: link.type,
+    title: link.title,
+    description: link.description ?? '',
+    external_url: link.external_url,
+    audience: link.audience,
+    instrument_key: link.instrument_key,
+    requires_screenshot: link.requires_screenshot,
+    is_enabled: link.is_enabled,
+  };
+}
+
+/** Mirror of the server rule: http(s) with a host, no credentials. */
+function linkRowIsComplete(row: BuilderLink): boolean {
+  const url = row.external_url.trim();
+  const title = row.title.trim();
+  if (title === '' && url === '') return true; // untouched row — dropped on save
+  if (title === '') return false;
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
+    return parsed.hostname !== '' && parsed.username === '' && parsed.password === '';
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -162,7 +255,7 @@ function SurveyBuilderDialog({
 }
 
 /** Normalized snapshot of the builder state for dirty comparison. */
-function surveyStateSnapshot(meta: SurveyMetaInput, questions: BuilderQuestion[]): string {
+function surveyStateSnapshot(meta: SurveyMetaInput, questions: BuilderQuestion[], links: BuilderLink[]): string {
   return JSON.stringify({
     title: meta.title.trim(),
     description: (meta.description ?? '').trim(),
@@ -177,6 +270,16 @@ function surveyStateSnapshot(meta: SurveyMetaInput, questions: BuilderQuestion[]
       type: q.question_type,
       required: q.is_required,
       options: q.options_text.split('\n').map((l) => l.trim()).filter(Boolean),
+    })),
+    links: links.map((l) => ({
+      type: l.type,
+      title: l.title.trim(),
+      description: l.description.trim(),
+      url: l.external_url.trim(),
+      audience: l.audience,
+      instrument: l.instrument_key,
+      requires_screenshot: l.requires_screenshot,
+      enabled: l.is_enabled,
     })),
   });
 }
@@ -224,6 +327,11 @@ function SurveyBuilderForm({
       options_text: q.options.map((o) => o.text).join('\n'),
     })) ?? [emptyQuestion()],
   );
+  const [links, setLinks] = useState<BuilderLink[]>(
+    existing !== null
+      ? existing.links.map(savedToBuilderLink)
+      : defaultBuilderLinks(),
+  );
 
   const immutable = existing !== null && existing.status !== 'draft';
   const validMeta = surveyMetaInputSchema.safeParse({ ...meta, description: meta.description ?? undefined }).success;
@@ -233,6 +341,10 @@ function SurveyBuilderForm({
         ? q.options_text.split('\n').map((l) => l.trim()).filter(Boolean).length >= 2
         : true),
   );
+  const validLinks = links.every(linkRowIsComplete);
+  const hasContent =
+    questions.some((q) => q.question_text.trim() !== '') ||
+    links.some((l) => l.is_enabled && l.title.trim() !== '' && l.external_url.trim() !== '');
 
   // Dirty tracking for the unsaved-changes guard. Immutable surveys are
   // never dirty (every field is disabled).
@@ -266,10 +378,11 @@ function SurveyBuilderForm({
           options_text: q.options.map((o) => o.text).join('\n'),
         }))
       : [emptyQuestion()],
+    existing !== null ? existing.links.map(savedToBuilderLink) : defaultBuilderLinks(),
   ), [existing]);
   const currentSnapshot = useMemo(
-    () => surveyStateSnapshot(meta, questions),
-    [meta, questions],
+    () => surveyStateSnapshot(meta, questions, links),
+    [meta, questions, links],
   );
   const dirty = ! immutable && currentSnapshot !== initialSnapshot;
 
@@ -279,6 +392,10 @@ function SurveyBuilderForm({
 
   function patchQuestion(index: number, patch: Partial<BuilderQuestion>) {
     setQuestions((current) => current.map((q, i) => (i === index ? { ...q, ...patch } : q)));
+  }
+
+  function patchLinkRow(key: string, patch: Partial<BuilderLink>) {
+    setLinks((current) => current.map((l) => (l.key === key ? { ...l, ...patch } : l)));
   }
 
   function toggleYearLevel(level: number, checked: boolean) {
@@ -292,7 +409,7 @@ function SurveyBuilderForm({
   }
 
   function save() {
-    const payload = { meta, questions };
+    const payload = { meta, questions, links };
     if (existing !== null) {
       update.mutate({ id: existing.id, ...payload }, { onSuccess: onClose });
     } else {
@@ -385,9 +502,23 @@ function SurveyBuilderForm({
             </div>
           </div>
 
-          <div className="space-y-3">
+        <Tabs defaultValue="questions" className="w-full">
+          <TabsList className="grid w-full grid-cols-2">
+            <TabsTrigger value="questions">
+              Questions ({questions.filter((q) => q.question_text.trim() !== '').length})
+            </TabsTrigger>
+            <TabsTrigger value="links">
+              Optional links ({links.filter((l) => l.title.trim() !== '' || l.external_url.trim() !== '').length})
+              <Badge variant="secondary" className="ml-1.5">Optional</Badge>
+            </TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="questions" className="space-y-3 pt-2">
             <div className="flex items-center justify-between">
-              <Label className="text-sm font-medium">Questions</Label>
+              <div>
+                <Label className="text-sm font-medium">In-app survey questions</Label>
+                <p className="text-xs text-muted-foreground">Questions marked Required must be answered by students before submitting.</p>
+              </div>
               {!immutable && (
                 <Button type="button" size="sm" variant="outline" onClick={() => setQuestions([...questions, emptyQuestion()])}>
                   <Plus aria-hidden /> Add question
@@ -405,7 +536,7 @@ function SurveyBuilderForm({
                     onChange={(e) => patchQuestion(index, { question_text: e.target.value })}
                     className="min-h-9 flex-1"
                   />
-                  {!immutable && questions.length > 1 && (
+                  {!immutable && (
                     <Button
                       type="button"
                       size="icon"
@@ -441,8 +572,7 @@ function SurveyBuilderForm({
                   )}
                   {q.question_type === 'external_url' && (
                     <p className="text-xs text-muted-foreground">
-                      Paste the activity link (e.g. a Google Form or EducationPlanner test) into the question text —
-                      students get a clickable link plus a completion checkbox that feeds the clearance gate.
+                      Paste the activity link into the question text — students get a clickable link plus a completion checkbox.
                     </p>
                   )}
                   <div className="flex items-center gap-2 pb-1">
@@ -457,15 +587,305 @@ function SurveyBuilderForm({
                 </div>
               </div>
             ))}
-        </div>
+            {questions.length === 0 && (
+              <p className="rounded-lg border border-dashed p-4 text-center text-xs text-muted-foreground">
+                No questions added. This survey will be a links-only survey.
+              </p>
+            )}
+          </TabsContent>
+
+          <TabsContent value="links" className="space-y-3 pt-2">
+            <div>
+              <Label className="text-sm font-medium">Optional links (Survey, Assessment &amp; Evaluation)</Label>
+              <p className="text-xs text-muted-foreground">
+                All external links are optional and never block student submission. Turn on &ldquo;Requires screenshot&rdquo; if you want proof of an assessment result.
+              </p>
+            </div>
+
+            {links.map((row) => {
+              const saved = existing?.links.find((l) => l.id === row.id);
+              return (
+                <div key={row.key} className="space-y-2 rounded-lg border bg-background p-3">
+                  <div className="flex items-start justify-between gap-2">
+                    <Badge variant="secondary">{LINK_TYPE_LABELS[row.type]}</Badge>
+                    {!immutable && (
+                      <Button
+                        type="button"
+                        size="icon"
+                        variant="ghost"
+                        aria-label={`Remove ${LINK_TYPE_LABELS[row.type]} row`}
+                        onClick={() => setLinks((current) => current.filter((l) => l.key !== row.key))}
+                      >
+                        <Trash2 className="size-4" aria-hidden />
+                      </Button>
+                    )}
+                  </div>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <div className="space-y-1.5">
+                      <Label htmlFor={`link-title-${row.key}`}>Title</Label>
+                      <Input
+                        id={`link-title-${row.key}`}
+                        value={row.title}
+                        onChange={(e) => patchLinkRow(row.key, { title: e.target.value })}
+                        placeholder="e.g. Multiple Intelligences (MI)"
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor={`link-url-${row.key}`}>External URL</Label>
+                      <Input
+                        id={`link-url-${row.key}`}
+                        value={row.external_url}
+                        onChange={(e) => patchLinkRow(row.key, { external_url: e.target.value })}
+                        placeholder="https://…"
+                        inputMode="url"
+                      />
+                    </div>
+                    <div className="space-y-1.5 sm:col-span-2">
+                      <Label htmlFor={`link-desc-${row.key}`}>Instructions <span className="text-muted-foreground">(shown to students)</span></Label>
+                      <Input
+                        id={`link-desc-${row.key}`}
+                        value={row.description}
+                        disabled={immutable}
+                        onChange={(e) => patchLinkRow(row.key, { description: e.target.value })}
+                        placeholder="Short instructions for the student"
+                      />
+                    </div>
+                    {row.type === 'test' && (
+                      <div className="space-y-1.5">
+                        <Label htmlFor={`link-instrument-${row.key}`}>Instrument</Label>
+                        <Select
+                          value={row.instrument_key ?? 'custom'}
+                          disabled={immutable}
+                          onValueChange={(v) => {
+                            const instrument = v as SurveyLinkInstrument;
+                            const canonical = Object.values(INSTRUMENT_LABELS);
+                            patchLinkRow(row.key, {
+                              instrument_key: instrument,
+                              title: row.title.trim() === '' || canonical.includes(row.title.trim())
+                                ? INSTRUMENT_LABELS[instrument]
+                                : row.title,
+                            });
+                          }}
+                        >
+                          <SelectTrigger id={`link-instrument-${row.key}`}><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            {(Object.keys(INSTRUMENT_LABELS) as SurveyLinkInstrument[]).map((key) => (
+                              <SelectItem key={key} value={key}>{INSTRUMENT_LABELS[key]}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    )}
+                    {row.type === 'survey' && (
+                      <div className="space-y-1.5">
+                        <Label htmlFor={`link-audience-${row.key}`}>Audience</Label>
+                        <Select
+                          value={row.audience ?? 'all'}
+                          disabled={immutable}
+                          onValueChange={(v) => patchLinkRow(row.key, { audience: v === 'all' ? null : v as SurveyAudience })}
+                        >
+                          <SelectTrigger id={`link-audience-${row.key}`}><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="all">Any audience</SelectItem>
+                            {(Object.keys(AUDIENCE_LABELS) as SurveyAudience[]).filter((a) => a !== 'all').map((key) => (
+                              <SelectItem key={key} value={key}>{AUDIENCE_LABELS[key]}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    )}
+                    <div className="flex flex-wrap items-center gap-4 pb-1 sm:col-span-2">
+                      {row.type === 'test' && (
+                        <div className="flex items-center gap-2">
+                          <Checkbox
+                            id={`link-screenshot-${row.key}`}
+                            checked={row.requires_screenshot}
+                            disabled={immutable}
+                            onCheckedChange={(checked) => patchLinkRow(row.key, { requires_screenshot: checked === true })}
+                          />
+                          <Label htmlFor={`link-screenshot-${row.key}`} className="cursor-pointer font-normal">Requires screenshot</Label>
+                        </div>
+                      )}
+                      <div className="flex items-center gap-2">
+                        <Checkbox
+                          id={`link-enabled-${row.key}`}
+                          checked={row.is_enabled}
+                          disabled={immutable}
+                          onCheckedChange={(checked) => patchLinkRow(row.key, { is_enabled: checked === true })}
+                        />
+                        <Label htmlFor={`link-enabled-${row.key}`} className="cursor-pointer font-normal">Enabled</Label>
+                      </div>
+                      {immutable && row.id !== undefined && (
+                        <LinkFixButton surveyId={existing.id} row={row} saved={saved} />
+                      )}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+
+            {!immutable && (
+              <div className="flex flex-wrap gap-2">
+                <Button type="button" size="sm" variant="outline" onClick={() => setLinks((current) => [...current, emptyLink('survey')])}>
+                  <Plus aria-hidden /> Add survey link
+                </Button>
+                <Button type="button" size="sm" variant="outline" onClick={() => setLinks((current) => [...current, emptyLink('test')])}>
+                  <Plus aria-hidden /> Add assessment link
+                </Button>
+                {links.every((l) => l.type !== 'evaluation') && (
+                  <Button type="button" size="sm" variant="outline" onClick={() => setLinks((current) => [...current, emptyLink('evaluation')])}>
+                    <Plus aria-hidden /> Add evaluation link
+                  </Button>
+                )}
+              </div>
+            )}
+            {!validLinks && (
+              <p className="text-xs text-destructive" role="alert">
+                Every link row needs a title and a public http(s) URL.
+              </p>
+            )}
+          </TabsContent>
+        </Tabs>
 
         <DialogFooter>
           <Button type="button" variant="outline" onClick={requestClose} disabled={pending}>Cancel</Button>
-          <Button type="button" onClick={save} disabled={pending || immutable || ! validMeta || ! validQuestions}>
+          <Button type="button" onClick={save} disabled={pending || immutable || ! validMeta || ! validQuestions || ! validLinks || ! hasContent}>
             <ClipboardList aria-hidden /> {pending ? 'Saving…' : existing !== null ? 'Save draft' : 'Create draft'}
           </Button>
         </DialogFooter>
     </form>
+  );
+}
+
+/**
+ * Narrow live hot-fix: retitles / re-URLs one link on a published
+ * survey without unfreezing the question set. A dead external link is
+ * an operations emergency; required/enabled stay frozen.
+ */
+function LinkFixButton({
+  surveyId,
+  row,
+  saved,
+}: {
+  surveyId: number;
+  row: BuilderLink;
+  saved: SurveyLink | undefined;
+}) {
+  const patch = usePatchSurveyLink();
+  const changed = saved !== undefined
+    && (row.title.trim() !== saved.title || row.external_url.trim() !== saved.external_url);
+
+  return (
+    <Button
+      type="button"
+      size="sm"
+      variant="outline"
+      disabled={!changed || ! linkRowIsComplete(row) || patch.isPending}
+      title="Live surveys keep questions frozen — this rewrites only the link."
+      onClick={() => patch.mutate({
+        surveyId,
+        linkId: row.id as number,
+        title: row.title.trim(),
+        external_url: row.external_url.trim(),
+      })}
+    >
+      {patch.isPending ? 'Saving…' : 'Save link fix'}
+    </Button>
+  );
+}
+
+/** Streams one proof image back through the audited, authed endpoint. */
+async function downloadProof(surveyId: number, responseId: number, shot: SurveyLinkScreenshot): Promise<void> {
+  const res = await apiClient.get<Blob>(
+    `/counselling/surveys/${surveyId}/responses/${responseId}/screenshots/${shot.id}`,
+    { responseType: 'blob' },
+  );
+  const url = URL.createObjectURL(res.data);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = shot.original_name;
+  anchor.click();
+  URL.revokeObjectURL(url);
+}
+
+function ProofRow({
+  surveyId,
+  responseId,
+  link,
+  onView,
+}: {
+  surveyId: number;
+  responseId: number;
+  link: SurveyResponseLink;
+  onView: (link: SurveyResponseLink) => void;
+}) {
+  const url = useResponseScreenshotUrl(surveyId, responseId, link.screenshot?.id ?? null);
+
+  return (
+    <div className="flex items-center justify-between gap-2 rounded-lg border bg-background p-2.5">
+      <div className="min-w-0">
+        <p className="truncate text-xs font-medium text-foreground">{link.title}</p>
+        <p className="text-xs text-muted-foreground">
+          Optional{link.screenshot !== null ? ' · Screenshot uploaded' : ''} · {link.opened ? 'Opened' : 'Not opened'}
+        </p>
+      </div>
+      {link.screenshot !== null ? (
+        <div className="flex shrink-0 items-center gap-1.5">
+          {url.data !== undefined && (
+            <img
+              src={url.data}
+              alt={`Result screenshot for ${link.title}`}
+              className="h-10 w-14 rounded border object-cover"
+            />
+          )}
+          <Button size="sm" variant="ghost" onClick={() => onView(link)}>View Result</Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            aria-label={`Download ${link.screenshot.original_name}`}
+            onClick={() => void downloadProof(surveyId, responseId, link.screenshot as SurveyLinkScreenshot)}
+          >
+            <Download className="size-3.5" aria-hidden />
+          </Button>
+        </div>
+      ) : (
+        <span className="shrink-0 text-xs text-muted-foreground">No screenshot</span>
+      )}
+    </div>
+  );
+}
+
+function ProofLightbox({
+  surveyId,
+  responseId,
+  link,
+  onClose,
+}: {
+  surveyId: number;
+  responseId: number;
+  link: SurveyResponseLink;
+  onClose: () => void;
+}) {
+  const url = useResponseScreenshotUrl(surveyId, responseId, link.screenshot?.id ?? null);
+
+  return (
+    <Dialog open onOpenChange={(open) => ! open && onClose()}>
+      <DialogContent className="sm:max-w-3xl">
+        <DialogHeader>
+          <DialogTitle>{link.title} — result screenshot</DialogTitle>
+          <DialogDescription>{link.screenshot?.original_name}</DialogDescription>
+        </DialogHeader>
+        {url.data !== undefined ? (
+          <img
+            src={url.data}
+            alt={`Result screenshot for ${link.title}`}
+            className="max-h-[70dvh] w-full rounded-lg border object-contain"
+          />
+        ) : (
+          <Skeleton className="h-64" />
+        )}
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -523,6 +943,7 @@ function ResponsesDialog({ survey, onClose }: { survey: Survey; onClose: () => v
   // The list payload carries no questions — fetch the detail for labels.
   const surveyDetail = useSurvey(survey.id);
   const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [viewing, setViewing] = useState<SurveyResponseLink | null>(null);
   const detail = useSurveyResponseDetail(survey.id, selectedId);
   const rows = responses.data ?? [];
   const questionsById = new Map((surveyDetail.data?.questions ?? []).map((q) => [q.id, q]));
@@ -603,27 +1024,45 @@ function ResponsesDialog({ survey, onClose }: { survey: Survey; onClose: () => v
                         <TableCell colSpan={4} className="bg-muted/20 p-4">
                           {detail.isLoading && <Skeleton className="h-16" />}
                           {detail.data !== undefined && (
-                            <ul className="space-y-2.5">
-                              {detail.data.answers.map((a) => {
-                                const question = questionsById.get(a.question_id);
-                                return (
-                                  <li key={a.question_id}>
-                                    <p className="text-xs font-medium text-foreground">
-                                      {question?.question_text ?? `Question #${a.question_id}`}
-                                    </p>
-                                    <p className="text-sm text-muted-foreground">
-                                      {typeof a.value === 'boolean'
-                                        ? 'Completed'
-                                        : Array.isArray(a.value)
-                                          ? (a.value as Array<number | string>)
-                                              .map((id) => question?.options.find((o) => o.id === id)?.text ?? String(id))
-                                              .join(', ')
-                                          : String(a.value)}
-                                    </p>
-                                  </li>
-                                );
-                              })}
-                            </ul>
+                            <div className="space-y-3">
+                              <ul className="space-y-2.5">
+                                {detail.data.answers.map((a) => {
+                                  const question = questionsById.get(a.question_id);
+                                  return (
+                                    <li key={a.question_id}>
+                                      <p className="text-xs font-medium text-foreground">
+                                        {question?.question_text ?? `Question #${a.question_id}`}
+                                      </p>
+                                      <p className="text-sm text-muted-foreground">
+                                        {typeof a.value === 'boolean'
+                                          ? 'Completed'
+                                          : Array.isArray(a.value)
+                                            ? (a.value as Array<number | string>)
+                                                .map((id) => question?.options.find((o) => o.id === id)?.text ?? String(id))
+                                                .join(', ')
+                                            : String(a.value)}
+                                      </p>
+                                    </li>
+                                  );
+                                })}
+                              </ul>
+                              {detail.data.links.length > 0 && (
+                                <div className="space-y-2">
+                                  <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                                    Assessment proofs
+                                  </p>
+                                  {detail.data.links.map((link) => (
+                                    <ProofRow
+                                      key={link.link_id}
+                                      surveyId={survey.id}
+                                      responseId={detail.data.id}
+                                      link={link}
+                                      onView={setViewing}
+                                    />
+                                  ))}
+                                </div>
+                              )}
+                            </div>
                           )}
                         </TableCell>
                       </TableRow>
@@ -637,6 +1076,14 @@ function ResponsesDialog({ survey, onClose }: { survey: Survey; onClose: () => v
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>Close</Button>
         </DialogFooter>
+        {viewing !== null && detail.data !== undefined && (
+          <ProofLightbox
+            surveyId={survey.id}
+            responseId={detail.data.id}
+            link={viewing}
+            onClose={() => setViewing(null)}
+          />
+        )}
       </DialogContent>
     </Dialog>
   );

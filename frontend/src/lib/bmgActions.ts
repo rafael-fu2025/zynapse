@@ -91,3 +91,30 @@ export function bmgActionAvailability(
     restore: !pending.restore && isArchived,
   };
 }
+
+/**
+ * ESP32 boards a drum may integrate right now: registered (unarchived)
+ * and held by no drum. Every drum carries exactly one device, so a
+ * fleet whose boards are all bound blocks drum creation until another
+ * board is registered — the create dialog gates on `length === 0`.
+ *
+ * `exceptDeviceId` keeps a drum's CURRENT board in the list when
+ * building reassignment options (assigning it back is a no-op, not a
+ * conflict).
+ */
+export function availableBmgDevices<
+  T extends {
+    id: number;
+    // `| undefined` spelled out because the project runs
+    // exactOptionalPropertyTypes and BmgUnit/BmgDevice genuinely carry
+    // these as optional-and-nullable.
+    unit_id?: number | null | undefined;
+    archived_at?: string | null | undefined;
+  },
+>(devices: T[], exceptDeviceId?: number): T[] {
+  return devices.filter((d) => {
+    if (d.archived_at !== null && d.archived_at !== undefined) return false;
+    if (d.unit_id === null || d.unit_id === undefined) return true;
+    return exceptDeviceId !== undefined && d.id === exceptDeviceId;
+  });
+}

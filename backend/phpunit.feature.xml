@@ -39,6 +39,12 @@
     </source>
     <php>
         <!--
+          The suite peaks just over PHP's default 128M CLI limit (~134MB
+          across 295 kernel-booting tests), which surfaces as a confusing
+          fatal mid-run — pin a sane ceiling here instead.
+        -->
+        <ini name="memory_limit" value="512M"/>
+        <!--
           The refresh cookie is Secure=true in .env, which a test client
           over plain HTTP would discard. Feature tests assert on the
           Set-Cookie header directly, so relax it here for determinism.

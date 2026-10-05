@@ -81,12 +81,14 @@ final class BmgWorkflowTest extends FeatureTestCase
         $categoryId = (int) ($category['data']['id'] ?? 0);
         $this->assertGreaterThan(0, $categoryId);
 
-        // 2. Unit (drum).
+        // 2. Unit (drum) — integrates one registered ESP32.
+        $device = $this->createBmgDevice();
         $unit = $this->postJson('api/v1/facilities/units', [
             'code'                => "unit-{$suffix}",
             'display_name'        => "Feature Drum {$suffix}",
             'spec_capacity_kg'    => 500,
             'default_category_id' => $categoryId,
+            'device_id'           => $device['deviceId'],
         ], 201);
         $unitId = (int) ($unit['data']['id'] ?? 0);
         $this->assertGreaterThan(0, $unitId);
@@ -187,9 +189,11 @@ final class BmgWorkflowTest extends FeatureTestCase
         ], 201);
         $categoryId = (int) ($category['data']['id'] ?? 0);
 
+        $device = $this->createBmgDevice();
         $unit = $this->postJson('api/v1/facilities/units', [
             'code'         => "unit-{$suffix}",
             'display_name' => "Mismatch Drum {$suffix}",
+            'device_id'    => $device['deviceId'],
         ], 201);
         $unitId = (int) ($unit['data']['id'] ?? 0);
 

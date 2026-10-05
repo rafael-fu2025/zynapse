@@ -7,11 +7,15 @@ import { z } from 'zod';
 import { toast } from 'sonner';
 import { apiClient } from '@/api/client';
 import type { ApiEnvelopeError } from '@/api/envelope';
+import { builderLinksPayload } from '@/utils/surveyGating';
 import type {
+  BuilderLink,
   BuilderQuestion,
   MySurvey,
   MySurveyForm,
   Survey,
+  SurveyLink,
+  SurveyLinkScreenshot,
   SurveyMetaInput,
   SurveyResponseDetail,
   SurveyResponseRow,
@@ -19,6 +23,7 @@ import type {
 import {
   mySurveyFormSchema,
   mySurveySchema,
+  surveyLinkSchema,
   surveyQuestionSchema,
   surveyResponseDetailSchema,
   surveyResponseRowSchema,
@@ -26,7 +31,10 @@ import {
 } from '@/schemas/surveys';
 
 const surveyListSchema = z.array(
-  surveySchema.omit({ questions: true }).extend({ questions: z.array(surveyQuestionSchema).default([]) }),
+  surveySchema.omit({ questions: true }).extend({
+    questions: z.array(surveyQuestionSchema).default([]),
+    links: z.array(surveyLinkSchema).default([]),
+  }),
 );
 
 function metaPayload(input: SurveyMetaInput): Record<string, unknown> {
@@ -53,6 +61,10 @@ function questionsPayload(questions: BuilderQuestion[]): Array<Record<string, un
         ? q.options_text.split('\n').map((line) => line.trim()).filter((line) => line !== '')
         : [],
     }));
+}
+
+function linksPayload(links: BuilderLink[]): Array<Record<string, unknown>> {
+  return builderLinksPayload(links);
 }
 
 // ---- staff: builder + publish ---------------------------------------
@@ -82,12 +94,15 @@ export function useSurvey(id: number | null) {
 
 export function useCreateSurvey() {
   const qc = useQueryClient();
-  return useMutation<Survey, ApiEnvelopeError, { meta: SurveyMetaInput; questions: BuilderQuestion[] }>({
-    mutationFn: async ({ meta, questions }) => {
+  return useMutation<Survey, ApiEnvelopeError, { meta: SurveyMetaInput; questions: BuilderQuestion[]; links: BuilderLink[] }>({
+    mutationFn: async ({ meta, questions, links }) => {
       const created = await apiClient.post<Survey>('/counselling/surveys', metaPayload(meta));
       const id = (created.data as { id: number }).id;
       const withQuestions = await apiClient.post<Survey>(`/counselling/surveys/${id}/questions`, {
         questions: questionsPayload(questions),
+      });
+      await apiClient.post<Survey>(`/counselling/surveys/${id}/links`, {
+        links: linksPayload(links),
       });
       return withQuestions.data;
     },
@@ -101,14 +116,18 @@ export function useCreateSurvey() {
 
 export function useUpdateSurvey() {
   const qc = useQueryClient();
-  return useMutation<Survey, ApiEnvelopeError, { id: number; meta: SurveyMetaInput; questions: BuilderQuestion[] }>({
-    mutationFn: async ({ id, meta, questions }) => {
+  return useMutation<Survey, ApiEnvelopeError, { id: number; meta: SurveyMetaInput; questions: BuilderQuestion[]; links: BuilderLink[] }>({
+    mutationFn: async ({ id, meta, questions, links }) => {
       await apiClient.post<Survey>(`/counselling/surveys/${id}/update`, metaPayload(meta));
-      void qc.invalidateQueries({ queryKey: ['guidance', 'surveys'] });
-      const withQuestions = await apiClient.post<Survey>(`/counselling/surveys/${id}/questions`, {
+      await apiClient.post<Survey>(`/counselling/surveys/${id}/questions`, {
         questions: questionsPayload(questions),
       });
-      return withQuestions.data;
+      // Links save last so a URL-validation failure leaves the rest saved.
+      const withLinks = await apiClient.post<Survey>(`/counselling/surveys/${id}/links`, {
+        links: linksPayload(links),
+      });
+      void qc.invalidateQueries({ queryKey: ['guidance', 'surveys'] });
+      return withLinks.data;
     },
     onSuccess: (s) => {
       void qc.invalidateQueries({ queryKey: ['guidance', 'surveys'] });
@@ -223,5 +242,107 @@ export function useSubmitSurvey() {
       toast.success('Submitted — thank you!');
     },
     onError: (err) => toast.error(err.errors[0]?.message ?? 'Failed to submit.'),
+  });
+}
+
+// ---- dynamic links: staff hot-fix ---------------------------------------
+
+/** Replaces the URL/title of one link on an already-published survey. */
+export function usePatchSurveyLink() {
+  const qc = useQueryClient();
+  return useMutation<SurveyLink, ApiEnvelopeError, { surveyId: number; linkId: number; title?: string; external_url?: string }>({
+    mutationFn: async ({ surveyId, linkId, ...patch }) => {
+      const res = await apiClient.post<SurveyLink>(`/counselling/surveys/${surveyId}/links/${linkId}/patch`, patch);
+      return surveyLinkSchema.parse(res.data);
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['guidance', 'surveys'] });
+      toast.success('Link updated on the published survey.');
+    },
+    onError: (err) => toast.error(err.errors[0]?.message ?? 'Failed to update the link.'),
+  });
+}
+
+// ---- dynamic links: student attestations + proofs ------------------------
+
+/**
+ * Logs the open attestation for a link. The caller opens the tab FIRST
+ * (synchronously, to keep the user gesture for the popup) and then
+ * fires this without awaiting it.
+ */
+export function useOpenSurveyLink() {
+  return useMutation<{ external_url: string }, ApiEnvelopeError, { surveyId: number; linkId: number }>({
+    mutationFn: async ({ surveyId, linkId }) => {
+      const res = await apiClient.post<{ external_url: string }>(
+        `/me/guidance/surveys/${surveyId}/links/${linkId}/open`,
+      );
+      return res.data;
+    },
+  });
+}
+
+/** Uploads (or replaces) the staged screenshot proof for one test link. */
+export function useUploadScreenshot() {
+  return useMutation<SurveyLinkScreenshot, ApiEnvelopeError, { surveyId: number; linkId: number; file: File }>({
+    mutationFn: async ({ surveyId, linkId, file }) => {
+      const body = new FormData();
+      body.append('screenshot', file);
+      const res = await apiClient.post<SurveyLinkScreenshot>(
+        `/me/guidance/surveys/${surveyId}/links/${linkId}/screenshot`,
+        body,
+      );
+      return res.data;
+    },
+  });
+}
+
+/** Removes a staged (unsubmitted) screenshot. */
+export function useRemoveScreenshot() {
+  return useMutation<void, ApiEnvelopeError, { surveyId: number; linkId: number }>({
+    mutationFn: async ({ surveyId, linkId }) => {
+      await apiClient.delete(`/me/guidance/surveys/${surveyId}/links/${linkId}/screenshot`);
+    },
+  });
+}
+
+/**
+ * Object URL for the caller's own staged screenshot (restores the
+ * preview after a reload). Needs an authed blob fetch — plain <img src>
+ * cannot carry the bearer token.
+ */
+export function useMyScreenshotUrl(surveyId: number | null, linkId: number | null) {
+  return useQuery<string, ApiEnvelopeError>({
+    queryKey: ['me', 'guidance', 'surveys', surveyId, 'links', linkId, 'screenshot'],
+    enabled: surveyId !== null && linkId !== null,
+    staleTime: Number.POSITIVE_INFINITY,
+    retry: false,
+    queryFn: async () => {
+      const res = await apiClient.get<Blob>(
+        `/me/guidance/surveys/${surveyId}/links/${linkId}/screenshot`,
+        { responseType: 'blob' },
+      );
+      return URL.createObjectURL(res.data);
+    },
+  });
+}
+
+/** Object URL for one staff-side screenshot proof. */
+export function useResponseScreenshotUrl(
+  surveyId: number | null,
+  responseId: number | null,
+  screenshotId: number | null,
+) {
+  return useQuery<string, ApiEnvelopeError>({
+    queryKey: ['guidance', 'surveys', surveyId, 'responses', responseId, 'screenshots', screenshotId],
+    enabled: surveyId !== null && responseId !== null && screenshotId !== null,
+    staleTime: Number.POSITIVE_INFINITY,
+    retry: false,
+    queryFn: async () => {
+      const res = await apiClient.get<Blob>(
+        `/counselling/surveys/${surveyId}/responses/${responseId}/screenshots/${screenshotId}`,
+        { responseType: 'blob' },
+      );
+      return URL.createObjectURL(res.data);
+    },
   });
 }

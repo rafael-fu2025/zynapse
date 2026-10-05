@@ -351,6 +351,18 @@ final class CategoryService extends BaseService
                     ['code' => 'resource.conflict', 'message' => "Cannot delete: {$unitRefs} unit(s) reference this category as their default. Clear those first."],
                 ]);
             }
+            // Drums designate their waste mix through the pivot (set at
+            // drum setup); a category still profiled onto any drum cannot
+            // be hard-deleted.
+            $designatedRefs = $this->db->table('facilities_bmg_unit_categories')
+                ->where('facilities_bmg_unit_categories.tenant_id', CurrentTenant::id())
+                ->where('category_id', $categoryId)
+                ->countAllResults();
+            if ($designatedRefs > 0) {
+                throw new ApiException('resource.conflict', 409, [
+                    ['code' => 'resource.conflict', 'message' => "Cannot delete: {$designatedRefs} drum(s) designate this category in their waste mix. Remove it from those drums first."],
+                ]);
+            }
 
             $this->db->table('facilities_waste_categories')
                 ->where('facilities_waste_categories.tenant_id', CurrentTenant::id())
