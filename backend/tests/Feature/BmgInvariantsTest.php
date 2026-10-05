@@ -81,11 +81,15 @@ final class BmgInvariantsTest extends FeatureTestCase
             'reference_duration_days' => 21,
         ], 201);
 
+        // Every drum integrates exactly one ESP32 (device_id required).
+        $device = $this->createBmgDevice();
+
         $unit = $this->postJson('api/v1/facilities/units', [
             'code'                => "inv-unit-{$suffix}",
             'display_name'        => "Invariant Drum {$suffix}",
             'spec_capacity_kg'    => 500,
             'default_category_id' => (int) $category['data']['id'],
+            'device_id'           => $device['deviceId'],
         ], 201);
 
         $unitId = (int) $unit['data']['id'];

@@ -1,8 +1,11 @@
 /**
- * pageMeta — single source of truth for the topbar title/description
- * shown on mobile. Pages still render their own H1 on desktop; the
- * topbar mirrors the same strings here so the mobile header carries
- * the page identity without a context-propagating API.
+ * pageMeta — single source of truth for the topbar title shown on mobile
+ * and the breadcrumb labels in PageHeader. Pages still render their own
+ * H1 on desktop; the topbar mirrors the same strings here so the mobile
+ * header carries the page identity without a context-propagating API.
+ *
+ * Page definitions are NOT stored here — they live as `description`
+ * props on each page's <PageHeader> and surface in its info tooltip.
  *
  * Add a new entry whenever a route's H1 changes; the route key is
  * the React Router `path` pattern (without `:params`).
@@ -10,21 +13,13 @@
 export interface PageMeta {
   /** Short title shown in the topbar; should match the page H1. */
   title: string;
-  /** Optional supporting line. If empty, only the title is rendered. */
-  description?: string;
 }
 
 export const PAGE_META: Readonly<Record<string, PageMeta>> = {
-  '/': { title: 'Dashboard', description: 'Signed in as your account — Asia/Manila' },
+  '/': { title: 'Dashboard' },
   '/me': { title: 'My portal' },
-  '/clinic': {
-    title: 'Clinic',
-    description: 'Encounters are isolated from counselling.',
-  },
-  '/appointments': {
-    title: 'Appointments',
-    description: 'Times shown in Asia/Manila; stored in UTC.',
-  },
+  '/clinic': { title: 'Clinic' },
+  '/appointments': { title: 'Appointments' },
   '/patients': { title: 'Records' },
   '/inventory': { title: 'Inventory' },
   '/counselling': { title: 'Counselling' },
@@ -37,10 +32,7 @@ export const PAGE_META: Readonly<Record<string, PageMeta>> = {
   '/facilities/waste-categories': { title: 'Waste categories' },
   '/facilities/devices': { title: 'Devices' },
   '/admin': { title: 'Administration' },
-  '/admin/users': {
-    title: 'Users',
-    description: 'Deactivation is soft — accounts are never deleted.',
-  },
+  '/admin/users': { title: 'Users' },
   '/notifications': { title: 'Notifications' },
   '/referrals': { title: 'Referrals' },
   '/reports': { title: 'Reports and Analytics' },

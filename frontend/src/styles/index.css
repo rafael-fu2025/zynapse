@@ -249,22 +249,20 @@ input:-internal-autofill-selected {
 
 /*
  * Mobile topbar page title — the page H1 ("Clinic", "Appointments", …)
- * AND its supporting description live in the page's PageHeader so the
- * user always knows which screen they're on without scrolling up, but
- * on mobile the topbar shows the title instead (Layout.tsx +
- * pageMeta). Hide both elements on mobile to avoid rendering them
- * twice.
+ * lives in the page's PageHeader so the user always knows which screen
+ * they're on without scrolling up, but on mobile the topbar shows the
+ * title instead (Layout.tsx + pageMeta). Hide the h1 on mobile to avoid
+ * rendering it twice.
  *
  * Selectors are attribute-based (the PageHeader sets
- * `data-page-header` / `data-page-header-description`) so they match
- * regardless of nesting depth — portal pages render their header
- * inside a wrapper div, where a `main > header > …` selector misses.
- * Standalone screens (Login, Queue display, Kiosk station, 403) don't
- * use PageHeader and are unaffected.
+ * `data-page-header`) so they match regardless of nesting depth —
+ * portal pages render their header inside a wrapper div, where a
+ * `main > header > …` selector misses. Standalone screens (Login,
+ * Queue display, Kiosk station, 403) don't use PageHeader and are
+ * unaffected.
  */
 @media (max-width: 767px) {
-  [data-page-header] h1,
-  [data-page-header] [data-page-header-description] {
+  [data-page-header] h1 {
     display: none;
   }
 }

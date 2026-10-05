@@ -65,10 +65,14 @@ final class Routes implements BaseRoutes
             $r->post('surveys',                       'SurveyController::createSurvey');
             $r->post('surveys/(:num)/update',         'SurveyController::updateSurvey/$1');
             $r->post('surveys/(:num)/questions',      'SurveyController::setQuestions/$1');
+            // Dynamic links (2026-10): draft config + live URL hot-fix.
+            $r->post('surveys/(:num)/links',          'SurveyController::setLinks/$1');
+            $r->post('surveys/(:num)/links/(:num)/patch', 'SurveyController::patchLink/$1/$2');
             $r->post('surveys/(:num)/publish',        'SurveyController::publishSurvey/$1');
             $r->post('surveys/(:num)/archive',        'SurveyController::archiveSurvey/$1');
             $r->get('surveys/(:num)/responses',       'SurveyController::listResponses/$1');
             $r->get('surveys/(:num)/responses/(:num)', 'SurveyController::responseDetail/$1/$2');
+            $r->get('surveys/(:num)/responses/(:num)/screenshots/(:num)', 'SurveyController::downloadScreenshot/$1/$2/$3');
 
             // Aftercare loop (2026-09 parity plan Phase C) — RA 11036 §24.
             $r->get('followups',                      'GuidanceFollowupController::listFollowups');
@@ -85,6 +89,11 @@ final class Routes implements BaseRoutes
             $r->get('services',      'GuidanceContentController::feedServices');
             $r->get('surveys',       'SurveyController::mySurveys');
             $r->get('surveys/(:num)', 'SurveyController::myForm/$1');
+            // Dynamic links: open attestation + screenshot proof staging.
+            $r->post('surveys/(:num)/links/(:num)/open',         'SurveyController::openLink/$1/$2');
+            $r->post('surveys/(:num)/links/(:num)/screenshot',   'SurveyController::uploadScreenshot/$1/$2');
+            $r->get('surveys/(:num)/links/(:num)/screenshot',    'SurveyController::previewScreenshot/$1/$2');
+            $r->delete('surveys/(:num)/links/(:num)/screenshot', 'SurveyController::removeScreenshot/$1/$2');
             $r->post('surveys/(:num)/submit', 'SurveyController::submit/$1');
             $r->get('requirements',  'SurveyController::myRequirements');
         });

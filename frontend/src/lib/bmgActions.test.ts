@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { ACTIVE_STATUSES, bmgActionAvailability, type BmgAction } from './bmgActions';
+import { ACTIVE_STATUSES, availableBmgDevices, bmgActionAvailability, type BmgAction } from './bmgActions';
 
 /**
  * The drum menu's state rules.
@@ -102,5 +102,32 @@ describe('bmgActionAvailability', () => {
     expect(on({ cancel: true })).not.toContain('cancel');
     // An unrelated pending mutation must not disable the others.
     expect(on({ finish: true })).toContain('cancel');
+  });
+});
+
+describe('availableBmgDevices', () => {
+  const fleet = [
+    { id: 1, unit_id: null as number | null, archived_at: null as string | null },
+    { id: 2, unit_id: 11, archived_at: null },
+    { id: 3, unit_id: null, archived_at: null },
+    { id: 4, unit_id: null, archived_at: '2026-09-29 10:00:00' },
+    { id: 5, unit_id: 12, archived_at: null },
+  ];
+
+  it('lists only unbound, unarchived boards', () => {
+    expect(availableBmgDevices(fleet).map((d) => d.id)).toEqual([1, 3]);
+  });
+
+  it('is empty when every board is bound — the create-drum gate', () => {
+    const allBound = fleet.map((d) => ({ ...d, unit_id: 10 + d.id }));
+    expect(availableBmgDevices(allBound)).toEqual([]);
+  });
+
+  it('keeps the drum\'s current board in reassignment options', () => {
+    expect(availableBmgDevices(fleet, 2).map((d) => d.id)).toEqual([1, 2, 3]);
+  });
+
+  it('never resurrects an archived board for reassignment', () => {
+    expect(availableBmgDevices(fleet, 4).map((d) => d.id)).toEqual([1, 3]);
   });
 });

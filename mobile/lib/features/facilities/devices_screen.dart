@@ -170,7 +170,12 @@ class _DevicesScreenState extends State<DevicesScreen> with AutoPolling {
     List<BmgUnit> units = [];
     try {
       final page = await ApiService.I.facilityUnits(limit: 100);
-      units = page.items.where((u) => u.archivedAt == null).toList();
+      // A drum integrates exactly ONE ESP32 — only unbound drums can
+      // take a new binding here; swapping a held drum belongs to the
+      // drum's Edit form.
+      units = page.items
+          .where((u) => u.archivedAt == null && u.deviceId == null)
+          .toList();
     } catch (e) {
       // Registration still works without a drum binding.
     }
@@ -233,7 +238,13 @@ class _DevicesScreenState extends State<DevicesScreen> with AutoPolling {
     List<BmgUnit> units = [];
     try {
       final page = await ApiService.I.facilityUnits(limit: 100);
-      units = page.items.where((u) => u.archivedAt == null).toList();
+      // Offer only free drums plus the one this device already holds —
+      // a drum bound to ANOTHER board is refused server-side (1:1).
+      units = page.items
+          .where((u) =>
+              u.archivedAt == null &&
+              (u.deviceId == null || u.deviceId == d.unitId))
+          .toList();
     } catch (e) {
       // Editing the name alone still works without the drum list.
     }

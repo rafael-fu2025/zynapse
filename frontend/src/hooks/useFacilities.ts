@@ -194,7 +194,9 @@ export function useStartBatch() {
       invalidateFacilities(qc);
     },
     onSuccess: () => {
-      toast.success('Batch started.');
+      // The backend queued a `start` command for the drum's ESP32 in the
+      // same transaction; the board picks it up on its next poll.
+      toast.success('Batch started — start command sent to the ESP32.');
     },
   });
 }
@@ -639,6 +641,8 @@ export function useArchiveUnit() {
       // (e.g. two clicks in quick succession, or another tab archived
       // it). A 404 here is a no-op for the user — we swallow it and let
       // `onSettled` reconcile. Anything else propagates to onError.
+      // The drum's ESP32 is released server-side; it is attached to its
+      // next drum from that drum's Edit form.
       try {
         const res = await apiClient.delete<BmgUnit>(`/facilities/units/${unitId}`);
         return bmgUnitSchema.parse(res.data);

@@ -86,7 +86,7 @@ final class BmgService extends BaseService
         $this->policy->check('list');
 
         $builder = $this->db->table('facilities_bmg_units AS u')
-            ->select('u.id, u.code, u.display_name, u.status, u.location_code, u.spec_capacity_kg, u.default_category_id, u.notes, u.created_at, u.updated_at, u.archived_at, c.name AS default_category_name, b.id AS active_batch_id, b.total_input_weight_kg AS active_batch_weight_kg, b.started_at AS active_batch_started_at, b.expected_completion_date AS active_batch_expected_completion_date')
+            ->select('u.id, u.code, u.display_name, u.status, u.location_code, u.spec_capacity_kg, u.default_category_id, u.notes, u.created_at, u.updated_at, u.archived_at, c.name AS default_category_name, b.id AS active_batch_id, b.total_input_weight_kg AS active_batch_weight_kg, b.started_at AS active_batch_started_at, b.expected_completion_date AS active_batch_expected_completion_date, d.id AS device_id, d.code AS device_code, d.display_name AS device_display_name, d.status AS device_status, d.last_seen_at AS device_last_seen_at')
             ->where('u.tenant_id', CurrentTenant::id())
             ->join(
                 'facilities_bmg_batches AS b',
@@ -95,6 +95,9 @@ final class BmgService extends BaseService
                 false, // no identifier escaping — the ON clause carries quoted literals
             )
             ->join('facilities_waste_categories AS c', 'c.id = u.default_category_id', 'left')
+            // The drum's integrated ESP32. `uq_bmg_devices_unit` keeps the
+            // binding 1:1, so the join can never fan a unit row out.
+            ->join('facilities_bmg_devices AS d', 'd.unit_id = u.id', 'left')
             ->orderBy('u.created_at', 'DESC')
             ->orderBy('u.id', 'DESC');
 
@@ -123,6 +126,31 @@ final class BmgService extends BaseService
                 ? substr((string) $r['active_batch_expected_completion_date'], 0, 10)
                 : $a->expectedCompletionDate($startDate, BmgAnalytics::DEFAULT_DURATION_DAYS);
             $r['active_batch_progress_pct'] = $a->progressPercent($startDate, $expected, $today);
+        }
+        unset($r);
+
+        // Attach each drum's designated waste categories in one grouped
+        // query — the pivot cannot go into the main JOIN without fanning
+        // rows out under keyset pagination.
+        $unitIds = array_map(static fn (array $r): int => (int) $r['id'], $final['rows']);
+        $catsByUnit = [];
+        if ($unitIds !== []) {
+            $pivotRows = $this->db->table('facilities_bmg_unit_categories AS uc')
+                ->select('uc.unit_id, c.id AS category_id, c.name AS category_name')
+                ->join('facilities_waste_categories AS c', 'c.id = uc.category_id', 'left')
+                ->where('uc.tenant_id', CurrentTenant::id())
+                ->whereIn('uc.unit_id', $unitIds)
+                ->orderBy('uc.id', 'ASC')
+                ->get()->getResultArray();
+            foreach ($pivotRows as $pr) {
+                if ($pr['category_id'] === null) {
+                    continue;
+                }
+                $catsByUnit[(int) $pr['unit_id']][] = ['id' => (int) $pr['category_id'], 'name' => (string) $pr['category_name']];
+            }
+        }
+        foreach ($final['rows'] as &$r) {
+            $r['categories'] = $catsByUnit[(int) $r['id']] ?? [];
         }
         unset($r);
 
@@ -164,6 +192,25 @@ final class BmgService extends BaseService
                 ]);
             }
 
+            // The unit is STARTED through its integrated ESP32: starting
+            // a batch commands the drum's bound board to run. A drum
+            // without a live board (replacement window) or with a
+            // revoked one cannot start — the machine has no controller.
+            $board = $this->db->table('facilities_bmg_devices')
+                ->where('tenant_id', CurrentTenant::id())
+                ->where('unit_id', $unitId)
+                ->get()->getRowArray();
+            if ($board === null || $board['archived_at'] !== null) {
+                throw new ApiException('statemachine.bmg.unit_has_no_device', 409, [
+                    ['code' => 'statemachine.bmg.unit_has_no_device', 'message' => 'This drum has no assigned ESP32 — assign one before starting a batch.'],
+                ]);
+            }
+            if ($board['status'] !== 'active') {
+                throw new ApiException('statemachine.bmg.unit_device_disabled', 409, [
+                    ['code' => 'statemachine.bmg.unit_device_disabled', 'message' => "The drum's ESP32 ({$board['code']}) is disabled — re-enable it before starting a batch."],
+                ]);
+            }
+
             // A batch's total input can never exceed the drum's rated
             // capacity — a drum can't hold more than it was built for.
             if ($unit['spec_capacity_kg'] !== null
@@ -181,6 +228,23 @@ final class BmgService extends BaseService
             // rather than a generic "not idle" so the SPA can explain.
             if ($unit['status'] !== BMG_STATE_IDLE) {
                 throw StateMachineException::invalidTransition($unit['status'], BMG_STATE_PROCESSING, 'bmg');
+            }
+
+            // The drum's waste mix is profiled at drum-configuration time:
+            // when the drum designates categories, every composition
+            // component must be one of them (the start form pre-seeds one
+            // weight row per configured category). Unprofiled drums keep
+            // the free-form mix.
+            $designated = $this->unitCategoryIds($unitId);
+            if ($designated !== [] && $composition !== []) {
+                $allowed = array_fill_keys($designated, true);
+                foreach ($composition as $component) {
+                    if (! isset($allowed[(int) $component['category_id']])) {
+                        throw new ApiException('validation.invalid', 422, [
+                            ['code' => 'validation.invalid', 'message' => "Drum {$unit['code']} is designated for a fixed set of waste categories — category #{$component['category_id']} is not part of its mix.", 'field' => 'composition'],
+                        ]);
+                    }
+                }
             }
 
             // Validate composition categories and resolve their codes so
@@ -284,6 +348,15 @@ final class BmgService extends BaseService
                 $userId,
                 ['resource_code' => $ref, 'next_status' => BMG_STATE_PROCESSING],
             );
+
+            // Tell the drum's ESP32 to start the unit — the command is
+            // picked up on the board's next poll of the device surface.
+            $this->enqueueDeviceCommand((int) $board['id'], (string) $board['code'], 'start', [
+                'batch_id'              => $batchId,
+                'batch_reference'       => $ref,
+                'unit_code'             => (string) $unit['code'],
+                'total_input_weight_kg' => $totalInputKg,
+            ], $now, $userId);
 
             $batch = $this->db->table('facilities_bmg_batches')
                 ->where('facilities_bmg_batches.tenant_id', CurrentTenant::id())
@@ -825,7 +898,22 @@ final class BmgService extends BaseService
      * (panel revision). Input is normalized before validation so users
      * may type `DRUM 01` and get `drum-01`. Same-transaction audit row.
      *
-     * @param array{code:string, display_name:string, location_code?:?string, spec_capacity_kg?:?float, default_category_id?:?int, notes?:?string} $input
+     * Every drum integrates exactly ONE registered ESP32: `device_id`
+     * is mandatory and must reference a registered, unarchived device
+     * that no other drum holds. When every device in the registry is
+     * already bound, drum creation is refused — register another board
+     * first (the UI surfaces the same precondition before the form).
+     *
+     * The unit houses TWO drums: `drum_one_capacity_kg` +
+     * `drum_two_capacity_kg` (each ≥ 4 kg) are stored individually and
+     * `spec_capacity_kg` is RECOMPUTED as their sum — the batch input
+     * ceiling and utilization read the sum. `category_ids` profiles the
+     * waste categories the drum is designated for at creation time;
+     * batches started on it may only mix from that set, and the first
+     * selected category seeds `default_category_id` so the suggest
+     * heuristic and batch fallback keep working.
+     *
+     * @param array{code:string, display_name:string, location_code?:?string, spec_capacity_kg?:?float, drum_one_capacity_kg?:?float, drum_two_capacity_kg?:?float, default_category_id?:?int, category_ids?:list<int>, notes?:?string, device_id:int} $input
      */
     public function createUnit(array $input): BmgUnitDto
     {
@@ -834,9 +922,22 @@ final class BmgService extends BaseService
 
         $code = $this->support->assertSlug((string) $input['code'], 'code');
 
-        $defaultCategoryId = $this->resolveCategoryId($input['default_category_id'] ?? null);
+        $drums      = $this->resolveDrumCapacities($input);
+        $categoryIds = $this->resolveCategoryIds($input['category_ids'] ?? null);
+        $defaultCategoryId = $categoryIds !== []
+            ? $categoryIds[0]
+            : $this->resolveCategoryId($input['default_category_id'] ?? null);
 
-        return $this->txn(function () use ($input, $code, $defaultCategoryId, $userId): BmgUnitDto {
+        $deviceId = (int) ($input['device_id'] ?? 0);
+        if ($deviceId <= 0) {
+            throw new ApiException('validation.invalid', 422, [
+                ['code' => 'validation.invalid', 'message' => 'An ESP32 device is required — every drum integrates exactly one registered device.', 'field' => 'device_id'],
+            ]);
+        }
+
+        return $this->txn(function () use ($input, $code, $defaultCategoryId, $categoryIds, $drums, $userId, $deviceId): BmgUnitDto {
+            $device = $this->assertDeviceAvailable($deviceId);
+
             $dup = $this->db->table('facilities_bmg_units')->where('code', $code)->where('tenant_id', CurrentTenant::id())->get()->getRowArray();
             if ($dup !== null) {
                 throw new ApiException('resource.conflict', 409, [
@@ -851,8 +952,11 @@ final class BmgService extends BaseService
                 'location_code'       => isset($input['location_code']) && $input['location_code'] !== ''
                     ? trim((string) $input['location_code']) : null,
                 'status'              => BMG_STATE_IDLE,
-                'spec_capacity_kg'    => isset($input['spec_capacity_kg']) && $input['spec_capacity_kg'] !== ''
-                    ? (float) $input['spec_capacity_kg'] : null,
+                // The drums' sum wins over any client-supplied total.
+                'spec_capacity_kg'    => $drums['sum'] ?? (isset($input['spec_capacity_kg']) && $input['spec_capacity_kg'] !== ''
+                    ? (float) $input['spec_capacity_kg'] : null),
+                'drum_one_capacity_kg' => $drums['one'],
+                'drum_two_capacity_kg' => $drums['two'],
                 'default_category_id' => $defaultCategoryId,
                 'notes'               => isset($input['notes']) && $input['notes'] !== ''
                     ? (string) $input['notes'] : null,
@@ -862,20 +966,25 @@ final class BmgService extends BaseService
             ]);
             $id = (int) $this->db->insertID();
 
+            $this->bindDeviceToUnit($deviceId, $id);
+            $this->syncUnitCategories($id, $categoryIds, $now);
+
             $this->audit->enqueue(
                 'bmg.unit_created',
                 'facilities_bmg_units',
                 $id,
                 $userId,
-                ['resource_code' => $code, 'next_status' => BMG_STATE_IDLE],
+                ['resource_code' => $code, 'next_status' => BMG_STATE_IDLE, 'device_code' => (string) $device['code']],
             );
 
             $row = $this->db->table('facilities_bmg_units AS u')
                 ->where('u.tenant_id', CurrentTenant::id())
-                ->select('u.*, c.name AS default_category_name')
+                ->select('u.*, c.name AS default_category_name, d.id AS device_id, d.code AS device_code, d.display_name AS device_display_name, d.status AS device_status, d.last_seen_at AS device_last_seen_at')
                 ->join('facilities_waste_categories AS c', 'c.id = u.default_category_id', 'left')
+                ->join('facilities_bmg_devices AS d', 'd.unit_id = u.id', 'left')
                 ->where('u.id', $id)
                 ->get()->getRowArray();
+            $row['categories'] = $this->unitCategories((int) $row['id']);
             return BmgUnitDto::fromRow($row);
         });
     }
@@ -885,14 +994,30 @@ final class BmgService extends BaseService
      * legacy "Drum code cannot be changed" rule). The state machine
      * is owned elsewhere — this method refuses to mutate `status`.
      *
-     * @param array{display_name?:string, location_code?:?string, spec_capacity_kg?:?float, default_category_id?:?int, notes?:?string} $input
+     * `device_id` (re)assigns the drum's integrated ESP32 after
+     * creation: pass a registered, unbound device to swap the hardware
+     * (the previous board is released back to the available pool), or
+     * `null` to unbind (e.g. a dead board awaiting replacement). The
+     * target device must not be held by another drum.
+     *
+     * `drum_one_capacity_kg` / `drum_two_capacity_kg` re-profile the
+     * unit's two drums; both must be given together and `spec_capacity_kg`
+     * is recomputed as their sum. `category_ids` replaces the drum's
+     * designated waste-category set (first id seeds `default_category_id`).
+     *
+     * @param array{display_name?:string, location_code?:?string, spec_capacity_kg?:?float, drum_one_capacity_kg?:?float, drum_two_capacity_kg?:?float, default_category_id?:?int, category_ids?:list<int>, notes?:?string, device_id?:int|null} $input
      */
     public function updateUnit(int $unitId, array $input): BmgUnitDto
     {
         $this->policy->check('manage_units');
         $userId = \App\Auth\CurrentUser::assert();
 
-        return $this->txn(function () use ($unitId, $input, $userId): BmgUnitDto {
+        $drums = $this->resolveDrumCapacities($input);
+        $categoryIds = array_key_exists('category_ids', $input)
+            ? $this->resolveCategoryIds($input['category_ids'])
+            : null;
+
+        return $this->txn(function () use ($unitId, $input, $userId, $drums, $categoryIds): BmgUnitDto {
             $unit = $this->selectForUpdate('facilities_bmg_units', ['id' => $unitId, 'tenant_id' => CurrentTenant::id(), 'archived_at' => null]);
             if ($unit === null) {
                 throw new ApiException('resource.not_found', 404, [
@@ -914,9 +1039,16 @@ final class BmgService extends BaseService
                 $update['location_code'] = $input['location_code'] !== null && $input['location_code'] !== ''
                     ? trim((string) $input['location_code']) : null;
             }
-            if (array_key_exists('spec_capacity_kg', $input)) {
+            if (array_key_exists('spec_capacity_kg', $input) && $drums['one'] === null) {
                 $update['spec_capacity_kg'] = $input['spec_capacity_kg'] !== null && $input['spec_capacity_kg'] !== ''
                     ? (float) $input['spec_capacity_kg'] : null;
+            }
+            if ($drums['one'] !== null) {
+                // Per-drum capacities win: the unit's rated capacity IS
+                // the sum of its two drums.
+                $update['drum_one_capacity_kg'] = $drums['one'];
+                $update['drum_two_capacity_kg'] = $drums['two'];
+                $update['spec_capacity_kg']     = $drums['sum'];
             }
             if (array_key_exists('default_category_id', $input)) {
                 $update['default_category_id'] = $this->resolveCategoryId($input['default_category_id']);
@@ -924,6 +1056,28 @@ final class BmgService extends BaseService
             if (array_key_exists('notes', $input)) {
                 $update['notes'] = $input['notes'] !== null && $input['notes'] !== ''
                     ? (string) $input['notes'] : null;
+            }
+
+            $deviceOutcome = null;
+            if (array_key_exists('device_id', $input)) {
+                $deviceId = $input['device_id'] === null || $input['device_id'] === ''
+                    ? null : (int) $input['device_id'];
+                if ($deviceId !== null && $deviceId > 0) {
+                    $this->assertDeviceAvailable($deviceId, $unitId);
+                    $this->bindDeviceToUnit($deviceId, $unitId);
+                    $deviceOutcome = 'device_assigned';
+                } else {
+                    $this->unbindUnitDevices($unitId);
+                    $deviceOutcome = 'device_unbound';
+                }
+            }
+
+            if ($categoryIds !== null) {
+                $this->syncUnitCategories($unitId, $categoryIds, $this->support->utcNow());
+                // The first selected category seeds the default so the
+                // suggest heuristic and the batch category fallback keep
+                // working unchanged.
+                $update['default_category_id'] = $categoryIds[0] ?? null;
             }
 
             $this->db->table('facilities_bmg_units')
@@ -935,15 +1089,20 @@ final class BmgService extends BaseService
                 'facilities_bmg_units',
                 $unitId,
                 $userId,
-                ['resource_code' => (string) $unit['code']],
+                [
+                    'resource_code' => (string) $unit['code'],
+                    ...($deviceOutcome !== null ? ['outcome' => $deviceOutcome] : []),
+                ],
             );
 
             $fresh = $this->db->table('facilities_bmg_units AS u')
                 ->where('u.tenant_id', CurrentTenant::id())
-                ->select('u.*, c.name AS default_category_name')
+                ->select('u.*, c.name AS default_category_name, d.id AS device_id, d.code AS device_code, d.display_name AS device_display_name, d.status AS device_status, d.last_seen_at AS device_last_seen_at')
                 ->join('facilities_waste_categories AS c', 'c.id = u.default_category_id', 'left')
+                ->join('facilities_bmg_devices AS d', 'd.unit_id = u.id', 'left')
                 ->where('u.id', $unitId)
                 ->get()->getRowArray();
+            $fresh['categories'] = $this->unitCategories($unitId);
             return BmgUnitDto::fromRow($fresh);
         });
     }
@@ -976,17 +1135,236 @@ final class BmgService extends BaseService
     }
 
     /**
+     * Resolve a registered ESP32 for drum-side assignment. The device
+     * must exist in this tenant, be unarchived, and be FREE — or, when
+     * `$currentUnitId` is given, already be the drum's own board (the
+     * assign-same-device no-op). Bound elsewhere → 409 naming the
+     * holding drum, so the UI can point the operator at it.
+     *
+     * Must run inside the caller's transaction: the row is read FOR
+     * UPDATE, so two drums racing on the same board serialize here and
+     * the loser sees the binding. `uq_bmg_devices_unit` remains the
+     * DB-level final guard.
+     *
+     * @return array<string, mixed> the locked device row
+     */
+    private function assertDeviceAvailable(int $deviceId, ?int $currentUnitId = null): array
+    {
+        $device = $this->selectForUpdate('facilities_bmg_devices', ['id' => $deviceId, 'tenant_id' => CurrentTenant::id()]);
+        if ($device === null || $device['archived_at'] !== null) {
+            throw new ApiException('validation.invalid', 422, [
+                ['code' => 'validation.invalid', 'message' => 'ESP32 device not found (or archived) for that id.', 'field' => 'device_id'],
+            ]);
+        }
+        if ($device['unit_id'] !== null && (int) $device['unit_id'] !== (int) ($currentUnitId ?? -1)) {
+            $holder = $this->db->table('facilities_bmg_units')
+                ->select('code, display_name')
+                ->where('id', (int) $device['unit_id'])
+                ->where('tenant_id', CurrentTenant::id())
+                ->get()->getRowArray();
+            $held = $holder !== null
+                ? "{$holder['display_name']} ({$holder['code']})"
+                : "#{$device['unit_id']}";
+            throw new ApiException('resource.conflict', 409, [
+                ['code' => 'resource.conflict', 'message' => "ESP32 '{$device['code']}' is already bound to drum {$held}.", 'field' => 'device_id'],
+            ]);
+        }
+        return $device;
+    }
+
+    /**
+     * Point a device at a drum: release whatever board the drum
+     * currently holds (the drum keeps exactly one), then bind the new
+     * one. Caller holds the device lock (see `assertDeviceAvailable`).
+     */
+    private function bindDeviceToUnit(int $deviceId, int $unitId): void
+    {
+        $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
+        $this->db->table('facilities_bmg_devices')
+            ->where('tenant_id', CurrentTenant::id())
+            ->where('unit_id', $unitId)
+            ->where('id !=', $deviceId)
+            ->update(['unit_id' => null, 'updated_at' => $now]);
+        $this->db->table('facilities_bmg_devices')
+            ->where('tenant_id', CurrentTenant::id())
+            ->where('id', $deviceId)
+            ->update(['unit_id' => $unitId, 'updated_at' => $now]);
+    }
+
+    /**
+     * Release every device bound to a drum (drum archived, or board
+     * swapped out). The board returns to the available pool so another
+     * drum can integrate it.
+     */
+    private function unbindUnitDevices(int $unitId): void
+    {
+        $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
+        $this->db->table('facilities_bmg_devices')
+            ->where('tenant_id', CurrentTenant::id())
+            ->where('unit_id', $unitId)
+            ->update(['unit_id' => null, 'updated_at' => $now]);
+    }
+
+    /**
+     * Resolve the two drums' capacities. A BMG unit houses TWO drums,
+     * each holding at least 4 kg — the unit's rated capacity is their
+     * SUM, so both values must arrive together (a lone drum capacity is
+     * a client bug, not a half-filled form).
+     *
+     * @param array<string, mixed> $input
+     * @return array{one:?float, two:?float, sum:?float}
+     */
+    private function resolveDrumCapacities(array $input): array
+    {
+        $one = isset($input['drum_one_capacity_kg']) && $input['drum_one_capacity_kg'] !== ''
+            ? (float) $input['drum_one_capacity_kg'] : null;
+        $two = isset($input['drum_two_capacity_kg']) && $input['drum_two_capacity_kg'] !== ''
+            ? (float) $input['drum_two_capacity_kg'] : null;
+
+        foreach (['drum_one_capacity_kg' => $one, 'drum_two_capacity_kg' => $two] as $field => $value) {
+            if ($value !== null && $value < 4.0) {
+                throw new ApiException('validation.invalid', 422, [
+                    ['code' => 'validation.invalid', 'message' => 'Each drum holds at least 4 kg.', 'field' => $field],
+                ]);
+            }
+        }
+        if (($one === null) !== ($two === null)) {
+            throw new ApiException('validation.invalid', 422, [
+                ['code' => 'validation.invalid', 'message' => 'Provide both drums\' capacities — the unit capacity is their sum.', 'field' => 'drum_one_capacity_kg'],
+            ]);
+        }
+
+        return ['one' => $one, 'two' => $two, 'sum' => $one !== null ? $one + $two : null];
+    }
+
+    /**
+     * Validate a drum's designated waste-category set (order preserved —
+     * the first id seeds `default_category_id`). Returns [] for absent /
+     * empty input; unknown ids 404 naming the first one.
+     *
+     * @return list<int>
+     */
+    private function resolveCategoryIds(mixed $raw): array
+    {
+        if ($raw === null || $raw === '') {
+            return [];
+        }
+        if (! is_array($raw)) {
+            throw new ApiException('validation.invalid', 422, [
+                ['code' => 'validation.invalid', 'message' => 'category_ids must be an array of waste-category ids.', 'field' => 'category_ids'],
+            ]);
+        }
+
+        $ids = [];
+        foreach ($raw as $value) {
+            $id = (int) $value;
+            if ($id > 0) {
+                $ids[$id] = $id;
+            }
+        }
+        if ($ids === []) {
+            return [];
+        }
+
+        $rows = $this->db->table('facilities_waste_categories')
+            ->select('id')
+            ->where('tenant_id', CurrentTenant::id())
+            ->whereIn('id', array_keys($ids))
+            ->get()->getResultArray();
+        $known = array_map(static fn ($v): int => (int) $v, array_column($rows, 'id'));
+        $unknown = array_diff(array_keys($ids), $known);
+        if ($unknown !== []) {
+            throw new ApiException('resource.not_found', 404, [
+                ['code' => 'resource.not_found', 'message' => 'Waste category #' . reset($unknown) . ' not found.', 'field' => 'category_ids'],
+            ]);
+        }
+
+        return array_values($ids);
+    }
+
+    /** Replace a drum's designated-category set (create / re-profile). */
+    private function syncUnitCategories(int $unitId, array $categoryIds, string $now): void
+    {
+        $this->db->table('facilities_bmg_unit_categories')
+            ->where('tenant_id', CurrentTenant::id())
+            ->where('unit_id', $unitId)
+            ->delete();
+        if ($categoryIds === []) {
+            return;
+        }
+        $this->db->table('facilities_bmg_unit_categories')->insertBatch(array_map(
+            static fn (int $categoryId): array => [
+                'tenant_id'   => CurrentTenant::id(),
+                'unit_id'     => $unitId,
+                'category_id' => $categoryId,
+                'created_at'  => $now,
+            ],
+            $categoryIds,
+        ));
+    }
+
+    /**
+     * The designated waste categories of one drum (id + name, in
+     * configuration order).
+     *
+     * @return list<array{id:int, name:string}>
+     */
+    private function unitCategories(int $unitId): array
+    {
+        $rows = $this->db->table('facilities_bmg_unit_categories AS uc')
+            ->select('c.id, c.name')
+            ->join('facilities_waste_categories AS c', 'c.id = uc.category_id', 'left')
+            ->where('uc.tenant_id', CurrentTenant::id())
+            ->where('uc.unit_id', $unitId)
+            ->orderBy('uc.id', 'ASC')
+            ->get()->getResultArray();
+
+        return array_values(array_map(
+            static fn (array $r): array => ['id' => (int) $r['id'], 'name' => (string) $r['name']],
+            array_filter($rows, static fn (array $r): bool => $r['id'] !== null),
+        ));
+    }
+
+    /**
+     * Just the configured category ids of one drum — the allow-list
+     * `startBatch` checks the composition against.
+     *
+     * @return list<int>
+     */
+    private function unitCategoryIds(int $unitId): array
+    {
+        $rows = $this->db->table('facilities_bmg_unit_categories')
+            ->select('category_id')
+            ->where('tenant_id', CurrentTenant::id())
+            ->where('unit_id', $unitId)
+            ->orderBy('id', 'ASC')
+            ->get()->getResultArray();
+
+        return array_map(static fn (array $r): int => (int) $r['category_id'], $rows);
+    }
+
+    /**
      * Soft-archive a unit. Sets `archived_at`, refuses if the unit still
      * has an active batch (must be finished or cancelled first — same
      * invariant the legacy controller enforced by checking
      * `bmg_batches.status IN ('input','processing')`).
+     *
+     * The drum's ESP32 always leaves with it: by default the board is
+     * released to the available pool, but with `relocate_device_to_unit_id`
+     * it moves straight onto the named drum in the SAME transaction —
+     * the archive and the rebinding land together or not at all. The
+     * target must be a live drum whose device slot is free (this drum's
+     * own slot is vacated by the archive, so the board can never move
+     * back onto the drum being retired).
+     *
+     * @param array{relocate_device_to_unit_id?:int|null} $input
      */
-    public function archiveUnit(int $unitId): BmgUnitDto
+    public function archiveUnit(int $unitId, array $input = []): BmgUnitDto
     {
         $this->policy->check('manage_units');
         $userId = \App\Auth\CurrentUser::assert();
 
-        return $this->txn(function () use ($unitId, $userId): BmgUnitDto {
+        return $this->txn(function () use ($unitId, $input, $userId): BmgUnitDto {
             $unit = $this->selectForUpdate('facilities_bmg_units', ['id' => $unitId, 'tenant_id' => CurrentTenant::id(), 'archived_at' => null]);
             if ($unit === null) {
                 throw new ApiException('resource.not_found', 404, [
@@ -1006,6 +1384,22 @@ final class BmgService extends BaseService
                 ]);
             }
 
+            $relocateTo = isset($input['relocate_device_to_unit_id']) && (int) $input['relocate_device_to_unit_id'] > 0
+                ? (int) $input['relocate_device_to_unit_id'] : null;
+
+            // The board leaving this drum — captured BEFORE the unbind so
+            // the relocation below knows what it is moving.
+            $board = $this->db->table('facilities_bmg_devices')
+                ->where('tenant_id', CurrentTenant::id())
+                ->where('unit_id', $unitId)
+                ->get()->getRowArray();
+
+            if ($relocateTo !== null && $board === null) {
+                throw new ApiException('validation.invalid', 422, [
+                    ['code' => 'validation.invalid', 'message' => 'This drum has no assigned ESP32 to relocate.', 'field' => 'relocate_device_to_unit_id'],
+                ]);
+            }
+
             $now = $this->support->utcNow();
             $this->db->table('facilities_bmg_units')
                 ->where('facilities_bmg_units.tenant_id', CurrentTenant::id())
@@ -1014,12 +1408,28 @@ final class BmgService extends BaseService
                     'updated_at'  => $now,
                 ]);
 
+            // The drum leaves service, but its ESP32 does not: release the
+            // board back to the available pool — or straight onto the
+            // replacement drum when one was named. Unarchiving does not
+            // re-bind — assignment is an explicit act from the drum or
+            // device screen.
+            $this->unbindUnitDevices($unitId);
+
+            $relocatedToCode = null;
+            if ($relocateTo !== null && $board !== null) {
+                $relocatedToCode = $this->relocateFreedDevice((int) $board['id'], (string) $board['code'], $unitId, $relocateTo);
+            }
+
             $this->audit->enqueue(
                 'bmg.unit_archived',
                 'facilities_bmg_units',
                 $unitId,
                 $userId,
-                ['resource_code' => (string) $unit['code']],
+                [
+                    'resource_code' => (string) $unit['code'],
+                    'device_code'   => $board !== null ? (string) $board['code'] : null,
+                    'device_relocated_to' => $relocatedToCode,
+                ],
             );
 
             $fresh = $this->db->table('facilities_bmg_units')
@@ -1027,6 +1437,48 @@ final class BmgService extends BaseService
                 ->where('id', $unitId)->get()->getRowArray();
             return BmgUnitDto::fromRow($fresh);
         });
+    }
+
+    /**
+     * Move a just-freed board onto another drum inside the archiving
+     * transaction. The target must be live (unarchived), different from
+     * the drum being retired, and have no device of its own — a target
+     * that already holds a board is a 409 naming that board, never a
+     * silent steal.
+     *
+     * @return string the target drum's code, for the audit trail
+     */
+    private function relocateFreedDevice(int $deviceId, string $deviceCode, int $archivedUnitId, int $targetUnitId): string
+    {
+        $target = $this->selectForUpdate('facilities_bmg_units', ['id' => $targetUnitId, 'tenant_id' => CurrentTenant::id(), 'archived_at' => null]);
+        if ($target === null) {
+            throw new ApiException('validation.invalid', 422, [
+                ['code' => 'validation.invalid', 'message' => 'Relocation target not found (or archived).', 'field' => 'relocate_device_to_unit_id'],
+            ]);
+        }
+        if ($targetUnitId === $archivedUnitId) {
+            throw new ApiException('validation.invalid', 422, [
+                ['code' => 'validation.invalid', 'message' => 'The ESP32 cannot be relocated to the drum being archived.', 'field' => 'relocate_device_to_unit_id'],
+            ]);
+        }
+        $occupant = $this->db->table('facilities_bmg_devices')
+            ->select('code')
+            ->where('tenant_id', CurrentTenant::id())
+            ->where('unit_id', $targetUnitId)
+            ->get()->getRowArray();
+        if ($occupant !== null) {
+            throw new ApiException('resource.conflict', 409, [
+                ['code' => 'resource.conflict', 'message' => "Drum {$target['display_name']} ({$target['code']}) already has ESP32 '{$occupant['code']}' bound — pick another drum.", 'field' => 'relocate_device_to_unit_id'],
+            ]);
+        }
+
+        $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
+        $this->db->table('facilities_bmg_devices')
+            ->where('tenant_id', CurrentTenant::id())
+            ->where('id', $deviceId)
+            ->update(['unit_id' => $targetUnitId, 'updated_at' => $now]);
+
+        return (string) $target['code'];
     }
 
     /**
@@ -1754,6 +2206,20 @@ final class BmgService extends BaseService
                     ['code' => 'resource.not_found', 'message' => 'BMG unit not found (or archived) for that id.'],
                 ]);
             }
+            // 1:1 — a drum integrates exactly one ESP32. Registering into
+            // a drum that already holds a board must not silently steal
+            // the binding.
+            $holder = $this->db->table('facilities_bmg_devices')
+                ->select('code')
+                ->where('tenant_id', CurrentTenant::id())
+                ->where('unit_id', $unitId)
+                ->where('archived_at', null)
+                ->get()->getRowArray();
+            if ($holder !== null) {
+                throw new ApiException('resource.conflict', 409, [
+                    ['code' => 'resource.conflict', 'message' => "Drum {$unit['display_name']} ({$unit['code']}) already has ESP32 '{$holder['code']}' bound — reassign it from the drum instead.", 'field' => 'unit_id'],
+                ]);
+            }
         }
 
         $existing = $this->db->table('facilities_bmg_devices')->where('code', $code)->get()->getRowArray();
@@ -1943,6 +2409,22 @@ final class BmgService extends BaseService
                     if ($unit === null) {
                         throw ApiException::validationFailure([
                             ['code' => 'validation.field', 'message' => 'Bound drum not found, or is archived.', 'field' => 'unit_id'],
+                        ]);
+                    }
+                    // 1:1 — the drum-side assignment owns swaps; rebinding
+                    // here may not silently steal a board another drum
+                    // already holds. Unbind that drum (or reassign from
+                    // the drum screen) first.
+                    $holder = $this->db->table('facilities_bmg_devices')
+                        ->select('code')
+                        ->where('tenant_id', CurrentTenant::id())
+                        ->where('unit_id', $unitId)
+                        ->where('id !=', $deviceId)
+                        ->where('archived_at', null)
+                        ->get()->getRowArray();
+                    if ($holder !== null) {
+                        throw new ApiException('resource.conflict', 409, [
+                            ['code' => 'resource.conflict', 'message' => "Drum {$unit['display_name']} ({$unit['code']}) already has ESP32 '{$holder['code']}' bound — reassign it from the drum instead.", 'field' => 'unit_id'],
                         ]);
                     }
                 }
@@ -2247,6 +2729,137 @@ final class BmgService extends BaseService
             'updated_at'   => (string) $row['updated_at'],
             'archived_at'  => $row['archived_at'] !== null ? (string) $row['archived_at'] : null,
         ];
+    }
+
+    // -------------------------------------------------- device commands
+
+    /**
+     * Queue an outbound command for a device (`start` at batch start
+     * today; the table's CHECK admits `stop` for a later lifecycle
+     * hook). Same transaction as the caller's state change, so the
+     * command can never outlive the thing that produced it.
+     */
+    private function enqueueDeviceCommand(int $deviceId, string $deviceCode, string $command, array $payload, string $now, ?int $actorId): void
+    {
+        $this->db->table('facilities_bmg_device_commands')->insert([
+            'tenant_id'  => CurrentTenant::id(),
+            'device_id'  => $deviceId,
+            'command'    => $command,
+            'payload'    => json_encode($payload, JSON_THROW_ON_ERROR),
+            'status'     => 'pending',
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        $commandId = (int) $this->db->insertID();
+
+        $this->audit->enqueue(
+            'bmg.device_command_enqueued',
+            'facilities_bmg_device_commands',
+            $commandId,
+            $actorId,
+            [
+                'resource_code' => $deviceCode . ':' . $command,
+                'reason_code'   => 'facilities.device.command',
+                'outcome'       => $command,
+            ],
+        );
+    }
+
+    /**
+     * The device's pending command feed — the pull half of the start
+     * integration (`GET /api/v1/devices/bmg/commands`, device-token
+     * auth). Oldest first, capped per poll. Fetching stamps
+     * `delivered_at` but leaves the row `pending` until the board ACKs:
+     * at-least-once delivery, so a board that crashes mid-cycle
+     * re-receives the command and must dedupe by id.
+     *
+     * @return list<array<string, mixed>>
+     */
+    public function listDeviceCommands(array $device): array
+    {
+        $rows = $this->db->table('facilities_bmg_device_commands')
+            ->where('tenant_id', CurrentTenant::id())
+            ->where('device_id', (int) $device['id'])
+            ->where('status', 'pending')
+            ->orderBy('id', 'ASC')
+            ->limit(20)
+            ->get()->getResultArray();
+
+        $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
+        if ($rows !== []) {
+            // First delivery only — a redelivered row keeps its original
+            // stamp so the watchdog can reason about staleness later.
+            $this->db->table('facilities_bmg_device_commands')
+                ->where('tenant_id', CurrentTenant::id())
+                ->where('device_id', (int) $device['id'])
+                ->where('status', 'pending')
+                ->where('delivered_at', null)
+                ->whereIn('id', array_map(static fn (array $r): int => (int) $r['id'], $rows))
+                ->update(['delivered_at' => $now, 'updated_at' => $now]);
+        }
+
+        // Rows fetched before the stamp get the delivery time they were
+        // just written with; already-delivered rows keep their stored one.
+        return array_map(static fn (array $r): array => [
+            'id'             => (int) $r['id'],
+            'command'        => (string) $r['command'],
+            'payload'        => $r['payload'] !== null
+                ? json_decode((string) $r['payload'], true, 512, JSON_THROW_ON_ERROR)
+                : null,
+            'status'         => (string) $r['status'],
+            'delivered_at'   => $r['delivered_at'] !== null ? (string) $r['delivered_at'] : $now,
+            'created_at'     => (string) $r['created_at'],
+        ], $rows);
+    }
+
+    /**
+     * The board confirms it actuated a command (`POST
+     * /api/v1/devices/bmg/commands/ack`). Idempotent: re-acking an
+     * acknowledged command returns the row unchanged; a foreign or
+     * unknown command id is a 404 — the device identity scopes every
+     * lookup.
+     *
+     * @return array<string, mixed>
+     */
+    public function ackDeviceCommand(array $device, int $commandId): array
+    {
+        return $this->txn(function () use ($device, $commandId): array {
+            $cmd = $this->selectForUpdate('facilities_bmg_device_commands', [
+                'id'        => $commandId,
+                'tenant_id' => CurrentTenant::id(),
+                'device_id' => (int) $device['id'],
+            ]);
+            if ($cmd === null) {
+                throw new ApiException('resource.not_found', 404, [
+                    ['code' => 'resource.not_found', 'message' => 'Command not found for this device.'],
+                ]);
+            }
+
+            if ($cmd['status'] === 'pending') {
+                $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
+                $this->db->table('facilities_bmg_device_commands')
+                    ->where('tenant_id', CurrentTenant::id())
+                    ->where('id', $commandId)
+                    ->update(['status' => 'acknowledged', 'acknowledged_at' => $now, 'updated_at' => $now]);
+
+                $this->audit->enqueue(
+                    'bmg.device_command_acknowledged',
+                    'facilities_bmg_device_commands',
+                    $commandId,
+                    \App\Auth\CurrentUser::assert(),
+                    ['resource_code' => (string) $cmd['command'], 'reason_code' => 'facilities.device.command.ack', 'outcome' => 'acknowledged'],
+                );
+                $cmd['status']          = 'acknowledged';
+                $cmd['acknowledged_at'] = $now;
+            }
+
+            return [
+                'id'              => (int) $cmd['id'],
+                'command'         => (string) $cmd['command'],
+                'status'          => (string) $cmd['status'],
+                'acknowledged_at' => $cmd['acknowledged_at'] !== null ? (string) $cmd['acknowledged_at'] : null,
+            ];
+        });
     }
 
     // -------------------------------------------------------- losses

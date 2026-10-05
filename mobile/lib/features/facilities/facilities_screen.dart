@@ -11,7 +11,7 @@ import '../../core/services/auth_controller.dart';
 import '../common/auto_polling.dart';
 import '../common/crud_form.dart';
 import '../common/widgets.dart';
-import 'composition_sheet.dart';
+
 import 'drum_detail_sheet.dart';
 import 'turning.dart';
 import 'waste_categories_screen.dart';
@@ -144,22 +144,102 @@ class _FacilitiesScreenState extends State<FacilitiesScreen>
           ?.hasPermission('facilities.bmg.transition') ??
       false;
 
+  /// Add a unit. Every drum integrates exactly one registered ESP32, so
+  /// the form requires a free board — when the whole fleet is bound the
+  /// create is refused here (and again server-side) with a pointer at
+  /// the Devices screen. The unit houses TWO drums (capacities travel
+  /// as a pair; the backend stores their SUM as the unit capacity), and
+  /// the waste categories the drum is designated for are profiled HERE,
+  /// not at batch start.
   Future<void> _createUnit() async {
+    List<BmgDevice> devices = [];
+    List<BmgWasteCategory> categories = [];
+    try {
+      devices = await ApiService.I.facilityDevices(limit: 100);
+    } catch (e) {
+      if (kDebugMode) {
+        debugPrint('FacilitiesScreen.createUnit devices failed: $e');
+      }
+    }
+    try {
+      final raw = await ApiService.I.facilityWasteCategories();
+      categories = raw.map(BmgWasteCategory.fromJson).toList();
+    } catch (e) {
+      if (kDebugMode) {
+        debugPrint('FacilitiesScreen.createUnit categories failed: $e');
+      }
+    }
+    if (!mounted) return;
+    final available =
+        devices.where((d) => d.archivedAt == null && d.unitId == null).toList();
+    if (available.isEmpty) {
+      showCrudMessage(
+        context,
+        'Every registered ESP32 is already bound to a drum. '
+        'Register a new device first (Devices screen).',
+        error: true,
+      );
+      return;
+    }
+
+    // Codes are unique, so labels are too — the label is the wire value
+    // of the CrudForm dropdown and maps back to the id here.
+    final deviceLabels = [
+      for (final d in available) '${d.displayName} (${d.code})',
+    ];
     final payload = await showCrudForm(
       context,
       title: 'Add unit',
-      fields: const [
-        CrudField.text('code', 'Code'),
-        CrudField.text('display_name', 'Display name'),
-        CrudField.text('location_code', 'Location', required: false),
-        CrudField.number('spec_capacity_kg', 'Capacity (kg)', required: false),
+      fields: [
+        const CrudField.text('code', 'Code'),
+        const CrudField.text('display_name', 'Display name'),
+        const CrudField.text('location_code', 'Location', required: false),
+        const CrudField.number('drum_one_capacity_kg', 'Drum 1 capacity (kg)',
+            required: false),
+        const CrudField.number('drum_two_capacity_kg', 'Drum 2 capacity (kg)',
+            required: false),
+        CrudField.dropdown('device_id', 'ESP32 device', deviceLabels),
+        // Waste categories are profiled at drum setup: one toggle per
+        // category; checked ones become the drum's designated set.
+        for (final c in categories) CrudField.bool('cat_${c.id}', c.name),
       ],
       submitLabel: 'Add',
     );
     if (payload == null || !mounted) return;
+    final chosenIdx =
+        deviceLabels.indexOf((payload['device_id'] as String?) ?? '');
+    if (chosenIdx < 0) {
+      showCrudMessage(context, 'Select the ESP32 device to integrate.',
+          error: true);
+      return;
+    }
+    // Capacities must arrive as a pair (the unit capacity is their sum).
+    final one = (payload['drum_one_capacity_kg'] as String?) ?? '';
+    final two = (payload['drum_two_capacity_kg'] as String?) ?? '';
+    if (one.isEmpty != two.isEmpty) {
+      showCrudMessage(
+          context,
+          'Provide both drums\u2019 capacities — the unit capacity is '
+          'their sum.',
+          error: true);
+      return;
+    }
+    final body = <String, dynamic>{
+      ...payload,
+      'device_id': available[chosenIdx].id,
+    };
+    // Checked toggles → the designated category set.
+    final categoryIds = [
+      for (final c in categories)
+        if (payload['cat_${c.id}'] == true) c.id,
+    ];
+    if (categories.isNotEmpty) body['category_ids'] = categoryIds;
+    for (final c in categories) {
+      body.remove('cat_${c.id}');
+    }
     final ok = await runCrudAction(
       context,
-      () => ApiService.I.createFacilityUnit(payload),
+      () => ApiService.I.createFacilityUnit(body),
       successMessage: 'Unit created.',
     );
     if (ok) _load();
@@ -178,49 +258,35 @@ class _FacilitiesScreenState extends State<FacilitiesScreen>
   }
 
   Future<void> _startBatch(BmgUnit u) async {
-    List<BmgWasteCategory> categories = [];
-    try {
-      final raw = await ApiService.I.facilityWasteCategories();
-      categories = raw.map(BmgWasteCategory.fromJson).toList();
-    } catch (e) {
-      if (kDebugMode) debugPrint('FacilitiesScreen.startBatch failed: $e');
-    }
-    if (!mounted) return;
-    if (categories.isEmpty) {
-      showCrudMessage(context, 'No waste categories available.', error: true);
+    // Starting the drum IS starting the batch — one field, no ceremony.
+    // The waste mix was designated on the drum at setup; the backend
+    // derives the ETA from it and commands the drum's ESP32 to start.
+    final payload = await showCrudForm(
+      context,
+      title: 'Start batch — ${u.code}',
+      fields: const [
+        CrudField.number('total_input_weight_kg', 'Total input weight (kg)'),
+      ],
+      submitLabel: 'Start',
+    );
+    if (payload == null || !mounted) return;
+    final total = (payload['total_input_weight_kg'] as num?)?.toDouble() ?? 0;
+    if (total <= 0) return;
+    if (u.specCapacityKg != null && u.specCapacityKg! > 0 && total > u.specCapacityKg!) {
+      showCrudMessage(
+        context,
+        'Total input weight (${total.toStringAsFixed(2)} kg) exceeds this '
+        'unit\u2019s capacity (${u.specCapacityKg!.toStringAsFixed(2)} kg).',
+        error: true,
+      );
       return;
     }
-
-    // A segregated mix: one row per waste category with its loaded
-    // weight. The weight ratios drive the drum's expected duration, so a
-    // single-category form would mis-state the ETA for every mixed load.
-    final result = await showCompositionSheet(
-      context,
-      unitLabel: u.displayName,
-      categories: categories,
-      capacityKg: u.specCapacityKg,
-    );
-    if (result == null || !mounted) return;
-
-    final composition = result
-        .where((r) => r.containsKey('category_id'))
-        .map((r) => <String, dynamic>{
-              'category_id': r['category_id'],
-              'weight_kg': r['weight_kg'],
-            })
-        .toList();
-    final total = (result.firstWhere((r) => r.containsKey('__total'),
-            orElse: () => <String, dynamic>{})['__total'] as double? ??
-        0.0);
-    if (composition.isEmpty || total <= 0) return;
-
     final ok = await runCrudAction(
       context,
       () => ApiService.I.startFacilityBatch(u.id, {
         'total_input_weight_kg': total,
-        'composition': composition,
       }),
-      successMessage: 'Batch started.',
+      successMessage: 'Batch started — start command sent to the ESP32.',
     );
     if (ok) _load();
   }
@@ -268,7 +334,8 @@ class _FacilitiesScreenState extends State<FacilitiesScreen>
   }
 
   /// 5. Drum status — toggle Available / Under Maintenance / Archived.
-  /// Only allowed when the drum has no active batch.
+  /// Only allowed when the drum has no active batch. Archiving a drum
+  /// automatically releases its ESP32 back to the available pool.
   Future<void> _drumStatus(BmgUnit u) async {
     if (u.isActive) {
       showCrudMessage(context, 'Finish or cancel the active batch first.',
@@ -298,6 +365,7 @@ class _FacilitiesScreenState extends State<FacilitiesScreen>
     );
     if (payload == null || !mounted) return;
     final chosen = (payload['status'] as String?) ?? 'available';
+
     final ok = await runCrudAction(
       context,
       () async {
@@ -305,6 +373,9 @@ class _FacilitiesScreenState extends State<FacilitiesScreen>
           case 'maintenance':
             await ApiService.I.setFacilityUnitMaintenance(u.id, true);
           case 'archived':
+            // Archiving automatically releases the drum's ESP32 back to
+            // the available pool — no relocation step; the board is
+            // attached to its next drum from that drum's Edit form.
             await ApiService.I.archiveFacilityUnit(u.id);
           case 'available':
             await ApiService.I.unarchiveFacilityUnit(u.id);
@@ -591,7 +662,43 @@ class _FacilitiesScreenState extends State<FacilitiesScreen>
     if (ok) _load();
   }
 
+  /// Edit a drum's mutable fields — including swapping its integrated
+  /// ESP32 (free boards only; a board held by another drum is refused
+  /// server-side). 'None' unbinds, the replacement path for a dead board.
+  /// Re-profiles the two drum capacities (pair) and the designated
+  /// waste categories here, not at batch start.
   Future<void> _editUnit(BmgUnit u) async {
+    List<BmgDevice> devices = [];
+    List<BmgWasteCategory> categories = [];
+    try {
+      devices = await ApiService.I.facilityDevices(limit: 100);
+    } catch (e) {
+      if (kDebugMode) {
+        debugPrint('FacilitiesScreen.editUnit devices failed: $e');
+      }
+    }
+    try {
+      final raw = await ApiService.I.facilityWasteCategories();
+      categories = raw.map(BmgWasteCategory.fromJson).toList();
+    } catch (e) {
+      if (kDebugMode) {
+        debugPrint('FacilitiesScreen.editUnit categories failed: $e');
+      }
+    }
+    if (!mounted) return;
+
+    const unbound = '— None (unbound) —';
+    String label(BmgDevice d) => '${d.displayName} (${d.code})';
+    final options = [
+      unbound,
+      for (final d in devices)
+        if (d.archivedAt == null && (d.unitId == null || d.unitId == u.deviceId))
+          label(d),
+    ];
+    final current =
+        devices.where((d) => d.id == u.deviceId).toList();
+    final initial = current.isEmpty ? unbound : label(current.first);
+
     final payload = await showCrudForm(
       context,
       title: 'Edit unit — ${u.code}',
@@ -601,16 +708,55 @@ class _FacilitiesScreenState extends State<FacilitiesScreen>
         CrudField.text('display_name', 'Display name', initial: u.displayName),
         CrudField.text('location_code', 'Location',
             required: false, initial: u.locationCode ?? ''),
-        CrudField.number('spec_capacity_kg', 'Capacity (kg)',
-            required: false, initial: u.specCapacityKg?.toString()),
+        CrudField.number('drum_one_capacity_kg', 'Drum 1 capacity (kg)',
+            required: false, initial: u.drumOneCapacityKg?.toString()),
+        CrudField.number('drum_two_capacity_kg', 'Drum 2 capacity (kg)',
+            required: false, initial: u.drumTwoCapacityKg?.toString()),
+        CrudField.dropdown('device_id', 'ESP32 device', options,
+            initial: initial),
+        for (final c in categories)
+          CrudField.bool('cat_${c.id}', c.name,
+              boolInitial: u.categories.any((uc) => uc.id == c.id)),
       ],
       submitLabel: 'Save',
     );
     if (payload == null || !mounted) return;
     payload.remove('code');
+    final choice = payload['device_id'] as String?;
+    final deviceId = (choice == null || choice == unbound)
+        ? null
+        // Labels are unique (codes are), so the label maps back to the
+        // board id one-to-one.
+        : {for (final d in devices) label(d): d.id}[choice];
+    // Capacities must arrive as a pair (the unit capacity is their sum).
+    final one = (payload['drum_one_capacity_kg'] as String?) ?? '';
+    final two = (payload['drum_two_capacity_kg'] as String?) ?? '';
+    if (one.isEmpty != two.isEmpty) {
+      showCrudMessage(
+          context,
+          'Provide both drums\u2019 capacities — the unit capacity is '
+          'their sum.',
+          error: true);
+      return;
+    }
+    final body = <String, dynamic>{
+      ...payload,
+      'device_id': deviceId,
+    };
+    // Checked toggles → the designated set. Only sent when the category
+    // list loaded — a failed fetch must not clear an existing profile.
+    if (categories.isNotEmpty) {
+      body['category_ids'] = [
+        for (final c in categories)
+          if (payload['cat_${c.id}'] == true) c.id,
+      ];
+    }
+    for (final c in categories) {
+      body.remove('cat_${c.id}');
+    }
     final ok = await runCrudAction(
       context,
-      () => ApiService.I.updateFacilityUnit(u.id, payload),
+      () => ApiService.I.updateFacilityUnit(u.id, body),
       successMessage: 'Unit updated.',
     );
     if (ok) _load();
@@ -1156,7 +1302,8 @@ class _UnitTile extends StatelessWidget {
               Text(
                 '${unit.code}'
                 '${unit.locationCode != null && unit.locationCode!.isNotEmpty ? ' · ${unit.locationCode}' : ''}'
-                '${unit.defaultCategoryName != null ? ' · ${unit.defaultCategoryName}' : ''}',
+                '${unit.categories.isNotEmpty ? ' · ${unit.categories.map((c) => c.name).join(', ')}' : (unit.defaultCategoryName != null ? ' · ${unit.defaultCategoryName}' : '')}'
+                '${unit.deviceCode != null ? ' · ESP32 ${unit.deviceCode}' : ''}',
                 style: const TextStyle(color: Colors.black54, fontSize: 12),
               ),
               if (unit.isActive) ...[

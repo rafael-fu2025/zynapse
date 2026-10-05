@@ -295,4 +295,64 @@ abstract class FeatureTestCase extends CIUnitTestCase
             implode(', ', $codes),
         ));
     }
+
+    /**
+     * Create a registered BMG device row (plus its machine user), same
+     * shape `synapse:bmg-device-register` writes. Unbound by default —
+     * pass `$unitId` to pin it to a drum directly.
+     *
+     * The shared test schema persists rows across suite runs
+     * ($refresh = false), so codes are unique per call.
+     *
+     * @return array{deviceId:int, userId:int, token:string, code:string}
+     */
+    protected function createBmgDevice(?int $unitId = null, string $status = 'active'): array
+    {
+        $db  = db_connect();
+        $now = date('Y-m-d H:i:s');
+        $code = 'dev-' . bin2hex(random_bytes(4));
+
+        $db->table('users')->insert([
+            'username'   => 'dev-' . bin2hex(random_bytes(5)),
+            'status'     => 'active',
+            'active'     => 1,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        $userId = (int) $db->insertID();
+
+        $db->table('auth_identities')->insert([
+            'user_id'     => $userId,
+            'type'        => 'email_password',
+            'secret'      => 'device.' . $code . '@devices.local',
+            'secret2'     => password_hash(bin2hex(random_bytes(16)), PASSWORD_DEFAULT),
+            'force_reset' => 0,
+            'created_at'  => $now,
+            'updated_at'  => $now,
+        ]);
+
+        $group = $db->table('auth_groups')->where('name', 'bmg_device')->get()->getRowArray();
+        $this->assertNotNull($group, 'bmg_device group must exist (seeder).');
+        $db->table('auth_groups_users')->insert([
+            'group_id'   => (int) $group['id'],
+            'user_id'    => $userId,
+            'created_at' => $now,
+        ]);
+
+        $token = 'dev_' . bin2hex(random_bytes(32));
+        $db->table('facilities_bmg_devices')->insert([
+            'tenant_id'      => 1,
+            'unit_id'        => $unitId,
+            'code'           => $code,
+            'display_name'   => 'BMG Device ' . $code,
+            'token_hash'     => hash('sha256', $token),
+            'token_prefix'   => substr($token, 0, 12),
+            'status'         => $status,
+            'linked_user_id' => $userId,
+            'created_at'     => $now,
+            'updated_at'     => $now,
+        ]);
+
+        return ['deviceId' => (int) $db->insertID(), 'userId' => $userId, 'token' => $token, 'code' => $code];
+    }
 }

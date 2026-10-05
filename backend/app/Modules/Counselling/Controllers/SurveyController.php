@@ -64,6 +64,22 @@ final class SurveyController extends ApiController
         return $this->ok($this->service->setQuestions($id, $questions));
     }
 
+    public function setLinks(int $id): ResponseInterface
+    {
+        $this->authorize('counselling.surveys.manage');
+        $payload = $this->request->getJSON(true) ?? [];
+        $links = is_array($payload['links'] ?? null) ? $payload['links'] : [];
+        return $this->ok($this->service->setLinks($id, $links));
+    }
+
+    /** Narrow hot-fix: retitle / re-URL one link on a live version. */
+    public function patchLink(int $id, int $linkId): ResponseInterface
+    {
+        $this->authorize('counselling.surveys.manage');
+        $payload = $this->request->getJSON(true) ?? [];
+        return $this->ok($this->service->patchPublishedLink($id, $linkId, is_array($payload) ? $payload : []));
+    }
+
     public function publishSurvey(int $id): ResponseInterface
     {
         $this->authorize('counselling.surveys.manage');
@@ -92,6 +108,23 @@ final class SurveyController extends ApiController
         return $this->ok($this->service->responseDetail($id, $responseId));
     }
 
+    /** Streams a submitted screenshot proof (audited server-side). */
+    public function downloadScreenshot(int $id, int $responseId, int $screenshotId): ResponseInterface
+    {
+        $this->authorize('counselling.responses.read');
+        return $this->screenshotResponse($this->service->staffScreenshot($id, $responseId, $screenshotId));
+    }
+
+    private function screenshotResponse(array $meta): ResponseInterface
+    {
+        return $this->response
+            ->download($meta['path'], null)
+            ->setFileName($meta['name'])
+            ->setContentType($meta['mime'], 'UTF-8')
+            ->setHeader('Cache-Control', 'no-store')
+            ->setHeader('X-Content-Type-Options', 'nosniff');
+    }
+
     // ---- student: /me/guidance/surveys -------------------------------
 
     public function mySurveys(): ResponseInterface
@@ -109,6 +142,30 @@ final class SurveyController extends ApiController
         $payload = $this->request->getJSON(true) ?? [];
         $answers = is_array($payload['answers'] ?? null) ? $payload['answers'] : [];
         return $this->ok($this->service->submit($id, $answers), null, 201);
+    }
+
+    /** Open attestation for a dynamic link (idempotent per student). */
+    public function openLink(int $id, int $linkId): ResponseInterface
+    {
+        return $this->ok($this->service->openLink($id, $linkId));
+    }
+
+    /** Stages a screenshot proof (multipart field: screenshot). */
+    public function uploadScreenshot(int $id, int $linkId): ResponseInterface
+    {
+        return $this->ok($this->service->uploadScreenshot($id, $linkId, $this->request->getFile('screenshot')), null, 201);
+    }
+
+    /** Streams the caller's own screenshot back (post-reload preview). */
+    public function previewScreenshot(int $id, int $linkId): ResponseInterface
+    {
+        return $this->screenshotResponse($this->service->studentScreenshot($id, $linkId));
+    }
+
+    /** Removes a staged (unsubmitted) screenshot. */
+    public function removeScreenshot(int $id, int $linkId): ResponseInterface
+    {
+        return $this->ok($this->service->removeScreenshot($id, $linkId));
     }
 
     public function myRequirements(): ResponseInterface

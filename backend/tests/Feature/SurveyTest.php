@@ -183,11 +183,13 @@ final class SurveyTest extends FeatureTestCase
         ]);
         $again->assertStatus(409);
 
-        // The submitted survey disappears from the student's list.
+        // The submitted survey stays listed for optional proofs, flagged.
         $mine = $this->authed($student['token'], 'get', 'api/v1/me/guidance/surveys');
         $mine->assertStatus(200);
-        $ids = array_map(static fn (array $r): int => (int) $r['id'], $this->envelope($mine)['data'] ?? []);
-        $this->assertNotContains($ctx['id'], $ids);
+        $rows = $this->envelope($mine)['data'] ?? [];
+        $mineRow = array_values(array_filter($rows, static fn (array $r): bool => (int) $r['id'] === $ctx['id']))[0] ?? null;
+        $this->assertIsArray($mineRow, 'The submitted survey stays listed for optional proofs.');
+        $this->assertTrue($mineRow['submitted']);
     }
 
     public function testRequirementsEndpointIsTheClearanceGate(): void

@@ -55,8 +55,15 @@ final class BmgController extends ApiController
             'display_name'       => 'required|max_length[128]',
             'location_code'      => 'permit_empty|max_length[64]',
             'spec_capacity_kg'   => 'permit_empty|decimal|greater_than[0]',
+            // The unit's two drums — spec capacity is recomputed as their
+            // sum; the ≥ 4 kg-per-drum floor is enforced in the service.
+            'drum_one_capacity_kg' => 'permit_empty|decimal|greater_than[0]',
+            'drum_two_capacity_kg' => 'permit_empty|decimal|greater_than[0]',
             'default_category_id'=> 'permit_empty|is_natural_no_zero',
+            'category_ids'       => 'permit_empty',
             'notes'              => 'permit_empty|max_length[512]',
+            // Every drum integrates exactly one registered ESP32.
+            'device_id'          => 'required|is_natural_no_zero',
         ];
         if (! $this->makeValidation($rules)->run($payload)) {
             throw ApiException::validationFailure($this->collectErrors());
@@ -73,8 +80,13 @@ final class BmgController extends ApiController
             'display_name'       => 'permit_empty|max_length[128]',
             'location_code'      => 'permit_empty|max_length[64]',
             'spec_capacity_kg'   => 'permit_empty|decimal|greater_than[0]',
+            'drum_one_capacity_kg' => 'permit_empty|decimal|greater_than[0]',
+            'drum_two_capacity_kg' => 'permit_empty|decimal|greater_than[0]',
             'default_category_id'=> 'permit_empty|is_natural_no_zero',
+            'category_ids'       => 'permit_empty',
             'notes'              => 'permit_empty|max_length[512]',
+            // Reassign the drum's ESP32; an explicit null unbinds.
+            'device_id'          => 'permit_empty|is_natural',
         ];
         if (! $this->makeValidation($rules)->run($payload)) {
             throw ApiException::validationFailure($this->collectErrors());
@@ -83,9 +95,25 @@ final class BmgController extends ApiController
         return $this->ok($this->service->updateUnit($unitId, $payload));
     }
 
+    /**
+     * Soft-archive a drum. The DELETE route carries no body (plain
+     * archive — the ESP32 is released); the POST `units/{id}/archive`
+     * route may name `relocate_device_to_unit_id` to move the drum's
+     * ESP32 straight onto another device-less drum in the same
+     * transaction.
+     */
     public function archiveUnit(int $unitId): ResponseInterface
     {
-        return $this->ok($this->service->archiveUnit($unitId));
+        $payload = $this->request->getJSON(true) ?? [];
+        $rules   = ['relocate_device_to_unit_id' => 'permit_empty|is_natural_no_zero'];
+        if (! $this->makeValidation($rules)->run($payload)) {
+            throw ApiException::validationFailure($this->collectErrors());
+        }
+
+        return $this->ok($this->service->archiveUnit($unitId, [
+            'relocate_device_to_unit_id' => isset($payload['relocate_device_to_unit_id']) && $payload['relocate_device_to_unit_id'] !== ''
+                ? (int) $payload['relocate_device_to_unit_id'] : null,
+        ]));
     }
 
     public function unarchiveUnit(int $unitId): ResponseInterface
@@ -104,10 +132,11 @@ final class BmgController extends ApiController
             throw ApiException::validationFailure($this->collectErrors());
         }
 
-        // Panel revision: the structured per-category `composition` is
-        // the preferred contract; the legacy free-form `input_items`
-        // array is still accepted for backward compatibility. At least
-        // one of the two must be present.
+        // Starting the drum IS starting the batch: the waste mix is
+        // designated on the drum, so the UI sends only the loaded
+        // weight. The structured per-category `composition` (and the
+        // legacy free-form `input_items`) remain accepted for API
+        // clients that segregate by category.
         $composition = $payload['composition'] ?? [];
         if (! is_array($composition)) {
             throw new ApiException('validation.invalid', 422, [
@@ -119,11 +148,6 @@ final class BmgController extends ApiController
         if (! is_array($items)) {
             throw new ApiException('validation.invalid', 422, [
                 ['code' => 'validation.invalid', 'message' => 'input_items must be an array.', 'field' => 'input_items'],
-            ]);
-        }
-        if ($composition === [] && $items === []) {
-            throw new ApiException('validation.invalid', 422, [
-                ['code' => 'validation.invalid', 'message' => 'Provide the waste composition (category + weight per component).', 'field' => 'composition'],
             ]);
         }
 

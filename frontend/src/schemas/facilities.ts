@@ -78,6 +78,19 @@ export const bmgUnitSchema = z.object({
   // In-use indicator: expected completion + progress of the active batch.
   active_batch_expected_completion_date: z.string().nullable().optional(),
   active_batch_progress_pct: z.number().int().min(0).nullable().optional(),
+  // The drum's integrated ESP32 (1:1 — backend enforces via a unique
+  // index). Optional so payloads fetched before the join shipped parse.
+  device_id: z.number().int().positive().nullable().optional(),
+  device_code: z.string().nullable().optional(),
+  device_display_name: z.string().nullable().optional(),
+  device_status: z.string().nullable().optional(),
+  device_last_seen_at: z.string().nullable().optional(),
+  // Waste categories the drum is designated for (set at drum setup;
+  // startBatch may only mix from this set). Empty = unprofiled drum.
+  categories: z.array(z.object({ id: z.number().int().positive(), name: z.string() })).optional(),
+  // The unit houses TWO drums; spec_capacity_kg is the SUM of these.
+  drum_one_capacity_kg: z.number().nullable().optional(),
+  drum_two_capacity_kg: z.number().nullable().optional(),
 });
 export type BmgUnit = z.infer<typeof bmgUnitSchema>;
 
@@ -128,8 +141,12 @@ export type AddBatchUpdateInput = z.infer<typeof addBatchUpdateSchema>;
  * Required + optional fields for registering a new BMG unit.
  * `code` is a SLUG (lowercase, hyphen-separated — e.g. `drum-01`);
  * the create dialog auto-generates it from the name and the backend
- * normalizes + validates the same contract. `default_category_id`
- * pre-fills the waste category on a future batch.
+ * normalizes + validates the same contract. `device_id` is the
+ * REQUIRED ESP32 integration — a drum cannot be created while every
+ * registered device is already bound to another drum. The unit houses
+ * TWO drums: `drum_one_capacity_kg` + `drum_two_capacity_kg` (each ≥ 4,
+ * both together) and the backend stores their SUM as the unit capacity.
+ * `category_ids` designates the waste categories the drum may compost.
  */
 export const createUnitSchema = z.object({
   code: z
@@ -140,8 +157,12 @@ export const createUnitSchema = z.object({
   display_name: z.string().min(1, 'Required').max(128),
   location_code: z.string().max(64).optional().or(z.literal('')),
   spec_capacity_kg: z.coerce.number().positive().optional().or(z.literal('')),
+  drum_one_capacity_kg: z.coerce.number().min(4, 'Each drum holds at least 4 kg.').optional().or(z.literal('')),
+  drum_two_capacity_kg: z.coerce.number().min(4, 'Each drum holds at least 4 kg.').optional().or(z.literal('')),
   default_category_id: z.coerce.number().int().positive().optional().or(z.literal('')),
+  category_ids: z.array(z.number().int().positive()),
   notes: z.string().max(512).optional().or(z.literal('')),
+  device_id: z.coerce.number().int().positive(),
 });
 export type CreateUnitInput = z.infer<typeof createUnitSchema>;
 
@@ -149,14 +170,23 @@ export type CreateUnitInput = z.infer<typeof createUnitSchema>;
  * Mutable fields on an existing unit. `code` is intentionally NOT in
  * this schema — the legacy rule was "Drum code cannot be changed" and
  * the service enforces it server-side too. All fields are optional so
- * the form can PATCH only the changed values.
+ * the form can PATCH only the changed values. `device_id` reassigns
+ * the drum's ESP32 (or `null` unbinds it); the backend refuses a
+ * device another drum already holds. `category_ids` (always sent by
+ * the edit form — an empty array clears the designation) replaces the
+ * drum's waste-category set; the two drum capacities arrive together
+ * and the backend recomputes the unit capacity as their sum.
  */
 export const updateUnitSchema = z.object({
   display_name: z.string().min(1, 'Required').max(128).optional(),
   location_code: z.string().max(64).optional().or(z.literal('')),
   spec_capacity_kg: z.coerce.number().positive().optional().or(z.literal('')),
+  drum_one_capacity_kg: z.coerce.number().min(4, 'Each drum holds at least 4 kg.').optional().or(z.literal('')),
+  drum_two_capacity_kg: z.coerce.number().min(4, 'Each drum holds at least 4 kg.').optional().or(z.literal('')),
   default_category_id: z.coerce.number().int().positive().optional().or(z.literal('')),
+  category_ids: z.array(z.number().int().positive()).optional(),
   notes: z.string().max(512).optional().or(z.literal('')),
+  device_id: z.number().int().positive().nullable().optional(),
 });
 export type UpdateUnitInput = z.infer<typeof updateUnitSchema>;
 
@@ -200,10 +230,11 @@ export const finishBatchSchema = z.object({
 export type FinishBatchInput = z.infer<typeof finishBatchSchema>;
 
 /**
- * Start a batch with its segregated waste composition (panel
- * revision): one row per waste category with the loaded weight.
- * Component weights must add up to `total_input_weight_kg` — the
- * backend re-checks with a ±0.01 kg tolerance.
+ * Start a batch: just the loaded weight — starting the drum IS starting
+ * the batch, and the waste mix was already designated on the drum (the
+ * backend derives the ETA from the drum's first designated category).
+ * A structured `composition` remains accepted for API clients that
+ * segregate by category; when present its weights must sum to the total.
  */
 export const startBatchSchema = z
   .object({
@@ -215,10 +246,12 @@ export const startBatchSchema = z
           weight_kg: z.number().positive(),
         }),
       )
-      .min(1, 'Add at least one waste component'),
+      .optional(),
   })
   .refine(
-    (v) => Math.abs(v.composition.reduce((s, c) => s + c.weight_kg, 0) - v.total_input_weight_kg) <= 0.01,
+    (v) =>
+      !v.composition || v.composition.length === 0 ||
+      Math.abs(v.composition.reduce((s, c) => s + c.weight_kg, 0) - v.total_input_weight_kg) <= 0.01,
     { message: 'Component weights must add up to the total input weight.', path: ['composition'] },
   );
 export type StartBatchInput = z.infer<typeof startBatchSchema>;

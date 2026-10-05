@@ -16,6 +16,10 @@ final class Routes implements BaseRoutes
             $r->post('units',                         'BmgController::createUnit');
             $r->post('units/(:num)',                  'BmgController::updateUnit/$1');
             $r->delete('units/(:num)',                'BmgController::archiveUnit/$1');
+            // POST variant of archive — carries the optional
+            // `relocate_device_to_unit_id` body for one-step ESP32
+            // relocation when a drum is retired.
+            $r->post('units/(:num)/archive',          'BmgController::archiveUnit/$1');
             $r->post('units/(:num)/unarchive',        'BmgController::unarchiveUnit/$1');
             $r->post('units/(:num)/start',            'BmgController::startBatch/$1');
             $r->post('units/(:num)/maintenance',      'BmgController::setUnitMaintenance/$1');
@@ -64,6 +68,10 @@ final class Routes implements BaseRoutes
         // surface. Deliberately OUTSIDE the api_auth group above.
         $routes->group('api/v1/devices', ['namespace' => 'Modules\\Facilities\\Controllers', 'filter' => 'device_auth'], static function (RouteCollection $r): void {
             $r->post('bmg/turn-sessions', 'DeviceTurnSessionController::store');
+            // Outbound command channel — the board polls for queued
+            // commands (batch start) and ACKs after actuating.
+            $r->get('bmg/commands',       'DeviceCommandController::index');
+            $r->post('bmg/commands/ack',  'DeviceCommandController::ack');
         });
     }
 }

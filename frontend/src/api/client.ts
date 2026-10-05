@@ -81,13 +81,29 @@ export const apiClient: AxiosInstance = axios.create({
   headers: { Accept: 'application/json' },
 });
 
+/**
+ * Request id — UUID v4. `crypto.randomUUID` is secure-context-only, so
+ * over plain HTTP on a LAN IP (the multi-device dev-testing path) it is
+ * undefined and would throw inside the request interceptor, killing every
+ * API call before it leaves the page. `crypto.getRandomValues` has no
+ * such restriction.
+ */
+function newRequestId(): string {
+  if (typeof crypto.randomUUID === 'function') return crypto.randomUUID();
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  bytes[6] = ((bytes[6] ?? 0) & 0x0f) | 0x40;
+  bytes[8] = ((bytes[8] ?? 0) & 0x3f) | 0x80;
+  const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
 apiClient.interceptors.request.use((config) => {
   const access = useAuthStore.getState().accessToken;
   if (access !== null) {
     config.headers.set('Authorization', `Bearer ${access}`);
   }
   // Per-request id lets the backend log lines correlate with the SPA.
-  config.headers.set('X-Request-Id', crypto.randomUUID());
+  config.headers.set('X-Request-Id', newRequestId());
   // Never force a multipart Content-Type in the browser. The browser must
   // append its generated boundary; a bare `multipart/form-data` header makes
   // PHP treat an otherwise valid upload as if no file was submitted.
@@ -100,7 +116,10 @@ apiClient.interceptors.request.use((config) => {
 apiClient.interceptors.response.use(
   (response) => {
     const envelope = response.data as ApiEnvelope<unknown> | undefined;
-    if (envelope === undefined || typeof envelope !== 'object') {
+    // Blob downloads (screenshot proofs) bypass the envelope: response.data
+    // is object-shaped but carries no envelope, and treating it as one
+    // would wrongly throw "not a success envelope".
+    if (envelope === undefined || typeof envelope !== 'object' || response.data instanceof Blob) {
       return response;
     }
     // Normalize: replace response.data with the unwrapped data OR rethrow.
