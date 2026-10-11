@@ -859,7 +859,7 @@ function QueueTab({ onOpenEncounter }: QueueTabProps) {
                       )}
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>
-                          <Button className="min-h-11" size="sm" variant="outline" aria-label={`Encounter actions for queue ${formatQueueNumber(q.position)}`}>
+                          <Button className="min-h-11 md:min-h-0" size="sm" variant="outline" aria-label={`Encounter actions for queue ${formatQueueNumber(q.position)}`}>
                             Actions <ChevronDown className="size-3.5" aria-hidden />
                           </Button>
                         </DropdownMenuTrigger>
@@ -888,7 +888,7 @@ function QueueTab({ onOpenEncounter }: QueueTabProps) {
                           status badges so it never competes with them. */}
                       {canArchive && (
                         <Button
-                          className="min-h-11"
+                          className="min-h-11 md:min-h-0"
                           size="sm"
                           variant="outline"
                           disabled={anyPending}
@@ -975,7 +975,7 @@ function QueueTab({ onOpenEncounter }: QueueTabProps) {
                 )}
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
-                    <Button className="min-h-11" size="sm" variant="outline" aria-label={`Encounter actions for queue ${formatQueueNumber(q.position)}`}>
+                    <Button className="min-h-11 md:min-h-0" size="sm" variant="outline" aria-label={`Encounter actions for queue ${formatQueueNumber(q.position)}`}>
                       Actions <ChevronDown className="size-3.5" aria-hidden />
                     </Button>
                   </DropdownMenuTrigger>
@@ -1000,7 +1000,7 @@ function QueueTab({ onOpenEncounter }: QueueTabProps) {
                 </DropdownMenu>
                 {canArchive && (
                   <Button
-                    className="min-h-11"
+                    className="min-h-11 md:min-h-0"
                     size="sm"
                     variant="outline"
                     disabled={anyPending}
@@ -1586,14 +1586,14 @@ export default function ClinicPage() {
             canNext={list.data?.next !== null && list.data?.next !== undefined}
             actions={(e) => (
               <div className="flex justify-end gap-1">
-                <Button size="sm" variant="outline" onClick={() => setOpenView(e)}>
+                <Button className="min-h-11 md:min-h-0" size="sm" variant="outline" onClick={() => setOpenView(e)}>
                   <Stethoscope className="size-3.5" /> View
                 </Button>
                 {/* Archive mirrors the Queue-tab action, for staff working
                     from the Closed list instead of the board. */}
                 {canArchiveEncounter(e.status, e.archived_at) && (
                   <Button
-                    className="min-h-11"
+                    className="min-h-11 md:min-h-0"
                     size="sm"
                     variant="outline"
                     disabled={archiveEncounter.isPending}
@@ -1606,7 +1606,7 @@ export default function ClinicPage() {
                       run: () => archiveEncounter.mutate(e.id),
                     })}
                   >
-                    <Archive /> Archive
+                    <Archive className="size-3.5" /> Archive
                   </Button>
                 )}
               </div>
@@ -1644,11 +1644,11 @@ export default function ClinicPage() {
             }}
             actions={(e) => (
               <div className="flex justify-end gap-1">
-                <Button size="sm" variant="outline" onClick={() => setOpenView(e)}>
+                <Button className="min-h-11 md:min-h-0" size="sm" variant="outline" onClick={() => setOpenView(e)}>
                   <Stethoscope className="size-3.5" /> View
                 </Button>
                 <Button
-                  className="min-h-11"
+                  className="min-h-11 md:min-h-0"
                   size="sm"
                   variant="outline"
                   disabled={restoreEncounter.isPending}

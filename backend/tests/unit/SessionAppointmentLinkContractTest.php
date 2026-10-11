@@ -46,11 +46,26 @@ final class SessionAppointmentLinkContractTest extends TestCase
         $service = $this->read('app/Modules/Counselling/Services/CounsellingService.php');
 
         $this->assertStringContainsString(
-            'public function listSessions(?string $cursor, int $limit, ?int $appointmentId = null): array',
+            'public function listSessions(?string $cursor, int $limit, ?int $appointmentId = null, ?string $patientSchoolId = null): array',
             $service,
-            'The appointment filter must be optional, so the unfiltered list keeps working.',
+            'The appointment and patient filters must be optional, so the unfiltered list keeps working.',
         );
         $this->assertStringContainsString('if ($appointmentId !== null) {', $service);
+    }
+
+    /**
+     * The per-patient guidance record filter (2026-10) must 404 on an
+     * unknown identifier: falling through to the unfiltered builder would
+     * list the whole tenant's sessions for a patient the caller did not
+     * name — the same privacy failure mode as the appointment filter.
+     */
+    public function testThePatientFilterRejectsUnknownIdentifiers(): void
+    {
+        $service = $this->read('app/Modules/Counselling/Services/CounsellingService.php');
+
+        $this->assertStringContainsString('if ($patientSchoolId !== null) {', $service);
+        $this->assertStringContainsString("->where('counselling_sessions.patient_school_id', \$patientSchoolId)", $service);
+        $this->assertStringContainsString('resource.not_found', $service);
     }
 
     public function testTheLinkGoesThroughTheQueueEntry(): void
@@ -94,10 +109,13 @@ final class SessionAppointmentLinkContractTest extends TestCase
             $service,
             'The session ids must be resolved in their own query.',
         );
+        // The counsellor-name join (2026-10) adds a second `id`/`created_at`,
+        // so the keyset columns MUST be qualified — unqualified names would
+        // be ambiguous the moment a cursor is present.
         $this->assertStringContainsString(
-            'KeysetPaginator::apply($builder, $cursor, $limit);',
+            "KeysetPaginator::apply(\$builder, \$cursor, \$limit, 'counselling_sessions.created_at', 'counselling_sessions.id');",
             $service,
-            'The paginated builder must stay join-free so its keyset columns stay unambiguous.',
+            'The paginated builder must qualify its keyset columns so they stay unambiguous.',
         );
     }
 
@@ -115,7 +133,7 @@ final class SessionAppointmentLinkContractTest extends TestCase
         );
         // And it has to reach the service, not just be validated.
         $this->assertStringContainsString(
-            '$this->service->listSessions($cursor !== \'\' ? $cursor : null, $limit, $appointmentId)',
+            '$this->service->listSessions($cursor !== \'\' ? $cursor : null, $limit, $appointmentId, $patientSchoolId)',
             $controller,
         );
     }

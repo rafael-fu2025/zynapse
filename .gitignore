@@ -108,6 +108,7 @@ config/mcporter.json
 mobile/.flutter*
 vite.config.ts.timestamp-*
 frontend/.vitest-tmp
+videos/*
 
 # --- BMG IoT (mechanized compost tumbler) ---
 # The real sketch carries the WiFi credentials + device token and stays

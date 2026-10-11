@@ -125,7 +125,7 @@ export default function NotificationsPage() {
                       )}
                       <span className="mt-0.5 block text-xs text-muted-foreground">
                         {fmtUtcToApp(n.created_at)} · {fmtRelative(n.created_at)}
-                        {unread ? ' · unread' : ''}
+                        {unread ? ' · New' : ''}
                       </span>
                     </span>
                     {n.template_code.startsWith('referral.') && (

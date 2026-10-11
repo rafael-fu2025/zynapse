@@ -15,6 +15,7 @@ use DateTimeImmutable;
 use DateTimeZone;
 use Modules\Counselling\Policies\CounsellingPolicy;
 use Modules\Counselling\Services\QueueService as GuidanceQueueService;
+use Modules\Counselling\Services\ScheduleService as GuidanceScheduleService;
 
 /** Patient-owned appointment and multi-destination queue facade. */
 final class PortalAppointmentService extends BaseService
@@ -113,12 +114,7 @@ final class PortalAppointmentService extends BaseService
                 $dto = $this->clinicAppointments->bookSelf(
                     $userId, null, $startUtc->format('Y-m-d H:i:s'), $input['reason'] ?? null,
                 )->toArray();
-                $row = $this->clinicRow($dto);
-                // Pass the proof-of-booking QR through — bookSelf mints it,
-                // but clinicRow used to drop the field, so students booked
-                // from the portal could never render their QR (2026-09 audit).
-                $row['qr_token'] = $dto['qr_token'] ?? null;
-                return $row;
+                return $this->clinicRow($dto);
             });
         }
         return $this->bookGuidance($userId, $startLocal, (string) ($input['type'] ?? 'initial'), $input['reason'] ?? null);
@@ -383,6 +379,7 @@ final class PortalAppointmentService extends BaseService
         return $this->txn(function () use ($userId, $local, $type, $reason): array {
             $utc = $local->setTimezone(new DateTimeZone('UTC'));
             $this->assertPatientFree($userId, $utc);
+            $this->assertUnderNoShowLimit($userId);
             $user = $this->db->table('users')->select('student_number,employee_number')->where('users.tenant_id', CurrentTenant::id())->where('id',$userId)->get()->getRowArray();
             if($user===null)throw new ApiException('resource.not_found',404,[['code'=>'resource.not_found','message'=>'Patient not found.']]);
             $school=(string)($user['student_number']?:$user['employee_number']); $end=$local->modify('+60 minutes'); $now=gmdate('Y-m-d H:i:s');
@@ -402,6 +399,33 @@ final class PortalAppointmentService extends BaseService
         });
     }
 
+    /**
+     * Three-strike gate for self-service Guidance bookings.
+     *
+     * Staff booking in `Counselling\ScheduleService::book()` already refuses a
+     * patient at the limit (a supervisor may override). This path had no such
+     * check, so a student with three consecutive no-shows could simply book
+     * themselves back in online. The patient here is always the caller, so
+     * there is no override: they are pointed at the Guidance office instead,
+     * where a supervisor can book for them.
+     *
+     * Guidance-only: the counter is incremented and reset by Guidance
+     * appointments alone, and clinic bookings are not subject to it.
+     */
+    private function assertUnderNoShowLimit(int $userId): void
+    {
+        $row = $this->db->query(
+            'SELECT `consecutive_no_shows` FROM `users` WHERE `tenant_id` = ? AND `id` = ?',
+            [CurrentTenant::id(), $userId],
+        )->getRowArray();
+        $strikes = (int) ($row['consecutive_no_shows'] ?? 0);
+        if ($strikes >= GuidanceScheduleService::NO_SHOW_STRIKE_LIMIT) {
+            throw new ApiException('counselling.schedule.no_show_limit', 409, [[
+                'code' => 'counselling.schedule.no_show_limit',
+                'message' => 'Online booking is paused because you have missed ' . GuidanceScheduleService::NO_SHOW_STRIKE_LIMIT . ' Guidance appointments in a row. Please visit the Guidance Center to book your next one.',
+            ]]);
+        }
+    }
     private function guidanceQueue(): GuidanceQueueService
     { return new GuidanceQueueService(new CounsellingPolicy(), \Config\Services::auditOutbox(), $this->notify); }
     private function parseUtc(string $value): DateTimeImmutable

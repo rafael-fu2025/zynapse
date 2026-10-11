@@ -28,6 +28,13 @@ final class BmgPolicy extends BasePolicy
      * Actions that target an EXISTING batch and therefore carry a
      * `started_by_user_id` for ownership comparison. `start` itself
      * is not in this set because no prior batch exists to own.
+     *
+     * Read-only actions (`logs_read`, `analytics`, `alerts_read`,
+     * `io_read`) are deliberately NOT owned: the module-level
+     * permission is the gate, so every facilities operator can monitor
+     * any batch in their tenant. Only mutations are starter-only.
+     * (The SPA's batch detail view fetches analytics, logs and alerts
+     * together and 403'd for every non-starter.)
      */
     private const OWNED_BATCH_ACTIONS = [
         'update',
@@ -36,11 +43,7 @@ final class BmgPolicy extends BasePolicy
         'cancel',
         'release',
         'logs_record',
-        'logs_read',
-        'io_record',
         'losses_record',
-        'analytics',
-        'alerts_read',
         'alerts_ack',
     ];
 
@@ -64,7 +67,13 @@ final class BmgPolicy extends BasePolicy
             'list'             => 'facilities.units.read',
             'manage_units'     => 'facilities.units.manage',
             'devices_list'     => 'facilities.units.read',
+            // Manual commands + schedule publishing are ADMIN-only per
+            // the mechanized-tumbler scope: an operator who can reach a
+            // motor over the network must be a trusted administrator
+            // (batch state transitions remain operator-gated below).
             'devices_manage'   => 'facilities.units.manage',
+            'device_command'   => 'facilities.units.manage',
+            'schedule_manage'  => 'facilities.units.manage',
             'start'            => 'facilities.bmg.transition',
             'update'           => 'facilities.bmg.transition',
             'record_output'    => 'facilities.bmg.record_output',
@@ -81,7 +90,13 @@ final class BmgPolicy extends BasePolicy
             // resolves the active batch on its own drum.
             'device_logs_record' => 'facilities.bmg.logs.record',
             'categories_manage' => 'facilities.categories.manage',
+            // Manual I/O entry is staff-wide (the mechanized-tumbler
+            // scope): anyone holding the io permission may enter waste
+            // loaded / compost harvested on an active batch, and may
+            // READ the ledger they write to. Batch-state transitions
+            // stay in OWNED_BATCH_ACTIONS.
             'io_record'        => 'facilities.bmg.io.record',
+            'io_read'          => 'facilities.bmg.io.record',
             'losses_record'    => 'facilities.bmg.io.record',
             'alerts_read'      => 'facilities.bmg.logs.read',
             'alerts_ack'       => 'facilities.bmg.logs.record',

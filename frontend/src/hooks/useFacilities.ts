@@ -21,7 +21,9 @@ import { apiClient, getNextCursor } from '@/api/client';
 import { ApiEnvelopeError } from '@/api/envelope';
 import { toast } from 'sonner';
 import {
+  addBatchInputSchema,
   addBatchLossSchema,
+  addBatchOutputSchema,
   addProcessLogSchema,
   activeBatchSchema,
   batchAnalyticsSchema,
@@ -30,8 +32,15 @@ import {
   batchUpdateSchema,
   blendCnSchema,
   bmgAlertSchema,
+  bmgBatchInputSchema,
+  bmgBatchOutputSchema,
   bmgBatchSchema,
+  bmgDeviceAssignmentSchema,
+  bmgDeviceCommandSchema,
   bmgDeviceSchema,
+  bmgScheduleSchema,
+  bmgUnitMonitorSchema,
+  bmgUnitScheduleSchema,
   bmgUnitSchema,
   cancelBatchSchema,
   categoryDeviationSchema,
@@ -40,12 +49,16 @@ import {
   openAlertSchema,
   processLogSchema,
   registerDeviceSchema,
+  saveScheduleSchema,
   updateDeviceSchema,
   updateUnitSchema,
   updateWasteCategorySchema,
+  voidIoSchema,
   wasteCategorySchema,
   type ActiveBatch,
+  type AddBatchInput,
   type AddBatchLossInput,
+  type AddBatchOutput,
   type AddBatchUpdateInput,
   type AddProcessLogInput,
   type BatchAnalytics,
@@ -55,9 +68,17 @@ import {
   type BlendCn,
   type BmgAlert,
   type BmgBatch,
+  type BmgBatchInputRow,
+  type BmgBatchOutputRow,
   type BmgDevice,
+  type BmgDeviceAssignment,
+  type BmgDeviceCommand,
+  type BmgDeviceCommandType,
   type BmgDeviceStatus,
+  type BmgSchedule,
   type BmgUnit,
+  type BmgUnitMonitor,
+  type BmgUnitSchedule,
   type CancelBatchInput,
   type CategoryDeviation,
   type CreateUnitInput,
@@ -66,6 +87,7 @@ import {
   type ProcessLog,
   type RegisterDeviceInput,
   type FinishBatchInput,
+  type SaveScheduleInput,
   type StartBatchInput,
   type UpdateDeviceInput,
   type UpdateUnitInput,
@@ -76,6 +98,18 @@ import {
 const UNITS_KEY = ['facilities', 'units'] as const;
 const ACTIVE_BATCHES_KEY = ['facilities', 'batches', 'active'] as const;
 const DEVICES_KEY = ['facilities', 'devices'] as const;
+
+/**
+ * Used as `refetchOnMount` / `refetchOnWindowFocus` on batch-scoped read
+ * queries. A 403 is a permission verdict, not a transient failure: the
+ * answer will not change by re-asking on every tab focus or remount, and
+ * each repeat adds a failed request to the console. A manual Retry
+ * (`refetch()`) or a fresh page load still re-checks.
+ */
+function refetchUnlessForbidden(query: { state: { error: unknown } }): boolean {
+  const err = query.state.error;
+  return !(err instanceof ApiEnvelopeError && err.httpStatus === 403);
+}
 
 function unitsQueryKey(cursor: string | null, limit: number, includeArchived = false) {
   return [...UNITS_KEY, { cursor, limit, includeArchived }] as const;
@@ -325,6 +359,8 @@ export function useProcessLogs(batchId: number | null) {
       return z.array(processLogSchema).parse(res.data);
     },
     enabled: batchId !== null && batchId > 0,
+    refetchOnMount: refetchUnlessForbidden,
+    refetchOnWindowFocus: refetchUnlessForbidden,
   });
 }
 
@@ -526,6 +562,8 @@ export function useBatchAnalytics(batchId: number | null) {
       return batchAnalyticsSchema.parse(res.data);
     },
     enabled: batchId !== null && batchId > 0,
+    refetchOnMount: refetchUnlessForbidden,
+    refetchOnWindowFocus: refetchUnlessForbidden,
   });
 }
 
@@ -828,6 +866,8 @@ export function useAlerts(batchId: number | null) {
       return z.array(bmgAlertSchema).parse(res.data);
     },
     enabled: batchId !== null && batchId > 0,
+    refetchOnMount: refetchUnlessForbidden,
+    refetchOnWindowFocus: refetchUnlessForbidden,
   });
 }
 
@@ -1118,6 +1158,240 @@ export function useSetBmgDeviceStatus() {
     },
     onSettled: () => {
       void qc.invalidateQueries({ queryKey: DEVICES_KEY });
+    },
+  });
+}
+
+/** Send manual start/stop/run-now command to a registered BMG device. */
+export function useSendDeviceCommand() {
+  const qc = useQueryClient();
+  return useMutation<
+    { device_id: number; command: string; status: string; enqueued: boolean },
+    ApiEnvelopeError,
+    { deviceId: number; command: BmgDeviceCommandType }
+  >({
+    mutationFn: async ({ deviceId, command }) => {
+      const res = await apiClient.post<{ device_id: number; command: string; status: string; enqueued: boolean }>(
+        `/facilities/devices/${deviceId}/commands`,
+        { command },
+      );
+      return res.data;
+    },
+    onSuccess: (_data, vars) => {
+      void qc.invalidateQueries({ queryKey: DEVICES_KEY });
+      void qc.invalidateQueries({ queryKey: ['facilities', 'device-commands', vars.deviceId] });
+      const messages: Record<BmgDeviceCommandType, string> = {
+        start: 'Start command queued for tumbler.',
+        stop: 'Stop command queued for tumbler.',
+        run_now: 'Run-now command queued for tumbler.',
+      };
+      toast.success(messages[vars.command]);
+    },
+    onError: (err) => {
+      toast.error(err.errors[0]?.message ?? 'Failed to send command to device.');
+    },
+  });
+}
+
+/** Retrieve recent outbound commands for a device. */
+export function useDeviceCommands(deviceId: number | null) {
+  return useQuery<BmgDeviceCommand[], ApiEnvelopeError>({
+    queryKey: ['facilities', 'device-commands', deviceId],
+    enabled: deviceId !== null,
+    queryFn: async () => {
+      const res = await apiClient.get<BmgDeviceCommand[]>(`/facilities/devices/${deviceId}/commands`);
+      return z.array(bmgDeviceCommandSchema).parse(res.data);
+    },
+  });
+}
+
+/** Drum-binding history for a device (newest first). */
+export function useDeviceAssignments(deviceId: number | null) {
+  return useQuery<BmgDeviceAssignment[], ApiEnvelopeError>({
+    queryKey: ['facilities', 'device-assignments', deviceId],
+    enabled: deviceId !== null,
+    queryFn: async () => {
+      const res = await apiClient.get<BmgDeviceAssignment[]>(`/facilities/devices/${deviceId}/assignments`);
+      return z.array(bmgDeviceAssignmentSchema).parse(res.data);
+    },
+  });
+}
+
+// ---- per-unit automation ---------------------------------------------
+
+/**
+ * Current run schedule + published history for a unit. Slow-moving:
+ * the schedule only changes when staff publish.
+ */
+export function useUnitSchedule(unitId: number | null) {
+  return useQuery<BmgUnitSchedule, ApiEnvelopeError>({
+    queryKey: ['facilities', 'schedule', unitId],
+    enabled: unitId !== null,
+    staleTime: 30_000,
+    queryFn: async () => {
+      const res = await apiClient.get<BmgUnitSchedule>(`/facilities/units/${unitId}/schedule`);
+      return bmgUnitScheduleSchema.parse(res.data);
+    },
+  });
+}
+
+/**
+ * Publish a schedule change. The version bump is what reaches the ESP32
+ * on its next pull — the toast says so, because "saved" alone reads like
+ * the drum already changed.
+ */
+export function useSaveSchedule(unitId: number) {
+  const qc = useQueryClient();
+  return useMutation<BmgSchedule, ApiEnvelopeError, SaveScheduleInput>({
+    mutationFn: async (input) => {
+      const valid = saveScheduleSchema.parse(input);
+      const res = await apiClient.post<BmgSchedule>(`/facilities/units/${unitId}/schedule`, valid);
+      return bmgScheduleSchema.parse(res.data);
+    },
+    onSuccess: (schedule) => {
+      toast.success(`Schedule v${schedule.version} published — the drum applies it on its next check-in.`);
+      void qc.invalidateQueries({ queryKey: ['facilities', 'schedule', unitId] });
+      void qc.invalidateQueries({ queryKey: ['facilities', 'monitor', unitId] });
+    },
+    onError: (err) => {
+      toast.error(err.errors[0]?.message ?? 'Failed to publish the schedule.');
+    },
+  });
+}
+
+/**
+ * The per-unit monitoring aggregate — device liveness, schedule, recent
+ * runs, missed slots, totals. Polls while mounted so the dashboard's
+ * online/offline state tracks reality.
+ */
+export function useUnitMonitor(unitId: number | null) {
+  return useQuery<BmgUnitMonitor, ApiEnvelopeError>({
+    queryKey: ['facilities', 'monitor', unitId],
+    enabled: unitId !== null,
+    refetchInterval: 60_000,
+    staleTime: 30_000,
+    queryFn: async () => {
+      const res = await apiClient.get<BmgUnitMonitor>(`/facilities/units/${unitId}/monitor`);
+      return bmgUnitMonitorSchema.parse(res.data);
+    },
+  });
+}
+
+// ---- manual waste-in / compost-out ledger ----------------------------
+
+function buildIoRecordedAt(recordedAt: string | undefined): string | undefined {
+  // A datetime-local value is Manila wall time, NOT ISO-with-zone. Send
+  // it space-separated; the backend reads it in the clinic's timezone.
+  const trimmed = (recordedAt ?? '').trim();
+  if (trimmed === '') return undefined;
+  return trimmed.replace('T', ' ') + (trimmed.length === 16 ? ':00' : '');
+}
+
+/** Manual feedstock loaded into a batch (staff-entered). */
+export function useAddBatchInput(batchId: number) {
+  const qc = useQueryClient();
+  return useMutation<BmgBatchInputRow, ApiEnvelopeError, AddBatchInput>({
+    mutationFn: async (input) => {
+      const valid = addBatchInputSchema.parse(input);
+      const payload: Record<string, unknown> = { weight_kg: valid.weight_kg };
+      if (valid.category_id !== undefined && valid.category_id !== '') payload.category_id = valid.category_id;
+      if (valid.cn_ratio !== undefined && valid.cn_ratio !== '') payload.cn_ratio = valid.cn_ratio;
+      if (valid.bulk_density_kg_per_m3 !== undefined && valid.bulk_density_kg_per_m3 !== '') {
+        payload.bulk_density_kg_per_m3 = valid.bulk_density_kg_per_m3;
+      }
+      if (valid.ph !== undefined && valid.ph !== '') payload.ph = valid.ph;
+      if ((valid.note ?? '') !== '') payload.note = valid.note;
+      const recordedAt = buildIoRecordedAt(valid.recorded_at);
+      if (recordedAt !== undefined) payload.recorded_at = recordedAt;
+
+      const res = await apiClient.post<BmgBatchInputRow>(`/facilities/batches/${batchId}/inputs`, payload);
+      return bmgBatchInputSchema.parse(res.data);
+    },
+    onSuccess: () => {
+      toast.success('Waste input recorded.');
+      void qc.invalidateQueries({ queryKey: ['facilities', 'batch-inputs', batchId] });
+      void qc.invalidateQueries({ queryKey: ['facilities', 'analytics', batchId] });
+    },
+    onError: (err) => {
+      toast.error(err.errors[0]?.message ?? 'Failed to record the waste input.');
+    },
+  });
+}
+
+/** Manual compost harvested from a batch (staff-entered). */
+export function useAddBatchOutput(batchId: number) {
+  const qc = useQueryClient();
+  return useMutation<BmgBatchOutputRow, ApiEnvelopeError, AddBatchOutput>({
+    mutationFn: async (input) => {
+      const valid = addBatchOutputSchema.parse(input);
+      const payload: Record<string, unknown> = { output_weight_kg: valid.output_weight_kg };
+      if ((valid.harvest_date ?? '') !== '') payload.harvest_date = valid.harvest_date;
+      if ((valid.quality_grade ?? '') !== '') payload.quality_grade = valid.quality_grade;
+      if ((valid.note ?? '') !== '') payload.note = valid.note;
+      const recordedAt = buildIoRecordedAt(valid.recorded_at);
+      if (recordedAt !== undefined) payload.recorded_at = recordedAt;
+
+      const res = await apiClient.post<BmgBatchOutputRow>(`/facilities/batches/${batchId}/outputs`, payload);
+      return bmgBatchOutputSchema.parse(res.data);
+    },
+    onSuccess: () => {
+      toast.success('Compost output recorded.');
+      void qc.invalidateQueries({ queryKey: ['facilities', 'batch-outputs', batchId] });
+      void qc.invalidateQueries({ queryKey: ['facilities', 'analytics', batchId] });
+    },
+    onError: (err) => {
+      toast.error(err.errors[0]?.message ?? 'Failed to record the compost output.');
+    },
+  });
+}
+
+/** VOID a manual I/O row (never edited, never deleted — the audit trail). */
+export function useVoidBatchIo(batchId: number) {
+  const qc = useQueryClient();
+  return useMutation<
+    { id: number; kind: string },
+    ApiEnvelopeError,
+    { kind: 'input' | 'output'; rowId: number; reason: string }
+  >({
+    mutationFn: async ({ kind, rowId, reason }) => {
+      const valid = voidIoSchema.parse({ reason });
+      const res = await apiClient.post<{ id: number; kind: string }>(
+        `/facilities/batches/${batchId}/${kind}s/${rowId}/void`,
+        valid,
+      );
+      return res.data;
+    },
+    onSuccess: (_data, vars) => {
+      toast.success(`${vars.kind === 'input' ? 'Input' : 'Output'} voided.`);
+      void qc.invalidateQueries({ queryKey: ['facilities', `batch-${vars.kind}s`, batchId] });
+      void qc.invalidateQueries({ queryKey: ['facilities', 'analytics', batchId] });
+    },
+    onError: (err) => {
+      toast.error(err.errors[0]?.message ?? 'Failed to void the row.');
+    },
+  });
+}
+
+/** Manual input ledger for a batch (oldest first, voided rows included). */
+export function useBatchInputs(batchId: number | null) {
+  return useQuery<BmgBatchInputRow[], ApiEnvelopeError>({
+    queryKey: ['facilities', 'batch-inputs', batchId],
+    enabled: batchId !== null,
+    queryFn: async () => {
+      const res = await apiClient.get<BmgBatchInputRow[]>(`/facilities/batches/${batchId}/inputs`);
+      return z.array(bmgBatchInputSchema).parse(res.data);
+    },
+  });
+}
+
+/** Manual output ledger for a batch (oldest first, voided rows included). */
+export function useBatchOutputs(batchId: number | null) {
+  return useQuery<BmgBatchOutputRow[], ApiEnvelopeError>({
+    queryKey: ['facilities', 'batch-outputs', batchId],
+    enabled: batchId !== null,
+    queryFn: async () => {
+      const res = await apiClient.get<BmgBatchOutputRow[]>(`/facilities/batches/${batchId}/outputs`);
+      return z.array(bmgBatchOutputSchema).parse(res.data);
     },
   });
 }

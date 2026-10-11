@@ -108,7 +108,6 @@ class UserProfile {
     this.gender,
     this.address,
     required this.hasQr,
-    required this.hasRfid,
     required this.archived,
     this.createdAt = '',
     this.updatedAt = '',
@@ -131,6 +130,8 @@ class UserProfile {
     this.records = const [],
     this.allergies = const [],
     this.contacts = const [],
+    this.activeGuidanceReferral = false,
+    this.isDirectoryRecord = false,
   });
 
   factory UserProfile.fromJson(Map<String, dynamic> json) => UserProfile(
@@ -143,7 +144,6 @@ class UserProfile {
         gender: json['gender'] as String?,
         address: json['address'] as String?,
         hasQr: (json['has_qr'] ?? false) as bool,
-        hasRfid: (json['has_rfid'] ?? false) as bool,
         archived: (json['archived'] ?? false) as bool,
         createdAt: (json['created_at'] ?? '') as String,
         updatedAt: (json['updated_at'] ?? '') as String,
@@ -163,6 +163,14 @@ class UserProfile {
         emergencyContactPhone: json['emergency_contact_phone'] as String?,
         isTeaching: json['is_teaching'] as bool?,
         positionYear: json['position_year'] as int?,
+        // Live clinic→counselling referral — the "Referred to Guidance"
+        // badge, mirroring `active_guidance_referral` in
+        // `frontend/src/schemas/patients.ts`.
+        activeGuidanceReferral:
+            (json['active_guidance_referral'] ?? false) as bool,
+        // Synthetic MIS directory rows (no local user) carry this flag on
+        // the SPA; those rows cannot hold allergies/contacts.
+        isDirectoryRecord: (json['is_directory_record'] ?? false) as bool,
         records: (json['records'] as List? ?? [])
             .whereType<Map<String, dynamic>>()
             .map(EmployeeRecord.fromJson)
@@ -186,7 +194,6 @@ class UserProfile {
   final String? gender;
   final String? address;
   final bool hasQr;
-  final bool hasRfid;
   final bool archived;
   final String createdAt;
   final String updatedAt;
@@ -222,6 +229,19 @@ class UserProfile {
 
   /// Student detail only: emergency contacts.
   final List<PatientContact> contacts;
+
+  /// A live clinic→counselling referral exists for this person — renders
+  /// the "Referred to Guidance" badge (mirrors the SPA).
+  final bool activeGuidanceReferral;
+
+  /// True for synthetic MIS directory rows (no local user row). These can
+  /// never hold allergies/contacts, so the medical action is withheld.
+  final bool isDirectoryRecord;
+
+  /// The identifier the referral pipeline and the per-person guidance
+  /// record key on: `student_number` or `employee_number`.
+  String? get registryNumber =>
+      isStudent ? studentNumber : employeeNumber;
 
   String get fullName {
     final middle = (middleName != null && middleName!.isNotEmpty)

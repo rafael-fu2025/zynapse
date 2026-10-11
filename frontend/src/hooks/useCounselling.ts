@@ -73,6 +73,24 @@ export function useSession(sessionId: number | null) {
   });
 }
 
+/**
+ * One person's counselling session history — the per-patient "guidance
+ * record" behind the guidance-side registry detail. Gated server-side by
+ * `counselling.records.read`; notes are NOT part of this payload.
+ */
+export function usePatientSessions(patientSchoolId: string | null, enabled: boolean) {
+  return useQuery<Session[], ApiEnvelopeError>({
+    queryKey: ['counselling', 'sessions', 'patient', patientSchoolId],
+    enabled: enabled && patientSchoolId !== null && patientSchoolId !== '',
+    queryFn: async () => {
+      const res = await apiClient.get<unknown[]>(
+        `/counselling/sessions?patient_school_id=${encodeURIComponent(patientSchoolId ?? '')}`,
+      );
+      return z.array(sessionSchema).parse(res.data);
+    },
+  });
+}
+
 export function useOpenSession() {
   const qc = useQueryClient();
   return useMutation<Session, ApiEnvelopeError, OpenSessionInput>({

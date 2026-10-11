@@ -6,19 +6,19 @@
  * optional reason; the slot is converted to UTC via `appDateTimeToUtcSql`
  * (same as the staff scheduling screen) and booked for the CALLING
  * student. The booked slot then flows through the normal clinic
- * pipeline — at check-in the kiosk auto-opens the encounter.
+ * pipeline — staff check-in opens the encounter and queue entry.
  *
  * Also lists the student's own appointments so the dashboard isn't a
  * dead end.
  */
-import { CalendarPlus, Clock3, Loader2, QrCode, UserRound } from 'lucide-react';
+import { CalendarPlus, Clock3, Loader2, UserRound } from 'lucide-react';
 import { useState } from 'react';
 import { toast } from 'sonner';
-import { AppointmentQrDialog } from '@/components/AppointmentQrDialog';
+
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Dialog } from '@/components/ui/dialog';
+
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -51,9 +51,7 @@ export function StudentBookingSection() {
   const [date, setDate] = useState('');
   const [time, setTime] = useState('');
   const [reason, setReason] = useState('');
-  // Proof-of-booking QR — opened right after a successful booking and via
-  // the QR icon on each appointment row (mirrors the mobile surface).
-  const [qrAppt, setQrAppt] = useState<StudentAppointment | null>(null);
+
 
   function submit() {
     if (providerId === null) {
@@ -68,13 +66,10 @@ export function StudentBookingSection() {
     book.mutate(
       { provider_user_id: providerId, scheduled_at: scheduledAt, reason: reason.trim() !== '' ? reason.trim() : undefined },
       {
-        onSuccess: (a) => {
+        onSuccess: () => {
           setDate('');
           setTime('');
           setReason('');
-          // The backend returns the plaintext `qr_token` here — surface
-          // the booking QR immediately so the student can screenshot it.
-          setQrAppt(a);
         },
       },
     );
@@ -116,12 +111,12 @@ export function StudentBookingSection() {
               <p className="text-xs text-muted-foreground">No clinic staff are listed as providers yet.</p>
             )}
           </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1.5">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div className="min-w-0 space-y-1.5">
               <Label htmlFor="sb-date">Date</Label>
               <DatePicker id="sb-date" value={date} onChange={setDate} />
             </div>
-            <div className="space-y-1.5">
+            <div className="min-w-0 space-y-1.5">
               <Label htmlFor="sb-time">Time</Label>
               <TimePicker id="sb-time" value={time} onChange={setTime} />
             </div>
@@ -157,31 +152,19 @@ export function StudentBookingSection() {
           {appointments.data !== undefined && appointments.data.length > 0 && (
             <ul className="max-h-80 space-y-2 overflow-y-auto pr-1 text-xs">
               {appointments.data.map((a) => (
-                <AppointmentRow key={a.id} a={a} onShowQr={setQrAppt} />
+                <AppointmentRow key={a.id} a={a} />
               ))}
             </ul>
           )}
         </CardContent>
       </Card>
 
-      {qrAppt !== null && (
-        <Dialog open onOpenChange={(o) => !o && setQrAppt(null)}>
-          <AppointmentQrDialog
-            appointmentId={qrAppt.id}
-            patientLabel="You"
-            scheduledAt={qrAppt.scheduled_at}
-            status={qrAppt.status}
-            initialToken={qrAppt.qr_token ?? null}
-            canIssue
-            onClose={() => setQrAppt(null)}
-          />
-        </Dialog>
-      )}
+
     </div>
   );
 }
 
-function AppointmentRow({ a, onShowQr }: { a: StudentAppointment; onShowQr: (a: StudentAppointment) => void }) {
+function AppointmentRow({ a }: { a: StudentAppointment }) {
   return (
     <li className="flex items-center gap-3 rounded-lg border bg-muted/30 px-3 py-2">
       <div className="min-w-0 flex-1">
@@ -191,16 +174,7 @@ function AppointmentRow({ a, onShowQr }: { a: StudentAppointment; onShowQr: (a: 
           {a.reason !== null && a.reason !== '' ? ` · ${a.reason}` : ''}
         </p>
       </div>
-      <Button
-        type="button"
-        size="icon"
-        variant="ghost"
-        aria-label={`Show booking QR for ${fmtUtcToApp(a.scheduled_at)}`}
-        title="Show booking QR"
-        onClick={() => onShowQr(a)}
-      >
-        <QrCode className="size-4" aria-hidden />
-      </Button>
+
       <Badge variant={STATUS_VARIANT[a.status] ?? 'secondary'} className="shrink-0">
         {titleCase(a.status)}
       </Badge>

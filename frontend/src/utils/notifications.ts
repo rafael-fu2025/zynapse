@@ -4,6 +4,17 @@
  *
  * Context is whitelisted server-side (resource ids, status/module codes,
  * urgency) — NEVER PII — so these renderers only ever see safe values.
+ *
+ * Writing rules (the audience is clinic and guidance staff and students,
+ * not IT people):
+ *   - Plain sentences. No dotted event codes, no snake_case, no jargon.
+ *   - Never show internal record ids such as `appointment#15` or
+ *     `queue#12` — they mean nothing to a reader. Human-facing
+ *     references (a batch reference, a device name) are kept.
+ *   - A code we have no copy for still reads as a sentence
+ *     ("You have a new notification") instead of leaking the raw code.
+ *   - Anything that tells two similar notifications apart (which office,
+ *     when, which direction) goes in `notificationDetail`.
  */
 
 import { hasPermission } from '@/store/auth';
@@ -22,70 +33,119 @@ export interface NotificationContext {
   queue_number?: unknown;
 }
 
-function resourceCode(context: NotificationContext | null): string {
-  return typeof context?.resource_code === 'string' ? context.resource_code : '';
+/** Shown when a notification code has no dedicated copy yet. */
+const FALLBACK_LABEL = 'You have a new notification';
+
+/**
+ * The reference a person can recognise, or '' when there is none. The
+ * backend sends internal row handles like `appointment#15` / `appt#5` /
+ * `queue#12` in `resource_code`; those are filtered out. A batch
+ * reference or device name has no `#id` shape and passes through.
+ */
+function humanReference(context: NotificationContext | null): string {
+  const code = typeof context?.resource_code === 'string' ? context.resource_code.trim() : '';
+  if (code === '' || /^[a-z_]+#\d+$/i.test(code)) return '';
+  return code;
+}
+
+/** "counselling" is the internal name; staff and students know it as Guidance. */
+function moduleName(value: unknown): string {
+  if (typeof value !== 'string' || value === '') return '';
+  const v = value.toLowerCase();
+  if (v === 'counselling' || v === 'guidance') return 'Guidance';
+  if (v === 'clinic') return 'Clinic';
+  return v.charAt(0).toUpperCase() + v.slice(1).replace(/_/g, ' ');
+}
+
+function sentenceCase(value: string): string {
+  const v = value.replace(/_/g, ' ').trim().toLowerCase();
+  return v.charAt(0).toUpperCase() + v.slice(1);
 }
 
 export function notificationLabel(
   templateCode: string,
   context: NotificationContext | null,
 ): string {
-  const res = resourceCode(context);
-  const suffix = res !== '' ? `(${res})` : '';
+  const ref = humanReference(context);
   switch (templateCode) {
-    case 'appointment.assigned':
-      return `New appointment assigned ${suffix}`.trim();
-    case 'appointment.scheduled': return `Appointment booked ${suffix}`.trim();
-    case 'appointment.rescheduled': return `Appointment rescheduled ${suffix}`.trim();
-    case 'appointment.confirmed': return `Appointment confirmed ${suffix}`.trim();
-    case 'appointment.cancelled': return `Appointment cancelled ${suffix}`.trim();
-    case 'appointment.no_show':
-      return `Appointment marked no-show ${suffix}`.trim();
-    case 'referral.created':
-      return `New referral to handle ${suffix}`.trim();
-    case 'referral.acknowledged':
-      return `Referral acknowledged ${suffix}`.trim();
-    case 'referral.closed':
-      return `Referral closed ${suffix}`.trim();
-    case 'reorder.created':
-      return `Low stock — purchase request created ${suffix}`.trim();
+    // Appointments — the same event reaches the patient and the staff
+    // member, so the wording is neutral; the detail line carries the
+    // office and the date/time.
+    case 'appointment.assigned': return 'An appointment was assigned to you';
+    case 'appointment.scheduled': return 'Appointment booked';
+    case 'appointment.rescheduled': return 'Appointment moved to a new time';
+    case 'appointment.confirmed': return 'Appointment confirmed';
+    case 'appointment.checked_in': return 'Checked in for an appointment';
+    case 'appointment.completed': return 'Appointment completed';
+    case 'appointment.cancelled': return 'Appointment cancelled';
+    case 'appointment.no_show': return 'Appointment missed (marked as no-show)';
+
+    case 'referral.created': return 'A new referral is waiting for you';
+    case 'referral.acknowledged': return 'Your referral was received';
+    case 'referral.closed': return 'A referral was closed';
+    case 'referral.queue_handoff': return 'A referred patient was added to your queue';
+
+    case 'reorder.created': return 'Supplies are running low — a purchase request was created';
+
     case 'queue.called':
     case 'counselling.queue_called': {
       const destination = context?.destination === 'counselling' ? 'Guidance' : 'Clinic';
-      return `You're up — proceed to ${destination} ${suffix}`.trim();
+      return `It's your turn — please go to ${destination}`;
     }
     // October 2026 recall window: the sweep resolved a skipped patient's
-    // 60-minute window to no-show with nobody watching the module.
-    case 'queue.skip_expired':
-      return `Skipped patient auto-marked no-show ${suffix}`.trim();
+    // recall window to no-show with nobody watching the module.
+    case 'queue.skip_expired': return 'A skipped patient was automatically marked as no-show';
+
     case 'bmg.alert_triggered':
-      return `BMG alert on batch ${suffix}`.trim();
-    case 'referral.queue_handoff':
-      return `Referral moved to queue ${suffix}`.trim();
-    case 'counselling.session_opened':
-      return `Guidance session opened ${suffix}`.trim();
-    case 'counselling.session_closed':
-      return `Guidance session closed ${suffix}`.trim();
-    case 'counselling.session_reassigned':
-      return `Guidance session reassigned to you ${suffix}`.trim();
-    case 'counselling.appointment_booked':
-      return `Guidance appointment booked ${suffix}`.trim();
-    case 'admin.user_created':
-      return 'New user account created';
-    case 'admin.user_groups_changed':
-      return 'User roles changed';
-    case 'admin.user_password_reset':
-      return 'User password reset';
-    case 'admin.user_status_changed':
-      return 'User account status changed';
-    case 'admin.portal_account_minted':
-      return 'Portal account minted for patient';
+      return ref !== '' ? `Equipment alert on batch ${ref}` : 'Equipment alert needs attention';
+    case 'bmg.device_silent':
+      return ref !== ''
+        ? `Device ${ref} stopped sending data — please check it`
+        : 'A device stopped sending data — please check it';
+    // A run the board reported while its drum had no active batch — the
+    // motor turned but nothing recorded it against a batch.
+    case 'bmg.device_run_no_batch':
+      return ref !== ''
+        ? `Drum ${ref} ran with no active batch`
+        : 'A drum ran with no active batch — please check it';
+    // The board's DS3231 is missing or unsynced; run timestamps from it
+    // cannot be trusted until it recovers.
+    case 'bmg.device_rtc_invalid':
+      return ref !== ''
+        ? `Device ${ref} has a clock problem (RTC invalid)`
+        : 'A device has a clock problem (RTC invalid)';
+    // An instruction to the drum's controller timed out before the board
+    // picked it up. `next_status` carries which one (start / stop / run_now).
+    case 'bmg.device_command_expired': {
+      const drum = ref !== '' ? `drum ${ref}` : 'a drum';
+      switch (context?.next_status) {
+        case 'start':
+          return `The start command never reached ${drum} — the drum has not started turning`;
+        case 'stop':
+          return `The stop command never reached ${drum} — check that it has stopped`;
+        case 'run_now':
+          return `The run-now command never reached ${drum}`;
+        default:
+          return `A command never reached ${drum}`;
+      }
+    }
+
+    case 'counselling.session_opened': return 'Guidance session started';
+    case 'counselling.session_closed': return 'Guidance session ended';
+    case 'counselling.session_reassigned': return 'A Guidance session was assigned to you';
+    case 'counselling.appointment_booked': return 'Guidance appointment booked';
+
+    case 'admin.user_created': return 'A new user account was created';
+    case 'admin.user_groups_changed': return "A user's roles were changed";
+    case 'admin.user_password_reset': return "A user's password was reset";
+    case 'admin.user_status_changed': return 'A user account was turned on or off';
+    case 'admin.portal_account_minted': return 'A portal account was created for a patient';
     default:
-      return templateCode;
+      return FALLBACK_LABEL;
   }
 }
 
-/** Optional secondary line (module direction, urgency, …). */
+/** Optional secondary line (office + time, direction, urgency, …). */
 export function notificationDetail(
   templateCode: string,
   context: NotificationContext | null,
@@ -93,31 +153,39 @@ export function notificationDetail(
   if (context === null) return null;
   if (templateCode.startsWith('appointment.') && typeof context.appointment_at === 'string') {
     const destination = context.destination === 'counselling' ? 'Guidance' : 'Clinic';
-    return `${destination} · ${new Intl.DateTimeFormat('en-PH', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Asia/Manila' }).format(new Date(context.appointment_at))}`;
+    const when = new Date(context.appointment_at);
+    if (!Number.isNaN(when.getTime())) {
+      return `${destination} · ${new Intl.DateTimeFormat('en-PH', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Asia/Manila' }).format(when)}`;
+    }
   }
   if ((templateCode === 'queue.called' || templateCode === 'counselling.queue_called') && typeof context.queue_number === 'string') {
-    return context.queue_number;
+    return `Your number: ${context.queue_number}`;
   }
   if (templateCode === 'queue.skip_expired' && typeof context.queue_number === 'string') {
-    return `${context.queue_number} · recall window expired`;
+    return `Number ${context.queue_number} · the time to call them back ran out`;
   }
   if (
     (templateCode === 'referral.created' || templateCode === 'referral.acknowledged') &&
-    typeof context.source_module === 'string' &&
-    typeof context.target_module === 'string'
+    moduleName(context.source_module) !== '' &&
+    moduleName(context.target_module) !== ''
   ) {
-    return `${context.source_module} → ${context.target_module}`;
+    return `From ${moduleName(context.source_module)} to ${moduleName(context.target_module)}`;
   }
   if (templateCode === 'reorder.created' && typeof context.urgency === 'string') {
-    return `Urgency: ${context.urgency}`;
+    return `How urgent: ${sentenceCase(context.urgency)}`;
   }
   if (templateCode === 'queue.called' && typeof context.position === 'number') {
     return `Queue ${String(context.position).padStart(3, '0')}`;
   }
-  if (templateCode === 'bmg.alert_triggered' && typeof context.urgency === 'string') {
+  if (
+    (templateCode === 'bmg.alert_triggered' ||
+      templateCode === 'bmg.device_silent' ||
+      templateCode === 'bmg.device_command_expired') &&
+    typeof context.urgency === 'string'
+  ) {
     const sev = context.urgency.toUpperCase();
-    const label = sev === 'CRITICAL' ? 'Critical' : sev === 'WARNING' ? 'Warning' : sev;
-    return `Severity: ${label}`;
+    const label = sev === 'CRITICAL' ? 'Critical' : sev === 'WARNING' ? 'Needs a check' : sentenceCase(context.urgency);
+    return `How serious: ${label}`;
   }
   return null;
 }

@@ -271,7 +271,7 @@ function CategoryActions({ cat, state }: { cat: WasteCategory; state: ReturnType
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button className="min-h-11" size="sm" variant="outline" aria-label={`Actions for ${cat.code}`}>
+        <Button className="min-h-11 md:min-h-0" size="sm" variant="outline" aria-label={`Actions for ${cat.code}`}>
           Actions <ChevronDown className="size-3.5" aria-hidden />
         </Button>
       </DropdownMenuTrigger>

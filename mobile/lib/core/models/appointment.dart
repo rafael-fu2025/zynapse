@@ -12,7 +12,6 @@ class Appointment {
     required this.status,
     this.reason,
     this.encounterId,
-    this.qrToken,
     required this.createdAt,
   });
 
@@ -27,7 +26,6 @@ class Appointment {
         status: (json['status'] ?? 'scheduled') as String,
         reason: json['reason'] as String?,
         encounterId: json['encounter_id'] as int?,
-        qrToken: json['qr_token'] as String?,
         createdAt: (json['created_at'] ?? '') as String,
       );
 
@@ -59,11 +57,6 @@ class Appointment {
   /// Non-null once the encounter was auto-opened at check-in.
   final int? encounterId;
 
-  /// Plaintext QR proof-of-booking token (present only when the backend
-  /// returned it — at booking time or via the `issueQr` endpoint). The DB
-  /// stores only its HMAC hash; this is what the patient shows at check-in.
-  final String? qrToken;
-
   final String createdAt;
 
   String get patientLabel => (patientName != null && patientName!.isNotEmpty)
@@ -73,18 +66,4 @@ class Appointment {
   String get providerLabel => (providerName != null && providerName!.isNotEmpty)
       ? providerName!
       : (providerUserId != null ? 'Provider #$providerUserId' : 'Unassigned');
-}
-
-/// Result of the PUBLIC `/appointments/verify` endpoint — minimum
-/// disclosure: validity + status + scheduled time, never PII.
-class AppointmentQrVerify {
-  AppointmentQrVerify({
-    required this.valid,
-    this.status,
-    this.scheduledAt,
-  });
-
-  final bool valid;
-  final String? status;
-  final String? scheduledAt;
 }

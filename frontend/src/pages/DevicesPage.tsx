@@ -14,12 +14,13 @@
  */
 import { useId, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { ArrowLeft, Archive, ChevronDown, ChevronLeft, ChevronRight, Cpu, Loader2, Pencil, Plus, Power, PowerOff, RotateCcw } from 'lucide-react';
+import { ArrowLeft, Archive, ChevronDown, ChevronLeft, ChevronRight, Cpu, History, Loader2, Pencil, Play, Plus, Power, PowerOff, RotateCcw, Square } from 'lucide-react';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { PageHeader } from '@/components/PageHeader';
 import { Button } from '@/components/ui/button';
 import { ConfirmDialog, type ConfirmAction } from '@/components/ConfirmDialog';
+import { describeHeartbeatAge, parseUtcSql } from '@/lib/bmgFormat';
 import { CopyButton } from '@/components/CopyButton';
 import { MobileCardList, MobileCard, MobileCardActions, MobileCardListState } from '@/components/MobileCardList';
 import { TableStateRows } from '@/components/TableStates';
@@ -59,8 +60,10 @@ import {
   useArchiveBmgDevice,
   useBmgDevices,
   useBmgUnits,
+  useDeviceAssignments,
   useRegenerateBmgDeviceToken,
   useRegisterBmgDevice,
+  useSendDeviceCommand,
   useSetBmgDeviceStatus,
   useUpdateBmgDevice,
 } from '@/hooks/useFacilities';
@@ -75,8 +78,7 @@ import { titleCase } from '@/lib/utils';
  * Shown-once credential reveal for a freshly minted device token —
  * same pattern as the temporary-password dialog on AdminUsersPage.
  * The plaintext is never retrievable again.
- */
-function DeviceTokenDialog({ device, token, onClose }: { device: BmgDevice; token: string; onClose: () => void }) {
+ */function DeviceTokenDialog({ device, token, onClose }: { device: BmgDevice; token: string; onClose: () => void }) {
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
       <DialogContent lockDismiss>
@@ -299,6 +301,69 @@ function EditDeviceDialog({ device, onClose }: { device: BmgDevice; onClose: () 
   );
 }
 
+/**
+ * Drum-binding ledger for one device — who moved it where, when. The
+ * UNIQUE binding overwrites the previous drum, so this history is the
+ * only place the previous assignment survives.
+ */
+function AssignmentHistoryDialog({ device, onClose }: { device: BmgDevice; onClose: () => void }) {
+  const history = useDeviceAssignments(device.id);
+
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Assignment history — {device.code}</DialogTitle>
+          <DialogDescription>
+            Every drum this controller has been bolted to, newest first. The open row is its current binding.
+          </DialogDescription>
+        </DialogHeader>
+        {history.isLoading && (
+          <div className="flex items-center gap-2 py-4 text-sm text-muted-foreground">
+            <Loader2 className="size-4 animate-spin" /> Loading…
+          </div>
+        )}
+        {history.isError && (
+          <p className="rounded-md border border-destructive/30 bg-destructive/5 p-2 text-xs text-destructive">
+            Failed to load assignment history.
+          </p>
+        )}
+        {history.data !== undefined && history.data.length === 0 && (
+          <p className="py-2 text-sm text-muted-foreground">This device has never been bound to a drum.</p>
+        )}
+        {history.data !== undefined && history.data.length > 0 && (
+          <ul className="divide-y rounded-md border text-sm">
+            {history.data.map((entry) => (
+              <li key={entry.id} className="flex items-start justify-between gap-2 px-3 py-2">
+                <div className="min-w-0">
+                  <p className="truncate font-medium">
+                    {entry.unit_display_name ?? `Drum #${entry.unit_id}`}
+                    {entry.unit_code !== null && (
+                      <span className="ml-2 font-mono text-xs text-muted-foreground">{entry.unit_code}</span>
+                    )}
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    Bound {fmtUtcToApp(entry.assigned_at, 'MMM d, yyyy · h:mm a')}
+                    {entry.unassigned_at !== null
+                      ? ` · released ${fmtUtcToApp(entry.unassigned_at, 'MMM d, yyyy · h:mm a')}`
+                      : ''}
+                  </p>
+                </div>
+                {entry.is_active && <Badge variant="success">Current</Badge>}
+              </li>
+            ))}
+          </ul>
+        )}
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>
+            Close
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 export default function DevicesPage() {
   const [archivedParam, setArchivedParam] = useUrlFilter('archived');
   const showArchived = archivedParam === '1';
@@ -307,6 +372,7 @@ export default function DevicesPage() {
   const setStatus = useSetBmgDeviceStatus();
   const regenerate = useRegenerateBmgDeviceToken();
   const archive = useArchiveBmgDevice();
+  const sendCommand = useSendDeviceCommand();
   const auth = useAuthStore();
   const canManage = hasPermission(auth, 'facilities.units.manage');
 
@@ -314,8 +380,29 @@ export default function DevicesPage() {
   const [editing, setEditing] = useState<BmgDevice | null>(null);
   const [minted, setMinted] = useState<{ device: BmgDevice; token: string } | null>(null);
   const [confirm, setConfirm] = useState<ConfirmAction | null>(null);
+  const [historyFor, setHistoryFor] = useState<BmgDevice | null>(null);
 
   const rows = devices.data?.data ?? [];
+
+  /**
+   * Heartbeat-derived online state. The list endpoint doesn't ship the
+   * threshold, so this uses the backend default (BMG_OFFLINE_AFTER_MIN
+   * 20); the unit monitor is the precise per-drum view.
+   */
+  const heartbeatBadge = (d: BmgDevice) => {
+    const stamp = d.last_heartbeat_at ?? d.last_seen_at;
+    if (stamp === null || stamp === undefined) return null;
+    const parsed = parseUtcSql(stamp);
+    if (parsed === null) return null;
+    const minutes = Math.floor((Date.now() - parsed.getTime()) / 60000);
+    const readout = describeHeartbeatAge(minutes, null);
+    const variant = readout.tone === 'danger' ? 'destructive' : 'success';
+    return (
+      <Badge variant={variant} title={`Last check-in ${stamp} UTC`}>
+        {readout.tone === 'danger' ? 'Offline' : 'Online'}
+      </Badge>
+    );
+  };
 
   const deviceActions = (d: BmgDevice) => (
     <DropdownMenu>
@@ -328,6 +415,52 @@ export default function DevicesPage() {
         <DropdownMenuItem className="min-h-11" onSelect={() => setEditing(d)}>
           <Pencil /> Edit device
         </DropdownMenuItem>
+        <DropdownMenuItem className="min-h-11" onSelect={() => setHistoryFor(d)}>
+          <History /> Assignment history
+        </DropdownMenuItem>
+        {d.status === 'active' && d.unit_id != null && (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              className="min-h-11"
+              disabled={sendCommand.isPending}
+              onSelect={() => setConfirm({
+                title: `Run ${d.display_name} now?`,
+                description: `Queues a one-off rotation using the drum's current schedule settings. The board runs it within about 10 minutes of its next check-in, and the run is reported back.`,
+                confirmLabel: 'Run now',
+                destructive: false,
+                run: () => sendCommand.mutate({ deviceId: d.id, command: 'run_now' }),
+              })}
+            >
+              <RotateCcw className="size-4 text-sky-600" /> Run now
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              className="min-h-11"
+              disabled={sendCommand.isPending}
+              onSelect={() => setConfirm({
+                title: `Start tumbler for ${d.display_name}?`,
+                description: `This will enqueue a start command for ESP32 (${d.code}) to begin its rotation cycle on drum ${d.unit_name ?? d.unit_code}.`,
+                confirmLabel: 'Start tumbler',
+                run: () => sendCommand.mutate({ deviceId: d.id, command: 'start' }),
+              })}
+            >
+              <Play className="size-4 text-emerald-600" /> Start tumbler
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              className="min-h-11 text-amber-600 focus:text-amber-600"
+              disabled={sendCommand.isPending}
+              onSelect={() => setConfirm({
+                title: `Stop tumbler for ${d.display_name}?`,
+                description: `This will immediately enqueue a stop command for ESP32 (${d.code}) to halt motor rotation.`,
+                confirmLabel: 'Stop tumbler',
+                run: () => sendCommand.mutate({ deviceId: d.id, command: 'stop' }),
+              })}
+            >
+              <Square className="size-4" /> Stop tumbler
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+          </>
+        )}
         <DropdownMenuItem
           className="min-h-11"
           onSelect={() => setConfirm({
@@ -450,6 +583,7 @@ export default function DevicesPage() {
                   <div className="flex flex-wrap items-center gap-1.5">
                     <Badge variant={d.status === 'active' ? 'success' : 'destructive'}>{titleCase(d.status)}</Badge>
                     {d.archived_at != null && <Badge variant="secondary">Archived</Badge>}
+                    {d.archived_at == null && d.status === 'active' && heartbeatBadge(d)}
                     {/* The watchdog fires one notification per silence
                         episode; this is the standing signal that stays on
                         screen after the operator has seen it. */}
@@ -519,6 +653,7 @@ export default function DevicesPage() {
               <div className="flex flex-wrap justify-end gap-1.5">
                 <Badge variant={d.status === 'active' ? 'success' : 'destructive'}>{titleCase(d.status)}</Badge>
                 {d.archived_at != null && <Badge variant="secondary">Archived</Badge>}
+                {d.archived_at == null && d.status === 'active' && heartbeatBadge(d)}
                 {d.silence_notified_at != null && d.archived_at == null && <Badge variant="warning">Silent</Badge>}
               </div>
             </div>
@@ -536,6 +671,7 @@ export default function DevicesPage() {
       {registering && <RegisterDeviceDialog onClose={() => setRegistering(false)} />}
       {editing !== null && <EditDeviceDialog device={editing} onClose={() => setEditing(null)} />}
       {minted !== null && <DeviceTokenDialog device={minted.device} token={minted.token} onClose={() => setMinted(null)} />}
+      {historyFor !== null && <AssignmentHistoryDialog device={historyFor} onClose={() => setHistoryFor(null)} />}
 
       <nav className="flex items-center justify-between" aria-label="pagination">
         <p className="text-xs text-muted-foreground">
@@ -560,7 +696,7 @@ export default function DevicesPage() {
         title={confirm?.title ?? ''}
         description={confirm?.description}
         confirmLabel={confirm?.confirmLabel}
-        pending={regenerate.isPending || setStatus.isPending}
+        pending={regenerate.isPending || setStatus.isPending || sendCommand.isPending}
         onConfirm={() => {
           confirm?.run();
           setConfirm(null);

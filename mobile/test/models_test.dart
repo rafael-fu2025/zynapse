@@ -1,8 +1,10 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:synapse_mobile/core/models/appointment.dart';
 import 'package:synapse_mobile/core/models/appointment_portal.dart';
+import 'package:synapse_mobile/core/models/counselling.dart';
 import 'package:synapse_mobile/core/models/equipment.dart';
 import 'package:synapse_mobile/core/models/notification.dart';
+import 'package:synapse_mobile/core/models/profile.dart';
 import 'package:synapse_mobile/core/models/queue.dart';
 import 'package:synapse_mobile/core/models/session.dart';
 
@@ -225,6 +227,98 @@ void main() {
       expect(log.first.toStatus, EquipmentStatus.working);
       expect(log.last.toStatus, EquipmentStatus.forReplacement);
       expect(log.last.note, 'Frame corrosion');
+    });
+  });
+
+  /// Employee parity (2026-10): the SPA's registry rows carry the
+  /// clinic→counselling referral flag and the synthetic-directory flag,
+  /// and the per-person guidance record carries the counsellor's name.
+  /// These fields drive which Actions the mobile sheet offers, so they
+  /// must survive parsing.
+  group('UserProfile employee parity fields', () {
+    test('parses active_guidance_referral and is_directory_record', () {
+      final p = UserProfile.fromJson(const {
+        'id': 7,
+        'kind': 'employee',
+        'first_name': 'Maria',
+        'last_name': 'Santos',
+        'employee_number': 'EMP-0042',
+        'has_qr': false,
+        'archived': false,
+        'active_guidance_referral': true,
+        'is_directory_record': true,
+      });
+      expect(p.activeGuidanceReferral, isTrue);
+      expect(p.isDirectoryRecord, isTrue);
+      // The guidance record + referral pipeline key on the registry number.
+      expect(p.registryNumber, 'EMP-0042');
+    });
+
+    test('defaults both flags to false on legacy payloads', () {
+      final p = UserProfile.fromJson(const {
+        'id': 8,
+        'kind': 'student',
+        'first_name': 'Ana',
+        'last_name': 'Reyes',
+        'student_number': '2021-0001',
+        'has_qr': true,
+        'archived': false,
+      });
+      expect(p.activeGuidanceReferral, isFalse);
+      expect(p.isDirectoryRecord, isFalse);
+      expect(p.registryNumber, '2021-0001');
+    });
+
+    test('registryNumber follows the kind, not whichever field is set', () {
+      // A payload carrying both numbers (defensive) must resolve by kind.
+      final employee = UserProfile.fromJson(const {
+        'id': 9,
+        'kind': 'employee',
+        'employee_number': 'EMP-9',
+        'student_number': '2021-9999',
+        'has_qr': false,
+        'archived': false,
+      });
+      expect(employee.registryNumber, 'EMP-9');
+
+      final student = UserProfile.fromJson(const {
+        'id': 10,
+        'kind': 'student',
+        'employee_number': 'EMP-10',
+        'student_number': '2021-0010',
+        'has_qr': false,
+        'archived': false,
+      });
+      expect(student.registryNumber, '2021-0010');
+    });
+  });
+
+  /// The per-person guidance record returns `counsellor_name` (the SPA
+  /// added the join in 2026-10); older list payloads omit it.
+  group('CounsellingSession counsellor_name', () {
+    test('parses counsellor_name when the payload joins the user', () {
+      final s = CounsellingSession.fromJson(const {
+        'id': 3,
+        'patient_school_id': 'EMP-0042',
+        'counsellor_user_id': 11,
+        'counsellor_name': 'Dr. Reyes',
+        'started_at': '2026-10-01 01:30:00',
+        'ended_at': null,
+      });
+      expect(s.counsellorName, 'Dr. Reyes');
+      expect(s.isOpen, isTrue);
+    });
+
+    test('leaves counsellor_name null when absent', () {
+      final s = CounsellingSession.fromJson(const {
+        'id': 4,
+        'patient_school_id': '2021-0001',
+        'counsellor_user_id': 11,
+        'started_at': '2026-09-15 02:00:00',
+        'ended_at': '2026-09-15 03:00:00',
+      });
+      expect(s.counsellorName, isNull);
+      expect(s.isOpen, isFalse);
     });
   });
 }

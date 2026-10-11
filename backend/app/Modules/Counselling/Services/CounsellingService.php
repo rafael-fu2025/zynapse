@@ -46,16 +46,17 @@ final class CounsellingService extends BaseService
      *
      * @return array{data: array<int, array<string, mixed>>, next: ?string, count: int}
      */
-    public function listSessions(?string $cursor, int $limit, ?int $appointmentId = null): array
+    public function listSessions(?string $cursor, int $limit, ?int $appointmentId = null, ?string $patientSchoolId = null): array
     {
         $this->policy->check('list');
 
         $builder = $this->db->table('counselling_sessions')
             ->where('counselling_sessions.tenant_id', CurrentTenant::id())
-            ->select('id, patient_user_id, patient_school_id, counsellor_user_id, started_at, ended_at, created_at')
-            ->where('archived_at', null)
-            ->orderBy('created_at', 'DESC')
-            ->orderBy('id', 'DESC');
+            ->select('counselling_sessions.id, counselling_sessions.patient_user_id, counselling_sessions.patient_school_id, counselling_sessions.counsellor_user_id, counselling_sessions.started_at, counselling_sessions.ended_at, counselling_sessions.created_at, u.username AS counsellor_name')
+            ->join('users AS u', 'u.id = counselling_sessions.counsellor_user_id', 'left')
+            ->where('counselling_sessions.archived_at', null)
+            ->orderBy('counselling_sessions.created_at', 'DESC')
+            ->orderBy('counselling_sessions.id', 'DESC');
 
         if ($appointmentId !== null) {
             $sessionIds = array_map(
@@ -75,7 +76,29 @@ final class CounsellingService extends BaseService
             $builder->whereIn('counselling_sessions.id', $sessionIds);
         }
 
-        KeysetPaginator::apply($builder, $cursor, $limit);
+        if ($patientSchoolId !== null) {
+            // Per-person guidance record: an unknown identifier must 404
+            // rather than silently degrading to a tenant-wide list.
+            $patient = $this->db->table('users')
+                ->select('id')
+                ->where('tenant_id', CurrentTenant::id())
+                ->whereIn('kind', ['student', 'employee'])
+                ->groupStart()
+                    ->where('student_number', $patientSchoolId)
+                    ->orWhere('employee_number', $patientSchoolId)
+                ->groupEnd()
+                ->get()->getRowArray();
+            if ($patient === null) {
+                throw new ApiException('resource.not_found', 404, [
+                    ['code' => 'resource.not_found', 'message' => "Patient #{$patientSchoolId} not found."],
+                ]);
+            }
+            $builder->where('counselling_sessions.patient_school_id', $patientSchoolId);
+        }
+
+        // Qualified keyset columns: the counsellor join adds a second `id`
+        // and `created_at`, so bare names would be ambiguous on page 2+.
+        KeysetPaginator::apply($builder, $cursor, $limit, 'counselling_sessions.created_at', 'counselling_sessions.id');
 
         $rows = $builder->get()->getResultArray();
         $final = KeysetPaginator::finalize($rows, $limit);

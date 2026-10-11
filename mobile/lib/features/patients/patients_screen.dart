@@ -7,9 +7,11 @@ import 'package:hugeicons/hugeicons.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/api/api_client.dart';
+import '../../core/models/counselling.dart';
 import '../../core/models/profile.dart';
 import '../../core/services/api_service.dart';
 import '../../core/services/auth_controller.dart';
+import '../../core/utils/dates.dart';
 import '../../core/utils/university_email.dart';
 import '../common/crud_form.dart';
 import '../common/widgets.dart';
@@ -143,6 +145,27 @@ class _PatientsScreenState extends State<PatientsScreen> {
               ?.hasPermission('referrals.create') ??
           false);
 
+  /// `counselling.records.read` — gates the per-person guidance record,
+  /// mirroring the SPA's `canReadGuidance` gate. Clinic permissions alone
+  /// never expose the guidance record (privacy split, 2026-10).
+  bool get _canReadGuidance =>
+      context
+          .read<AuthController>()
+          .session
+          ?.hasPermission('counselling.records.read') ??
+      false;
+
+  /// `referrals.create` — the SPA's `canRefer`. Held by BOTH bridge-side
+  /// groups (clinic staff and guidance staff), so it must NOT be folded
+  /// into the guidance-record permission: clinic staff raise
+  /// clinic → Guidance referrals without holding counselling read.
+  bool get _canCreateReferral =>
+      context
+          .read<AuthController>()
+          .session
+          ?.hasPermission('referrals.create') ??
+      false;
+
   List<CrudField> _studentFields([UserProfile? p]) => [
         CrudField.text('first_name', 'First name', initial: p?.firstName),
         CrudField.text('last_name', 'Last name', initial: p?.lastName),
@@ -213,24 +236,6 @@ class _PatientsScreenState extends State<PatientsScreen> {
     if (ok) _load();
   }
 
-  Future<void> _edit(UserProfile p) async {
-    final isEmployee = p.isStudent == false;
-    final payload = await showCrudForm(
-      context,
-      title: 'Edit ${p.displayName}',
-      fields: isEmployee ? _employeeFields(p) : _studentFields(p),
-    );
-    if (payload == null || !mounted) return;
-    final ok = await runCrudAction(
-      context,
-      () => isEmployee
-          ? ApiService.I.updateEmployee(p.id, payload)
-          : ApiService.I.updateStudent(p.id, payload),
-      successMessage: '${p.displayName} updated.',
-    );
-    if (ok) _load();
-  }
-
   Future<void> _archive(UserProfile p) async {
     final confirmed = await showCrudConfirm(
       context,
@@ -275,21 +280,66 @@ class _PatientsScreenState extends State<PatientsScreen> {
     if (ok) _load();
   }
 
-  /// Opens the patient detail sheet — allergies + emergency contacts for
-  /// students (with add/edit/remove), and the full profile for employees.
+  /// Opens the patient detail sheet — allergies + emergency contacts
+  /// (add/edit/remove) for BOTH kinds, plus the profile sections.
   /// Mirrors the web View dialog (`StudentDetailDialog` /
   /// `EmployeeDetailDialog`).
-  Future<void> _viewDetail(UserProfile p) async {
+  ///
+  /// [openMedical] scrolls straight to the medical block — the
+  /// "Manage medical record" action's destination, matching the SPA's
+  /// separate menu entry that opens the same dialog.
+  Future<void> _viewDetail(UserProfile p, {bool openMedical = false}) async {
     if (!mounted) return;
     final fresh = await showDialog<UserProfile>(
       context: context,
       barrierDismissible: false,
-      builder: (dialogContext) => _DetailSheet(person: p),
+      builder: (dialogContext) => _DetailSheet(
+        person: p,
+        openMedical: openMedical,
+      ),
     );
     if (fresh != null && mounted) {
       // Detail edits returned an updated row; refresh the list.
       _load();
     }
+  }
+
+  /// Opens the per-person guidance record sheet — counselling session
+  /// history (date, counsellor, open/closed). Gated by
+  /// `counselling.records.read`; mirrors the SPA's GuidanceRecordSection.
+  /// Notes are NOT part of this payload.
+  Future<void> _viewGuidanceRecord(UserProfile p) async {
+    final number = p.registryNumber;
+    if (number == null || number.isEmpty) return;
+    if (!mounted) return;
+    await showSynapseSheet<void>(
+      context,
+      builder: (_) => _GuidanceRecordSheet(
+        personName: p.displayName,
+        registryNumber: number,
+      ),
+    );
+  }
+
+  /// Clinic → Guidance referral — the SPA's `ReferToGuidanceDialog`.
+  /// Fixed direction (Clinic → Counselling), artifact `intake_pass`, and
+  /// a required reason + priority. Only reason / notes / priority travel
+  /// to Guidance; the clinic medical record stays confidential.
+  /// A 409 `referral.active_duplicate` shows the existing referral.
+  Future<void> _referToGuidance(UserProfile p) async {
+    final number = p.registryNumber;
+    if (number == null || number.isEmpty) return;
+    final payload = await showSynapseSheet<Map<String, dynamic>>(
+      context,
+      builder: (_) => _ReferToGuidanceSheet(person: p, number: number),
+    );
+    if (payload == null || !mounted) return;
+    final ok = await runCrudAction(
+      context,
+      () => ApiService.I.createReferral(payload),
+      successMessage: 'Referral sent to Guidance.',
+    );
+    if (ok) _load();
   }
 
   @override
@@ -444,10 +494,14 @@ class _PatientsScreenState extends State<PatientsScreen> {
           person: _items[i],
           canWrite: _canWrite,
           canRefer: _canRefer,
+          canReadGuidance: _canReadGuidance,
+          canCreateReferral: _canCreateReferral,
           onView: () => _viewDetail(_items[i]),
-          onEdit: () => _edit(_items[i]),
           onArchive: () => _archive(_items[i]),
           onRefer: () => _refer(_items[i]),
+          onReferGuidance: () => _referToGuidance(_items[i]),
+          onGuidanceRecord: () => _viewGuidanceRecord(_items[i]),
+          onManageMedical: () => _viewDetail(_items[i], openMedical: true),
         );
       },
     );
@@ -473,10 +527,14 @@ class _PatientTile extends StatelessWidget {
     required this.person,
     required this.canWrite,
     required this.canRefer,
+    this.canReadGuidance = false,
+    this.canCreateReferral = false,
     this.onView,
-    this.onEdit,
     this.onArchive,
     this.onRefer,
+    this.onReferGuidance,
+    this.onGuidanceRecord,
+    this.onManageMedical,
   });
 
   final UserProfile person;
@@ -485,88 +543,148 @@ class _PatientTile extends StatelessWidget {
   /// Guidance-side refer action — students only, matching the web's
   /// guidance Records surface (`referrals.create`, no registry write).
   final bool canRefer;
+
+  /// `counselling.records.read` — gates the per-person guidance record
+  /// and the clinic→Guidance referral, exactly like the SPA. A clinic
+  /// user does NOT get the guidance record from clinic permissions.
+  final bool canReadGuidance;
+
+  /// `referrals.create` — held by both bridge-side groups. The
+  /// clinic → Guidance referral needs this, NOT the guidance read code.
+  final bool canCreateReferral;
+
   final VoidCallback? onView;
-  final VoidCallback? onEdit;
   final VoidCallback? onArchive;
   final VoidCallback? onRefer;
+  final VoidCallback? onReferGuidance;
+  final VoidCallback? onGuidanceRecord;
+  final VoidCallback? onManageMedical;
 
   /// Opens the patient action sheet — a modern replacement for the default
-  /// popup menu: View + Refer (guidance) or Edit + Archive/Restore
-  /// (clinic) as tinted icon rows, with the patient's name + ID in the
-  /// header.
+  /// popup menu, mirroring the SPA's employee/student Actions menu
+  /// (`frontend/src/pages/PatientsPage.tsx::employeeActions`):
+  ///
+  ///   View record · View guidance record* · Refer to clinic† ·
+  ///   Manage medical record‡ · Refer to Guidance§ · Archive/Restore‡
+  ///
+  ///   *  `counselling.records.read`
+  ///   †  guidance side (`referrals.create`, no registry write)
+  ///   ‡  clinic side + `clinic.patients.write`, and never for
+  ///      directory-only MIS rows
+  ///   §  clinic side + `referrals.create`
+  ///
+  /// "Edit employee record" was removed from the SPA (2026-10) — the
+  /// mobile sheet keeps only the actions the web still offers.
   void _openActions(BuildContext context) {
+    final isEmployee = !person.isStudent;
+    // Medical rows only exist for local users; synthetic MIS directory
+    // rows have nothing to attach allergies/contacts to.
+    final canManageMedical = canWrite && !person.isDirectoryRecord;
     showSynapseSheet<void>(
       context,
       builder: (sheetContext) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              SheetHeader(
-                title: person.displayName,
-                subtitle: person.isStudent
-                    ? (person.studentNumber ?? 'Student')
-                    : (person.employeeNumber ?? 'Employee'),
-              ),
-              const SizedBox(height: 8),
-              _ActionRow(
-                icon: HugeIcons.strokeRoundedView,
-                label: 'View record',
-                description: person.isStudent
-                    ? 'Allergies, emergency contacts, profile'
-                    : 'Profile, handles, emergency contact',
-                onTap: () {
-                  Navigator.of(sheetContext).pop();
-                  onView?.call();
-                },
-              ),
-              if (canRefer && person.isStudent) ...[
+        child: SingleChildScrollView(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                SheetHeader(
+                  title: person.displayName,
+                  subtitle: person.isStudent
+                      ? (person.studentNumber ?? 'Student')
+                      : (person.employeeNumber ?? 'Employee'),
+                ),
+                const SizedBox(height: 8),
                 _ActionRow(
-                  icon: HugeIcons.strokeRoundedShare01,
-                  label: 'Refer to clinic',
-                  description: 'Counselling → Clinic referral for this student',
+                  icon: HugeIcons.strokeRoundedView,
+                  label: 'View record',
+                  description: person.isStudent
+                      ? 'Allergies, emergency contacts, profile'
+                      : 'Profile, handles, emergency contact',
                   onTap: () {
                     Navigator.of(sheetContext).pop();
-                    onRefer?.call();
+                    onView?.call();
                   },
                 ),
+                if (canReadGuidance) ...[
+                  _ActionRow(
+                    icon: HugeIcons.strokeRoundedNote01,
+                    label: 'View guidance record',
+                    description: 'Counselling session history',
+                    onTap: () {
+                      Navigator.of(sheetContext).pop();
+                      onGuidanceRecord?.call();
+                    },
+                  ),
+                ],
+                // Guidance's cross-action: raise a counselling → clinic
+                // referral. The SPA offers this for BOTH kinds (2026-10),
+                // not students only.
+                if (canRefer) ...[
+                  _ActionRow(
+                    icon: HugeIcons.strokeRoundedShare01,
+                    label: 'Refer to clinic',
+                    description: isEmployee
+                        ? 'Counselling → Clinic referral for this employee'
+                        : 'Counselling → Clinic referral for this student',
+                    onTap: () {
+                      Navigator.of(sheetContext).pop();
+                      onRefer?.call();
+                    },
+                  ),
+                ],
+                if (canManageMedical) ...[
+                  _ActionRow(
+                    icon: HugeIcons.strokeRoundedHealth,
+                    label: 'Manage medical record',
+                    description: 'Allergies and emergency contacts',
+                    onTap: () {
+                      Navigator.of(sheetContext).pop();
+                      onManageMedical?.call();
+                    },
+                  ),
+                ],
+                // Clinic → Guidance referral. The SPA offers this on the
+                // CLINIC side (`side === 'clinic' && canRefer`), so it is
+                // gated on registry write + `referrals.create` — never the
+                // guidance read code, which clinic staff do not hold.
+                if (canWrite && canCreateReferral) ...[
+                  _ActionRow(
+                    icon: HugeIcons.strokeRoundedHeartCheck,
+                    label: 'Refer to Guidance',
+                    description: isEmployee
+                        ? 'Clinic → Guidance referral for this employee'
+                        : 'Clinic → Guidance referral for this student',
+                    onTap: () {
+                      Navigator.of(sheetContext).pop();
+                      onReferGuidance?.call();
+                    },
+                  ),
+                ],
+                if (canWrite && !person.isDirectoryRecord) ...[
+                  const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 12),
+                    child: Divider(height: 1),
+                  ),
+                  _ActionRow(
+                    icon: person.archived
+                        ? HugeIcons.strokeRoundedRefresh
+                        : HugeIcons.strokeRoundedArchive01,
+                    label: person.archived ? 'Restore' : 'Archive',
+                    description: person.archived
+                        ? 'Put the patient back on the registry'
+                        : 'Remove from the registry view',
+                    color: person.archived ? null : const Color(0xFFB3261E),
+                    onTap: () {
+                      Navigator.of(sheetContext).pop();
+                      onArchive?.call();
+                    },
+                  ),
+                ],
               ],
-              if (canWrite) ...[
-                const Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 12),
-                  child: Divider(height: 1),
-                ),
-                _ActionRow(
-                  icon: HugeIcons.strokeRoundedPencilEdit01,
-                  label: 'Edit',
-                  description: 'Update profile details',
-                  onTap: () {
-                    Navigator.of(sheetContext).pop();
-                    onEdit?.call();
-                  },
-                ),
-                const Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 12),
-                  child: Divider(height: 1),
-                ),
-                _ActionRow(
-                  icon: person.archived
-                      ? HugeIcons.strokeRoundedRefresh
-                      : HugeIcons.strokeRoundedArchive01,
-                  label: person.archived ? 'Restore' : 'Archive',
-                  description: person.archived
-                      ? 'Put the patient back on the registry'
-                      : 'Remove from the registry view',
-                  color: person.archived ? null : const Color(0xFFB3261E),
-                  onTap: () {
-                    Navigator.of(sheetContext).pop();
-                    onArchive?.call();
-                  },
-                ),
-              ],
-            ],
+            ),
           ),
         ),
       ),
@@ -696,12 +814,9 @@ class _PatientTile extends StatelessWidget {
         trailing: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            // Handles (QR / RFID) — mirrors the web EmployeeDetailDialog
-            // "Handles" badges; shown for both kinds when present.
+            // Patient identity QR — separate from appointment booking.
             if (person.hasQr)
               const StatusBadge(label: 'QR', color: Color(0xFF1E6FD9)),
-            if (person.hasRfid)
-              const StatusBadge(label: 'RFID', color: Color(0xFF1E6FD9)),
             if (isStudent && person.consecutiveNoShows > 0)
               StatusBadge(
                 label: '${person.consecutiveNoShows}× no-show',
@@ -736,7 +851,9 @@ class _PatientTile extends StatelessWidget {
 /// fixed patient; the operator picks the artifact and may add a reason
 /// or notes. Pops the same payload shape `_ReferralCreateSheet` produces
 /// so `ApiService.I.createReferral` consumes it unchanged. Mirrors the
-/// web `ReferStudentDialog`.
+/// web `ReferStudentDialog`, extended to employees (2026-10) so the
+/// SPA's guidance-side "Refer to clinic" action is reachable for both
+/// kinds — not students only.
 class _ReferSheet extends StatefulWidget {
   const _ReferSheet({required this.person});
 
@@ -762,11 +879,12 @@ class _ReferSheetState extends State<_ReferSheet> {
   }
 
   void _submit() {
-    final studentNumber = widget.person.studentNumber ?? '';
+    final identifier = widget.person.registryNumber ?? '';
     final artifact = _artifactController.text.trim();
-    if (studentNumber.isEmpty) {
-      setState(() => _submitError =
-          'This record has no student number and cannot be referred.');
+    if (identifier.isEmpty) {
+      setState(() => _submitError = widget.person.isStudent
+          ? 'This record has no student number and cannot be referred.'
+          : 'This record has no employee number and cannot be referred.');
       return;
     }
     if (artifact.isEmpty) {
@@ -776,7 +894,7 @@ class _ReferSheetState extends State<_ReferSheet> {
     final reason = _reasonController.text.trim();
     final notes = _notesController.text.trim();
     Navigator.of(context).pop(<String, dynamic>{
-      'patient_school_id': studentNumber,
+      'patient_school_id': identifier,
       'source_module': 'counselling',
       'target_module': 'clinic',
       'artifact_type': artifact,
@@ -801,7 +919,7 @@ class _ReferSheetState extends State<_ReferSheet> {
           SheetHeader(
             title: 'Refer to clinic',
             subtitle:
-                '${widget.person.displayName} · ${widget.person.studentNumber ?? 'Student'}',
+                '${widget.person.displayName} · ${widget.person.registryNumber ?? (widget.person.isStudent ? 'Student' : 'Employee')}',
           ),
           const SizedBox(height: 4),
           const Text(
@@ -904,6 +1022,301 @@ class _ReferSheetState extends State<_ReferSheet> {
   }
 }
 
+/// Per-person guidance record — the counselling session history for one
+/// student/employee. Mirrors the SPA's `GuidanceRecordSection`
+/// (`frontend/src/components/clinic/GuidanceRecordSection.tsx`): date,
+/// counsellor, open/closed, empty + error states. Notes are deliberately
+/// NOT shown here — they stay behind their own session endpoints.
+class _GuidanceRecordSheet extends StatefulWidget {
+  const _GuidanceRecordSheet({
+    required this.personName,
+    required this.registryNumber,
+  });
+
+  final String personName;
+  final String registryNumber;
+
+  @override
+  State<_GuidanceRecordSheet> createState() => _GuidanceRecordSheetState();
+}
+
+class _GuidanceRecordSheetState extends State<_GuidanceRecordSheet> {
+  bool _loading = true;
+  String? _error;
+  List<CounsellingSession> _sessions = const [];
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final sessions =
+          await ApiService.I.patientCounsellingSessions(widget.registryNumber);
+      if (!mounted) return;
+      setState(() {
+        _sessions = sessions;
+        _loading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = mapDioError(e).message;
+        _loading = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            SheetHeader(
+              title: widget.personName,
+              subtitle: 'Guidance record · ${widget.registryNumber}',
+            ),
+            const SizedBox(height: 8),
+            Flexible(
+              child: _loading
+                  ? const SizedBox(
+                      height: 140,
+                      child: Center(child: CircularProgressIndicator()),
+                    )
+                  : _error != null
+                      ? SizedBox(
+                          height: 140,
+                          child: AsyncState.error(_error!, onRetry: _load),
+                        )
+                      : _sessions.isEmpty
+                          ? const Padding(
+                              padding: EdgeInsets.symmetric(vertical: 18),
+                              child: Text(
+                                'No counselling sessions on record.',
+                                style: TextStyle(
+                                    color: Colors.black45, fontSize: 13),
+                              ),
+                            )
+                          : ListView.separated(
+                              shrinkWrap: true,
+                              itemCount: _sessions.length,
+                              separatorBuilder: (_, __) =>
+                                  const Divider(height: 1),
+                              itemBuilder: (context, i) {
+                                final s = _sessions[i];
+                                final open = s.isOpen;
+                                return ListTile(
+                                  contentPadding: EdgeInsets.zero,
+                                  dense: true,
+                                  leading: Icon(
+                                    HugeIcons.strokeRoundedNote01,
+                                    size: 20,
+                                    color: open
+                                        ? const Color(0xFF1B7A43)
+                                        : Colors.black38,
+                                  ),
+                                  title: Text(
+                                    fmtUtcShort(s.startedAt),
+                                    style: const TextStyle(
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.w600),
+                                  ),
+                                  subtitle: Text(
+                                    s.counsellorName ?? 'Unassigned',
+                                    style: const TextStyle(fontSize: 12),
+                                  ),
+                                  trailing: StatusBadge(
+                                    label: open ? 'Open' : 'Closed',
+                                    color: open
+                                        ? const Color(0xFF1B7A43)
+                                        : Colors.black45,
+                                  ),
+                                );
+                              },
+                            ),
+            ),
+            const SizedBox(height: 12),
+            OutlinedButton.icon(
+              onPressed: () => Navigator.of(context).pop(),
+              icon: const Icon(HugeIcons.strokeRoundedCancel01, size: 18),
+              label: const Text('Close'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Clinic → Guidance referral — the SPA's `ReferToGuidanceDialog`.
+/// Fixed direction (clinic → counselling), artifact `intake_pass`, and a
+/// required reason + priority. Only reason / notes / priority travel to
+/// Guidance; the clinic medical record stays confidential.
+class _ReferToGuidanceSheet extends StatefulWidget {
+  const _ReferToGuidanceSheet({required this.person, required this.number});
+
+  final UserProfile person;
+  final String number;
+
+  @override
+  State<_ReferToGuidanceSheet> createState() => _ReferToGuidanceSheetState();
+}
+
+class _ReferToGuidanceSheetState extends State<_ReferToGuidanceSheet> {
+  /// Mirrors `GUIDANCE_REASON_OPTIONS` in
+  /// `frontend/src/schemas/referrals.ts`.
+  static const _reasons = <String, String>{
+    'emotional_concern': 'Emotional concern',
+    'behavioral_concern': 'Behavioral concern',
+    'academic_stress': 'Academic stress',
+    'family_concern': 'Family concern',
+    'bullying': 'Bullying',
+    'self_harm_risk': 'Self-harm risk',
+    'other': 'Other',
+  };
+
+  /// Mirrors `REFERRAL_PRIORITIES`.
+  static const _priorities = ['low', 'normal', 'high', 'urgent'];
+
+  final _notesController = TextEditingController();
+  String? _reason;
+  String _priority = 'normal';
+  String? _submitError;
+
+  @override
+  void dispose() {
+    _notesController.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    if (_reason == null || _reason!.isEmpty) {
+      setState(() => _submitError = 'Pick a reason.');
+      return;
+    }
+    final notes = _notesController.text.trim();
+    Navigator.of(context).pop(<String, dynamic>{
+      'patient_school_id': widget.number,
+      'source_module': 'clinic',
+      'target_module': 'counselling',
+      'artifact_type': 'intake_pass',
+      'reason_code': _reason,
+      'priority': _priority,
+      if (notes.isNotEmpty) 'notes_plaintext': notes,
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.only(
+        bottom: MediaQuery.of(context).viewInsets.bottom,
+      ),
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(20, 14, 20, 20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            SheetHeader(
+              title: 'Refer to Guidance',
+              subtitle: '${widget.person.displayName} · ${widget.number}',
+            ),
+            const SizedBox(height: 10),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF5F5F4),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: const Color(0xFFE7E5E4)),
+              ),
+              child: const Text(
+                'Only the reason, notes, and priority are shared with the '
+                'Guidance Center. The clinic medical record stays '
+                'confidential to Clinic staff.',
+                style: TextStyle(fontSize: 12, color: Colors.black54),
+              ),
+            ),
+            const SizedBox(height: 12),
+            DropdownButtonFormField<String>(
+              initialValue: _reason,
+              decoration: const InputDecoration(
+                labelText: 'Reason for referral',
+                isDense: true,
+              ),
+              items: [
+                for (final e in _reasons.entries)
+                  DropdownMenuItem(value: e.key, child: Text(e.value)),
+              ],
+              onChanged: (v) => setState(() {
+                _reason = v;
+                _submitError = null;
+              }),
+            ),
+            const SizedBox(height: 12),
+            DropdownButtonFormField<String>(
+              initialValue: _priority,
+              decoration: const InputDecoration(
+                labelText: 'Priority',
+                isDense: true,
+              ),
+              items: [
+                for (final p in _priorities)
+                  DropdownMenuItem(
+                    value: p,
+                    child: Text(p[0].toUpperCase() + p.substring(1)),
+                  ),
+              ],
+              onChanged: (v) => setState(() => _priority = v ?? 'normal'),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _notesController,
+              maxLength: 2000,
+              maxLines: 3,
+              decoration: const InputDecoration(
+                labelText: 'Notes (optional)',
+                hintText: 'Brief context for the Guidance counselor…',
+                isDense: true,
+                border: OutlineInputBorder(),
+              ),
+            ),
+            if (_submitError != null) ...[
+              const SizedBox(height: 4),
+              Text(
+                _submitError!,
+                style: TextStyle(
+                  color: Theme.of(context).colorScheme.error,
+                  fontSize: 13,
+                ),
+              ),
+            ],
+            const SizedBox(height: 8),
+            FilledButton(
+              onPressed: _submit,
+              style: FilledButton.styleFrom(
+                backgroundColor: const Color(0xFF800000),
+                padding: const EdgeInsets.symmetric(vertical: 14),
+              ),
+              child: const Text('Refer to Guidance'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 /// A tappable row in the patient action sheet — tinted icon + label + a
 /// muted description, with an optional destructive (red) treatment.
 class _ActionRow extends StatelessWidget {
@@ -978,14 +1391,19 @@ class _ActionRow extends StatelessWidget {
   }
 }
 
-/// Full patient detail — mirrors the web View dialogs. Students get
-/// allergies + emergency contacts (with add/edit/remove); employees get
-/// their profile + handles + emergency contact. Pops with the latest row
-/// so the caller can refresh the list after any edit.
+/// Full patient detail — mirrors the web View dialogs. BOTH kinds get the
+/// person-level medical record (allergies + emergency contacts, with
+/// add/edit/remove) plus their profile fields; the SPA made the medical
+/// record shared in 2026-10 and the employee detail endpoint now returns
+/// it. Pops with the latest row so the caller can refresh the list.
 class _DetailSheet extends StatefulWidget {
-  const _DetailSheet({required this.person});
+  const _DetailSheet({required this.person, this.openMedical = false});
 
   final UserProfile person;
+
+  /// True when opened from "Manage medical record" — scrolls the medical
+  /// block into view once loaded.
+  final bool openMedical;
 
   @override
   State<_DetailSheet> createState() => _DetailSheetState();
@@ -995,6 +1413,9 @@ class _DetailSheetState extends State<_DetailSheet> {
   bool _loading = true;
   String? _error;
   UserProfile? _detail;
+  final _scrollController = ScrollController();
+  final _medicalKey = GlobalKey();
+  bool _scrolledToMedical = false;
 
   bool get _canWrite =>
       context
@@ -1003,10 +1424,20 @@ class _DetailSheetState extends State<_DetailSheet> {
           ?.hasPermission('clinic.patients.write') ??
       false;
 
+  /// Medical writes are clinic-side and need a local user row; synthetic
+  /// MIS directory rows carry no id to attach rows to.
+  bool get _canManageMedical => _canWrite && !widget.person.isDirectoryRecord;
+
   @override
   void initState() {
     super.initState();
     _load();
+  }
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
   }
 
   Future<void> _load() async {
@@ -1023,6 +1454,7 @@ class _DetailSheetState extends State<_DetailSheet> {
         _detail = detail;
         _loading = false;
       });
+      _maybeScrollToMedical();
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -1030,6 +1462,22 @@ class _DetailSheetState extends State<_DetailSheet> {
         _loading = false;
       });
     }
+  }
+
+  /// "Manage medical record" lands on the medical block rather than the
+  /// top of the profile.
+  void _maybeScrollToMedical() {
+    if (!widget.openMedical || _scrolledToMedical) return;
+    _scrolledToMedical = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final ctx = _medicalKey.currentContext;
+      if (ctx == null || !mounted) return;
+      Scrollable.ensureVisible(
+        ctx,
+        duration: const Duration(milliseconds: 250),
+        alignment: 0.05,
+      );
+    });
   }
 
   void _close([UserProfile? updated]) {
@@ -1055,7 +1503,9 @@ class _DetailSheetState extends State<_DetailSheet> {
     if (payload == null || !mounted) return;
     final ok = await runCrudAction(
       context,
-      () => ApiService.I.addStudentAllergy(widget.person.id, payload),
+      () => widget.person.isStudent
+          ? ApiService.I.addStudentAllergy(widget.person.id, payload)
+          : ApiService.I.addEmployeeAllergy(widget.person.id, payload),
       successMessage: 'Allergy recorded.',
     );
     if (ok && mounted) _load();
@@ -1081,7 +1531,10 @@ class _DetailSheetState extends State<_DetailSheet> {
     if (payload == null || !mounted) return;
     final ok = await runCrudAction(
       context,
-      () => ApiService.I.updateStudentAllergy(widget.person.id, a.id, payload),
+      () => widget.person.isStudent
+          ? ApiService.I.updateStudentAllergy(widget.person.id, a.id, payload)
+          : ApiService.I.updateEmployeeAllergy(
+              widget.person.id, a.id, payload),
       successMessage: 'Allergy updated.',
     );
     if (ok && mounted) _load();
@@ -1091,14 +1544,17 @@ class _DetailSheetState extends State<_DetailSheet> {
     final confirmed = await showCrudConfirm(
       context,
       title: 'Remove allergy?',
-      message: 'Remove "${a.allergen}" from this student\'s record?',
+      message:
+          'Remove "${a.allergen}" from this ${widget.person.isStudent ? 'student' : 'employee'}\'s record?',
       confirmLabel: 'Remove',
       destructive: true,
     );
     if (!confirmed || !mounted) return;
     final ok = await runCrudAction(
       context,
-      () => ApiService.I.deleteStudentAllergy(widget.person.id, a.id),
+      () => widget.person.isStudent
+          ? ApiService.I.deleteStudentAllergy(widget.person.id, a.id)
+          : ApiService.I.deleteEmployeeAllergy(widget.person.id, a.id),
       successMessage: 'Allergy removed.',
     );
     if (ok && mounted) _load();
@@ -1119,7 +1575,9 @@ class _DetailSheetState extends State<_DetailSheet> {
     if (payload == null || !mounted) return;
     final ok = await runCrudAction(
       context,
-      () => ApiService.I.addStudentContact(widget.person.id, payload),
+      () => widget.person.isStudent
+          ? ApiService.I.addStudentContact(widget.person.id, payload)
+          : ApiService.I.addEmployeeContact(widget.person.id, payload),
       successMessage: 'Emergency contact added.',
     );
     if (ok && mounted) _load();
@@ -1142,7 +1600,10 @@ class _DetailSheetState extends State<_DetailSheet> {
     if (payload == null || !mounted) return;
     final ok = await runCrudAction(
       context,
-      () => ApiService.I.updateStudentContact(widget.person.id, c.id, payload),
+      () => widget.person.isStudent
+          ? ApiService.I.updateStudentContact(widget.person.id, c.id, payload)
+          : ApiService.I.updateEmployeeContact(
+              widget.person.id, c.id, payload),
       successMessage: 'Emergency contact updated.',
     );
     if (ok && mounted) _load();
@@ -1152,14 +1613,17 @@ class _DetailSheetState extends State<_DetailSheet> {
     final confirmed = await showCrudConfirm(
       context,
       title: 'Remove contact?',
-      message: 'Remove "${c.contactName}" from this student\'s record?',
+      message:
+          'Remove "${c.contactName}" from this ${widget.person.isStudent ? 'student' : 'employee'}\'s record?',
       confirmLabel: 'Remove',
       destructive: true,
     );
     if (!confirmed || !mounted) return;
     final ok = await runCrudAction(
       context,
-      () => ApiService.I.deleteStudentContact(widget.person.id, c.id),
+      () => widget.person.isStudent
+          ? ApiService.I.deleteStudentContact(widget.person.id, c.id)
+          : ApiService.I.deleteEmployeeContact(widget.person.id, c.id),
       successMessage: 'Emergency contact removed.',
     );
     if (ok && mounted) _load();
@@ -1194,15 +1658,25 @@ class _DetailSheetState extends State<_DetailSheet> {
                           child: AsyncState.error(_error!, onRetry: _load),
                         )
                       : SingleChildScrollView(
+                          controller: _scrollController,
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.stretch,
                             children: [
-                              if (d.isStudent) ...[
-                                _buildAllergies(d),
-                                const SizedBox(height: 16),
-                                _buildContacts(d),
-                              ] else
+                              // Both kinds carry the person-level medical
+                              // record; employees also get their profile.
+                              if (!d.isStudent) ...[
                                 _buildEmployeeProfile(d),
+                                const SizedBox(height: 16),
+                              ],
+                              Column(
+                                key: _medicalKey,
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  _buildAllergies(d),
+                                  const SizedBox(height: 16),
+                                  _buildContacts(d),
+                                ],
+                              ),
                             ],
                           ),
                         ),
@@ -1231,7 +1705,7 @@ class _DetailSheetState extends State<_DetailSheet> {
                 style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15),
               ),
             ),
-            if (_canWrite)
+            if (_canManageMedical)
               IconButton(
                 tooltip: 'Add allergy',
                 icon: const Icon(HugeIcons.strokeRoundedAdd01, size: 20),
@@ -1260,7 +1734,7 @@ class _DetailSheetState extends State<_DetailSheet> {
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(fontSize: 12))
                   : null,
-              trailing: _canWrite
+              trailing: _canManageMedical
                   ? Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
@@ -1297,7 +1771,7 @@ class _DetailSheetState extends State<_DetailSheet> {
                 style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15),
               ),
             ),
-            if (_canWrite)
+            if (_canManageMedical)
               IconButton(
                 tooltip: 'Add contact',
                 icon: const Icon(HugeIcons.strokeRoundedAdd01, size: 20),
@@ -1335,7 +1809,7 @@ class _DetailSheetState extends State<_DetailSheet> {
                 '${c.relationship} · ${c.phone}',
                 style: const TextStyle(fontSize: 12),
               ),
-              trailing: _canWrite
+              trailing: _canManageMedical
                   ? Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
@@ -1405,9 +1879,6 @@ class _DetailSheetState extends State<_DetailSheet> {
             StatusBadge(
                 label: d.hasQr ? 'QR' : 'no QR',
                 color: d.hasQr ? const Color(0xFF1E6FD9) : Colors.black38),
-            StatusBadge(
-                label: d.hasRfid ? 'RFID' : 'no RFID',
-                color: d.hasRfid ? const Color(0xFF1E6FD9) : Colors.black38),
             if (d.isTeaching == true)
               const StatusBadge(label: 'Teaching', color: Color(0xFF0F766E))
             else if (d.isTeaching == false)

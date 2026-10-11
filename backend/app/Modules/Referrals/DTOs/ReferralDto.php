@@ -26,6 +26,7 @@ final class ReferralDto extends BaseDTO
             'target_module'     => (string) $this->row['target_module'],
             'artifact_type'     => (string) $this->row['artifact_type'],
             'status'            => (string) $this->row['status'],
+            'priority'          => (string) ($this->row['priority'] ?? 'normal'),
             'reason_code'       => $this->row['reason_code'] !== null ? (string) $this->row['reason_code'] : null,
             // Handling provider (nurse / counsellor) — panel revision.
             // NULL until the receiving side acknowledges the referral.

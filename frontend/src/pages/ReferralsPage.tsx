@@ -535,6 +535,7 @@ export default function ReferralsPage() {
               <TableHead className="px-3">Target</TableHead>
               <TableHead className="px-3">Artifact</TableHead>
               <TableHead className="px-3">Status</TableHead>
+              <TableHead className="px-3">Priority</TableHead>
               <TableHead className="px-3">Provider</TableHead>
               <TableHead className="px-3">Updated</TableHead>
               <TableHead className="px-3 text-right">Actions</TableHead>
@@ -542,7 +543,7 @@ export default function ReferralsPage() {
           </TableHeader>
           <TableBody>
             <TableStateRows
-              colSpan={9}
+              colSpan={10}
               isLoading={list.isLoading}
               isError={list.isError}
               isEmpty={rows.length === 0}
@@ -583,6 +584,16 @@ export default function ReferralsPage() {
                 <TableCell className="px-3">
                   <Badge variant={r.status === 'closed' ? 'success' : r.status === 'under_review' ? 'warning' : 'info'}>{statusLabel(r.status)}</Badge>
                 </TableCell>
+                <TableCell className="px-3">
+                  {(() => {
+                    const priority = r.priority ?? 'normal';
+                    return (
+                      <Badge variant={priority === 'urgent' ? 'destructive' : priority === 'high' ? 'warning' : 'secondary'}>
+                        {priority.charAt(0).toUpperCase() + priority.slice(1)}
+                      </Badge>
+                    );
+                  })()}
+                </TableCell>
                 <TableCell className="px-3 text-xs">
                   {r.provider_name !== undefined && r.provider_name !== null ? r.provider_name : <span className="text-muted-foreground">—</span>}
                 </TableCell>
@@ -592,7 +603,7 @@ export default function ReferralsPage() {
                     {(r.status === 'acknowledged' || r.status === 'under_review') &&
                       (me.data?.permissions.includes('*') === true || me.data?.permissions.includes(`${r.target_module}.queue.manage`) === true) && (
                       <Button
-                        className="min-h-11"
+                        className="min-h-11 md:min-h-0"
                         size="sm"
                         variant="outline"
                         disabled={handoff.isPending || r.queue_handoff_entry_id != null}
@@ -602,20 +613,20 @@ export default function ReferralsPage() {
                       </Button>
                     )}
                     {r.status === 'submitted' && canAcknowledge(r) && (
-                      <Button className="min-h-11" size="sm" variant="secondary" disabled={ack.isPending} onClick={() => ack.mutate(r.id)}>Acknowledge</Button>
+                      <Button className="min-h-11 md:min-h-0" size="sm" variant="secondary" disabled={ack.isPending} onClick={() => ack.mutate(r.id)}>Acknowledge</Button>
                     )}
                     {r.status === 'acknowledged' && canReview(r) && (
-                      <Button className="min-h-11" size="sm" variant="secondary" disabled={rev.isPending} onClick={() => rev.mutate(r.id)}>Review</Button>
+                      <Button className="min-h-11 md:min-h-0" size="sm" variant="secondary" disabled={rev.isPending} onClick={() => rev.mutate(r.id)}>Review</Button>
                     )}
                     {r.target_module === 'counselling' && (r.status === 'acknowledged' || r.status === 'under_review') && (
-                      <Button className="min-h-11" size="sm" variant="secondary" onClick={() => setBookingFor(r)}>
+                      <Button className="min-h-11 md:min-h-0" size="sm" variant="secondary" onClick={() => setBookingFor(r)}>
                         <CalendarPlus /> Book
                       </Button>
                     )}
                     {r.status !== 'closed' && (
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>
-                          <Button className="min-h-11" size="sm" variant="outline" aria-label={`Actions for referral #${r.id}`}>
+                          <Button className="min-h-11 md:min-h-0" size="sm" variant="outline" aria-label={`Actions for referral #${r.id}`}>
                             Actions <ChevronDown className="size-3.5" aria-hidden />
                           </Button>
                         </DropdownMenuTrigger>

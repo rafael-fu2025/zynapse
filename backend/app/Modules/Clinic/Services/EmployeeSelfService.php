@@ -24,7 +24,7 @@ use Modules\Clinic\DTOs\UserDto;
  */
 final class EmployeeSelfService extends BaseService
 {
-    private const USER_COLS = 'id, kind, first_name, last_name, middle_name, qr_code, rfid_tag, date_of_birth, gender, address, archived_at, student_number, course, year_level, section, blood_type, consecutive_no_shows, employee_number, department, position, date_hired, employment_status, hr_synced_at, emergency_contact_name, emergency_contact_phone, is_teaching, created_at, updated_at';
+    private const USER_COLS = 'id, kind, first_name, last_name, middle_name, qr_code, date_of_birth, gender, address, archived_at, student_number, course, year_level, section, blood_type, consecutive_no_shows, employee_number, department, position, date_hired, employment_status, hr_synced_at, emergency_contact_name, emergency_contact_phone, is_teaching, created_at, updated_at';
 
     private readonly EmployeePersonService $person;
 

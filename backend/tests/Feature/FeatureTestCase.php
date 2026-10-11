@@ -67,6 +67,12 @@ abstract class FeatureTestCase extends CIUnitTestCase
 
     protected function setUp(): void
     {
+        // Use an already-provisioned test schema when migration execution is
+        // prohibited (e.g. reviewing destructive retirement migrations).
+        if (getenv('SYNAPSE_TEST_SKIP_MIGRATIONS') === '1') {
+            $this->migrate = false;
+            $this->refresh = false;
+        }
         parent::setUp();
 
         // The rate-limit filter increments a per-window counter through

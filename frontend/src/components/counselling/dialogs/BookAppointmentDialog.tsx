@@ -118,15 +118,15 @@ export function BookAppointmentDialog({ onClose, onBooked }: BookAppointmentDial
             <p role="alert" className="text-xs text-destructive">{errors.appointment_date.message}</p>
           )}
         </div>
-        <div className="grid grid-cols-2 gap-3">
-          <div className="space-y-1.5">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div className="min-w-0 space-y-1.5">
             <Label htmlFor="appt-start">Start time</Label>
             <TimePicker id="appt-start" aria-invalid={errors.start_time !== undefined} value={watch('start_time') ?? ''} onChange={(v) => setValue('start_time', v, { shouldValidate: true, shouldDirty: true })} />
             {errors.start_time !== undefined && (
               <p role="alert" className="text-xs text-destructive">{errors.start_time.message}</p>
             )}
           </div>
-          <div className="space-y-1.5">
+          <div className="min-w-0 space-y-1.5">
             <Label htmlFor="appt-end">End time</Label>
             <TimePicker id="appt-end" aria-invalid={errors.end_time !== undefined} value={watch('end_time') ?? ''} onChange={(v) => setValue('end_time', v, { shouldValidate: true, shouldDirty: true })} />
             {errors.end_time !== undefined && (

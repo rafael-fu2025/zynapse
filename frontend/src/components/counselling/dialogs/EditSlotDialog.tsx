@@ -64,7 +64,7 @@ export function EditSlotDialog({
   }
 
   return (
-    <DialogContent lockDismiss className="max-w-md">
+    <DialogContent lockDismiss size="lg">
       <DialogHeader>
         <DialogTitle>Edit availability window</DialogTitle>
       </DialogHeader>
@@ -76,11 +76,15 @@ export function EditSlotDialog({
         )}
       </p>
 
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+      {/* Day gets its own row and Start/End share the next: a time picker
+          (icon + hour + minute + AM/PM) is ~15rem wide, so three fields in
+          one row cannot fit a dialog and used to overlap. `min-w-0` lets
+          each grid column shrink to its track. */}
+      <div className="space-y-3">
         <div className="space-y-1.5">
           <Label id="edit-slot-dow-label" className="text-xs">Day</Label>
           <Select value={dow} onValueChange={setDow}>
-            <SelectTrigger aria-labelledby="edit-slot-dow-label" className="h-8 w-full">
+            <SelectTrigger aria-labelledby="edit-slot-dow-label" className="w-full">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -90,13 +94,15 @@ export function EditSlotDialog({
             </SelectContent>
           </Select>
         </div>
-        <div className="space-y-1.5">
-          <Label htmlFor="edit-slot-start" className="text-xs">Start</Label>
-          <TimePicker id="edit-slot-start" value={start} onChange={setStart} />
-        </div>
-        <div className="space-y-1.5">
-          <Label htmlFor="edit-slot-end" className="text-xs">End</Label>
-          <TimePicker id="edit-slot-end" value={end} onChange={setEnd} />
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div className="min-w-0 space-y-1.5">
+            <Label htmlFor="edit-slot-start" className="text-xs">Start</Label>
+            <TimePicker id="edit-slot-start" value={start} onChange={setStart} />
+          </div>
+          <div className="min-w-0 space-y-1.5">
+            <Label htmlFor="edit-slot-end" className="text-xs">End</Label>
+            <TimePicker id="edit-slot-end" value={end} onChange={setEnd} />
+          </div>
         </div>
       </div>
 

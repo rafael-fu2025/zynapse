@@ -7,6 +7,20 @@
  * contacts. The student record itself is view-only — registry fields
  * have no edit UI (2026-09 product decision). Employees tab: list +
  * registration. Archive is soft — registry rows are never deleted.
+ *
+ * Two sides, four surfaces (students/employees x clinic/guidance):
+ *
+ *   clinic side    students   register, view (blood, allergies, contacts),
+ *                             manage medical record, archive/restore
+ *                  employees  register, view (QR handle, clinic visit
+ *                             history), edit, archive/restore
+ *   guidance side  students   view (no blood/allergies), refer to clinic
+ *                  employees  view (no QR handle, no clinic visit
+ *                             history), refer to clinic
+ *
+ * Guidance never mutates the registry — its only write is a referral.
+ * This is a presentation split; the backend remains the authority and
+ * enforces `clinic.patients.write` / `referrals.create` regardless.
  */
 import { zodResolver } from '@hookform/resolvers/zod';
 import {
@@ -15,7 +29,9 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  ClipboardList,
   Eye,
+  HeartHandshake,
   HeartPulse,
   KeyRound,
   Loader2,
@@ -87,25 +103,28 @@ import {
   useEmployeeEncounters,
   useEmployeeFacets,
   useEmployeeSearch,
+  parseArchiveStatus,
   useEmployees,
   useSetEmployeeArchived,
   useSetStudentArchived,
+  usePatientDetail,
   useStudent,
   useStudentFacets,
   useStudentSearch,
   useStudents,
   useUpdateAllergy,
   useUpdateContact,
-  useUpdateEmployee,
+  type ArchiveStatus,
 } from '@/hooks/usePatients';
 import { useCreateReferral } from '@/hooks/useReferrals';
+import { ReferToGuidanceDialog } from '@/components/clinic/ReferToGuidanceDialog';
+import { GuidanceRecordSection } from '@/components/clinic/GuidanceRecordSection';
 import { createReferralSchema, type CreateReferralInput } from '@/schemas/referrals';
 import {
   addAllergySchema,
   addContactSchema,
   createEmployeeSchema,
   createStudentSchema,
-  updateEmployeeSchema,
   type AddAllergyInput,
   type AddContactInput,
   type CreateEmployeeInput,
@@ -114,7 +133,6 @@ import {
   type EmployeeRecord,
   type PortalAccount,
   type Student,
-  type UpdateEmployeeInput,
 } from '@/schemas/patients';
 import { deriveUniversityEmail } from '@/lib/universityEmail';
 import { fmtUtcToApp } from '@/utils/date';
@@ -229,20 +247,28 @@ function serverErrorFor(err: unknown, fields: readonly string[]): { field?: stri
   return { message: 'Request failed. Please try again.' };
 }
 
+/** The registry row a guidance referral is raised for (student or employee). */
+interface ReferralSubject {
+  /** Student or employee number — the referral pipeline's patient handle. */
+  number: string;
+  name: string;
+}
+
 /**
- * ReferStudentDialog — the guidance-side action on a registry record.
- * The direction is fixed (counselling → clinic) and the patient is the
- * row's own record; the operator picks the artifact and may add a reason
- * or notes. Posts through the same referral pipeline the Referrals page
- * uses — the backend enforces `referrals.create`.
+ * ReferPatientDialog — the guidance-side action on a registry record
+ * (student or employee). The direction is fixed (counselling → clinic)
+ * and the patient is the row's own record; the operator picks the
+ * artifact and may add a reason or notes. Posts through the same referral
+ * pipeline the Referrals page uses — the backend enforces
+ * `referrals.create`.
  */
-function ReferStudentDialog({ student, onClose }: { student: Student; onClose: () => void }) {
+function ReferPatientDialog({ patient, onClose }: { patient: ReferralSubject; onClose: () => void }) {
   const create = useCreateReferral();
   const { register, handleSubmit, formState: { errors }, watch, setValue } =
     useForm<CreateReferralInput>({
       resolver: zodResolver(createReferralSchema),
       defaultValues: {
-        patient_school_id: student.student_number ?? '',
+        patient_school_id: patient.number,
         source_module: 'counselling',
         target_module: 'clinic',
         artifact_type: 'referral_letter',
@@ -262,7 +288,7 @@ function ReferStudentDialog({ student, onClose }: { student: Student; onClose: (
         <DialogTitle>Refer to clinic</DialogTitle>
       </DialogHeader>
       <p className="text-sm text-muted-foreground">
-        {personName(`${student.last_name}, ${student.first_name}`)} · {student.student_number}
+        {patient.name} · {patient.number}
       </p>
       <form noValidate onSubmit={(e) => void onSubmit(e)} className="space-y-3">
         <div className="space-y-1.5">
@@ -363,7 +389,7 @@ function CreateStudentDialog({ onClose }: { onClose: () => void }) {
         }
       },
       onError: (err) => {
-        const e = serverErrorFor(err, ['student_number', 'account_email', 'qr_code', 'rfid_tag']);
+        const e = serverErrorFor(err, ['student_number', 'account_email', 'qr_code']);
         if (e.field !== undefined) {
           setError(e.field as keyof CreateStudentInput, { type: 'server', message: e.message });
         } else {
@@ -481,8 +507,16 @@ function CreateStudentDialog({ onClose }: { onClose: () => void }) {
  * context only — the student record itself is view-only, so registry
  * fields have no edit UI anywhere (2026-09 product decision).
  */
-function ManageMedicalRecordDialog({ studentId, onClose }: { studentId: number | string; onClose: () => void }) {
-  const detail = useStudent(studentId);
+function ManageMedicalRecordDialog({
+  kind,
+  patientId,
+  onClose,
+}: {
+  kind: 'student' | 'employee';
+  patientId: number | string;
+  onClose: () => void;
+}) {
+  const detail = usePatientDetail(kind, patientId);
   const addAllergy = useAddAllergy();
   const addContact = useAddContact();
   const updateAllergy = useUpdateAllergy();
@@ -503,7 +537,9 @@ function ManageMedicalRecordDialog({ studentId, onClose }: { studentId: number |
   });
 
   const s = detail.data;
-  const activeStudentId = s?.id ?? (typeof studentId === 'number' && studentId > 0 ? studentId : 0);
+  const kindLabel = kind === 'employee' ? 'Employee' : 'Student';
+  const handle = s?.kind === 'employee' ? s.employee_number : s?.student_number;
+  const activePatientId = s?.id ?? (typeof patientId === 'number' && patientId > 0 ? patientId : 0);
   const severity = allergyForm.watch('severity');
   const isPrimary = contactForm.watch('is_primary');
 
@@ -527,33 +563,33 @@ function ManageMedicalRecordDialog({ studentId, onClose }: { studentId: number |
   }
 
   const submitAllergy = allergyForm.handleSubmit((values) => {
-    if (activeStudentId <= 0) return;
+    if (activePatientId <= 0) return;
     const onDone = () => {
       setEditing(null);
       allergyForm.reset({ allergen: '', severity: 'mild', reaction: '' });
     };
     if (editing?.type === 'allergy') {
       updateAllergy.mutate(
-        { studentId: activeStudentId, allergyId: editing.id, input: values },
+        { kind, patientId: activePatientId, allergyId: editing.id, input: values },
         { onSuccess: onDone },
       );
     } else {
-      addAllergy.mutate({ studentId: activeStudentId, input: values }, { onSuccess: onDone });
+      addAllergy.mutate({ kind, patientId: activePatientId, input: values }, { onSuccess: onDone });
     }
   });
   const submitContact = contactForm.handleSubmit((values) => {
-    if (activeStudentId <= 0) return;
+    if (activePatientId <= 0) return;
     const onDone = () => {
       setEditing(null);
       contactForm.reset({ contact_name: '', relationship: '', phone: '', is_primary: false });
     };
     if (editing?.type === 'contact') {
       updateContact.mutate(
-        { studentId: activeStudentId, contactId: editing.id, input: values },
+        { kind, patientId: activePatientId, contactId: editing.id, input: values },
         { onSuccess: onDone },
       );
     } else {
-      addContact.mutate({ studentId: activeStudentId, input: values }, { onSuccess: onDone });
+      addContact.mutate({ kind, patientId: activePatientId, input: values }, { onSuccess: onDone });
     }
   });
 
@@ -561,7 +597,9 @@ function ManageMedicalRecordDialog({ studentId, onClose }: { studentId: number |
     <DialogContent lockDismiss className="max-h-[85vh] overflow-y-auto sm:max-w-xl">
       <DialogHeader>
         <DialogTitle>
-          {s !== undefined ? `${personName(`${s.last_name}, ${s.first_name}`)} — ${s.student_number}` : 'Student'}
+          {s !== undefined
+            ? `${personName(`${s.last_name}, ${s.first_name}`)} — ${handle ?? '—'}`
+            : kindLabel}
         </DialogTitle>
       </DialogHeader>
 
@@ -570,9 +608,19 @@ function ManageMedicalRecordDialog({ studentId, onClose }: { studentId: number |
       {s !== undefined && (
         <div className="space-y-4">
           <div className="grid grid-cols-3 gap-2 text-sm">
-            <p><span className="text-muted-foreground">Course:</span> {s.course ?? '—'}</p>
-            <p><span className="text-muted-foreground">Year:</span> {s.year_level ?? '—'}</p>
-            <p><span className="text-muted-foreground">Blood:</span> {s.blood_type ?? '—'}</p>
+            {kind === 'employee' ? (
+              <>
+                <p><span className="text-muted-foreground">Department:</span> {s.department ?? '—'}</p>
+                <p><span className="text-muted-foreground">Position:</span> {s.position ?? '—'}</p>
+                <p><span className="text-muted-foreground">Status:</span> {employmentStatusLabel(s.employment_status)}</p>
+              </>
+            ) : (
+              <>
+                <p><span className="text-muted-foreground">Course:</span> {s.course ?? '—'}</p>
+                <p><span className="text-muted-foreground">Year:</span> {s.year_level ?? '—'}</p>
+                <p><span className="text-muted-foreground">Blood:</span> {s.blood_type ?? '—'}</p>
+              </>
+            )}
           </div>
 
           <section className="space-y-2">
@@ -597,8 +645,8 @@ function ManageMedicalRecordDialog({ studentId, onClose }: { studentId: number |
                       size="sm"
                       className="size-7 p-0 text-destructive"
                       aria-label={`Remove allergy ${a.allergen}`}
-                      disabled={deleteAllergy.isPending || activeStudentId <= 0}
-                      onClick={() => deleteAllergy.mutate({ studentId: activeStudentId, allergyId: a.id })}
+                      disabled={deleteAllergy.isPending || activePatientId <= 0}
+                      onClick={() => deleteAllergy.mutate({ kind, patientId: activePatientId, allergyId: a.id })}
                     >
                       <Trash2 className="size-3.5" />
                     </Button>
@@ -662,8 +710,8 @@ function ManageMedicalRecordDialog({ studentId, onClose }: { studentId: number |
                       size="sm"
                       className="size-7 p-0 text-destructive"
                       aria-label={`Remove contact ${c.contact_name}`}
-                      disabled={deleteContact.isPending || activeStudentId <= 0}
-                      onClick={() => deleteContact.mutate({ studentId: activeStudentId, contactId: c.id })}
+                      disabled={deleteContact.isPending || activePatientId <= 0}
+                      onClick={() => deleteContact.mutate({ kind, patientId: activePatientId, contactId: c.id })}
                     >
                       <Trash2 className="size-3.5" />
                     </Button>
@@ -723,10 +771,31 @@ function ManageMedicalRecordDialog({ studentId, onClose }: { studentId: number |
  * the medical sections with no mutation controls. Editing lives in
  * ManageMedicalRecordDialog so the menu's "View" and "Manage" actions
  * match what they can actually do.
+ *
+ * Side-aware: the guidance side omits the clinical fields (blood type,
+ * allergies) and keeps the registry snapshot plus emergency contacts,
+ * which counsellors need for crisis follow-up.
  */
-function StudentDetailDialog({ studentId, onClose }: { studentId: number | string; onClose: () => void }) {
+/**
+ * GuidanceRecordSection lives in `components/clinic/GuidanceRecordSection`
+ * (extracted 2026-10 so the guidance-record surface can be unit-tested
+ * without loading this page's full module graph). It renders only for
+ * `counselling.records.read` holders; notes stay on their own session
+ * endpoints. Clinic viewers never see it.
+ */
+
+function StudentDetailDialog({
+  studentId,
+  side,
+  onClose,
+}: {
+  studentId: number | string;
+  side: 'clinic' | 'guidance';
+  onClose: () => void;
+}) {
   const detail = useStudent(studentId);
   const s = detail.data;
+  const clinical = side === 'clinic';
 
   return (
     <DialogContent lockDismiss className="max-h-[85vh] overflow-y-auto sm:max-w-xl">
@@ -740,29 +809,36 @@ function StudentDetailDialog({ studentId, onClose }: { studentId: number | strin
 
       {s !== undefined && (
         <div className="space-y-4">
-          <div className="grid grid-cols-3 gap-2 text-sm">
+          <div className={clinical ? 'grid grid-cols-3 gap-2 text-sm' : 'grid grid-cols-2 gap-2 text-sm'}>
             <p><span className="text-muted-foreground">Course:</span> {s.course ?? '—'}</p>
             <p><span className="text-muted-foreground">Year:</span> {s.year_level ?? '—'}</p>
-            <p><span className="text-muted-foreground">Blood:</span> {s.blood_type ?? '—'}</p>
+            {clinical && (
+              <p><span className="text-muted-foreground">Blood:</span> {s.blood_type ?? '—'}</p>
+            )}
+            {!clinical && (
+              <p className="col-span-2"><span className="text-muted-foreground">Department:</span> {s.department ?? '—'}</p>
+            )}
           </div>
 
-          <section className="space-y-2">
-            <h3 className="flex items-center gap-1.5 text-sm font-semibold">
-              <HeartPulse className="size-4 text-destructive" /> Allergies
-            </h3>
-            {(s.allergies ?? []).length === 0 && (
-              <p className="text-xs text-muted-foreground">None recorded.</p>
-            )}
-            <ul className="space-y-1">
-              {(s.allergies ?? []).map((a) => (
-                <li key={a.id} className="flex items-center gap-2 text-sm">
-                  <Badge variant={SEVERITY_VARIANT[a.severity]}>{a.severity}</Badge>
-                  <span className="font-medium">{a.allergen}</span>
-                  {a.reaction !== null && <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">— {a.reaction}</span>}
-                </li>
-              ))}
-            </ul>
-          </section>
+          {clinical && (
+            <section className="space-y-2">
+              <h3 className="flex items-center gap-1.5 text-sm font-semibold">
+                <HeartPulse className="size-4 text-destructive" /> Allergies
+              </h3>
+              {(s.allergies ?? []).length === 0 && (
+                <p className="text-xs text-muted-foreground">None recorded.</p>
+              )}
+              <ul className="space-y-1">
+                {(s.allergies ?? []).map((a) => (
+                  <li key={a.id} className="flex items-center gap-2 text-sm">
+                    <Badge variant={SEVERITY_VARIANT[a.severity]}>{a.severity}</Badge>
+                    <span className="font-medium">{a.allergen}</span>
+                    {a.reaction !== null && <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">— {a.reaction}</span>}
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
 
           <section className="space-y-2">
             <h3 className="flex items-center gap-1.5 text-sm font-semibold">
@@ -782,6 +858,10 @@ function StudentDetailDialog({ studentId, onClose }: { studentId: number | strin
               ))}
             </ul>
           </section>
+
+          {!clinical && (
+            <GuidanceRecordSection patientSchoolId={s?.student_number ?? null} />
+          )}
         </div>
       )}
 
@@ -824,7 +904,7 @@ function CreateEmployeeDialog({ onClose }: { onClose: () => void }) {
         }
       },
       onError: (err) => {
-        const e = serverErrorFor(err, ['employee_number', 'account_email', 'qr_code', 'rfid_tag']);
+        const e = serverErrorFor(err, ['employee_number', 'account_email', 'qr_code']);
         if (e.field !== undefined) {
           setError(e.field as keyof CreateEmployeeInput, { type: 'server', message: e.message });
         } else {
@@ -915,138 +995,6 @@ function CreateEmployeeDialog({ onClose }: { onClose: () => void }) {
   );
 }
 
-function EditEmployeeDialog({ employee, onClose }: { employee: Employee; onClose: () => void }) {
-  const update = useUpdateEmployee();
-  const { register, handleSubmit, reset, setValue, watch } =
-    useForm<UpdateEmployeeInput>({
-      resolver: zodResolver(updateEmployeeSchema),
-      defaultValues: {
-        first_name: employee.first_name,
-        last_name: employee.last_name,
-        department: employee.department ?? '',
-        position: employee.position ?? '',
-        employment_status: employee.employment_status ?? 'active',
-        is_teaching: employee.is_teaching ?? false,
-        date_hired: employee.date_hired ?? '',
-        emergency_contact_name: employee.emergency_contact_name ?? '',
-        emergency_contact_phone: employee.emergency_contact_phone ?? '',
-        // employee.gender is `string | null`; narrow to the union.
-        gender: employee.gender === 'male' || employee.gender === 'female' || employee.gender === 'other'
-          ? employee.gender
-          : undefined,
-        date_of_birth: employee.date_of_birth ?? '',
-        address: employee.address ?? '',
-      },
-    });
-  const status = watch('employment_status');
-  const isTeaching = watch('is_teaching');
-  const gender = watch('gender');
-
-  const onSubmit = handleSubmit((values) => {
-    update.mutate({ id: employee.id, input: values }, { onSuccess: () => { reset(); onClose(); } });
-  });
-
-  return (
-    <DialogContent lockDismiss>
-      <DialogHeader>
-        <DialogTitle>Edit employee — {employee.employee_number}</DialogTitle>
-      </DialogHeader>
-      <form noValidate onSubmit={(e) => void onSubmit(e)} className="space-y-3">
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <div className="space-y-1.5">
-            <Label htmlFor="emp-first">First name</Label>
-            <Input id="emp-first" {...register('first_name')} />
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="emp-last">Last name</Label>
-            <Input id="emp-last" {...register('last_name')} />
-          </div>
-        </div>
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <div className="space-y-1.5">
-            <Label htmlFor="emp-dept">Department</Label>
-            <Input id="emp-dept" {...register('department')} />
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="emp-position">Position</Label>
-            <Input id="emp-position" {...register('position')} />
-          </div>
-        </div>
-        <div className="space-y-1.5">
-          <Label id="emp-status-label">Employment status</Label>
-          <Select {...(status !== undefined ? { value: status } : {})} onValueChange={(v) => setValue('employment_status', v as UpdateEmployeeInput['employment_status'])}>
-            <SelectTrigger aria-labelledby="emp-status-label"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="active">Active</SelectItem>
-              <SelectItem value="on_leave">On leave</SelectItem>
-              <SelectItem value="inactive">Inactive</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-        {/*
-          Teaching flag — informational classification (teaching vs
-          non-teaching staff, e.g. for directory triage). All employees
-          can refer students to counselling regardless of this flag.
-        */}
-        <label className="flex items-center gap-2 rounded-md border bg-background px-3 py-2 text-sm">
-          <input
-            type="checkbox"
-            checked={isTeaching === true}
-            onChange={(e) => setValue('is_teaching', e.target.checked, { shouldDirty: true })}
-            className="size-4"
-            aria-label="Teaching employee"
-          />
-          <span>Teaching employee (faculty)</span>
-        </label>
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <div className="space-y-1.5">
-            <Label htmlFor="emp-date-hired">Date hired</Label>
-            <Input id="emp-date-hired" placeholder="YYYY-MM-DD" {...register('date_hired')} />
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="emp-dob">Date of birth</Label>
-            <Input id="emp-dob" placeholder="YYYY-MM-DD" {...register('date_of_birth')} />
-          </div>
-        </div>
-        <div className="space-y-1.5">
-          <Label id="emp-gender-label">Gender</Label>
-          <Select
-            {...(gender !== undefined ? { value: gender } : {})}
-            onValueChange={(v) => setValue('gender', v as UpdateEmployeeInput['gender'])}
-          >
-            <SelectTrigger aria-labelledby="emp-gender-label"><SelectValue placeholder="Select…" /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="male">Male</SelectItem>
-              <SelectItem value="female">Female</SelectItem>
-              <SelectItem value="other">Other</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-        <div className="space-y-1.5">
-          <Label htmlFor="emp-address">Address</Label>
-          <Input id="emp-address" {...register('address')} />
-        </div>
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <div className="space-y-1.5">
-            <Label htmlFor="emp-ec-name">Emergency contact name</Label>
-            <Input id="emp-ec-name" {...register('emergency_contact_name')} />
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="emp-ec-phone">Emergency contact phone</Label>
-            <Input id="emp-ec-phone" placeholder="09XX XXX XXXX" {...register('emergency_contact_phone')} />
-          </div>
-        </div>
-        <DialogFooter>
-          <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
-          <Button type="submit" disabled={update.isPending}>
-            {update.isPending && <Loader2 className="animate-spin" />} Save
-          </Button>
-        </DialogFooter>
-      </form>
-    </DialogContent>
-  );
-}
-
 /**
  * EmployeeRecordHistory — one MIS record's expandable clinic history.
  *
@@ -1054,10 +1002,49 @@ function EditEmployeeDialog({ employee, onClose }: { employee: Employee; onClose
  * one person can hold several registry records. This block renders one
  * record inside the registry row accordion (and the detail dialog);
  * expanding it lazily fetches that record's encounters.
+ *
+ * `clinical` is the clinic-side view. The guidance side gets the same
+ * position history as a static row — no visit count, not expandable, and
+ * the encounters query never fires (`enabled` stays false).
  */
-function EmployeeRecordHistory({ record }: { record: EmployeeRecord }) {
+function EmployeeRecordHistory({ record, clinical }: { record: EmployeeRecord; clinical: boolean }) {
   const [open, setOpen] = useState(false);
-  const encounters = useEmployeeEncounters(record.id, open);
+  const encounters = useEmployeeEncounters(record.id, clinical && open);
+
+  const summary = (
+    <>
+      {clinical && (
+        <ChevronDown
+          className={`size-3.5 shrink-0 text-muted-foreground transition-transform ${open ? '' : '-rotate-90'}`}
+          aria-hidden
+        />
+      )}
+      <span className="tabular-nums font-medium">{record.employee_number}</span>
+      {record.is_primary && <Badge variant="outline">current</Badge>}
+      {record.archived && <Badge variant="secondary">Archived</Badge>}
+      <span className="min-w-0 flex-1 truncate">
+        {record.position ?? 'No position'}
+        {record.department !== null && <span className="text-muted-foreground"> — {record.department}</span>}
+      </span>
+      <span className="tabular-nums text-muted-foreground">
+        {record.position_year !== null ? `${record.position_year}` : ''}
+        {clinical && (
+          <>
+            {record.position_year !== null ? ' · ' : ''}
+            {record.visit_count} visit{record.visit_count === 1 ? '' : 's'}
+          </>
+        )}
+      </span>
+    </>
+  );
+
+  if (!clinical) {
+    return (
+      <div className="flex w-full flex-wrap items-center gap-2 rounded-lg border bg-background px-3 py-2 text-xs">
+        {summary}
+      </div>
+    );
+  }
 
   return (
     <div className="rounded-lg border bg-background">
@@ -1067,21 +1054,7 @@ function EmployeeRecordHistory({ record }: { record: EmployeeRecord }) {
         onClick={() => setOpen((o) => !o)}
         className="flex w-full flex-wrap items-center gap-2 px-3 py-2 text-left text-xs hover:bg-muted/50"
       >
-        <ChevronDown
-          className={`size-3.5 shrink-0 text-muted-foreground transition-transform ${open ? '' : '-rotate-90'}`}
-          aria-hidden
-        />
-        <span className="tabular-nums font-medium">{record.employee_number}</span>
-        {record.is_primary && <Badge variant="outline">current</Badge>}
-        {record.archived && <Badge variant="secondary">Archived</Badge>}
-        <span className="min-w-0 flex-1 truncate">
-          {record.position ?? 'No position'}
-          {record.department !== null && <span className="text-muted-foreground"> — {record.department}</span>}
-        </span>
-        <span className="tabular-nums text-muted-foreground">
-          {record.position_year !== null ? `${record.position_year} · ` : ''}
-          {record.visit_count} visit{record.visit_count === 1 ? '' : 's'}
-        </span>
+        {summary}
       </button>
       {open && (
         <div className="border-t px-3 py-2">
@@ -1121,12 +1094,14 @@ function EmployeeRecordHistory({ record }: { record: EmployeeRecord }) {
  */
 function EmployeeRowGroup({
   employee: e,
+  side,
   multiRecord,
   expanded,
   onToggle,
   actions,
 }: {
   employee: Employee;
+  side: 'clinic' | 'guidance';
   multiRecord: boolean;
   expanded: boolean;
   onToggle: () => void;
@@ -1175,6 +1150,9 @@ function EmployeeRowGroup({
                 {e.archived && <Badge variant="secondary">Archived</Badge>}
               </>
             )}
+            {e.active_guidance_referral === true && (
+              <Badge variant="info">Referred to Guidance</Badge>
+            )}
           </div>
         </TableCell>
         <TableCell className="px-3 text-right">
@@ -1188,7 +1166,7 @@ function EmployeeRowGroup({
               MIS records — position history, newest first
             </p>
             <div className="space-y-1.5">
-              {records.map((r) => <EmployeeRecordHistory key={r.id} record={r} />)}
+              {records.map((r) => <EmployeeRecordHistory key={r.id} record={r} clinical={side === 'clinic'} />)}
             </div>
           </TableCell>
         </TableRow>
@@ -1202,10 +1180,22 @@ function EmployeeRowGroup({
  * `StudentDetailDialog` for the students side. The schema already
  * carries the emergency contact + date-hired fields, so the dialog
  * can show them without an extra round trip.
+ *
+ * Side-aware: the QR identity handle and the per-record clinic
+ * visit history are clinic-side only; guidance sees the HR snapshot.
  */
-function EmployeeDetailDialog({ employeeId, onClose }: { employeeId: number | string; onClose: () => void }) {
+function EmployeeDetailDialog({
+  employeeId,
+  side,
+  onClose,
+}: {
+  employeeId: number | string;
+  side: 'clinic' | 'guidance';
+  onClose: () => void;
+}) {
   const detail = useEmployee(employeeId);
   const e = detail.data;
+  const clinical = side === 'clinic';
 
   return (
     <DialogContent className="sm:max-w-md">
@@ -1255,14 +1245,15 @@ function EmployeeDetailDialog({ employeeId, onClose }: { employeeId: number | st
             </dd>
           </div>
           <div className="col-span-2">
-            <dt className="text-xs text-muted-foreground">Handles</dt>
+            <dt className="text-xs text-muted-foreground">{clinical ? 'Handles' : 'Classification'}</dt>
             <dd className="flex flex-wrap gap-1.5">
-              {e.has_qr
-                ? <Badge variant="info">QR</Badge>
-                : <Badge variant="secondary">no QR</Badge>}
-              {e.has_rfid
-                ? <Badge variant="info">RFID</Badge>
-                : <Badge variant="secondary">no RFID</Badge>}
+              {clinical && (
+                <>
+                  {e.has_qr
+                    ? <Badge variant="info">QR</Badge>
+                    : <Badge variant="secondary">no QR</Badge>}
+                </>
+              )}
               <TeachingBadge isTeaching={e.is_teaching} />
             </dd>
           </div>
@@ -1270,7 +1261,7 @@ function EmployeeDetailDialog({ employeeId, onClose }: { employeeId: number | st
             <div className="col-span-2">
               <dt className="text-xs text-muted-foreground">MIS records — position history</dt>
               <dd className="mt-1.5 space-y-1.5">
-                {e.records?.map((r) => <EmployeeRecordHistory key={r.id} record={r} />)}
+                {e.records?.map((r) => <EmployeeRecordHistory key={r.id} record={r} clinical={clinical} />)}
               </dd>
             </div>
           )}
@@ -1281,10 +1272,48 @@ function EmployeeDetailDialog({ employeeId, onClose }: { employeeId: number | st
           )}
         </dl>
       )}
+      {!clinical && (
+        <GuidanceRecordSection patientSchoolId={e?.employee_number ?? null} />
+      )}
       <DialogFooter>
         <Button variant="outline" onClick={onClose}>Close</Button>
       </DialogFooter>
     </DialogContent>
+  );
+}
+
+/**
+ * ArchiveStatusSelect — which records a registry tab shows: Active (the
+ * default), Archived (ONLY archived records) or All records.
+ *
+ * It replaced a "Show archived" toggle that ADDED archived rows to the live
+ * ones, so an archived record sat somewhere in a list of mostly-live rows
+ * and finding it to restore meant scanning for the grey badge. A registry
+ * is searched by state as often as by name, so state is its own view.
+ */
+function ArchiveStatusSelect({
+  id,
+  value,
+  onChange,
+}: {
+  id: string;
+  value: ArchiveStatus;
+  onChange: (next: ArchiveStatus) => void;
+}) {
+  return (
+    <div className="space-y-1">
+      <Label id={`${id}-label`} className="text-xs">Status</Label>
+      <Select value={value} onValueChange={(v) => onChange(parseArchiveStatus(v))}>
+        <SelectTrigger aria-labelledby={`${id}-label`} className="w-40">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="active">Active</SelectItem>
+          <SelectItem value="archived">Archived</SelectItem>
+          <SelectItem value="all">All records</SelectItem>
+        </SelectContent>
+      </Select>
+    </div>
   );
 }
 
@@ -1319,9 +1348,23 @@ export default function PatientsPage() {
   const side: 'clinic' | 'guidance' =
     canWrite && searchParams.get('side') !== 'guidance' ? 'clinic' : 'guidance';
   const canRefer = useCan('referrals.create');
-  const [referStudent, setReferStudent] = useState<Student | null>(null);
-  // Filters live in the URL (PRODUCT principle 5): ?q=, ?archived=1,
-  // ?emp_q=, ?emp_archived=, ?emp_department= and ?emp_position= survive a
+  // Registry mutations (medical record, edit, archive) are clinic-side
+  // actions: a holder of both permissions viewing the guidance side must
+  // not see them, so every write gate below uses this, not bare `canWrite`.
+  const clinicWrite = side === 'clinic' && canWrite;
+  // The guidance record is its own surface behind its own code — a clinic
+  // user does NOT get it from clinic permissions (privacy rule, 2026-10).
+  // The backend session endpoint enforces the same code, so the menu gate
+  // and the authority agree.
+  const canReadGuidance = useCan('counselling.records.read');
+  // Guidance's one action on either tab — raise a counselling → clinic
+  // referral for the row's own record (student or employee).
+  const guidanceRefer = side === 'guidance' && canRefer;
+  const [referPatient, setReferPatient] = useState<ReferralSubject | null>(null);
+  // Clinic-side "Refer to Guidance" target (students tab only).
+  const [referGuidance, setReferGuidance] = useState<ReferralSubject | null>(null);
+  // Filters live in the URL (PRODUCT principle 5): ?q=, ?stu_status=,
+  // ?emp_q=, ?emp_status=, ?emp_department= and ?emp_position= survive a
   // refresh and can be shared as links. Each tab keeps its own search key
   // so switching tabs re-seeds from the URL.
   const [query, setQuery, queryDraft] = useUrlFilter('q', { debounceMs: 300 });
@@ -1330,11 +1373,22 @@ export default function PatientsPage() {
   const [openCreateEmp, setOpenCreateEmp] = useState(false);
   const [detailId, setDetailId] = useState<number | string | null>(null);
   const [empDetailId, setEmpDetailId] = useState<number | string | null>(null);
-  const [manageId, setManageId] = useState<number | string | null>(null);
-  const [editEmp, setEditEmp] = useState<Employee | null>(null);
+  // "View guidance record" opens the SAME person detail dialog on the
+  // guidance side even when the page itself is on the clinic side, so a
+  // counselling.read holder can reach the guidance record without losing
+  // their clinic context.
+  const [guidanceDetail, setGuidanceDetail] = useState<{ kind: 'student' | 'employee'; id: number | string } | null>(null);
+  // Medical-record dialog target — students and employees share the same
+  // person-level medical record (allergies + emergency contacts).
+  const [manage, setManage] = useState<{ kind: 'student' | 'employee'; id: number | string } | null>(null);
   const [confirm, setConfirm] = useState<ConfirmAction | null>(null);
-  const [showArchived, setShowArchived] = useUrlFilter('archived', { default: '' });
-  const [showArchivedEmp, setShowArchivedEmp] = useUrlFilter('emp_archived', { default: '' });
+  // Archive state is its own view per tab (?stu_status= / ?emp_status=):
+  // active (default) | archived (only) | all. Values from a hand-edited URL
+  // are coerced, so anything unknown is just `active`.
+  const [stuStatusRaw, setStuStatusRaw] = useUrlFilter('stu_status', { default: 'active' });
+  const [empStatusRaw, setEmpStatusRaw] = useUrlFilter('emp_status', { default: 'active' });
+  const stuStatus = parseArchiveStatus(stuStatusRaw);
+  const empStatus = parseArchiveStatus(empStatusRaw);
   // Students tab facets. Department, Course (MIS `program`) and Year Level
   // (MIS `level`) are the three categorical fields the MIS student endpoint
   // itself filters on, and the only ones our synced rows carry. There is
@@ -1359,18 +1413,75 @@ export default function PatientsPage() {
   // An active facet is a filter even with nothing typed, so the empty state
   // must read "no matches" rather than "no students registered".
   const studentFiltered = searching
-    || stuDepartment !== 'all' || stuCourse !== 'all' || stuYear !== 'all';
-  const list = useStudents(cursor, 25, showArchived === '1', stuDepartment, stuCourse, stuYear);
+    || stuDepartment !== 'all' || stuCourse !== 'all' || stuYear !== 'all'
+    || stuStatus !== 'active';
+  const list = useStudents(cursor, 25, stuStatus, stuDepartment, stuCourse, stuYear);
   const search = useStudentSearch(query, {
+    status: stuStatus,
     department: stuDepartment,
     course: stuCourse,
     yearLevel: stuYear,
   });
-  const stuFacets = useStudentFacets();
-  const employees = useEmployees(empCursor, 25, showArchivedEmp === '1', 'all', empDepartment, empPosition);
-  const empFacets = useEmployeeFacets();
-  const empSearch = useEmployeeSearch(empQuery, empDepartment, empPosition);
+  const stuFacets = useStudentFacets(stuStatus);
+  const employees = useEmployees(empCursor, 25, empStatus, 'all', empDepartment, empPosition);
+  const empFacets = useEmployeeFacets(empStatus);
+  const empSearch = useEmployeeSearch(empQuery, empDepartment, empPosition, empStatus);
   const setArchived = useSetStudentArchived();
+
+  // Switching Active / Archived / All swaps the record set, and the facet
+  // dropdowns are rebuilt from that set — a department that only live
+  // students have would leave the control blank in the archived view. So a
+  // status change starts from page 1 with the facets cleared.
+  function changeStuStatus(next: ArchiveStatus) {
+    setStuStatusRaw(next);
+    setStuDepartment('all');
+    setStuCourse('all');
+    setStuYear('all');
+    setCursor(null);
+    setHistory([null]);
+  }
+  function changeEmpStatus(next: ArchiveStatus) {
+    setEmpStatusRaw(next);
+    setEmpDepartment('all');
+    setEmpPosition('all');
+    setEmpCursor(null);
+    setEmpHistory([null]);
+  }
+
+  // Clinic Records and Guidance Records are completely independent modules
+  // sharing `/patients`. When switching between sides, clear all search
+  // terms, archive statuses, facets, and pagination so neither module's
+  // view state ever bleeds into the other.
+  const prevSideRef = useRef(side);
+  useEffect(() => {
+    if (prevSideRef.current !== side) {
+      prevSideRef.current = side;
+      setQuery('');
+      setEmpQuery('');
+      setStuStatusRaw('active');
+      setEmpStatusRaw('active');
+      setStuDepartment('all');
+      setStuCourse('all');
+      setStuYear('all');
+      setEmpDepartment('all');
+      setEmpPosition('all');
+      setCursor(null);
+      setEmpCursor(null);
+      setHistory([null]);
+      setEmpHistory([null]);
+    }
+  }, [
+    side,
+    setQuery,
+    setEmpQuery,
+    setStuStatusRaw,
+    setEmpStatusRaw,
+    setStuDepartment,
+    setStuCourse,
+    setStuYear,
+    setEmpDepartment,
+    setEmpPosition,
+  ]);
 
   function nextPage() {
     if (list.data?.next !== null && list.data?.next !== undefined) {
@@ -1417,20 +1528,56 @@ export default function PatientsPage() {
         <DropdownMenuItem className="min-h-11" onSelect={() => setDetailId(student.id <= 0 && student.student_number ? student.student_number : student.id)}>
           <Eye /> View record
         </DropdownMenuItem>
+        {/* Clinic-side cross-link into the guidance record (2026-10): the
+            student menu parity for "View/Manage Guidance Record". Gated on
+            the counselling code, so clinic staff without it never see it —
+            the clinic record and the guidance record stay separate
+            surfaces. */}
+        {side === 'clinic' && canReadGuidance && (
+          <DropdownMenuItem
+            className="min-h-11"
+            onSelect={() => setGuidanceDetail({
+              kind: 'student',
+              id: student.id <= 0 && student.student_number ? student.student_number : student.id,
+            })}
+          >
+            <ClipboardList /> View guidance record
+          </DropdownMenuItem>
+        )}
         {/* Guidance-side action (2026-09-27): the guidance record surface
-            refers a student to the clinic — clinic-only actions (medical
-            edits, archiving) stay below, gated on write. */}
-        {side === 'guidance' && canRefer && (
-          <DropdownMenuItem className="min-h-11" onSelect={() => setReferStudent(student)}>
+            refers a student to the clinic. Clinic-only actions (medical
+            edits, archiving) are gated on the clinic side + write. */}
+        {guidanceRefer && (
+          <DropdownMenuItem
+            className="min-h-11"
+            onSelect={() => setReferPatient({
+              number: student.student_number ?? '',
+              name: personName(`${student.last_name}, ${student.first_name}`),
+            })}
+          >
             <Share2 /> Refer to clinic
           </DropdownMenuItem>
         )}
-        {canWrite && (
-          <DropdownMenuItem className="min-h-11" onSelect={() => setManageId(student.id <= 0 && student.student_number ? student.student_number : student.id)}>
+        {clinicWrite && !student.is_directory_record && (
+          <DropdownMenuItem className="min-h-11" onSelect={() => setManage({ kind: 'student', id: student.id <= 0 && student.student_number ? student.student_number : student.id })}>
             <HeartPulse /> Manage medical record
           </DropdownMenuItem>
         )}
-        {canWrite && !student.is_directory_record && (
+        {/* Clinic-side referral to the Guidance Center (2026-10): raises a
+            clinic → counselling referral. Only reason / notes / priority
+            travel to Guidance — the clinic record stays untouched. */}
+        {side === 'clinic' && canRefer && (
+          <DropdownMenuItem
+            className="min-h-11"
+            onSelect={() => setReferGuidance({
+              number: student.student_number ?? '',
+              name: personName(`${student.last_name}, ${student.first_name}`),
+            })}
+          >
+            <HeartHandshake /> Refer to Guidance
+          </DropdownMenuItem>
+        )}
+        {clinicWrite && !student.is_directory_record && (
           <>
             <DropdownMenuSeparator />
             <DropdownMenuItem
@@ -1474,12 +1621,56 @@ export default function PatientsPage() {
         <DropdownMenuItem className="min-h-11" onSelect={() => setEmpDetailId(employee.id <= 0 && employee.employee_number ? employee.employee_number : employee.id)}>
           <Eye /> View employee record
         </DropdownMenuItem>
-        {canWrite && !employee.is_directory_record && (
-          <DropdownMenuItem className="min-h-11" onSelect={() => setEditEmp(employee)}>
-            <Pencil /> Edit employee record
+        {/* Employee parity (2026-10): the guidance record is a separate
+            surface from the employee's clinic record. This opens the same
+            person detail on the guidance side (sessions + counsellor), and
+            is only offered to holders of the counselling read code. */}
+        {side === 'clinic' && canReadGuidance && (
+          <DropdownMenuItem
+            className="min-h-11"
+            onSelect={() => setGuidanceDetail({
+              kind: 'employee',
+              id: employee.id <= 0 && employee.employee_number ? employee.employee_number : employee.id,
+            })}
+          >
+            <ClipboardList /> View guidance record
           </DropdownMenuItem>
         )}
-        {canWrite && !employee.is_directory_record && (
+        {/* Guidance refers an employee to the clinic exactly as it does a
+            student; editing and archiving the registry row are clinic-side. */}
+        {guidanceRefer && (
+          <DropdownMenuItem
+            className="min-h-11"
+            onSelect={() => setReferPatient({
+              number: employee.employee_number ?? '',
+              name: `${employee.last_name}, ${employee.first_name}`,
+            })}
+          >
+            <Share2 /> Refer to clinic
+          </DropdownMenuItem>
+        )}
+        {/* Employee parity (2026-10): the same person-level medical record
+            and the clinic → counselling referral as the students tab.
+            Directory-only MIS rows (negative synthetic ids) have no local
+            person to attach allergies/contacts to, so the medical action is
+            withheld for them — same gate as edit/archive. */}
+        {clinicWrite && !employee.is_directory_record && (
+          <DropdownMenuItem className="min-h-11" onSelect={() => setManage({ kind: 'employee', id: employee.id <= 0 && employee.employee_number ? employee.employee_number : employee.id })}>
+            <HeartPulse /> Manage medical record
+          </DropdownMenuItem>
+        )}
+        {side === 'clinic' && canRefer && (
+          <DropdownMenuItem
+            className="min-h-11"
+            onSelect={() => setReferGuidance({
+              number: employee.employee_number ?? '',
+              name: `${employee.last_name}, ${employee.first_name}`,
+            })}
+          >
+            <HeartHandshake /> Refer to Guidance
+          </DropdownMenuItem>
+        )}
+        {clinicWrite && !employee.is_directory_record && (
           <>
             <DropdownMenuSeparator />
             <DropdownMenuItem
@@ -1525,8 +1716,12 @@ export default function PatientsPage() {
           title="Records"
           description={
             side === 'guidance'
-              ? 'The student and employee registry as seen from Guidance — refer records to the clinic; clinical actions stay clinic-side.'
-              : 'Registry recycled from the legacy system — records are archived, never deleted.'
+              ? (tab === 'students'
+                ? 'Students as seen from Guidance — refer a student to the clinic; medical details and registry changes stay clinic-side.'
+                : 'Employees as seen from Guidance — refer an employee to the clinic; clinic visit history and registry changes stay clinic-side.')
+              : (tab === 'students'
+                ? 'Student registry with medical records — register students, manage allergies and emergency contacts. Records are archived, never deleted.'
+                : 'Employee registry with clinic visit history — register and edit employees. Records are archived, never deleted.')
           }
           actions={
             tab === 'students' ? (
@@ -1631,18 +1826,7 @@ export default function PatientsPage() {
                 </SelectContent>
               </Select>
             </div>
-            <div className="space-y-1">
-              <Label className="text-xs">Status</Label>
-              <div>
-                <Button
-                  variant={showArchived === '1' ? 'secondary' : 'outline'}
-                  aria-pressed={showArchived === '1'}
-                  onClick={() => { setShowArchived(showArchived === '1' ? '' : '1'); setCursor(null); setHistory([null]); }}
-                >
-                  <Archive /> {showArchived === '1' ? 'Hide archived' : 'Show archived'}
-                </Button>
-              </div>
-            </div>
+            <ArchiveStatusSelect id="stu-status" value={stuStatus} onChange={changeStuStatus} />
           </PageToolbar>
 
           <section className="hidden overflow-hidden rounded-xl border bg-card md:block md:min-h-0 md:flex-1">
@@ -1688,8 +1872,10 @@ export default function PatientsPage() {
                     description: 'Students appear after their first university-ID login or an HR/MIS sync.',
                   }}
                   noResults={{
-                    title: 'No students match these filters.',
-                    description: 'Try a different student number, name, department, program, or year level.',
+                    title: stuStatus === 'archived' ? 'No archived students found.' : 'No students match these filters.',
+                    description: stuStatus === 'archived'
+                      ? 'Nothing has been archived yet, or no archived student fits this search. Archive a record from its Actions menu.'
+                      : 'Try a different student number, name, department, program, or year level.',
                   }}
                   hasFilters={studentFiltered}
                 />
@@ -1706,15 +1892,20 @@ export default function PatientsPage() {
                     )}
                     <TableCell className="px-3 text-xs">{s.department ?? '—'}</TableCell>
                     <TableCell className="px-3">
-                      {s.is_directory_record ? (
-                        <Badge variant="outline" className="border-sky-300 bg-sky-50 text-sky-700 dark:border-sky-800 dark:bg-sky-950/40 dark:text-sky-300">
-                          MIS Directory
-                        </Badge>
-                      ) : s.archived ? (
-                        <Badge variant="secondary">Archived</Badge>
-                      ) : (
-                        <Badge variant="success">Active</Badge>
-                      )}
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        {s.is_directory_record ? (
+                          <Badge variant="outline" className="border-sky-300 bg-sky-50 text-sky-700 dark:border-sky-800 dark:bg-sky-950/40 dark:text-sky-300">
+                            MIS Directory
+                          </Badge>
+                        ) : s.archived ? (
+                          <Badge variant="secondary">Archived</Badge>
+                        ) : (
+                          <Badge variant="success">Active</Badge>
+                        )}
+                        {s.active_guidance_referral === true && (
+                          <Badge variant="info">Referred to Guidance</Badge>
+                        )}
+                      </div>
                     </TableCell>
                     <TableCell className="px-3 text-right">
                       {studentActions(s)}
@@ -1739,7 +1930,7 @@ export default function PatientsPage() {
           )}
           {!loading && !errored && rows.length === 0 && (
             <p className="rounded-xl border border-dashed p-6 text-center text-sm text-muted-foreground md:hidden">
-              {studentFiltered ? 'No matches.' : 'No students registered.'}
+              {stuStatus === 'archived' && !searching ? 'No archived students.' : studentFiltered ? 'No matches.' : 'No students registered.'}
             </p>
           )}
           <MobileCardList>
@@ -1747,15 +1938,20 @@ export default function PatientsPage() {
               <MobileCard key={s.id} aria-label={`Student ${s.student_number}`}>
                 <div className="mb-1 flex items-center justify-between gap-2">
                   <span className="text-sm font-medium text-foreground">{personName(`${s.last_name}, ${s.first_name}`)}</span>
-                  {s.is_directory_record ? (
-                    <Badge variant="outline" className="border-sky-300 bg-sky-50 text-sky-700 dark:border-sky-800 dark:bg-sky-950/40 dark:text-sky-300">
-                      MIS Directory
-                    </Badge>
-                  ) : s.archived ? (
-                    <Badge variant="secondary">Archived</Badge>
-                  ) : (
-                    <Badge variant="success">Active</Badge>
-                  )}
+                  <div className="flex flex-wrap items-center justify-end gap-1.5">
+                    {s.active_guidance_referral === true && (
+                      <Badge variant="info">Referred to Guidance</Badge>
+                    )}
+                    {s.is_directory_record ? (
+                      <Badge variant="outline" className="border-sky-300 bg-sky-50 text-sky-700 dark:border-sky-800 dark:bg-sky-950/40 dark:text-sky-300">
+                        MIS Directory
+                      </Badge>
+                    ) : s.archived ? (
+                      <Badge variant="secondary">Archived</Badge>
+                    ) : (
+                      <Badge variant="success">Active</Badge>
+                    )}
+                  </div>
                 </div>
                 <MobileCardField label="Number"><span className="tabular-nums text-xs">{s.student_number}</span></MobileCardField>
                 <MobileCardField label="Course"><span className="text-xs">{s.course ?? '—'}</span></MobileCardField>
@@ -1847,18 +2043,7 @@ export default function PatientsPage() {
                 </SelectContent>
               </Select>
             </div>
-            <div className="space-y-1">
-              <Label className="text-xs">Status</Label>
-              <div>
-                <Button
-                  variant={showArchivedEmp === '1' ? 'secondary' : 'outline'}
-                  aria-pressed={showArchivedEmp === '1'}
-                  onClick={() => { setShowArchivedEmp(showArchivedEmp === '1' ? '' : '1'); setEmpCursor(null); setEmpHistory([null]); }}
-                >
-                  <Archive /> {showArchivedEmp === '1' ? 'Hide archived' : 'Show archived'}
-                </Button>
-              </div>
-            </div>
+            <ArchiveStatusSelect id="emp-status" value={empStatus} onChange={changeEmpStatus} />
           </PageToolbar>
 
           <section className="hidden overflow-hidden rounded-xl border bg-card md:block md:min-h-0 md:flex-1">
@@ -1900,10 +2085,12 @@ export default function PatientsPage() {
                           description: 'Employees appear after an MIS directory sync (synapse:mis-sync) or their first university-ID login.',
                         }}
                         noResults={{
-                          title: 'No employees match these filters.',
-                          description: 'Try a different employee number, name, department, or position.',
+                          title: empStatus === 'archived' ? 'No archived employees found.' : 'No employees match these filters.',
+                          description: empStatus === 'archived'
+                            ? 'Nothing has been archived yet, or no archived employee fits this search. Archive a record from its Actions menu.'
+                            : 'Try a different employee number, name, department, or position.',
                         }}
-                        hasFilters={empSearching || empDepartment !== 'all' || empPosition !== 'all'}
+                        hasFilters={empSearching || empDepartment !== 'all' || empPosition !== 'all' || empStatus !== 'active'}
                       />
                       {empRows.map((e) => {
                         const multiRecord = !e.is_directory_record && (e.records?.length ?? 0) > 1;
@@ -1912,6 +2099,7 @@ export default function PatientsPage() {
                           <EmployeeRowGroup
                             key={e.id}
                             employee={e}
+                            side={side}
                             multiRecord={multiRecord}
                             expanded={expanded}
                             onToggle={() => toggleEmpExpanded(e.id)}
@@ -1946,9 +2134,11 @@ export default function PatientsPage() {
                 )}
                 {!empLoading && !empErrored && empRows.length === 0 && (
                   <p className="rounded-xl border border-dashed p-6 text-center text-sm text-muted-foreground">
-                    {(empSearching || empDepartment !== 'all' || empPosition !== 'all')
-                      ? 'No employees match these filters.'
-                      : 'No employees registered.'}
+                    {empStatus === 'archived' && !empSearching
+                      ? 'No archived employees.'
+                      : (empSearching || empDepartment !== 'all' || empPosition !== 'all' || empStatus !== 'active')
+                        ? 'No employees match these filters.'
+                        : 'No employees registered.'}
                   </p>
                 )}
                 <MobileCardList>
@@ -1969,6 +2159,9 @@ export default function PatientsPage() {
                       <div className="mb-1 flex flex-wrap gap-1.5">
                         {!e.is_directory_record && <TeachingBadge isTeaching={e.is_teaching} />}
                         {e.archived && <Badge variant="secondary">Archived</Badge>}
+                        {e.active_guidance_referral === true && (
+                          <Badge variant="info">Referred to Guidance</Badge>
+                        )}
                       </div>
                       <MobileCardField label="Number"><span className="tabular-nums text-xs">{e.employee_number}</span></MobileCardField>
                       <MobileCardField label="Department"><span className="text-xs">{e.department ?? '—'}</span></MobileCardField>
@@ -1976,7 +2169,7 @@ export default function PatientsPage() {
                       {!e.is_directory_record && (e.records?.length ?? 0) > 1 && (
                         <div className="mt-2 space-y-1.5" role="group" aria-label={`MIS records of ${e.employee_number}`}>
                           <p className="text-xs font-medium text-muted-foreground">MIS records — position history</p>
-                          {e.records?.map((r) => <EmployeeRecordHistory key={r.id} record={r} />)}
+                          {e.records?.map((r) => <EmployeeRecordHistory key={r.id} record={r} clinical={side === 'clinic'} />)}
                         </div>
                       )}
                       <MobileCardActions>{employeeActions(e)}</MobileCardActions>
@@ -2010,29 +2203,44 @@ export default function PatientsPage() {
 
       {detailId !== null && (
         <Dialog open onOpenChange={(o) => !o && setDetailId(null)}>
-          <StudentDetailDialog studentId={detailId} onClose={() => setDetailId(null)} />
+          <StudentDetailDialog studentId={detailId} side={side} onClose={() => setDetailId(null)} />
         </Dialog>
       )}
 
-      {manageId !== null && (
-        <Dialog open onOpenChange={(o) => !o && setManageId(null)}>
-          <ManageMedicalRecordDialog studentId={manageId} onClose={() => setManageId(null)} />
+        {manage !== null && (
+          <Dialog open onOpenChange={(o) => !o && setManage(null)}>
+            <ManageMedicalRecordDialog kind={manage.kind} patientId={manage.id} onClose={() => setManage(null)} />
+          </Dialog>
+        )}
+
+      {referPatient !== null && (
+        <Dialog open onOpenChange={(o) => !o && setReferPatient(null)}>
+          <ReferPatientDialog patient={referPatient} onClose={() => setReferPatient(null)} />
         </Dialog>
       )}
 
-      {referStudent !== null && (
-        <ReferStudentDialog student={referStudent} onClose={() => setReferStudent(null)} />
-      )}
-
-      {editEmp !== null && (
-        <Dialog open onOpenChange={(o) => !o && setEditEmp(null)}>
-          <EditEmployeeDialog employee={editEmp} onClose={() => setEditEmp(null)} />
+      {referGuidance !== null && (
+        <Dialog open onOpenChange={(o) => !o && setReferGuidance(null)}>
+          <ReferToGuidanceDialog patient={referGuidance} onClose={() => setReferGuidance(null)} />
         </Dialog>
       )}
 
       {empDetailId !== null && (
         <Dialog open onOpenChange={(o) => !o && setEmpDetailId(null)}>
-          <EmployeeDetailDialog employeeId={empDetailId} onClose={() => setEmpDetailId(null)} />
+          <EmployeeDetailDialog employeeId={empDetailId} side={side} onClose={() => setEmpDetailId(null)} />
+        </Dialog>
+      )}
+
+      {/* "View guidance record" — the person detail rendered on the
+          guidance side regardless of the page's own side, so the section
+          that carries the counselling history is the one that shows. */}
+      {guidanceDetail !== null && (
+        <Dialog open onOpenChange={(o) => !o && setGuidanceDetail(null)}>
+          {guidanceDetail.kind === 'employee' ? (
+            <EmployeeDetailDialog employeeId={guidanceDetail.id} side="guidance" onClose={() => setGuidanceDetail(null)} />
+          ) : (
+            <StudentDetailDialog studentId={guidanceDetail.id} side="guidance" onClose={() => setGuidanceDetail(null)} />
+          )}
         </Dialog>
       )}
 

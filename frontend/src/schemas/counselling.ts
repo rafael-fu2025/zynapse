@@ -8,6 +8,7 @@ export const sessionSchema = z.object({
   id: z.number().int().positive(),
   patient_school_id: z.string(),
   counsellor_user_id: z.number().int().positive(),
+  counsellor_name: z.string().nullable().optional(),
   started_at: z.string(),
   ended_at: z.string().nullable(),
 });

@@ -21,4 +21,4 @@ After acknowledge/review the patient can be handed off into the target module's 
 | POST   | `/api/v1/referrals/{id}/close`             | api_auth            | `referrals.close`           |
 | POST   | `/api/v1/referrals/{id}/queue-handoff`     | api_auth            | `referrals.acknowledge` + receiving side |
 
-The former per-referral QR token feature (issue/revoke/verify) was removed — see the `DropReferralQrColumns` migration. The clinic appointment QR (`/api/v1/appointments/verify`, public) is a separate feature and is unaffected.
+The former per-referral QR token feature (issue/revoke/verify) was removed — see the `DropReferralQrColumns` migration. Appointment QR issuance/verification is also retired (`DropAppointmentQrColumns`); queue handoff and booking remain unchanged.

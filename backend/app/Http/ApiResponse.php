@@ -50,6 +50,20 @@ final class ApiResponse
     }
 
     /**
+     * The DEVICE surface shape — small FLAT JSON for the ESP32s (BMG
+     * tumbler boards), deliberately NOT the human envelope. An 8-bit
+     * MCU with a 5 s request timeout parses `data.times` one nesting
+     * level deep at most; every byte and parser branch counts. Errors
+     * keep the standard envelope (the ApiExceptionFilter renders
+     * failures), so the firmware contract is: HTTP 200 + flat body =
+     * apply, anything else = keep current state and retry later.
+     */
+    public static function device(array $payload, int $status = 200): array
+    {
+        return ['status' => $status, 'body' => $payload];
+    }
+
+    /**
      * Apply a previously-built envelope to a ResponseInterface.
      */
     public static function apply(ResponseInterface $response, array $envelope): ResponseInterface

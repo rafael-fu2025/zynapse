@@ -1455,6 +1455,16 @@ export default function FacilitiesPage() {
           <DropdownMenuItem className="min-h-11" onSelect={() => setOpenEdit(u)}>
             <Pencil /> Edit drum
           </DropdownMenuItem>
+          {/* The drum page carries the UNIT's automation surface —
+              device liveness, the run schedule editor, run history and
+              the manual I/O ledger. It must be reachable for an IDLE
+              drum too (that is when a schedule is set), and the widget
+              links only cover drums with an active batch. */}
+          <DropdownMenuItem className="min-h-11" asChild>
+            <Link to={`/facilities/drums/${u.id}`}>
+              <Cpu /> Open drum page
+            </Link>
+          </DropdownMenuItem>
         {archived ? (
           <DropdownMenuItem className="min-h-11" disabled={!can.restore} onSelect={() => unarchiveUnit.mutate({ unitId: u.id })}>
             <ArchiveRestore /> Restore

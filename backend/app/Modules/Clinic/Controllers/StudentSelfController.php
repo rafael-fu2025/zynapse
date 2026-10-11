@@ -20,8 +20,8 @@ use Modules\Clinic\Services\StudentSelfService;
  * `user_id` UNIQUE link is the only thing that lets the caller
  * see the data; an unlinked user gets 404, not 403.
  *
- * READ-ONLY by design. The full student self-service flow
- * (book appointment, QR check-in) is still deferred.
+ * Supports self-scoped profile, visits, queue status and booking.
+ * Attendance is staff-actioned; booking does not issue QR tokens.
  */
 final class StudentSelfController extends ApiController
 {

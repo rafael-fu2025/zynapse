@@ -78,4 +78,16 @@ abstract class ApiController extends Controller
             ->setStatusCode($body['status'])
             ->setJSON($body['body']);
     }
+
+    /**
+     * Flat-JSON response for the device surface (ESP32 ingest). NOT the
+     * human envelope — see ApiResponse::device() for the contract.
+     */
+    protected function deviceOk(array $payload, int $status = 200): ResponseInterface
+    {
+        $body = \App\Http\ApiResponse::device($payload, $status);
+        return Services::response()
+            ->setStatusCode($body['status'])
+            ->setJSON($body['body']);
+    }
 }

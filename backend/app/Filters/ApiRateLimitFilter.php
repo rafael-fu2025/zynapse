@@ -21,6 +21,10 @@ use Config\Services;
  * Groups (the filter argument, e.g. `api_ratelimit:auth`):
  *   global — RATELIMIT_GLOBAL_PER_MIN (default 600), all `api/*` routes.
  *   auth   — RATELIMIT_AUTH_PER_MIN   (default 30), login/refresh only.
+ *   device — RATELIMIT_DEVICE_PER_MIN (default 120), the ESP32 ingest
+ *            surface. Buckets key on the X-Device-Token header FIRST
+ *            (device traffic carries no Bearer; keying on IP would put
+ *            every board behind the same router into ONE bucket).
  */
 final class ApiRateLimitFilter implements FilterInterface
 {
@@ -59,8 +63,9 @@ final class ApiRateLimitFilter implements FilterInterface
     private function limitFor(string $group): int
     {
         return match ($group) {
-            'auth'  => (int) (getenv('RATELIMIT_AUTH_PER_MIN') ?: 30),
-            default => (int) (getenv('RATELIMIT_GLOBAL_PER_MIN') ?: 600),
+            'auth'   => (int) (getenv('RATELIMIT_AUTH_PER_MIN') ?: 30),
+            'device' => (int) (getenv('RATELIMIT_DEVICE_PER_MIN') ?: 120),
+            default  => (int) (getenv('RATELIMIT_GLOBAL_PER_MIN') ?: 600),
         };
     }
 
@@ -76,6 +81,14 @@ final class ApiRateLimitFilter implements FilterInterface
 
     private function extractTokenId(RequestInterface $request): string
     {
+        // Device tokens travel on their own header (the device surface
+        // is disjoint from the human JWT by design) — key those buckets
+        // on the presented device credential, never on shared IP.
+        $device = trim((string) $request->getHeaderLine('X-Device-Token'));
+        if ($device !== '') {
+            return substr(hash('sha256', $device), 0, 16);
+        }
+
         $auth = (string) $request->getHeaderLine('Authorization');
         if (preg_match('/^Bearer\s+(.+)$/i', $auth, $m) === 1) {
             return substr(hash('sha256', $m[1]), 0, 16);

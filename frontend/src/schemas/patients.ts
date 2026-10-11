@@ -67,11 +67,13 @@ export const personSchema = z.object({
   gender: z.string().nullable(),
   address: z.string().nullable(),
   has_qr: z.boolean(),
-  has_rfid: z.boolean(),
+
   archived: z.boolean(),
   created_at: z.string(),
   updated_at: z.string().optional(),
   is_directory_record: z.boolean().optional(),
+  /** Live clinic→counselling referral exists — "Referred to Guidance" badge. */
+  active_guidance_referral: z.boolean().optional(),
 
   // Student-specific
   student_number: z.string().nullable(),

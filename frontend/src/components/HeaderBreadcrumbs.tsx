@@ -7,12 +7,12 @@ import { titleCase } from '@/lib/utils';
 const TAB_LABELS: Record<string, string> = {
   queue: 'Queue',
   closed: 'Closed',
-  staff: 'Staff Schedules',
+  staff: 'Staff schedules',
   medicines: 'Medicines',
   supplies: 'Supplies',
   reorders: 'Purchases',
   insights: 'Insights',
-  scheduling: 'Scheduling',
+  scheduling: 'Staff schedules',
   analytics: 'Analytics',
   students: 'Students',
   employees: 'Employees',
@@ -33,8 +33,12 @@ export function HeaderBreadcrumbs() {
   const { pathname, search } = useLocation();
   if (pathname === '/') return null;
 
-  const parts = pathname.split('/').filter(Boolean);
-  const crumbs: Array<{ label: string; href: string }> = [];
+  const searchParams = new URLSearchParams(search);
+  const isRecordsPage = pathname.replace(/\/+$/, '') === '/patients';
+  // Clinic and Guidance Records share this route. The registry type is
+  // the destination; linking the Records parent only reopens Students.
+  const parts = isRecordsPage ? [] : pathname.split('/').filter(Boolean);
+  const crumbs: Array<{ label: string; href: string; linkable: boolean }> = [];
 
   let acc = '';
   for (const part of parts) {
@@ -47,12 +51,12 @@ export function HeaderBreadcrumbs() {
       label = `#${part}`;
     }
 
-    crumbs.push({ label, href: acc });
+    crumbs.push({ label, href: acc, linkable: meta.linkable !== false });
   }
 
   // Extract active ?tab= or ?session= to show deep context in breadcrumbs
-  const searchParams = new URLSearchParams(search);
-  const activeTab = searchParams.get('tab');
+  // Records defaults to Students even when the canonical URL omits ?tab=.
+  const activeTab = searchParams.get('tab') ?? (isRecordsPage ? 'students' : null);
   const activeSession = searchParams.get('session');
 
   if (activeTab !== null && activeTab !== '') {
@@ -60,6 +64,7 @@ export function HeaderBreadcrumbs() {
     crumbs.push({
       label: tabName,
       href: `${pathname}?tab=${encodeURIComponent(activeTab)}`,
+      linkable: true,
     });
   }
 
@@ -67,6 +72,7 @@ export function HeaderBreadcrumbs() {
     crumbs.push({
       label: `Session #${activeSession}`,
       href: `${pathname}?session=${activeSession}`,
+      linkable: true,
     });
   }
 
@@ -87,6 +93,8 @@ export function HeaderBreadcrumbs() {
             <ChevronRight className="size-3 text-muted-foreground/60" />
             {isLast ? (
               <span className="font-semibold text-foreground">{crumb.label}</span>
+            ) : !crumb.linkable ? (
+              <span>{crumb.label}</span>
             ) : (
               <Link to={crumb.href} className="transition-colors hover:text-foreground">
                 {crumb.label}

@@ -711,6 +711,28 @@ class ApiService {
     );
   }
 
+  /// One person's counselling session history — the per-person "guidance
+  /// record" behind the guidance-side registry detail. Gated server-side
+  /// by `counselling.records.read`; notes are NOT part of this payload.
+  /// Mirrors `usePatientSessions` in `frontend/src/hooks/useCounselling.ts`
+  /// (the SPA added the `?patient_school_id=` filter in 2026-10).
+  ///
+  /// [patientSchoolId] is the student/employee number — the same handle
+  /// the referral pipeline uses.
+  Future<List<CounsellingSession>> patientCounsellingSessions(
+    String patientSchoolId,
+  ) async {
+    final res = await _dio.get<Map<String, dynamic>>(
+      '/counselling/sessions',
+      queryParameters: {'patient_school_id': patientSchoolId},
+    );
+    final body = res.data;
+    return (body?['data'] as List? ?? [])
+        .whereType<Map<String, dynamic>>()
+        .map(CounsellingSession.fromJson)
+        .toList();
+  }
+
   // ---------------------------------------------------------------------
   // Referrals (referrals.read)
   // ---------------------------------------------------------------------
@@ -1009,40 +1031,6 @@ class ApiService {
       data: {'status': status},
     );
     return Appointment.fromJson(_unwrapObject(res));
-  }
-
-  /// `POST /clinic/appointments/{id}/qr` — (re)issue the proof-of-booking QR.
-  /// Staff with `clinic.appointments.write` or the booking's owner (student)
-  /// may call this. Returns the plaintext token for QR rendering.
-  Future<String> issueAppointmentQr(int id) async {
-    final res =
-        await _dio.post<Map<String, dynamic>>('/clinic/appointments/$id/qr');
-    final body = _unwrapObject(res);
-    final token = body['qr_token'] as String?;
-    if (token == null || token.isEmpty) {
-      throw ApiException(502, [
-        ApiError(
-          code: 'qr.token.missing',
-          message: 'The backend did not return a QR token.',
-        ),
-      ]);
-    }
-    return token;
-  }
-
-  /// `POST /appointments/verify` — PUBLIC minimum-disclosure verify (no
-  /// auth). Returns only validity + status + scheduled time, never PII.
-  Future<AppointmentQrVerify> verifyAppointmentQr(String token) async {
-    final res = await _dio.post<Map<String, dynamic>>(
-      '/appointments/verify',
-      data: {'token': token},
-    );
-    final data = _unwrapObject(res);
-    return AppointmentQrVerify(
-      valid: data['valid'] == true,
-      status: data['status'] as String?,
-      scheduledAt: data['scheduled_at'] as String?,
-    );
   }
 
   // ---------------------------------------------------------------------
@@ -1372,6 +1360,75 @@ class ApiService {
     final res = await _dio.post<Map<String, dynamic>>(
       '/clinic/students/$id/allergies',
       data: payload,
+    );
+    return UserProfile.fromJson(_unwrapObject(res));
+  }
+
+  // ---------------------------------------------------------------------
+  // Employee medical record — the same person-level allergies + emergency
+  // contacts the students tab manages. The SPA routes these through the
+  // `/clinic/employees/*` prefix (2026-10 employee parity); these mirror
+  // `frontend/src/hooks/usePatients.ts` `patientMedicalSegment()`.
+  // ---------------------------------------------------------------------
+
+  /// `POST /clinic/employees/{id}/allergies`
+  Future<UserProfile> addEmployeeAllergy(
+      int id, Map<String, dynamic> payload) async {
+    final res = await _dio.post<Map<String, dynamic>>(
+      '/clinic/employees/$id/allergies',
+      data: payload,
+    );
+    return UserProfile.fromJson(_unwrapObject(res));
+  }
+
+  /// `POST /clinic/employees/{id}/allergies/{allergyId}`
+  Future<UserProfile> updateEmployeeAllergy(
+    int id,
+    int allergyId,
+    Map<String, dynamic> payload,
+  ) async {
+    final res = await _dio.post<Map<String, dynamic>>(
+      '/clinic/employees/$id/allergies/$allergyId',
+      data: payload,
+    );
+    return UserProfile.fromJson(_unwrapObject(res));
+  }
+
+  /// `POST /clinic/employees/{id}/allergies/{allergyId}/delete`
+  Future<UserProfile> deleteEmployeeAllergy(int id, int allergyId) async {
+    final res = await _dio.post<Map<String, dynamic>>(
+      '/clinic/employees/$id/allergies/$allergyId/delete',
+    );
+    return UserProfile.fromJson(_unwrapObject(res));
+  }
+
+  /// `POST /clinic/employees/{id}/contacts`
+  Future<UserProfile> addEmployeeContact(
+      int id, Map<String, dynamic> payload) async {
+    final res = await _dio.post<Map<String, dynamic>>(
+      '/clinic/employees/$id/contacts',
+      data: payload,
+    );
+    return UserProfile.fromJson(_unwrapObject(res));
+  }
+
+  /// `POST /clinic/employees/{id}/contacts/{contactId}`
+  Future<UserProfile> updateEmployeeContact(
+    int id,
+    int contactId,
+    Map<String, dynamic> payload,
+  ) async {
+    final res = await _dio.post<Map<String, dynamic>>(
+      '/clinic/employees/$id/contacts/$contactId',
+      data: payload,
+    );
+    return UserProfile.fromJson(_unwrapObject(res));
+  }
+
+  /// `POST /clinic/employees/{id}/contacts/{contactId}/delete`
+  Future<UserProfile> deleteEmployeeContact(int id, int contactId) async {
+    final res = await _dio.post<Map<String, dynamic>>(
+      '/clinic/employees/$id/contacts/$contactId/delete',
     );
     return UserProfile.fromJson(_unwrapObject(res));
   }

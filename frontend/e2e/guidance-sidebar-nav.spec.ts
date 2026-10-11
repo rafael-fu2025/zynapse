@@ -115,7 +115,7 @@ test('the four counselling sections are an accordion under the Counselling row',
   // On /counselling the accordion starts open and lists the four sections.
   await page.goto('/counselling?tab=appointments');
   await expect(toggle).toHaveAttribute('aria-expanded', 'true');
-  for (const label of ['Queue', 'Appointments', 'Follow-ups', 'Scheduling']) {
+  for (const label of ['Queue', 'Appointments', 'Follow-ups', 'Staff schedules']) {
     await expect(sidebar.getByRole('link', { name: label, exact: true })).toBeVisible();
   }
 
@@ -213,7 +213,7 @@ test('the module row is lit on a bare URL, but no child is auto-selected', async
   // only after the user taps it (explicit ?tab=).
   await page.goto('/counselling');
   await expect(row).toHaveAttribute('data-active', 'true');
-  for (const label of ['Queue', 'Appointments', 'Follow-ups', 'Scheduling']) {
+  for (const label of ['Queue', 'Appointments', 'Follow-ups', 'Staff schedules']) {
     await expect(sidebar.getByRole('link', { name: label, exact: true })).not.toHaveAttribute(
       'data-active',
       'true',
@@ -251,6 +251,25 @@ test('the two Records entries open exclusively', async ({ page }) => {
   await records.nth(1).click();
   await expect(records.nth(1)).toHaveAttribute('aria-expanded', 'true');
   await expect(records.nth(0)).toHaveAttribute('aria-expanded', 'false');
+});
+
+test('Clinic Records and Guidance Records do not bleed query parameters or archive state across', async ({ page }) => {
+  // On Clinic Records with an archive or search filter active:
+  await page.goto('/patients?stu_status=archived&q=test&tab=students');
+
+  const sidebar = page.getByRole('navigation', { name: /primary/i });
+  const records = sidebar.getByRole('button', { name: 'Records', exact: true });
+
+  // Open the Guidance Center Records accordion (the second Records entry):
+  await records.nth(1).click();
+  const guidanceStudents = sidebar.getByRole('link', { name: 'Students', exact: true });
+
+  // The link generated for Guidance Records must NOT inherit Clinic's query params:
+  const href = await guidanceStudents.getAttribute('href');
+  expect(href).toContain('side=guidance');
+  expect(href).toContain('tab=students');
+  expect(href).not.toContain('stu_status');
+  expect(href).not.toContain('q=');
 });
 
 test('an explicit ?tab=queue deep link sticks and lights the Queue child', async ({ page }) => {

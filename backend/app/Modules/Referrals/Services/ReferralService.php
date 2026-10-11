@@ -55,7 +55,7 @@ final class ReferralService extends BaseService
 
         $builder = $this->db->table('referral_referrals AS r')
             ->where('r.tenant_id', CurrentTenant::id())
-            ->select('r.id, r.patient_school_id, r.source_encounter_id, r.source_session_id, r.source_module, r.target_module, r.artifact_type, r.status, r.reason_code, r.provider_user_id, r.queue_handoff_destination, r.queue_handoff_entry_id, r.queue_handoff_at, r.created_at, r.updated_at, u.username AS provider_name')
+            ->select('r.id, r.patient_school_id, r.source_encounter_id, r.source_session_id, r.source_module, r.target_module, r.artifact_type, r.status, r.priority, r.reason_code, r.provider_user_id, r.queue_handoff_destination, r.queue_handoff_entry_id, r.queue_handoff_at, r.created_at, r.updated_at, u.username AS provider_name')
             ->join('users AS u', 'u.id = r.provider_user_id', 'left')
             ->where('r.archived_at', null);
 
@@ -106,6 +106,7 @@ final class ReferralService extends BaseService
         ?int $sourceEncounterId = null,
         ?int $sourceSessionId = null,
         bool $clinicalStaffContext = false,
+        ?string $priority = null,
     ): ReferralDto {
         $this->policy->check('create');
         $userId = \App\Auth\CurrentUser::assert();
@@ -118,7 +119,15 @@ final class ReferralService extends BaseService
             ]);
         }
 
-        return $this->txn(function () use ($patientSchoolId, $sourceModule, $targetModule, $artifactType, $reasonCode, $notesPlaintext, $providerUserId, $sourceEncounterId, $sourceSessionId, $clinicalStaffContext, $userId): ReferralDto {
+        // Visibility/sorting only — priority never changes the state machine.
+        $priority = $priority ?? 'normal';
+        if (! in_array($priority, ['low', 'normal', 'high', 'urgent'], true)) {
+            throw new ApiException('validation.invalid', 422, [
+                ['code' => 'validation.invalid', 'message' => 'priority must be one of low|normal|high|urgent.', 'field' => 'priority'],
+            ]);
+        }
+
+        return $this->txn(function () use ($patientSchoolId, $sourceModule, $targetModule, $artifactType, $reasonCode, $notesPlaintext, $providerUserId, $sourceEncounterId, $sourceSessionId, $clinicalStaffContext, $priority, $userId): ReferralDto {
             $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
             $contextPatient = $this->lockAndAuthorizeSourceContext(
                 $sourceModule,
@@ -174,6 +183,7 @@ final class ReferralService extends BaseService
                 'issuer_user_id'    => $userId,
                 'provider_user_id'  => $this->resolveProviderId($providerUserId),
                 'status'            => REFERRAL_STATUS_SUBMITTED,
+                'priority'          => $priority,
                 'reason_code'       => $reasonCode,
                 'created_at'        => $now,
                 'updated_at'        => $now,
@@ -194,7 +204,7 @@ final class ReferralService extends BaseService
                 'referral_referrals',
                 $id,
                 $userId,
-                ['next_status' => REFERRAL_STATUS_SUBMITTED],
+                ['next_status' => REFERRAL_STATUS_SUBMITTED, 'priority' => $priority],
             );
 
             // Notify the receiving side so staff pick the referral up

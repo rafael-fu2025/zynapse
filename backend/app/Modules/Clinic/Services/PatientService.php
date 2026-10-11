@@ -6,6 +6,7 @@ namespace Modules\Clinic\Services;
 
 use App\Auth\CurrentUser;
 use App\Exceptions\ApiException;
+use App\Modules\Shared\ArchiveScope;
 use App\Modules\Shared\BaseService;
 use App\Pagination\KeysetPaginator;
 use App\Services\Audit\AuditOutboxService;
@@ -28,7 +29,7 @@ use Modules\Clinic\Policies\ClinicPolicy;
  */
 final class PatientService extends BaseService
 {
-    private const USER_COLS = 'id, kind, first_name, last_name, middle_name, qr_code, rfid_tag, date_of_birth, gender, address, archived_at, student_number, course, year_level, section, blood_type, consecutive_no_shows, employee_number, department, position, date_hired, employment_status, hr_synced_at, emergency_contact_name, emergency_contact_phone, is_teaching, created_at, updated_at';
+    private const USER_COLS = 'id, kind, first_name, last_name, middle_name, qr_code, date_of_birth, gender, address, archived_at, student_number, course, year_level, section, blood_type, consecutive_no_shows, employee_number, department, position, date_hired, employment_status, hr_synced_at, emergency_contact_name, emergency_contact_phone, is_teaching, created_at, updated_at';
 
     private readonly EmployeePersonService $person;
 
@@ -54,12 +55,15 @@ final class PatientService extends BaseService
      *                            (College 1-5, ELEM Grade 1-6, SHS 11-12), so
      *                            `3` means different cohorts in different
      *                            departments.
+     * @param bool|string $archiveScope `active` (default) | `archived` (only
+     *                            archived) | `all`. A bool is the legacy
+     *                            include-archived flag: `true` = `all`.
      * @return array{data: array<int, array<string, mixed>>, next: ?string, count: int}
      */
     public function listStudents(
         ?string $cursor,
         int $limit,
-        bool $includeArchived = false,
+        bool|string $archiveScope = ArchiveScope::ACTIVE,
         ?string $department = null,
         ?string $course = null,
         ?int $yearLevel = null,
@@ -73,9 +77,7 @@ final class PatientService extends BaseService
             ->orderBy('created_at', 'DESC')
             ->orderBy('id', 'DESC');
 
-        if (! $includeArchived) {
-            $builder->where('archived_at', null);
-        }
+        ArchiveScope::apply($builder, $archiveScope);
 
         $this->applyStudentFacetFilters($builder, $department, $course, $yearLevel);
 
@@ -84,11 +86,59 @@ final class PatientService extends BaseService
         $rows  = $builder->get()->getResultArray();
         $final = KeysetPaginator::finalize($rows, $limit);
 
+        $data = array_map(static fn (array $r) => UserDto::fromRow($r)->toArray(), $final['rows']);
+
+        // "Referred to Guidance" indicator — a boolean per page row; the
+        // referral rows themselves never leave the referrals module.
+        $flags = $this->activeGuidanceReferralFlags(array_map(
+            static fn (array $r): int => (int) $r['id'],
+            $final['rows'],
+        ));
+        foreach ($data as &$row) {
+            $row['active_guidance_referral'] = $flags[(int) $row['id']] ?? false;
+        }
+        unset($row);
+
         return [
-            'data'  => array_map(static fn (array $r) => UserDto::fromRow($r)->toArray(), $final['rows']),
+            'data'  => $data,
             'next'  => $final['nextCursor'],
             'count' => $limit,
         ];
+    }
+
+    /**
+     * Students with a LIVE clinic→counselling referral (submitted /
+     * acknowledged / under_review, not archived) — the "Referred to
+     * Guidance" badge source. Boolean-only: no referral content crosses
+     * the module boundary here.
+     *
+     * @param list<int> $userIds
+     * @return array<int, true>
+     */
+    public function activeGuidanceReferralFlags(array $userIds): array
+    {
+        if ($userIds === []) {
+            return [];
+        }
+        $rows = $this->db->table('referral_referrals')
+            ->select('patient_user_id')
+            ->where('tenant_id', CurrentTenant::id())
+            ->where('target_module', 'counselling')
+            ->whereIn('status', [REFERRAL_STATUS_SUBMITTED, REFERRAL_STATUS_ACKNOWLEDGED, REFERRAL_STATUS_UNDER_REVIEW])
+            ->where('archived_at', null)
+            ->whereIn('patient_user_id', $userIds)
+            ->get()->getResultArray();
+
+        $flags = [];
+        foreach ($rows as $r) {
+            $flags[(int) $r['patient_user_id']] = true;
+        }
+        return $flags;
+    }
+
+    public function hasActiveGuidanceReferral(int $patientUserId): bool
+    {
+        return isset($this->activeGuidanceReferralFlags([$patientUserId])[$patientUserId]);
     }
 
     /**
@@ -126,8 +176,10 @@ final class PatientService extends BaseService
 
     /**
      * Student facet options — the distinct `department`, `course` and
-     * `year_level` values present in the active tenant's live (non-archived)
-     * students.
+     * `year_level` values present in the active tenant's students within the
+     * given archive scope (live by default). The scope matters: in the
+     * archived view the dropdowns must offer the values archived students
+     * actually have, not the live ones.
      *
      * Derived from the synced rows rather than the MIS lookup registries
      * (`/students/departments`, `/programs`, `/levels`) for two reasons: those
@@ -141,24 +193,23 @@ final class PatientService extends BaseService
      *
      * @return array{departments: list<string>, courses: list<string>, yearLevels: list<int>}
      */
-    public function studentFacets(): array
+    public function studentFacets(bool|string $archiveScope = ArchiveScope::ACTIVE): array
     {
         $this->policy->check('patientsRead');
 
         // `col != ''` is NULL-safe here: in SQL a NULL comparison yields
         // NULL (not TRUE), so NULL and empty-string rows are both excluded
         // without needing an explicit IS NOT NULL branch.
-        $pick = function (string $column): array {
-            $rows = $this->db->table('users')
+        $pick = function (string $column) use ($archiveScope): array {
+            $builder = $this->db->table('users')
                 ->where('users.tenant_id', CurrentTenant::id())
                 ->where('kind', 'student')
-                ->where('archived_at', null)
                 ->where($column . ' !=', '')
                 ->distinct()
                 ->select($column)
-                ->orderBy($column, 'ASC')
-                ->get()
-                ->getResultArray();
+                ->orderBy($column, 'ASC');
+            ArchiveScope::apply($builder, $archiveScope);
+            $rows = $builder->get()->getResultArray();
 
             return array_values(array_map(static fn (array $r): string => (string) $r[$column], $rows));
         };
@@ -185,6 +236,7 @@ final class PatientService extends BaseService
         ?string $department = null,
         ?string $course = null,
         ?int $yearLevel = null,
+        bool|string $archiveScope = ArchiveScope::ACTIVE,
     ): array {
         $this->policy->check('patientsRead');
 
@@ -198,7 +250,6 @@ final class PatientService extends BaseService
             ->where('users.tenant_id', CurrentTenant::id())
             ->select(self::USER_COLS)
             ->where('kind', 'student')
-            ->where('archived_at', null)
             ->groupStart()
                 ->like('student_number', $q)
                 ->orLike('first_name', $q)
@@ -207,6 +258,10 @@ final class PatientService extends BaseService
                 ->orLike('course', $q)
                 ->orLike('department', $q)
             ->groupEnd();
+
+        // Search honours the same archive scope as the list — it used to
+        // hard-code live-only, so archived rows vanished the moment you typed.
+        ArchiveScope::apply($builder, $archiveScope);
 
         $this->applyStudentFacetFilters($builder, $deptFilter, $courseFilter, $yearFilter);
 
@@ -227,8 +282,10 @@ final class PatientService extends BaseService
             }
         }
 
+        // MIS directory rows are not registered locally, so they can never be
+        // archived — leave them out of the archived-only view.
         $remaining = $limit - count($localDtos);
-        if ($remaining > 0 && mb_strlen(trim($q)) >= 2) {
+        if ($remaining > 0 && mb_strlen(trim($q)) >= 2 && ArchiveScope::from($archiveScope) !== ArchiveScope::ARCHIVED) {
             try {
                 $fuMis = \Config\Services::fuMisAuthService();
                 $misStudents = $fuMis->searchStudents($q, $limit);
@@ -270,7 +327,6 @@ final class PatientService extends BaseService
                         'gender'               => null,
                         'address'              => null,
                         'qr_code'              => null,
-                        'rfid_tag'             => null,
                         'archived_at'          => null,
                         'blood_type'           => null,
                         'consecutive_no_shows' => 0,
@@ -284,6 +340,17 @@ final class PatientService extends BaseService
                 log_message('warning', sprintf('searchStudents MIS fallback error: %s', $e->getMessage()));
             }
         }
+
+        // Synthetic MIS directory rows (negative ids) can never hold a
+        // referral — flag local rows only.
+        $flags = $this->activeGuidanceReferralFlags(array_values(array_map(
+            static fn (array $d): int => (int) $d['id'],
+            array_filter($localDtos, static fn (array $d): bool => (int) $d['id'] > 0),
+        )));
+        foreach ($localDtos as &$d) {
+            $d['active_guidance_referral'] = $flags[(int) $d['id']] ?? false;
+        }
+        unset($d);
 
         return $localDtos;
     }
@@ -373,7 +440,6 @@ final class PatientService extends BaseService
         return $this->txn(function () use ($input, $userId): array {
             $this->assertHandleUnique('users', 'student_number', (string) $input['student_number'], null);
             $this->assertOptionalHandleUnique('users', 'qr_code', $input['qr_code'] ?? null, null);
-            $this->assertOptionalHandleUnique('users', 'rfid_tag', $input['rfid_tag'] ?? null, null);
 
             $now = $this->utcNow();
 
@@ -388,7 +454,6 @@ final class PatientService extends BaseService
                 'last_name'           => (string) $input['last_name'],
                 'middle_name'         => $this->strOrNull($input, 'middle_name'),
                 'qr_code'             => $this->strOrNull($input, 'qr_code'),
-                'rfid_tag'            => $this->strOrNull($input, 'rfid_tag'),
                 'course'              => $this->strOrNull($input, 'course'),
                 'year_level'          => isset($input['year_level']) && $input['year_level'] !== '' ? (int) $input['year_level'] : null,
                 'section'             => $this->strOrNull($input, 'section'),
@@ -443,10 +508,9 @@ final class PatientService extends BaseService
             }
 
             $this->assertOptionalHandleUnique('users', 'qr_code', $input['qr_code'] ?? null, $id);
-            $this->assertOptionalHandleUnique('users', 'rfid_tag', $input['rfid_tag'] ?? null, $id);
 
             $update = [];
-            foreach (['first_name', 'last_name', 'middle_name', 'qr_code', 'rfid_tag', 'course', 'section', 'date_of_birth', 'gender', 'address', 'blood_type'] as $col) {
+            foreach (['first_name', 'last_name', 'middle_name', 'qr_code', 'course', 'section', 'date_of_birth', 'gender', 'address', 'blood_type'] as $col) {
                 if (array_key_exists($col, $input)) {
                     $update[$col] = $input[$col] !== '' && $input[$col] !== null ? (string) $input[$col] : null;
                 }
@@ -506,21 +570,21 @@ final class PatientService extends BaseService
     /**
      * @param array<string, mixed> $input
      */
-    public function addAllergy(int $studentId, array $input): UserDto
+    public function addAllergy(int $patientId, array $input): UserDto
     {
         $this->policy->check('patientsWrite');
         $userId = CurrentUser::assert();
 
-        return $this->txn(function () use ($studentId, $input, $userId): UserDto {
-            $row = $this->selectForUpdate('users', ['tenant_id' => CurrentTenant::id(), 'id' => $studentId, 'kind' => 'student']);
-            if ($row === null) {
+        return $this->txn(function () use ($patientId, $input, $userId): UserDto {
+            $row = $this->selectForUpdate('users', ['tenant_id' => CurrentTenant::id(), 'id' => $patientId]);
+            if ($row === null || ! in_array((string) $row['kind'], ['student', 'employee'], true)) {
                 throw new ApiException('resource.not_found', 404, [
-                    ['code' => 'resource.not_found', 'message' => "Student #{$studentId} not found."],
+                    ['code' => 'resource.not_found', 'message' => "Patient #{$patientId} not found."],
                 ]);
             }
 
             $this->db->table('patient_allergies')->insert([
-                'user_id'          => $studentId,
+                'user_id'          => $patientId,
                 'allergen'         => (string) $input['allergen'],
                 'severity'         => (string) ($input['severity'] ?? 'mild'),
                 'reaction'         => $this->strOrNull($input, 'reaction'),
@@ -536,38 +600,38 @@ final class PatientService extends BaseService
                 ['severity' => (string) ($input['severity'] ?? 'mild')],
             );
 
-            return $this->getStudent($studentId);
+            return $this->patientDtoWithMedical($patientId);
         });
     }
 
     /**
-     * Legacy behavior: marking a contact primary demotes the student's
+     * Legacy behavior: marking a contact primary demotes the patient's
      * other contacts inside the same transaction.
      *
      * @param array<string, mixed> $input
      */
-    public function addContact(int $studentId, array $input): UserDto
+    public function addContact(int $patientId, array $input): UserDto
     {
         $this->policy->check('patientsWrite');
         $userId = CurrentUser::assert();
 
-        return $this->txn(function () use ($studentId, $input, $userId): UserDto {
-            $row = $this->selectForUpdate('users', ['tenant_id' => CurrentTenant::id(), 'id' => $studentId, 'kind' => 'student']);
-            if ($row === null) {
+        return $this->txn(function () use ($patientId, $input, $userId): UserDto {
+            $row = $this->selectForUpdate('users', ['tenant_id' => CurrentTenant::id(), 'id' => $patientId]);
+            if ($row === null || ! in_array((string) $row['kind'], ['student', 'employee'], true)) {
                 throw new ApiException('resource.not_found', 404, [
-                    ['code' => 'resource.not_found', 'message' => "Student #{$studentId} not found."],
+                    ['code' => 'resource.not_found', 'message' => "Patient #{$patientId} not found."],
                 ]);
             }
 
             $isPrimary = (bool) ($input['is_primary'] ?? false);
             if ($isPrimary) {
                 $this->db->table('patient_contacts')
-                    ->where('user_id', $studentId)
+                    ->where('user_id', $patientId)
                     ->update(['is_primary' => 0]);
             }
 
             $this->db->table('patient_contacts')->insert([
-                'user_id'      => $studentId,
+                'user_id'      => $patientId,
                 'contact_name' => (string) $input['contact_name'],
                 'relationship' => (string) $input['relationship'],
                 'phone'        => (string) $input['phone'],
@@ -583,29 +647,29 @@ final class PatientService extends BaseService
                 [],
             );
 
-            return $this->getStudent($studentId);
+            return $this->patientDtoWithMedical($patientId);
         });
     }
 
     /**
-     * Edit an existing allergy row (must belong to the student).
+     * Edit an existing allergy row (must belong to the patient).
      *
      * @param array<string, mixed> $input
      */
-    public function updateAllergy(int $studentId, int $allergyId, array $input): UserDto
+    public function updateAllergy(int $patientId, int $allergyId, array $input): UserDto
     {
         $this->policy->check('patientsWrite');
         $userId = CurrentUser::assert();
 
-        return $this->txn(function () use ($studentId, $allergyId, $input, $userId): UserDto {
+        return $this->txn(function () use ($patientId, $allergyId, $input, $userId): UserDto {
             $row = $this->db->table('patient_allergies')
                 ->where('tenant_id', CurrentTenant::id())
                 ->where('id', $allergyId)
-                ->where('user_id', $studentId)
+                ->where('user_id', $patientId)
                 ->get()->getRowArray();
             if ($row === null) {
                 throw new ApiException('resource.not_found', 404, [
-                    ['code' => 'resource.not_found', 'message' => "Allergy #{$allergyId} not found for student #{$studentId}."],
+                    ['code' => 'resource.not_found', 'message' => "Allergy #{$allergyId} not found for patient #{$patientId}."],
                 ]);
             }
 
@@ -620,25 +684,25 @@ final class PatientService extends BaseService
                 'severity' => (string) ($input['severity'] ?? 'mild'),
             ]);
 
-            return $this->getStudent($studentId);
+            return $this->patientDtoWithMedical($patientId);
         });
     }
 
-    /** Remove an allergy row (must belong to the student). */
-    public function deleteAllergy(int $studentId, int $allergyId): UserDto
+    /** Remove an allergy row (must belong to the patient). */
+    public function deleteAllergy(int $patientId, int $allergyId): UserDto
     {
         $this->policy->check('patientsWrite');
         $userId = CurrentUser::assert();
 
-        return $this->txn(function () use ($studentId, $allergyId, $userId): UserDto {
+        return $this->txn(function () use ($patientId, $allergyId, $userId): UserDto {
             $row = $this->db->table('patient_allergies')
                 ->where('tenant_id', CurrentTenant::id())
                 ->where('id', $allergyId)
-                ->where('user_id', $studentId)
+                ->where('user_id', $patientId)
                 ->get()->getRowArray();
             if ($row === null) {
                 throw new ApiException('resource.not_found', 404, [
-                    ['code' => 'resource.not_found', 'message' => "Allergy #{$allergyId} not found for student #{$studentId}."],
+                    ['code' => 'resource.not_found', 'message' => "Allergy #{$allergyId} not found for patient #{$patientId}."],
                 ]);
             }
 
@@ -648,37 +712,37 @@ final class PatientService extends BaseService
                 'resource_code' => (string) $row['allergen'],
             ]);
 
-            return $this->getStudent($studentId);
+            return $this->patientDtoWithMedical($patientId);
         });
     }
 
     /**
-     * Edit an existing emergency contact (must belong to the student).
+     * Edit an existing emergency contact (must belong to the patient).
      * If the edited row is set primary, other contacts are demoted first.
      *
      * @param array<string, mixed> $input
      */
-    public function updateContact(int $studentId, int $contactId, array $input): UserDto
+    public function updateContact(int $patientId, int $contactId, array $input): UserDto
     {
         $this->policy->check('patientsWrite');
         $userId = CurrentUser::assert();
 
-        return $this->txn(function () use ($studentId, $contactId, $input, $userId): UserDto {
+        return $this->txn(function () use ($patientId, $contactId, $input, $userId): UserDto {
             $row = $this->db->table('patient_contacts')
                 ->where('tenant_id', CurrentTenant::id())
                 ->where('id', $contactId)
-                ->where('user_id', $studentId)
+                ->where('user_id', $patientId)
                 ->get()->getRowArray();
             if ($row === null) {
                 throw new ApiException('resource.not_found', 404, [
-                    ['code' => 'resource.not_found', 'message' => "Contact #{$contactId} not found for student #{$studentId}."],
+                    ['code' => 'resource.not_found', 'message' => "Contact #{$contactId} not found for patient #{$patientId}."],
                 ]);
             }
 
             $isPrimary = (bool) ($input['is_primary'] ?? false);
             if ($isPrimary) {
                 $this->db->table('patient_contacts')
-                    ->where('user_id', $studentId)
+                    ->where('user_id', $patientId)
                     ->where('id !=', $contactId)
                     ->update(['is_primary' => 0]);
             }
@@ -695,25 +759,25 @@ final class PatientService extends BaseService
                 'is_primary' => $isPrimary ? '1' : '0',
             ]);
 
-            return $this->getStudent($studentId);
+            return $this->patientDtoWithMedical($patientId);
         });
     }
 
-    /** Remove an emergency contact (must belong to the student). */
-    public function deleteContact(int $studentId, int $contactId): UserDto
+    /** Remove an emergency contact (must belong to the patient). */
+    public function deleteContact(int $patientId, int $contactId): UserDto
     {
         $this->policy->check('patientsWrite');
         $userId = CurrentUser::assert();
 
-        return $this->txn(function () use ($studentId, $contactId, $userId): UserDto {
+        return $this->txn(function () use ($patientId, $contactId, $userId): UserDto {
             $row = $this->db->table('patient_contacts')
                 ->where('tenant_id', CurrentTenant::id())
                 ->where('id', $contactId)
-                ->where('user_id', $studentId)
+                ->where('user_id', $patientId)
                 ->get()->getRowArray();
             if ($row === null) {
                 throw new ApiException('resource.not_found', 404, [
-                    ['code' => 'resource.not_found', 'message' => "Contact #{$contactId} not found for student #{$studentId}."],
+                    ['code' => 'resource.not_found', 'message' => "Contact #{$contactId} not found for patient #{$patientId}."],
                 ]);
             }
 
@@ -723,8 +787,43 @@ final class PatientService extends BaseService
                 'resource_code' => (string) $row['contact_name'],
             ]);
 
-            return $this->getStudent($studentId);
+            return $this->patientDtoWithMedical($patientId);
         });
+    }
+
+    /**
+     * The patient DTO with allergies + emergency contacts attached —
+     * shared by the allergy/contact mutations. Resolves students AND
+     * employees (the medical record is a person-level record).
+     */
+    private function patientDtoWithMedical(int $userId): UserDto
+    {
+        $row = $this->db->table('users')
+            ->where('tenant_id', CurrentTenant::id())
+            ->select(self::USER_COLS)
+            ->where('id', $userId)
+            ->whereIn('kind', ['student', 'employee'])
+            ->get()->getRowArray();
+        if ($row === null) {
+            throw new ApiException('resource.not_found', 404, [
+                ['code' => 'resource.not_found', 'message' => "Patient #{$userId} not found."],
+            ]);
+        }
+
+        $allergies = $this->db->table('patient_allergies')
+            ->select('id, allergen, severity, reaction')
+            ->where('user_id', $userId)
+            ->orderBy('id', 'ASC')
+            ->get()->getResultArray();
+
+        $contacts = $this->db->table('patient_contacts')
+            ->select('id, contact_name, relationship, phone, is_primary')
+            ->where('user_id', $userId)
+            ->orderBy('is_primary', 'DESC')
+            ->orderBy('id', 'ASC')
+            ->get()->getResultArray();
+
+        return UserDto::fromRow($row, $allergies, $contacts);
     }
 
     // ---------------------------------------------------------- employees
@@ -744,7 +843,7 @@ final class PatientService extends BaseService
     public function listEmployees(
         ?string $cursor,
         int $limit,
-        bool $includeArchived = false,
+        bool|string $archiveScope = ArchiveScope::ACTIVE,
         ?string $teaching = null,
         ?string $department = null,
         ?string $position = null,
@@ -758,9 +857,8 @@ final class PatientService extends BaseService
             ->orderBy('created_at', 'DESC')
             ->orderBy('id', 'DESC');
 
-        if (! $includeArchived) {
-            $builder->where('archived_at', null);
-        }
+        $scope = ArchiveScope::from($archiveScope);
+        ArchiveScope::apply($builder, $scope);
 
         // Teaching / non-teaching triage. Non-teaching also captures
         // NULL (HR-synced rows without the flag), which renders as
@@ -779,17 +877,30 @@ final class PatientService extends BaseService
         // One row per person: the primary record (newest MIS appointment —
         // see EmployeePersonService) is listed; the person's other records
         // travel in the row's `records` payload for the history accordion.
-        $this->person->applyPrimaryOnlyFilter($builder, $includeArchived);
+        $this->person->applyPrimaryOnlyFilter($builder, $scope);
 
         KeysetPaginator::apply($builder, $cursor, $limit);
 
         $rows  = $builder->get()->getResultArray();
         $final = KeysetPaginator::finalize($rows, $limit);
 
-        $rows = $this->person->attachRecords($final['rows'], ! $includeArchived);
+        $rows = $this->person->attachRecords($final['rows'], $scope);
+
+        $data = array_map(static fn (array $r) => UserDto::fromRow($r)->toArray(), $rows);
+
+        // "Referred to Guidance" indicator — same boolean-only rule as
+        // the students list.
+        $flags = $this->activeGuidanceReferralFlags(array_map(
+            static fn (array $r): int => (int) $r['id'],
+            $final['rows'],
+        ));
+        foreach ($data as &$row) {
+            $row['active_guidance_referral'] = $flags[(int) $row['id']] ?? false;
+        }
+        unset($row);
 
         return [
-            'data'  => array_map(static fn (array $r) => UserDto::fromRow($r)->toArray(), $rows),
+            'data'  => $data,
             'next'  => $final['nextCursor'],
             'count' => $limit,
         ];
@@ -825,8 +936,9 @@ final class PatientService extends BaseService
 
     /**
      * Employee facet options — the distinct MIS-supplied `department` and
-     * `position` values present in the active tenant's live (non-archived)
-     * PRIMARY employee records (EmployeePersonService). Older records of a
+     * `position` values present in the active tenant's PRIMARY employee
+     * records (EmployeePersonService) within the given archive scope (live by
+     * default; the archived view offers the values archived records carry). Older records of a
      * duplicated person hold positions that are only visible through the
      * row's records accordion, so listing them as filter facets would
      * offer options that match no listed row.
@@ -838,23 +950,24 @@ final class PatientService extends BaseService
      *
      * @return array{departments: list<string>, positions: list<string>}
      */
-    public function employeeFacets(): array
+    public function employeeFacets(bool|string $archiveScope = ArchiveScope::ACTIVE): array
     {
         $this->policy->check('patientsRead');
+        $scope = ArchiveScope::from($archiveScope);
 
         // `col != ''` is NULL-safe here: in SQL a NULL comparison yields
         // NULL (not TRUE), so NULL and empty-string rows are both excluded
         // without needing an explicit IS NOT NULL branch.
-        $pick = function (string $column): array {
+        $pick = function (string $column) use ($scope): array {
             $builder = $this->db->table('users')
                 ->where('users.tenant_id', CurrentTenant::id())
                 ->where('kind', 'employee')
-                ->where('archived_at', null)
                 ->where($column . ' !=', '')
                 ->distinct()
                 ->select($column)
                 ->orderBy($column, 'ASC');
-            $this->person->applyPrimaryOnlyFilter($builder, false);
+            ArchiveScope::apply($builder, $scope);
+            $this->person->applyPrimaryOnlyFilter($builder, $scope);
 
             $rows = $builder->get()->getResultArray();
 
@@ -883,7 +996,6 @@ final class PatientService extends BaseService
         return $this->txn(function () use ($input, $userId): array {
             $this->assertHandleUnique('users', 'employee_number', (string) $input['employee_number'], null);
             $this->assertOptionalHandleUnique('users', 'qr_code', $input['qr_code'] ?? null, null);
-            $this->assertOptionalHandleUnique('users', 'rfid_tag', $input['rfid_tag'] ?? null, null);
 
             $now = $this->utcNow();
 
@@ -898,7 +1010,6 @@ final class PatientService extends BaseService
                 'last_name'              => (string) $input['last_name'],
                 'middle_name'            => $this->strOrNull($input, 'middle_name'),
                 'qr_code'                => $this->strOrNull($input, 'qr_code'),
-                'rfid_tag'               => $this->strOrNull($input, 'rfid_tag'),
                 'department'             => $this->strOrNull($input, 'department'),
                 'position'               => $this->strOrNull($input, 'position'),
                 'date_hired'             => $this->strOrNull($input, 'date_hired'),
@@ -1128,7 +1239,23 @@ final class PatientService extends BaseService
         // Detail view keeps archived rows visible, so the primary is
         // picked among all of the person's records (mirrors the list).
         $row = $this->person->attachRecords([$row], false)[0];
-        return UserDto::fromRow($row);
+
+        // The medical record (allergies + emergency contacts) is a
+        // person-level record — employees carry it exactly like students.
+        $allergies = $this->db->table('patient_allergies')
+            ->select('id, allergen, severity, reaction')
+            ->where('user_id', (int) $row['id'])
+            ->orderBy('id', 'ASC')
+            ->get()->getResultArray();
+
+        $contacts = $this->db->table('patient_contacts')
+            ->select('id, contact_name, relationship, phone, is_primary')
+            ->where('user_id', (int) $row['id'])
+            ->orderBy('is_primary', 'DESC')
+            ->orderBy('id', 'ASC')
+            ->get()->getResultArray();
+
+        return UserDto::fromRow($row, $allergies, $contacts);
     }
 
     /**
@@ -1148,6 +1275,7 @@ final class PatientService extends BaseService
         int $limit = 20,
         ?string $department = null,
         ?string $position = null,
+        bool|string $archiveScope = ArchiveScope::ACTIVE,
     ): array {
         $this->policy->check('patientsRead');
         $limit = max(1, min($limit, 50));
@@ -1166,8 +1294,10 @@ final class PatientService extends BaseService
                 ->orLike('middle_name', $q)
                 ->orLike('department', $q)
                 ->orLike('position', $q)
-            ->groupEnd()
-            ->where('archived_at', null);
+            ->groupEnd();
+
+        // Same scope as the list — search used to hard-code live-only.
+        ArchiveScope::apply($builder, $archiveScope);
 
         $this->applyEmployeeFacetFilters($builder, $deptFilter, $posFilter);
 
@@ -1190,8 +1320,10 @@ final class PatientService extends BaseService
             }
         }
 
+        // MIS directory rows are not registered locally, so they can never be
+        // archived — leave them out of the archived-only view.
         $remaining = $limit - count($localDtos);
-        if ($remaining > 0 && mb_strlen(trim($q)) >= 2) {
+        if ($remaining > 0 && mb_strlen(trim($q)) >= 2 && ArchiveScope::from($archiveScope) !== ArchiveScope::ARCHIVED) {
             try {
                 $fuMis = \Config\Services::fuMisAuthService();
                 $misEmployees = $fuMis->searchEmployees($q, $limit);
@@ -1232,7 +1364,6 @@ final class PatientService extends BaseService
                         'gender'                  => null,
                         'address'                 => null,
                         'qr_code'                 => null,
-                        'rfid_tag'                => null,
                         'archived_at'             => null,
                         'created_at'              => '',
                         'updated_at'              => '',
@@ -1244,6 +1375,16 @@ final class PatientService extends BaseService
                 log_message('warning', sprintf('searchEmployees MIS fallback error: %s', $e->getMessage()));
             }
         }
+
+        // Synthetic MIS rows (negative ids) can never hold a referral.
+        $flags = $this->activeGuidanceReferralFlags(array_values(array_map(
+            static fn (array $d): int => (int) $d['id'],
+            array_filter($localDtos, static fn (array $d): bool => (int) $d['id'] > 0),
+        )));
+        foreach ($localDtos as &$d) {
+            $d['active_guidance_referral'] = $flags[(int) $d['id']] ?? false;
+        }
+        unset($d);
 
         return $localDtos;
     }
@@ -1381,10 +1522,9 @@ final class PatientService extends BaseService
             }
 
             $this->assertOptionalHandleUnique('users', 'qr_code', $input['qr_code'] ?? null, $id);
-            $this->assertOptionalHandleUnique('users', 'rfid_tag', $input['rfid_tag'] ?? null, $id);
 
             $update = [];
-            foreach (['first_name', 'last_name', 'middle_name', 'qr_code', 'rfid_tag', 'department', 'position', 'date_hired', 'employment_status', 'emergency_contact_name', 'emergency_contact_phone', 'date_of_birth', 'gender', 'address'] as $col) {
+            foreach (['first_name', 'last_name', 'middle_name', 'qr_code', 'department', 'position', 'date_hired', 'employment_status', 'emergency_contact_name', 'emergency_contact_phone', 'date_of_birth', 'gender', 'address'] as $col) {
                 if (array_key_exists($col, $input)) {
                     $update[$col] = $input[$col] !== '' && $input[$col] !== null ? (string) $input[$col] : null;
                 }
@@ -1533,7 +1673,7 @@ final class PatientService extends BaseService
      * Deliberately NOT tenant-scoped, despite `users` carrying tenant_id:
      * the schema enforces these identifiers with GLOBAL unique indexes
      * (`uniq_users_student_number`, `uniq_users_employee_number`,
-     * `uniq_users_qr_code`, `uniq_users_rfid_tag`, `username`).
+     * `uniq_users_qr_code`, `username`).
      * A per-tenant check here would let a duplicate through PHP-side and
      * then die on the constraint as an unhandled 500 — the whole-table
      * check keeps the 409 clean and matches the database contract.

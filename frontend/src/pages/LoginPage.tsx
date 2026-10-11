@@ -17,6 +17,7 @@ import { humanizeCode } from '@/api/errorCodes';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { useLogin } from '@/hooks/useAuth';
 import { loginSchema, type LoginInput } from '@/schemas/auth';
 
@@ -267,41 +268,53 @@ export default function LoginPage() {
           </p>
         </div>
 
-        {/*
-          Socials — the offices behind the portal, each seal a link to
-          its Facebook page. Deliberately small and quiet: branding, not
-          navigation.
-        */}
-        <nav aria-label="Socials" className="flex flex-col items-center gap-2 pt-10">
-          <span className="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">
-            Socials
-          </span>
-          {/* Same pill language as the header's profile pill
-              (UserMenu): full round, primary-tinted border, translucent
-              fill. */}
-          <div className="flex items-center gap-4 rounded-full border border-primary/60 bg-background/60 px-4 py-1.5">
-            {SOCIALS.map((social) => (
-              <a
-                key={social.label}
-                href={social.href}
-                target="_blank"
-                rel="noreferrer"
-                aria-label={`${social.label} on Facebook`}
-                onContextMenu={swallow}
-                onDragStart={swallow}
-                className="rounded-full opacity-90 transition-opacity hover:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
-              >
-                <img
-                  src={social.src}
-                  alt=""
-                  draggable={false}
-                  onDragStart={swallow}
-                  onContextMenu={swallow}
-                  className="no-copy size-9 select-none object-contain"
-                />
-              </a>
-            ))}
+        {/* A quiet, labelled social dock: the seals keep their colours,
+            while the surface and focus states follow the active theme. */}
+        <nav aria-label="Socials" className="flex w-full max-w-xs flex-col items-center gap-3 pt-10">
+          <div className="flex w-full items-center gap-3">
+            <span aria-hidden className="h-px flex-1 bg-border" />
+            <span className="text-[0.6rem] font-medium tracking-wide text-muted-foreground">
+              Connect with us
+            </span>
+            <span aria-hidden className="h-px flex-1 bg-border" />
           </div>
+          <TooltipProvider delayDuration={150}>
+            <div className="grid w-full grid-cols-3 rounded-[2rem] border border-border bg-muted/40 p-1.5 shadow-sm">
+              {SOCIALS.map((social) => (
+                <Tooltip key={social.label}>
+                  <TooltipTrigger asChild>
+                    <a
+                      href={social.href}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      aria-label={`${social.label} on Facebook (opens in a new tab)`}
+                      onContextMenu={swallow}
+                      onDragStart={swallow}
+                      className="group flex min-w-0 flex-col items-center gap-2 rounded-[1.6rem] px-1 py-3 text-center text-muted-foreground transition-colors hover:bg-background hover:text-foreground hover:shadow-sm focus-visible:bg-background focus-visible:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+                    >
+                      <span className="grid size-11 shrink-0 place-items-center rounded-full bg-white p-0.5 ring-1 ring-black/5 motion-safe:transition-transform motion-safe:group-hover:-translate-y-0.5">
+                        <img
+                          src={social.src}
+                          alt=""
+                          draggable={false}
+                          onDragStart={swallow}
+                          onContextMenu={swallow}
+                          className="no-copy size-full select-none rounded-full object-contain"
+                        />
+                      </span>
+                      <span className="flex min-h-[2.5em] items-center justify-center text-[0.6rem] font-medium leading-tight">
+                        {social.label}
+                      </span>
+                    </a>
+                  </TooltipTrigger>
+                  <TooltipContent side="top" sideOffset={8} className="max-w-[calc(100vw-2rem)] text-center">
+                    <span className="block font-medium">{social.label} on Facebook</span>
+                    <span className="block text-[0.6rem]">Opens in a new tab</span>
+                  </TooltipContent>
+                </Tooltip>
+              ))}
+            </div>
+          </TooltipProvider>
         </nav>
       </section>
     </main>

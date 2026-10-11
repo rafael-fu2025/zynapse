@@ -6,6 +6,7 @@ namespace Modules\Clinic\Controllers;
 
 use App\Controllers\Api\ApiController;
 use App\Exceptions\ApiException;
+use App\Modules\Shared\ArchiveScope;
 use CodeIgniter\HTTP\ResponseInterface;
 use Config\Services;
 use Modules\Clinic\Policies\ClinicPolicy;
@@ -24,13 +25,25 @@ final class PatientController extends ApiController
         $this->service = $service ?? new PatientService(new ClinicPolicy(), Services::auditOutbox());
     }
 
+    /**
+     * Archive scope of a registry request: `?archived=active|archived|all`,
+     * with the legacy `?include_archived=1` (mobile client) meaning `all`.
+     * Omitted = `active`.
+     */
+    private function archiveScope(): string
+    {
+        return ArchiveScope::fromRequest(
+            $this->request->getGet('archived') !== null ? (string) $this->request->getGet('archived') : null,
+            $this->request->getGet('include_archived') !== null ? (string) $this->request->getGet('include_archived') : null,
+        );
+    }
+
     // ----------------------------------------------------------- students
 
     public function listStudents(): ResponseInterface
     {
         $cursor   = (string) ($this->request->getGet('cursor') ?? '');
         $limit    = (int)    ($this->request->getGet('limit')  ?? 25);
-        $archived = (string) ($this->request->getGet('include_archived') ?? '');
         // Facet filters — the three categorical fields MIS supplies and
         // filters on itself (`department`, `program`, `level`), stored
         // locally as `department`, `course` and `year_level`.
@@ -41,7 +54,7 @@ final class PatientController extends ApiController
         $page = $this->service->listStudents(
             $cursor !== '' ? $cursor : null,
             $limit,
-            $archived === '1' || $archived === 'true',
+            $this->archiveScope(),
             $department !== '' ? $department : null,
             $course !== '' ? $course : null,
             $yearLevel !== '' ? (int) $yearLevel : null,
@@ -60,7 +73,7 @@ final class PatientController extends ApiController
      */
     public function studentFacets(): ResponseInterface
     {
-        return $this->ok($this->service->studentFacets());
+        return $this->ok($this->service->studentFacets($this->archiveScope()));
     }
 
     public function searchStudents(): ResponseInterface
@@ -82,6 +95,7 @@ final class PatientController extends ApiController
             $department !== '' ? $department : null,
             $course !== '' ? $course : null,
             $yearLevel !== '' ? (int) $yearLevel : null,
+            $this->archiveScope(),
         ));
     }
 
@@ -103,7 +117,9 @@ final class PatientController extends ApiController
 
     public function showStudent(int|string $id): ResponseInterface
     {
-        return $this->ok($this->service->getStudent($id)->toArray());
+        $out = $this->service->getStudent($id)->toArray();
+        $out['active_guidance_referral'] = $this->service->hasActiveGuidanceReferral((int) $out['id']);
+        return $this->ok($out);
     }
 
     public function createStudent(): ResponseInterface
@@ -229,7 +245,6 @@ final class PatientController extends ApiController
     {
         $cursor   = (string) ($this->request->getGet('cursor') ?? '');
         $limit    = (int)    ($this->request->getGet('limit')  ?? 25);
-        $archived = (string) ($this->request->getGet('include_archived') ?? '');
         // teaching = all | teaching | non_teaching. Retained for API
         // compatibility (the mobile client still sends it); the web UI no
         // longer exposes it because the MIS employee payload carries no
@@ -244,7 +259,7 @@ final class PatientController extends ApiController
         $page = $this->service->listEmployees(
             $cursor !== '' ? $cursor : null,
             $limit,
-            $archived === '1' || $archived === 'true',
+            $this->archiveScope(),
             $teaching !== '' ? $teaching : null,
             $department !== '' ? $department : null,
             $position !== '' ? $position : null,
@@ -263,7 +278,7 @@ final class PatientController extends ApiController
      */
     public function employeeFacets(): ResponseInterface
     {
-        return $this->ok($this->service->employeeFacets());
+        return $this->ok($this->service->employeeFacets($this->archiveScope()));
     }
 
     public function createEmployee(): ResponseInterface
@@ -276,7 +291,6 @@ final class PatientController extends ApiController
             'last_name'               => 'required|max_length[100]',
             'middle_name'             => 'permit_empty|max_length[100]',
             'qr_code'                 => 'permit_empty|max_length[255]',
-            'rfid_tag'                => 'permit_empty|max_length[255]',
             'department'              => 'permit_empty|max_length[100]',
             'position'                => 'permit_empty|max_length[100]',
             'date_hired'              => 'permit_empty|valid_date[Y-m-d]',
@@ -324,6 +338,7 @@ final class PatientController extends ApiController
             20,
             $department !== '' ? $department : null,
             $position !== '' ? $position : null,
+            $this->archiveScope(),
         ));
     }
 
@@ -347,7 +362,6 @@ final class PatientController extends ApiController
             'last_name'               => 'permit_empty|max_length[100]',
             'middle_name'             => 'permit_empty|max_length[100]',
             'qr_code'                 => 'permit_empty|max_length[255]',
-            'rfid_tag'                => 'permit_empty|max_length[255]',
             'department'              => 'permit_empty|max_length[100]',
             'position'                => 'permit_empty|max_length[100]',
             'date_hired'              => 'permit_empty|valid_date[Y-m-d]',
@@ -399,7 +413,6 @@ final class PatientController extends ApiController
             'last_name'     => ($create ? 'required' : 'permit_empty') . '|max_length[100]',
             'middle_name'   => 'permit_empty|max_length[100]',
             'qr_code'       => 'permit_empty|max_length[255]',
-            'rfid_tag'      => 'permit_empty|max_length[255]',
             'course'        => 'permit_empty|max_length[100]',
             'year_level'    => 'permit_empty|integer|greater_than[0]|less_than[7]',
             'section'       => 'permit_empty|max_length[20]',

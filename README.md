@@ -96,7 +96,7 @@ Base URL in development: `http://localhost:8090/api/v1` (the SPA dev server prox
 
 - **Auth** — `Authorization: Bearer <access-token>`; the access token is short-lived (15 min) and lives in memory (SPA) or secure storage (mobile). The refresh token is an `HttpOnly; Secure; SameSite=Strict` cookie, rotated on every use, with replay detection.
 - **Envelope** — every response is `{ success, data, errors, meta }`. Errors carry stable codes (`resource.not_found`, `auth.login_locked`, …); 5xx bodies are redacted to `internal.error` and never leak messages or traces.
-- **Public endpoints (deliberate, leak-tested)** — `/health`, `/auth/login`, `/auth/refresh`, `/appointments/verify` and `/referrals/verify` (QR, minimum disclosure).
+- **Public endpoints (deliberate, leak-tested)** — `/health`, `/auth/login`, `/auth/refresh`. The former appointment and referral QR verify endpoints are retired.
 - **Pagination** — keyset cursors only; OFFSET pagination is banned.
 
 ## Configuration
@@ -107,7 +107,7 @@ Backend `.env` (from `backend/.env.example`, never committed):
 |---|---|
 | `JWT_SECRET` · `JWT_ALG` · `JWT_*_TTL_SECONDS` | Token signing and lifetimes (15 min access / 30 d refresh) |
 | `COUNSELLING_KEY` · `COUNSELLING_KEY_VERSION` | AES-256-GCM note encryption; rotate via `counselling_key_versions` + `COUNSELLING_KEY_V1`… |
-| `REFERRAL_HMAC_KEY` | QR token HMAC |
+
 | `CORS_ALLOWED_ORIGINS` | Strict allowlist — no wildcards in production |
 | `RATELIMIT_GLOBAL_PER_MIN` · `RATELIMIT_AUTH_PER_MIN` | Fixed-window buckets (600 / 30) |
 | `EXTERNAL_AUDIT_SAMPLE_LIVE` · `EXTERNAL_AUDIT_SAMPLE_TEST` | External-API `external.request` audit sampling per key env (1.0 / 0.2) |
@@ -123,19 +123,22 @@ Production must drain the durable outbox and report queue outside HTTP processes
 * * * * * cd /path/to/zynapse/backend && php spark synapse:audit-drain --batch=500 --max-batches=10
 * * * * * cd /path/to/zynapse/backend && php spark synapse:reports-drain --limit=10
 * * * * * cd /path/to/zynapse/backend && php spark synapse:appointments-enqueue-due
-0 * * * * cd /path/to/zynapse/backend && php spark synapse:bmg-device-watchdog
+*/15 * * * * cd /path/to/zynapse/backend && php spark synapse:bmg-device-watchdog
 15 2 * * * cd /path/to/zynapse/backend && php spark synapse:audit-verify
 ```
 
-The appointment worker promotes Clinic and Guidance bookings into their destination queues at T−15. The reports worker streams CSV rows to disk without holding a transaction open and expires files after 30 days — run a single reports worker. Route non-zero exits and the nightly verification result to alerting. Full command list: [`backend/README.md`](backend/README.md#cli-workers--commands).
+The appointment worker promotes Clinic and Guidance bookings into their destination queues at T−15. The reports worker streams CSV rows to disk without holding a transaction open and expires files after 30 days — run a single reports worker. The BMG watchdog sweeps every 15 min (offline / RTC-invalid / missed-run alerts, deduped per episode; threshold `BMG_OFFLINE_AFTER_MIN`, default 20). Route non-zero exits and the nightly verification result to alerting. Full command list: [`backend/README.md`](backend/README.md#cli-workers--commands).
 
 ## BMG device integration (mechanized tumbler)
 
-The compost drum is turned by an ESP32-S3 controller (`bmg_iot/compost/compost.ino`). After each completed rotation cycle the device reports one *turning session* over WiFi; the backend writes a `turning` process-log row (device + turns + duration) on the drum's active batch. Sensor readings (temperature, moisture, oxygen) are still entered manually by staff — the device has no sensors.
+The compost drum is turned by an ESP32-S3 controller (`bmg_iot/compost/compost.ino`). The board keeps its run schedule in flash and keeps running it when WiFi or the server is down, so the backend's role is: publish the schedule (bump a version), collect heartbeats, and ingest one row per motor run. Sensor readings (temperature, moisture, oxygen) are still entered manually by staff — the device has no sensors. Full contract with request/response examples: [`docs/BMG_DEVICE_API.md`](docs/BMG_DEVICE_API.md).
 
 ```
-ESP32-S3 ──POST /api/v1/devices/bmg/turn-sessions──▶ DeviceAuthFilter ──▶ BmgService::recordDeviceTurnSession
-            header: X-Device-Token: dev_<64hex>       (machine user)        (idempotent per session_uid)
+ESP32-S3 ──GET  /api/v1/devices/bmg/schedule ──▶ flat JSON, re-applied only when `version` changes
+            POST /api/v1/devices/bmg/heartbeat ──▶ liveness + RTC state + motor state (last_seen_at)
+            POST /api/v1/devices/bmg/runs ──────▶ one row per run (idempotent per run_uid), attached
+            POST /api/v1/devices/bmg/turn-sessions ▶ to the unit's active batch when one exists,
+            header: X-Device-Token: dev_<64hex>    flagged for staff when none does
 ```
 
 Setup:

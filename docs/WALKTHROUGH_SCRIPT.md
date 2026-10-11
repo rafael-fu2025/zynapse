@@ -220,7 +220,7 @@ university ID via MIS.)
 | 4:45 | Switch to the phone/emulator window |
 | 4:47 | Login screen → enter the student account → **Home** with quick actions |
 | 4:55 | **Book appointment** flow: pick type → slot → confirm |
-| 5:02 | Open the appointment detail → the **QR code** fills the screen (hold 3s) |
+| 5:02 | Open the appointment list → the new booking shows as **Scheduled** (hold 3s) |
 | 5:08 | Open **Surveys** → take one → submit |
 | 5:17 | Open **Notifications**; show the appointment reminder |
 | 5:24 | Open a report → **Export PDF** → show it in the PDF viewer |
