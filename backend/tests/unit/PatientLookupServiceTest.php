@@ -60,7 +60,7 @@ final class PatientLookupServiceTest extends TestCase
             self::markTestSkipped('No students in DB');
         }
         $identifier = $row['student_number'];
-        [$kind, $patient] = $this->svc->findForCheckin('manual', $identifier);
+        [$kind, $patient] = $this->svc->findByIdentifier($identifier);
         $this->assertSame('student', $kind);
         $this->assertIsArray($patient);
         $this->assertSame($identifier, $patient['student_number']);
@@ -76,7 +76,7 @@ final class PatientLookupServiceTest extends TestCase
             self::markTestSkipped('No employees in DB');
         }
         $identifier = $row['employee_number'];
-        [$kind, $patient] = $this->svc->findForCheckin('manual', $identifier);
+        [$kind, $patient] = $this->svc->findByIdentifier($identifier);
         $this->assertSame('employee', $kind);
         $this->assertIsArray($patient);
         $this->assertSame($identifier, $patient['employee_number']);
@@ -84,7 +84,7 @@ final class PatientLookupServiceTest extends TestCase
 
     public function testReturnsNullForUnknownIdentifier(): void
     {
-        [$kind, $patient] = $this->svc->findForCheckin('manual', '__NOT_A_REAL_ID__');
+        [$kind, $patient] = $this->svc->findByIdentifier('__NOT_A_REAL_ID__');
         $this->assertNull($kind);
         $this->assertNull($patient);
     }

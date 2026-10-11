@@ -12,6 +12,7 @@
 import { Link } from 'react-router-dom';
 import type { ReactNode } from 'react';
 
+import { GearGauge } from '@/components/facilities/GearGauge';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
 import {
@@ -24,6 +25,7 @@ import {
   type Readout,
   type Tone,
 } from '@/lib/bmgFormat';
+import { describeGear } from '@/lib/gearModel';
 import type { ActiveBatch } from '@/schemas/facilities';
 import { fmtShort } from '@/utils/date';
 
@@ -41,34 +43,6 @@ const TONE_TEXT: Record<Tone, string> = {
   danger: 'text-destructive',
 };
 
-/**
- * Theme-aware drum graphic: maroon on light, white on dark. The white
- * asset's filename is misspelled upstream (`drum-whte`), so it is
- * referenced as shipped rather than "fixed" and broken.
- *
- * Exported because the section header uses the same artwork at a
- * smaller size.
- */
-export function DrumArt({ className }: { className?: string }) {
-  return (
-    <>
-      <img
-        src="/drum-maroon.png"
-        alt=""
-        aria-hidden
-        draggable={false}
-        className={cn(className, 'object-contain dark:hidden')}
-      />
-      <img
-        src="/drum-whte.png"
-        alt=""
-        aria-hidden
-        draggable={false}
-        className={cn(className, 'hidden object-contain dark:block')}
-      />
-    </>
-  );
-}
 
 /** One `<dt>`/`<dd>` pair. Single definition so no row can diverge. */
 function FactRow({
@@ -115,6 +89,14 @@ export function DrumCard({ batch, turningDueDays, className }: DrumCardProps) {
   const turning = describeTurning(batch.days_since_last_turning, turningDueDays);
   const progress = formatProgress(batch.progress_pct);
   const isLoading = batch.input_kg <= 0;
+  // The gear is the card's status gauge: motion = processing, amber and
+  // slow = turning overdue, still = waiting for waste, arc = progress.
+  const gear = describeGear({
+    inputKg: batch.input_kg,
+    daysSinceLastTurning: batch.days_since_last_turning,
+    turningDueDays,
+    progressPct: batch.progress_pct,
+  });
 
   // The whole tile is the link, so its accessible name has to lead with
   // the drum's identity. A visually-hidden prefix does that WITHOUT an
@@ -137,7 +119,7 @@ export function DrumCard({ batch, turningDueDays, className }: DrumCardProps) {
       <span className="sr-only">{accessibleName}</span>
 
       <div className="flex justify-center py-0.5" aria-hidden>
-        <DrumArt className="h-14 w-auto" />
+        <GearGauge visual={gear} seed={batch.unit_id} size={72} />
       </div>
 
       <header className="flex items-start justify-between gap-2 border-b border-border/60 pb-2">

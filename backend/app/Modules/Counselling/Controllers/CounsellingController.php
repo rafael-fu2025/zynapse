@@ -76,7 +76,15 @@ final class CounsellingController extends ApiController
             $appointmentId = (int) $rawAppointment;
         }
 
-        $page = $this->service->listSessions($cursor !== '' ? $cursor : null, $limit, $appointmentId);
+        // `patient_school_id` is the per-person guidance record filter —
+        // one student's or employee's session history (2026-10).
+        $rawPatient = $this->request->getGet('patient_school_id');
+        $patientSchoolId = null;
+        if ($rawPatient !== null && $rawPatient !== '') {
+            $patientSchoolId = (string) $rawPatient;
+        }
+
+        $page = $this->service->listSessions($cursor !== '' ? $cursor : null, $limit, $appointmentId, $patientSchoolId);
         return $this->ok(
             $page['data'],
             \App\Http\ApiResponse::paginationMeta($page['count'], $page['next'], null),

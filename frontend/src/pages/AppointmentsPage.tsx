@@ -40,7 +40,7 @@ import {
   Loader2,
   LogIn,
   Pencil,
-  QrCode,
+
   Search,
   Stethoscope,
   UserX,
@@ -49,7 +49,7 @@ import {
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
-import { AppointmentQrDialog } from '@/components/AppointmentQrDialog';
+
 import { Badge } from '@/components/ui/badge';
 import { PageHeader, PageToolbar } from '@/components/PageHeader';
 import { Button } from '@/components/ui/button';
@@ -210,14 +210,10 @@ function ScheduleDialog({
   mode,
   initial,
   onClose,
-  onScheduled,
 }: {
   mode: 'create' | 'edit';
   initial?: Appointment;
   onClose: () => void;
-  /** Called with the freshly-created appointment so the page can surface
-   *  the proof-of-booking QR right after scheduling (mirrors mobile). */
-  onScheduled?: (a: Appointment) => void;
 }) {
   const isEdit = mode === 'edit';
   const schedule = useScheduleAppointment();
@@ -280,12 +276,7 @@ function ScheduleDialog({
       ? update.mutateAsync({ id: initial!.id, input: base })
       : schedule.mutateAsync(base);
     run
-      .then((a) => {
-        onClose();
-        // Surface the proof-of-booking QR for the newly-created
-        // appointment (the backend returns the plaintext token here).
-        if (!isEdit) onScheduled?.(a);
-      })
+      .then(() => onClose())
       .catch(() => { /* toast already fired */ });
   });
 
@@ -459,7 +450,6 @@ interface AppointmentActionProps {
   a: Appointment;
   onView: (a: Appointment) => void;
   onEdit: (a: Appointment) => void;
-  onQr: (a: Appointment) => void;
   transition: (vars: { id: number; status: AppointmentTransition }) => void;
   onConfirm: (action: ConfirmAction) => void;
   transitionPending: boolean;
@@ -474,7 +464,7 @@ interface AppointmentActionProps {
  * appointment on a timer any more — staff confirm the booking, check
  * the patient in, and mark a missed visit no-show themselves.
  */
-function AppointmentActions({ a, onView, onEdit, onQr, transition, onConfirm, transitionPending, canEdit }: AppointmentActionProps) {
+function AppointmentActions({ a, onView, onEdit, transition, onConfirm, transitionPending, canEdit }: AppointmentActionProps) {
   return (
     <>
       {/* Approval step: confirming a portal booking assigns the acting
@@ -484,9 +474,8 @@ function AppointmentActions({ a, onView, onEdit, onQr, transition, onConfirm, tr
           <Check /> Confirm
         </Button>
       )}
-      {/* Check in hands the patient to the clinic flow (opens the
-          encounter + queue entry server-side). The kiosk does the same
-          for self-service. */}
+      {/* Manual check-in opens the encounter + queue entry server-side;
+          no QR token or RFID scan is required. */}
       {(a.status === 'scheduled' || a.status === 'confirmed') && (
         <Button className="min-h-11 md:min-h-0" size="sm" variant="secondary" disabled={transitionPending} onClick={() => transition({ id: a.id, status: 'checked_in' })}>
           <LogIn /> Check in
@@ -506,9 +495,7 @@ function AppointmentActions({ a, onView, onEdit, onQr, transition, onConfirm, tr
           <DropdownMenuItem className="min-h-11" onSelect={() => onView(a)}>
             <Eye /> View appointment
           </DropdownMenuItem>
-          <DropdownMenuItem className="min-h-11" onSelect={() => onQr(a)}>
-            <QrCode /> Appointment QR
-          </DropdownMenuItem>
+
           {canEdit && (
             <DropdownMenuItem className="min-h-11" onSelect={() => onEdit(a)}>
               <Pencil /> Edit appointment
@@ -607,7 +594,6 @@ function AppointmentRow({
   providerName,
   onView,
   onEdit,
-  onQr,
   transition,
   onConfirm,
   transitionPending,
@@ -617,7 +603,6 @@ function AppointmentRow({
   providerName: string;
   onView: (a: Appointment) => void;
   onEdit: (a: Appointment) => void;
-  onQr: (a: Appointment) => void;
   transition: (vars: { id: number; status: AppointmentTransition }) => void;
   onConfirm: (action: ConfirmAction) => void;
   transitionPending: boolean;
@@ -675,7 +660,7 @@ function AppointmentRow({
             a={a}
             onView={onView}
             onEdit={onEdit}
-            onQr={onQr}
+
             transition={transition}
             onConfirm={onConfirm}
             transitionPending={transitionPending}
@@ -714,7 +699,7 @@ export default function AppointmentsPage() {
   const [openSchedule, setOpenSchedule] = useState(false);
   const [editing, setEditing] = useState<Appointment | null>(null);
   const [viewing, setViewing] = useState<Appointment | null>(null);
-  const [qrAppt, setQrAppt] = useState<Appointment | null>(null);
+
   const [confirm, setConfirm] = useState<ConfirmAction | null>(null);
   // Live search — `searchDraft` is the raw input, the URL carries the
   // debounced term, and only terms >= 2 chars trigger a dedicated
@@ -794,7 +779,6 @@ export default function AppointmentsPage() {
                 <ScheduleDialog
                   mode="create"
                   onClose={() => setOpenSchedule(false)}
-                  onScheduled={setQrAppt}
                 />
               )}
             </Dialog>
@@ -886,7 +870,6 @@ export default function AppointmentsPage() {
                     providerName={providerName(a.provider_user_id)}
                     onView={setViewing}
                     onEdit={setEditing}
-                    onQr={setQrAppt}
                     transition={(vars) => transition.mutate(vars)}
                     onConfirm={setConfirm}
                     transitionPending={transition.isPending}
@@ -920,7 +903,6 @@ export default function AppointmentsPage() {
                 providerName={providerName(a.provider_user_id)}
                 onView={setViewing}
                 onEdit={setEditing}
-                onQr={setQrAppt}
                 transition={(vars) => transition.mutate(vars)}
                 onConfirm={setConfirm}
                 transitionPending={transition.isPending}
@@ -956,7 +938,6 @@ export default function AppointmentsPage() {
             mode="edit"
             initial={editing}
             onClose={() => setEditing(null)}
-            onScheduled={setQrAppt}
           />
         </Dialog>
       )}
@@ -967,19 +948,6 @@ export default function AppointmentsPage() {
         </Dialog>
       )}
 
-      {qrAppt !== null && (
-        <Dialog open onOpenChange={(o) => !o && setQrAppt(null)}>
-          <AppointmentQrDialog
-            appointmentId={qrAppt.id}
-            patientLabel={qrAppt.patient_name ?? qrAppt.patient_school_id}
-            scheduledAt={qrAppt.scheduled_at}
-            status={qrAppt.status}
-            initialToken={qrAppt.qr_token ?? null}
-            canIssue={canWrite}
-            onClose={() => setQrAppt(null)}
-          />
-        </Dialog>
-      )}
 
       <ConfirmDialog
         open={confirm !== null}

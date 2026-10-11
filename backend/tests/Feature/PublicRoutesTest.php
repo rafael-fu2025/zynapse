@@ -4,31 +4,33 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
-/**
- * The deliberately-public routes (no api_auth filter) must stay
- * reachable WITHOUT a token — and stay that way. This is the
- * minimum-disclosure contract: this endpoint serves exactly one
- * unauthenticated purpose (appointment QR verification), so a refactor
- * that accidentally attaches api_auth breaks QR scanners in the field,
- * and one that widens the data would be a disclosure regression.
- *
- * The correct failure mode for this route is 4xx validation/not-found —
- * never 401 (wrong filter attached) and never a leak (over-broad data).
- */
+/** Retired QR routes must be absent, not merely gated by authentication. */
 final class PublicRoutesTest extends FeatureTestCase
 {
-    public function testAppointmentVerifyIsPublicButRejectsGarbage(): void
+    public function testAppointmentVerifyIsAbsent(): void
     {
-        $result = $this->withBodyFormat('json')->call(
+        $this->expectException(\CodeIgniter\Exceptions\PageNotFoundException::class);
+        $this->expectExceptionCode(404);
+        $this->withBodyFormat('json')->call(
             'post',
             'api/v1/appointments/verify',
-            ['qr_token' => 'not-a-real-token'],
+            ['token' => 'retired-token'],
         );
 
-        // Public: any failure must be a *verification* failure, not auth.
-        $this->assertNotSame(401, $result->response()->getStatusCode());
-        $this->assertNotSame(403, $result->response()->getStatusCode());
-        $body = $this->envelope($result);
-        $this->assertFalse($body['success']);
+    }
+
+    public function testAppointmentQrIssuanceIsAbsentForStaff(): void
+    {
+        $staff = $this->login(['clinic_admin']);
+        $this->expectException(\CodeIgniter\Exceptions\PageNotFoundException::class);
+        $this->expectExceptionCode(404);
+        $this->authed($staff['token'], 'post', 'api/v1/clinic/appointments/1/qr', []);
+    }
+
+    public function testReferralVerifyRemainsAbsent(): void
+    {
+        $this->expectException(\CodeIgniter\Exceptions\PageNotFoundException::class);
+        $this->expectExceptionCode(404);
+        $this->withBodyFormat('json')->call('post', 'api/v1/referrals/verify', ['token' => 'retired-token']);
     }
 }

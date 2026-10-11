@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Modules\Clinic\Services;
 
+use App\Modules\Shared\ArchiveScope;
 use App\Modules\Shared\BaseService;
 use App\Services\CurrentTenant;
 use CodeIgniter\Database\BaseBuilder;
@@ -152,19 +153,28 @@ final class EmployeePersonService extends BaseService
      * `position_year` to every row of a list page, in one batched round
      * trip per page.
      *
-     * `primaryAmongLive` keeps `is_primary` consistent with
-     * `applyPrimaryOnlyFilter()`: when the page hides archived rows, the
-     * primary is picked among live siblings only. Archived siblings still
+     * `$primaryAmong` keeps `is_primary` consistent with
+     * `applyPrimaryOnlyFilter()`: the primary is picked among the siblings
+     * the listing considered — live ones for `active`, archived ones for
+     * `archived`, every one for `all`. Siblings outside that set still
      * appear in `records`, flagged.
+     *
+     * Legacy boolean (kept for existing callers): `true` = `active`
+     * ("primary among live"), `false` = `all`. NOTE this is the opposite
+     * polarity to `ArchiveScope::from(bool)`, which describes what a list
+     * *includes* — hence the explicit translation below.
      *
      * @param list<array<string, mixed>> $rows
      * @return list<array<string, mixed>>
      */
-    public function attachRecords(array $rows, bool $primaryAmongLive = true): array
+    public function attachRecords(array $rows, bool|string $primaryAmong = true): array
     {
         if ($rows === []) {
             return $rows;
         }
+        $scope = is_bool($primaryAmong)
+            ? ($primaryAmong ? ArchiveScope::ACTIVE : ArchiveScope::ALL)
+            : ArchiveScope::from($primaryAmong);
 
         $keys = [];
         foreach ($rows as $r) {
@@ -184,9 +194,11 @@ final class EmployeePersonService extends BaseService
 
         $recordsByKey = [];
         foreach ($byKey as $key => $list) {
-            $candidates = $primaryAmongLive
-                ? array_values(array_filter($list, static fn (array $m) => $m['archived_at'] === null))
-                : $list;
+            $candidates = match ($scope) {
+                ArchiveScope::ACTIVE => array_values(array_filter($list, static fn (array $m) => $m['archived_at'] === null)),
+                ArchiveScope::ARCHIVED => array_values(array_filter($list, static fn (array $m) => $m['archived_at'] !== null)),
+                default => $list,
+            };
             $primary = self::pickPrimary($candidates !== [] ? $candidates : $list);
             $recordsByKey[$key] = array_map(
                 fn (array $m) => $this->recordSummary($m, $primary, $counts),
@@ -211,12 +223,19 @@ final class EmployeePersonService extends BaseService
      * `users` table, so nothing user-supplied ever enters it. The name
      * comparison MUST stay in lockstep with `nameKey()`.
      *
-     * `includeArchived` must match the listing query: a hidden sibling
-     * must not strip the only visible row of a person.
+     * `$scope` must match the listing query: a hidden sibling must not
+     * strip the only visible row of a person. In the `archived` scope the
+     * primary is the newest ARCHIVED record, so a person with one live and
+     * one archived record shows up once in each view. A bool is accepted
+     * for existing callers (`true` = all, `false` = active).
      */
-    public function applyPrimaryOnlyFilter(BaseBuilder $builder, bool $includeArchived): void
+    public function applyPrimaryOnlyFilter(BaseBuilder $builder, bool|string $scope): void
     {
-        $archivedSql = $includeArchived ? '' : ' AND s.archived_at IS NULL';
+        $archivedSql = match (ArchiveScope::from($scope)) {
+            ArchiveScope::ACTIVE => ' AND s.archived_at IS NULL',
+            ArchiveScope::ARCHIVED => ' AND s.archived_at IS NOT NULL',
+            default => '',
+        };
         $builder->where(new RawSql('NOT EXISTS (' . $this->primaryOverrideSql($archivedSql) . ')'));
     }
 

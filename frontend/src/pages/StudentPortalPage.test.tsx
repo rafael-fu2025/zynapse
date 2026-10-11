@@ -145,7 +145,7 @@ const h = vi.hoisted(() => {
       gender: 'male',
       blood_type: null,
       has_qr: true,
-      has_rfid: false,
+
       consecutive_no_shows: 0,
       archived: false,
       created_at: '2026-01-01 00:00:00',

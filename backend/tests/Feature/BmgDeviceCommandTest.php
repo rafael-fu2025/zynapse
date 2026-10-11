@@ -255,4 +255,315 @@ final class BmgDeviceCommandTest extends FeatureTestCase
         $res = $this->devicePost('dev_' . bin2hex(random_bytes(32)), 'api/v1/devices/bmg/commands/ack', ['command_id' => 1]);
         $res->assertStatus(401);
     }
+
+    public function testFinishBatchQueuesStopCommandForBoard(): void
+    {
+        $drum  = $this->createDrumWithBoard();
+        $batch = $this->startBatch($drum['unitId']);
+        $batchId = (int) $batch['data']['id'];
+
+        // Finish the batch
+        $finish = $this->postJson("api/v1/facilities/batches/{$batchId}/finish", [
+            'quality_grade'  => 'good',
+            'maturity_level' => 'mature',
+        ]);
+        $this->assertSame('released', $finish['data']['status']);
+
+        // Board must have a 'stop' command enqueued
+        $commands = $this->commandsFor($drum['deviceId']);
+        $this->assertCount(2, $commands);
+        $this->assertSame('start', $commands[0]['command']);
+        $this->assertSame('stop', $commands[1]['command']);
+        $this->assertSame('pending', $commands[1]['status']);
+    }
+
+    public function testCancelBatchQueuesStopCommandAndFailsPendingStart(): void
+    {
+        $drum  = $this->createDrumWithBoard();
+        $batch = $this->startBatch($drum['unitId']);
+        $batchId = (int) $batch['data']['id'];
+
+        // Cancel the batch
+        $cancel = $this->postJson("api/v1/facilities/batches/{$batchId}/cancel", [
+            'reason_code' => 'contamination',
+        ]);
+        $this->assertSame('cancelled', $cancel['data']['status']);
+
+        $commands = $this->commandsFor($drum['deviceId']);
+        $this->assertCount(2, $commands);
+        // The pending start command must be marked failed
+        $this->assertSame('start', $commands[0]['command']);
+        $this->assertSame('failed', $commands[0]['status']);
+        // And a new stop command is pending
+        $this->assertSame('stop', $commands[1]['command']);
+        $this->assertSame('pending', $commands[1]['status']);
+    }
+
+    public function testDevicePollingUpdatesLastSeenAt(): void
+    {
+        $drum = $this->createDrumWithBoard();
+        $this->startBatch($drum['unitId']);
+
+        $before = db_connect()->table('facilities_bmg_devices')
+            ->where('id', $drum['deviceId'])->get()->getRowArray();
+        $this->assertNull($before['last_seen_at']);
+
+        // Poll commands
+        $poll = $this->deviceGet($drum['deviceToken'], 'api/v1/devices/bmg/commands');
+        $poll->assertStatus(200);
+
+        $after = db_connect()->table('facilities_bmg_devices')
+            ->where('id', $drum['deviceId'])->get()->getRowArray();
+        $this->assertNotNull($after['last_seen_at'], 'Polling must keep last_seen_at fresh.');
+    }
+
+    public function testAdminCanSendManualStartAndStopCommands(): void
+    {
+        $drum = $this->createDrumWithBoard();
+
+        // Send manual start command
+        $startRes = $this->postJson("api/v1/facilities/devices/{$drum['deviceId']}/commands", [
+            'command' => 'start',
+        ], 201);
+        $this->assertSame('start', $startRes['data']['command']);
+        $this->assertTrue($startRes['data']['enqueued']);
+
+        // Send manual stop command
+        $stopRes = $this->postJson("api/v1/facilities/devices/{$drum['deviceId']}/commands", [
+            'command' => 'stop',
+        ], 201);
+        $this->assertSame('stop', $stopRes['data']['command']);
+
+        // Command history
+        $hist = $this->authed($this->token(), 'get', "api/v1/facilities/devices/{$drum['deviceId']}/commands");
+        $hist->assertStatus(200);
+        $items = $this->envelope($hist)['data'];
+        $this->assertCount(2, $items);
+        $this->assertSame('stop', $items[0]['command']);
+        $this->assertSame('start', $items[1]['command']);
+        // Stop failed the pending start
+        $this->assertSame('failed', $items[1]['status']);
+    }
+
+    // --- run-now + command TTL ----------------------------------------------
+
+    public function testRunNowIsQueuedAndDeliveredToTheBoard(): void
+    {
+        $drum = $this->createDrumWithBoard();
+
+        $res = $this->postJson("api/v1/facilities/devices/{$drum['deviceId']}/commands", [
+            'command' => 'run_now',
+        ], 201);
+        $this->assertSame('run_now', $res['data']['command']);
+
+        // The board sees it on its next poll, with a TTL stamped.
+        $feed = $this->envelope($this->deviceGet($drum['deviceToken'], 'api/v1/devices/bmg/commands'))['data'];
+        $this->assertCount(1, $feed);
+        $this->assertSame('run_now', $feed[0]['command']);
+        $this->assertNotNull($feed[0]['expires_at'], 'Every queued command carries a deadline.');
+        $this->assertTrue($feed[0]['payload']['manual']);
+    }
+
+    public function testStopSupersedesAPendingRunNow(): void
+    {
+        $drum = $this->createDrumWithBoard();
+
+        $this->postJson("api/v1/facilities/devices/{$drum['deviceId']}/commands", ['command' => 'run_now'], 201);
+        $this->postJson("api/v1/facilities/devices/{$drum['deviceId']}/commands", ['command' => 'stop'], 201);
+
+        $feed = $this->envelope($this->deviceGet($drum['deviceToken'], 'api/v1/devices/bmg/commands'))['data'];
+        $this->assertCount(1, $feed, 'The superseded run-now must not be delivered.');
+        $this->assertSame('stop', $feed[0]['command']);
+
+        $commands = $this->commandsFor($drum['deviceId']);
+        $this->assertSame('failed', $commands[0]['status']);
+        $this->assertSame('pending', $commands[1]['status']);
+    }
+
+    public function testExpiredCommandsAreNotDelivered(): void
+    {
+        $drum = $this->createDrumWithBoard();
+
+        $this->postJson("api/v1/facilities/devices/{$drum['deviceId']}/commands", ['command' => 'run_now'], 201);
+
+        // Age the command past its deadline — the board was offline and
+        // comes back later; an old "run now" must not fire.
+        db_connect()->table('facilities_bmg_device_commands')
+            ->where('device_id', $drum['deviceId'])
+            ->update(['expires_at' => gmdate('Y-m-d H:i:s', time() - 1)]);
+
+        $feed = $this->envelope($this->deviceGet($drum['deviceToken'], 'api/v1/devices/bmg/commands'))['data'];
+        $this->assertCount(0, $feed, 'Stale pending commands expire instead of delivering.');
+        $this->assertSame('failed', $this->commandsFor($drum['deviceId'])[0]['status']);
+    }
+
+    // --- expiry tells staff -----------------------------------------------
+
+    /** Age every pending command of a board past its deadline. */
+    private function expireCommandsOf(int $deviceId): void
+    {
+        db_connect()->table('facilities_bmg_device_commands')
+            ->where('device_id', $deviceId)
+            ->where('status', 'pending')
+            ->update(['expires_at' => gmdate('Y-m-d H:i:s', time() - 1)]);
+    }
+
+    /** Expiry notifications for one drum (the shared outbox accumulates across the suite). */
+    private function expiryNoticesFor(string $unitCode): array
+    {
+        return db_connect()->table('notification_outbox')
+            ->where('template_code', 'bmg.device_command_expired')
+            ->like('context_json', '"' . $unitCode . '"')
+            ->get()->getResultArray();
+    }
+
+    private function unitCode(int $unitId): string
+    {
+        return (string) db_connect()->table('facilities_bmg_units')->where('id', $unitId)->get()->getRowArray()['code'];
+    }
+
+    private function runWatchdog(): void
+    {
+        $command = new \App\Commands\BmgDeviceWatchdog(service('logger'), service('commands'));
+        $this->assertSame(0, $command->run([]));
+    }
+
+    public function testWatchdogTellsStaffWhenAStartNeverReachedAnOfflineBoard(): void
+    {
+        $drum = $this->createDrumWithBoard();
+        $code = $this->unitCode($drum['unitId']);
+        $this->startBatch($drum['unitId']);
+
+        // The board is offline: it never polls, so the lazy expiry in the
+        // command feed cannot run. Only the watchdog can notice.
+        $this->expireCommandsOf($drum['deviceId']);
+        $this->runWatchdog();
+
+        $this->assertSame('failed', $this->commandsFor($drum['deviceId'])[0]['status']);
+        $notices = $this->expiryNoticesFor($code);
+        $this->assertNotEmpty($notices, 'An expired start on an offline board must notify staff.');
+        $context = json_decode((string) $notices[0]['context_json'], true);
+        $this->assertSame('start', $context['next_status']);
+        $this->assertSame('warning', $context['urgency']);
+
+        // Settled: a second sweep must not notify again.
+        $before = count($notices);
+        $this->runWatchdog();
+        $this->assertCount($before, $this->expiryNoticesFor($code));
+    }
+
+    public function testBoardPollThatFindsAnExpiredCommandNotifiesExactlyOnce(): void
+    {
+        $drum = $this->createDrumWithBoard();
+        $code = $this->unitCode($drum['unitId']);
+
+        $this->postJson("api/v1/facilities/devices/{$drum['deviceId']}/commands", ['command' => 'run_now'], 201);
+        $this->expireCommandsOf($drum['deviceId']);
+
+        // The board reappears and polls first …
+        $this->deviceGet($drum['deviceToken'], 'api/v1/devices/bmg/commands')->assertStatus(200);
+        $afterPoll = count($this->expiryNoticesFor($code));
+        $this->assertGreaterThan(0, $afterPoll);
+
+        // … so the watchdog finds the row already settled.
+        $this->runWatchdog();
+        $this->assertCount($afterPoll, $this->expiryNoticesFor($code), 'One expired command, one notification.');
+    }
+
+    public function testExpiredStopIsCriticalBecauseTheDrumMayStillBeTurning(): void
+    {
+        $drum = $this->createDrumWithBoard();
+        $code = $this->unitCode($drum['unitId']);
+
+        $this->postJson("api/v1/facilities/devices/{$drum['deviceId']}/commands", ['command' => 'stop'], 201);
+        $this->expireCommandsOf($drum['deviceId']);
+        $this->runWatchdog();
+
+        $notices = $this->expiryNoticesFor($code);
+        $this->assertNotEmpty($notices);
+        $context = json_decode((string) $notices[0]['context_json'], true);
+        $this->assertSame('stop', $context['next_status']);
+        $this->assertSame('critical', $context['urgency']);
+    }
+
+    public function testAcknowledgedAndSupersededCommandsNeverRaiseAnExpiryNotice(): void
+    {
+        $drum = $this->createDrumWithBoard();
+        $code = $this->unitCode($drum['unitId']);
+
+        // 1) acknowledged in time, deadline passes afterwards
+        $this->postJson("api/v1/facilities/devices/{$drum['deviceId']}/commands", ['command' => 'run_now'], 201);
+        $feed = $this->envelope($this->deviceGet($drum['deviceToken'], 'api/v1/devices/bmg/commands'))['data'];
+        $this->devicePost($drum['deviceToken'], 'api/v1/devices/bmg/commands/ack', ['command_id' => $feed[0]['id']])->assertStatus(200);
+
+        // 2) superseded by a later stop (the run_now is failed on purpose)
+        $this->postJson("api/v1/facilities/devices/{$drum['deviceId']}/commands", ['command' => 'run_now'], 201);
+        $this->postJson("api/v1/facilities/devices/{$drum['deviceId']}/commands", ['command' => 'stop'], 201);
+
+        // The only still-pending command is the stop; settle it as acked too.
+        $feed = $this->envelope($this->deviceGet($drum['deviceToken'], 'api/v1/devices/bmg/commands'))['data'];
+        $this->devicePost($drum['deviceToken'], 'api/v1/devices/bmg/commands/ack', ['command_id' => $feed[0]['id']])->assertStatus(200);
+
+        db_connect()->table('facilities_bmg_device_commands')
+            ->where('device_id', $drum['deviceId'])
+            ->update(['expires_at' => gmdate('Y-m-d H:i:s', time() - 1)]);
+        $this->runWatchdog();
+        $this->deviceGet($drum['deviceToken'], 'api/v1/devices/bmg/commands')->assertStatus(200);
+
+        $this->assertSame([], $this->expiryNoticesFor($code), 'Settled commands must stay quiet.');
+    }
+
+    public function testStaleExpiredBacklogIsSettledSilently(): void
+    {
+        $drum = $this->createDrumWithBoard();
+        $code = $this->unitCode($drum['unitId']);
+
+        // A start that expired two days ago: old news, not an incident.
+        $this->postJson("api/v1/facilities/devices/{$drum['deviceId']}/commands", ['command' => 'start'], 201);
+        db_connect()->table('facilities_bmg_device_commands')
+            ->where('device_id', $drum['deviceId'])
+            ->update(['expires_at' => gmdate('Y-m-d H:i:s', time() - 2 * 86400)]);
+        $this->runWatchdog();
+
+        $this->assertSame('failed', $this->commandsFor($drum['deviceId'])[0]['status'], 'The backlog is still settled.');
+        $this->assertSame([], $this->expiryNoticesFor($code), 'But staff are not told about it.');
+    }
+
+    public function testDisabledBoardsLeftoverCommandsAreNotAnIncident(): void
+    {
+        $drum = $this->createDrumWithBoard();
+        $code = $this->unitCode($drum['unitId']);
+
+        $this->postJson("api/v1/facilities/devices/{$drum['deviceId']}/commands", ['command' => 'run_now'], 201);
+        // Staff switched the board off on purpose.
+        $this->postJson("api/v1/facilities/devices/{$drum['deviceId']}/status", ['status' => 'disabled']);
+        $this->expireCommandsOf($drum['deviceId']);
+        $this->runWatchdog();
+
+        $this->assertSame('failed', $this->commandsFor($drum['deviceId'])[0]['status']);
+        $this->assertSame([], $this->expiryNoticesFor($code));
+    }
+
+    public function testCommandsAndSchedulesAreAdminOnly(): void
+    {
+        $drum     = $this->createDrumWithBoard();
+        $operator = $this->login(['facilities_op']);
+
+        // Reaching a motor over the network is an administrative act.
+        $send = $this->authed($operator['token'], 'post', "api/v1/facilities/devices/{$drum['deviceId']}/commands", [
+            'command' => 'run_now',
+        ]);
+        $send->assertStatus(403);
+
+        $schedule = $this->authed($operator['token'], 'post', "api/v1/facilities/units/{$drum['unitId']}/schedule", [
+            'times'            => ['09:00'],
+            'duration_seconds' => 10,
+            'pwm'              => 200,
+            'enabled'          => true,
+        ]);
+        $schedule->assertStatus(403);
+
+        // The board's command feed itself is unaffected.
+        $this->deviceGet($drum['deviceToken'], 'api/v1/devices/bmg/commands')->assertStatus(200);
+    }
 }

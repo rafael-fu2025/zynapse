@@ -76,7 +76,7 @@ final class EmployeeSelfController extends ApiController
      * Phase 14: self-update of the calling employee's own profile
      * fields (name, emergency contact, address, gender, DOB). HR
      * fields (department, position, employment_status, is_teaching,
-     * qr_code, rfid_tag) are immutable through this endpoint.
+     * qr_code) are immutable through this endpoint.
      */
     public function updateProfile(): ResponseInterface
     {

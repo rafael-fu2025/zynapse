@@ -556,6 +556,22 @@ export const categoryDeviationSchema = z.object({
 export const BMG_DEVICE_STATUSES = ['active', 'disabled'] as const;
 export type BmgDeviceStatus = (typeof BMG_DEVICE_STATUSES)[number];
 
+export const BMG_DEVICE_COMMANDS = ['start', 'stop', 'run_now'] as const;
+export type BmgDeviceCommandType = (typeof BMG_DEVICE_COMMANDS)[number];
+
+export const bmgDeviceCommandSchema = z.object({
+  id: z.number(),
+  command: z.string(),
+  status: z.string(),
+  payload: z.record(z.string(), z.unknown()).nullable().optional(),
+  delivered_at: z.string().nullable().optional(),
+  // Pending commands expire — a stale "run now" never fires late.
+  expires_at: z.string().nullable().optional(),
+  acknowledged_at: z.string().nullable().optional(),
+  created_at: z.string(),
+});
+export type BmgDeviceCommand = z.infer<typeof bmgDeviceCommandSchema>;
+
 export const bmgDeviceSchema = z.object({
   id: z.number().int().positive(),
   code: z.string(),
@@ -573,6 +589,14 @@ export const bmgDeviceSchema = z.object({
   // UI keep a persistent "silent" signal instead of relying on the
   // one-shot notification the watchdog fires.
   silence_notified_at: z.string().nullable().optional(),
+  // Heartbeat telemetry — populated after the board's first /heartbeat.
+  last_heartbeat_at: z.string().nullable().optional(),
+  last_uptime_seconds: z.number().int().nullable().optional(),
+  last_rssi_dbm: z.number().int().nullable().optional(),
+  rtc_valid: z.boolean().nullable().optional(),
+  rtc_offset_seconds: z.number().int().nullable().optional(),
+  last_run_result: z.string().nullable().optional(),
+  motor_state: z.string().nullable().optional(),
   created_at: z.string(),
   updated_at: z.string().nullable().optional(),
   archived_at: z.string().nullable().optional(),
@@ -619,3 +643,221 @@ export const registerDeviceSchema = z
   });
 export type RegisterDeviceInput = z.infer<typeof registerDeviceSchema>;
 export type CategoryDeviation = z.infer<typeof categoryDeviationSchema>;
+
+// ---- Per-unit automation (schedule, runs, monitoring) ----------------
+
+/** A single "HH:MM" 24-hour run time in Asia/Manila. */
+export const RUN_TIME_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+export const MAX_SCHEDULE_TIMES = 8;
+export const MAX_RUN_DURATION_SECONDS = 3600;
+export const MAX_PWM = 255;
+
+export const bmgScheduleSchema = z.object({
+  unit_id: z.number().int().positive().optional(),
+  times: z.array(z.string()),
+  duration_seconds: z.number().int().min(1).max(MAX_RUN_DURATION_SECONDS),
+  pwm: z.number().int().min(0).max(MAX_PWM),
+  enabled: z.boolean(),
+  version: z.number().int().positive(),
+  updated_at: z.string().nullable().optional(),
+});
+export type BmgSchedule = z.infer<typeof bmgScheduleSchema>;
+
+export const bmgScheduleHistorySchema = z.object({
+  version: z.number().int().positive(),
+  times: z.array(z.string()),
+  duration_seconds: z.number().int(),
+  pwm: z.number().int(),
+  enabled: z.boolean(),
+  changed_by_user_id: z.number().int(),
+  created_at: z.string(),
+});
+export type BmgScheduleHistoryEntry = z.infer<typeof bmgScheduleHistorySchema>;
+
+export const bmgUnitScheduleSchema = z.object({
+  unit_id: z.number().int().positive(),
+  unit_code: z.string(),
+  schedule: bmgScheduleSchema,
+  next_run_at: z.string().nullable(),
+  history: z.array(bmgScheduleHistorySchema),
+});
+export type BmgUnitSchedule = z.infer<typeof bmgUnitScheduleSchema>;
+
+/**
+ * The schedule editor's form contract. Times arrive as operator input
+ * ("9:00" fingers happen) and are normalized to zero-padded HH:MM; the
+ * backend re-validates, so this is the friendly first gate, not the rule.
+ */
+export const saveScheduleSchema = z.object({
+  times: z
+    .array(z.string())
+    .max(MAX_SCHEDULE_TIMES, `At most ${MAX_SCHEDULE_TIMES} run times per day.`)
+    .transform((times) => times.map((t) => t.trim()).filter((t) => t !== ''))
+    .refine((times) => times.every((t) => RUN_TIME_PATTERN.test(t)), 'Use 24-hour HH:MM, e.g. 09:00.')
+    .refine((times) => new Set(times).size === times.length, 'Duplicate run times.'),
+  duration_seconds: z.coerce
+    .number()
+    .int('Whole seconds only.')
+    .min(1, 'At least 1 second.')
+    .max(MAX_RUN_DURATION_SECONDS, `At most ${MAX_RUN_DURATION_SECONDS} seconds.`),
+  pwm: z.coerce.number().int('Whole numbers only.').min(0).max(MAX_PWM, 'PWM is 0–255.'),
+  enabled: z.boolean(),
+});
+export type SaveScheduleInput = z.infer<typeof saveScheduleSchema>;
+
+export const BMG_RUN_ORIGINS = ['scheduled', 'manual'] as const;
+export type BmgRunOrigin = (typeof BMG_RUN_ORIGINS)[number];
+
+export const BMG_RUN_RESULTS = ['completed', 'failed', 'aborted'] as const;
+export type BmgRunResult = (typeof BMG_RUN_RESULTS)[number];
+
+export const bmgDeviceRunSchema = z.object({
+  id: z.number().int().positive(),
+  run_uid: z.string(),
+  origin: z.enum(BMG_RUN_ORIGINS),
+  result: z.enum(BMG_RUN_RESULTS),
+  started_at: z.string().nullable(),
+  ended_at: z.string().nullable(),
+  duration_seconds: z.number().int(),
+  turns_count: z.number().int().nullable().optional(),
+  batch_id: z.number().int().nullable().optional(),
+  created_at: z.string(),
+});
+export type BmgDeviceRun = z.infer<typeof bmgDeviceRunSchema>;
+
+export const bmgDeviceAssignmentSchema = z.object({
+  id: z.number().int().positive(),
+  device_id: z.number().int().positive(),
+  unit_id: z.number().int().positive(),
+  unit_code: z.string().nullable(),
+  unit_display_name: z.string().nullable(),
+  assigned_by_user_id: z.number().int(),
+  unassigned_by_user_id: z.number().int().nullable(),
+  assigned_at: z.string(),
+  unassigned_at: z.string().nullable(),
+  is_active: z.boolean(),
+});
+export type BmgDeviceAssignment = z.infer<typeof bmgDeviceAssignmentSchema>;
+
+export const bmgUnitMonitorSchema = z.object({
+  unit: z.object({
+    id: z.number().int().positive(),
+    code: z.string(),
+    display_name: z.string(),
+    status: z.string(),
+    archived_at: z.string().nullable(),
+  }),
+  device: z
+    .object({
+      id: z.number().int().positive(),
+      code: z.string(),
+      display_name: z.string(),
+      status: z.string(),
+      firmware: z.string().nullable(),
+      online: z.boolean(),
+      offline_after_minutes: z.number().int(),
+      last_seen_at: z.string().nullable(),
+      last_heartbeat_at: z.string().nullable(),
+      heartbeat_age_minutes: z.number().int().nullable(),
+      last_rssi_dbm: z.number().int().nullable(),
+      last_uptime_seconds: z.number().int().nullable(),
+      rtc_valid: z.boolean().nullable(),
+      rtc_offset_seconds: z.number().int().nullable(),
+      last_run_result: z.string().nullable(),
+      motor_state: z.string().nullable(),
+    })
+    .nullable(),
+  schedule: bmgScheduleSchema.extend({ next_run_at: z.string().nullable() }),
+  runs: z.object({
+    recent: z.array(bmgDeviceRunSchema),
+    failed_count: z.number().int(),
+    missed_times: z.array(z.string()),
+    missed_count: z.number().int(),
+  }),
+  active_batch: z
+    .object({
+      id: z.number().int().positive(),
+      reference_code: z.string(),
+      status: z.string(),
+      started_at: z.string(),
+      total_input_weight_kg: z.number(),
+      output_weight_kg: z.number().nullable(),
+    })
+    .nullable(),
+  totals: z.object({
+    input_kg: z.number(),
+    output_kg: z.number(),
+  }),
+  open_alerts: z.array(
+    z.object({
+      id: z.number().int().positive(),
+      code: z.string(),
+      severity: z.string(),
+      message: z.string(),
+      triggered_at: z.string(),
+    }),
+  ),
+});
+export type BmgUnitMonitor = z.infer<typeof bmgUnitMonitorSchema>;
+
+// ---- Manual waste-in / compost-out ledger ----------------------------
+
+export const bmgBatchInputSchema = z.object({
+  id: z.number().int().positive(),
+  batch_id: z.number().int().positive(),
+  weight_kg: z.number(),
+  category_id: z.number().int().nullable().optional(),
+  category_name: z.string().nullable().optional(),
+  cn_ratio: z.number().nullable().optional(),
+  bulk_density_kg_per_m3: z.number().nullable().optional(),
+  ph: z.number().nullable().optional(),
+  note: z.string().nullable().optional(),
+  recorded_by_user_id: z.number().int(),
+  recorded_at: z.string(),
+  voided_at: z.string().nullable().optional(),
+  void_reason: z.string().nullable().optional(),
+  running_total_kg: z.number(),
+});
+export type BmgBatchInputRow = z.infer<typeof bmgBatchInputSchema>;
+
+export const bmgBatchOutputSchema = z.object({
+  id: z.number().int().positive(),
+  batch_id: z.number().int().positive(),
+  output_weight_kg: z.number(),
+  harvest_date: z.string().nullable().optional(),
+  quality_grade: z.string().nullable().optional(),
+  note: z.string().nullable().optional(),
+  recorded_by_user_id: z.number().int(),
+  recorded_at: z.string(),
+  voided_at: z.string().nullable().optional(),
+  void_reason: z.string().nullable().optional(),
+  running_total_kg: z.number(),
+});
+export type BmgBatchOutputRow = z.infer<typeof bmgBatchOutputSchema>;
+
+/** Staff-entered Manila wall time ("YYYY-MM-DDTHH:MM" from a datetime-local input). */
+export const addBatchInputSchema = z.object({
+  weight_kg: z.coerce.number().positive('Weight must be positive.'),
+  category_id: z.coerce.number().int().positive().optional().or(z.literal('')),
+  recorded_at: z.string().optional().or(z.literal('')),
+  cn_ratio: z.coerce.number().min(0.1).max(200).optional().or(z.literal('')),
+  bulk_density_kg_per_m3: z.coerce.number().positive().optional().or(z.literal('')),
+  ph: z.coerce.number().min(0).max(14).optional().or(z.literal('')),
+  note: z.string().trim().max(255).optional().or(z.literal('')),
+});
+export type AddBatchInput = z.infer<typeof addBatchInputSchema>;
+
+export const addBatchOutputSchema = z.object({
+  output_weight_kg: z.coerce.number().positive('Weight must be positive.'),
+  harvest_date: z.string().optional().or(z.literal('')),
+  quality_grade: z.enum(['excellent', 'good', 'fair']).optional().or(z.literal('')),
+  recorded_at: z.string().optional().or(z.literal('')),
+  note: z.string().trim().max(255).optional().or(z.literal('')),
+});
+export type AddBatchOutput = z.infer<typeof addBatchOutputSchema>;
+
+export const voidIoSchema = z.object({
+  reason: z.string().trim().min(1, 'A reason is required.').max(255),
+});
+export type VoidIoInput = z.infer<typeof voidIoSchema>;

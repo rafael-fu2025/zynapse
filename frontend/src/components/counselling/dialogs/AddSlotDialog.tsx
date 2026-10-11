@@ -82,8 +82,8 @@ export function AddSlotDialog({ onClose }: { onClose: () => void }) {
             <p role="alert" className="text-xs text-destructive">{errors.days_of_week.message}</p>
           )}
         </div>
-        <div className="grid grid-cols-2 gap-3">
-          <div className="space-y-1.5">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div className="min-w-0 space-y-1.5">
             <Label htmlFor="slot-start">Start time</Label>
             <TimePicker
               id="slot-start"
@@ -95,7 +95,7 @@ export function AddSlotDialog({ onClose }: { onClose: () => void }) {
               <p role="alert" className="text-xs text-destructive">{errors.start_time.message}</p>
             )}
           </div>
-          <div className="space-y-1.5">
+          <div className="min-w-0 space-y-1.5">
             <Label htmlFor="slot-end">End time</Label>
             <TimePicker
               id="slot-end"

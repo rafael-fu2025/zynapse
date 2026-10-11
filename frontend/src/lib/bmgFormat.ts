@@ -111,3 +111,138 @@ export function describeBatchPhase(inputKg: number): Readout {
     ? { label: 'Loading', tone: 'info' }
     : { label: 'Processing', tone: 'info' };
 }
+
+// ---- Device automation readouts --------------------------------------
+
+/** "just now" / "12 min ago" / "3 days ago" for a heartbeat age. */
+export function formatAge(minutes: number | null | undefined): string {
+  if (minutes === null || minutes === undefined) return 'never';
+  if (minutes < 1) return 'just now';
+  if (minutes < 60) return `${minutes} min ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 48) return `${hours} h ago`;
+  return formatDaysAgo(Math.floor(hours / 24));
+}
+
+/**
+ * Online/offline from the heartbeat age. `offlineAfterMinutes` ships in
+ * the monitor payload so the label and the backend's watchdog can never
+ * disagree about what "offline" means.
+ */
+export function describeHeartbeatAge(
+  minutes: number | null | undefined,
+  offlineAfterMinutes: number | null | undefined,
+): Readout {
+  if (minutes === null || minutes === undefined) {
+    return { label: 'Never checked in', tone: 'warning' };
+  }
+  const threshold = offlineAfterMinutes ?? 20;
+  if (minutes > threshold) {
+    return { label: `Offline — ${formatAge(minutes)}`, tone: 'danger' };
+  }
+  return { label: `Online — ${formatAge(minutes)}`, tone: 'neutral' };
+}
+
+/**
+ * DS3231 clock health from the drift the server measured at the last
+ * heartbeat. The board's clock running a few seconds off is normal NTP
+ * jitter; minutes of drift is what corrupts run timestamps.
+ */
+export function describeClockDrift(
+  rtcValid: boolean | null | undefined,
+  offsetSeconds: number | null | undefined,
+): Readout {
+  if (rtcValid === null || rtcValid === undefined) {
+    return { label: 'RTC unknown', tone: 'muted' };
+  }
+  if (rtcValid === false) {
+    return { label: 'RTC invalid', tone: 'danger' };
+  }
+  if (offsetSeconds === null || offsetSeconds === undefined) {
+    return { label: 'RTC OK', tone: 'neutral' };
+  }
+  const drift = Math.abs(offsetSeconds);
+  if (drift <= 60) {
+    return { label: `RTC OK (${offsetSeconds >= 0 ? '+' : ''}${offsetSeconds}s)`, tone: 'neutral' };
+  }
+  if (drift <= 300) {
+    return { label: `Clocking ${offsetSeconds >= 0 ? '+' : ''}${Math.round(offsetSeconds / 60)} min`, tone: 'warning' };
+  }
+  return { label: `Clock off by ${Math.round(drift / 60)} min`, tone: 'danger' };
+}
+
+/**
+ * The next scheduled run, from the monitor's UTC timestamp. Accepts a
+ * `now` for tests; renders in the browser's locale time (the schedule
+ * itself is Manila time, which staff read directly).
+ */
+export function describeNextRun(
+  nextRunAtUtc: string | null | undefined,
+  enabled: boolean | null | undefined,
+  now: Date = new Date(),
+): Readout {
+  if (!enabled) {
+    return { label: 'Schedule off', tone: 'muted' };
+  }
+  if (!nextRunAtUtc) {
+    return { label: 'No run times set', tone: 'muted' };
+  }
+  const next = parseUtcSql(nextRunAtUtc);
+  if (next === null) return { label: '—', tone: 'muted' };
+  const diffMin = Math.round((next.getTime() - now.getTime()) / 60000);
+  const clock = next.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  if (diffMin < 0) {
+    return { label: `${clock} (due)`, tone: 'warning' };
+  }
+  if (diffMin < 60) {
+    return { label: `${clock} (in ${diffMin} min)`, tone: 'info' };
+  }
+  return { label: clock, tone: 'neutral' };
+}
+
+/**
+ * A run row's outcome as readout text. Anything that is not `completed`
+ * is operational debt and reads loudly.
+ */
+export function describeRunResult(result: string): Readout {
+  switch (result) {
+    case 'completed':
+      return { label: 'Completed', tone: 'neutral' };
+    case 'failed':
+      return { label: 'Failed', tone: 'danger' };
+    case 'aborted':
+      return { label: 'Aborted', tone: 'warning' };
+    default:
+      return { label: result, tone: 'muted' };
+  }
+}
+
+/** Input vs output totals for the unit's ledger, with the balance. */
+export function formatIoTotals(
+  inputKg: number | null | undefined,
+  outputKg: number | null | undefined,
+): { input: string; output: string; balance: Readout } {
+  const input = inputKg ?? 0;
+  const output = outputKg ?? 0;
+  const balanceKg = input - output;
+  return {
+    input: formatKg(input),
+    output: formatKg(output),
+    balance: {
+      label: formatKg(balanceKg),
+      tone: balanceKg < 0 ? 'danger' : 'muted',
+    },
+  };
+}
+
+/**
+ * The server's UTC SQL timestamps (`YYYY-MM-DD HH:MM:SS`) are not ISO —
+ * Safari refuses them outright. Parse explicitly.
+ */
+export function parseUtcSql(value: string): Date | null {
+  const m = value.match(/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2}):(\d{2})/);
+  if (m === null) return null;
+  return new Date(
+    Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5]), Number(m[6])),
+  );
+}

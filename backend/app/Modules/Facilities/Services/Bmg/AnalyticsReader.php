@@ -189,8 +189,8 @@ final class AnalyticsReader extends BaseService
         }
         $this->policy->check('analytics', $batch);
 
-        $structuredIn  = (float) ($this->db->table('facilities_bmg_inputs')->where('facilities_bmg_inputs.tenant_id', CurrentTenant::id())->selectSum('weight_kg', 't')->where('batch_id', $batchId)->get()->getRowArray()['t'] ?? 0);
-        $structuredOut = (float) ($this->db->table('facilities_bmg_outputs')->where('facilities_bmg_outputs.tenant_id', CurrentTenant::id())->selectSum('output_weight_kg', 't')->where('batch_id', $batchId)->get()->getRowArray()['t'] ?? 0);
+        $structuredIn  = (float) ($this->db->table('facilities_bmg_inputs')->where('facilities_bmg_inputs.tenant_id', CurrentTenant::id())->selectSum('weight_kg', 't')->where('batch_id', $batchId)->where('voided_at', null)->get()->getRowArray()['t'] ?? 0);
+        $structuredOut = (float) ($this->db->table('facilities_bmg_outputs')->where('facilities_bmg_outputs.tenant_id', CurrentTenant::id())->selectSum('output_weight_kg', 't')->where('batch_id', $batchId)->where('voided_at', null)->get()->getRowArray()['t'] ?? 0);
 
         // Per-category loss breakdown (drives the loss pie/bar chart).
         // Group-level SUM is safe here (no PII, no tenant mix-up since
@@ -421,6 +421,7 @@ final class AnalyticsReader extends BaseService
             ->select('weight_kg, cn_ratio')
             ->where('batch_id', $batchId)
             ->where('tenant_id', CurrentTenant::id())
+            ->where('voided_at', null)
             ->where('cn_ratio IS NOT NULL', null, false)
             ->get()->getResultArray();
 

@@ -27,6 +27,8 @@ use Modules\Facilities\Services\Bmg\BatchIoService;
 use Modules\Facilities\Services\Bmg\BmgSupport;
 use Modules\Facilities\Services\Bmg\CategoryService;
 use Modules\Facilities\Services\Bmg\HistoryService;
+use Modules\Facilities\Services\Bmg\MonitorService;
+use Modules\Facilities\Services\Bmg\ScheduleService;
 
 /**
  * BmgService — Facilities state machine.
@@ -47,6 +49,14 @@ final class BmgService extends BaseService
      */
     private const ALERT_DEDUPE_WINDOW_HOURS = 24;
 
+    /**
+     * An expired device command is only worth a notification while it is
+     * still news. Older rows (a backlog from before the expiry alert
+     * existed, a board that was shelved for weeks) are settled silently:
+     * telling staff on day 30 that a `start` never landed on day 1 is noise.
+     */
+    private const COMMAND_EXPIRY_NOTIFY_HOURS = 24;
+
     private readonly BmgAnalytics $analytics;
     private readonly BmgSupport $support;
     private readonly BatchIoService $batchIo;
@@ -54,6 +64,8 @@ final class BmgService extends BaseService
     private readonly AlertService $alerts;
     private readonly HistoryService $history;
     private readonly CategoryService $categories;
+    private readonly ScheduleService $schedules;
+    private readonly MonitorService $monitor;
 
     public function __construct(
         private readonly BmgPolicy $policy,
@@ -76,6 +88,8 @@ final class BmgService extends BaseService
         $this->alerts          = new AlertService($this->db, $this->policy, $this->audit);
         $this->history         = new HistoryService($this->db, $this->policy);
         $this->categories      = new CategoryService($this->db, $this->policy, $this->audit, $this->support);
+        $this->schedules       = new ScheduleService($this->db, $this->policy, $this->audit, $this->support);
+        $this->monitor         = new MonitorService($this->db, $this->policy, $this->schedules);
     }
 
     /**
@@ -814,6 +828,13 @@ final class BmgService extends BaseService
                 ['previous_status' => (string) $batch['status'], 'next_status' => BMG_STATE_RELEASED, 'quality_grade' => $grade, 'maturity_level' => $maturity],
             );
 
+            // Send stop command to the drum's bound ESP32 and clear any pending starts.
+            $this->stopUnitDevice((int) $batch['unit_id'], $now, $userId, [
+                'batch_id'        => $batchId,
+                'batch_reference' => (string) $batch['reference_code'],
+                'context'         => 'finish',
+            ]);
+
             $fresh = $this->db->table('facilities_bmg_batches')
                 ->where('facilities_bmg_batches.tenant_id', CurrentTenant::id())
                 ->where('id', $batchId)->get()->getRowArray();
@@ -881,6 +902,14 @@ final class BmgService extends BaseService
                 $userId,
                 ['previous_status' => (string) $batch['status'], 'next_status' => BMG_STATE_CANCELLED, 'reason_code' => $reasonCode],
             );
+
+            // Send stop command to the drum's bound ESP32 and clear any pending starts.
+            $this->stopUnitDevice((int) $batch['unit_id'], $now, $userId, [
+                'batch_id'        => $batchId,
+                'batch_reference' => (string) $batch['reference_code'],
+                'reason_code'     => $reasonCode,
+                'context'         => 'cancel',
+            ]);
 
             $fresh = $this->db->table('facilities_bmg_batches')
                 ->where('facilities_bmg_batches.tenant_id', CurrentTenant::id())
@@ -966,8 +995,11 @@ final class BmgService extends BaseService
             ]);
             $id = (int) $this->db->insertID();
 
-            $this->bindDeviceToUnit($deviceId, $id);
+            $this->bindDeviceToUnit($deviceId, $id, $userId);
             $this->syncUnitCategories($id, $categoryIds, $now);
+            // Safe-default schedule row (disabled) — the device's
+            // schedule pull must always find a row for a live unit.
+            $this->schedules->ensureForUnit($id);
 
             $this->audit->enqueue(
                 'bmg.unit_created',
@@ -1064,10 +1096,10 @@ final class BmgService extends BaseService
                     ? null : (int) $input['device_id'];
                 if ($deviceId !== null && $deviceId > 0) {
                     $this->assertDeviceAvailable($deviceId, $unitId);
-                    $this->bindDeviceToUnit($deviceId, $unitId);
+                    $this->bindDeviceToUnit($deviceId, $unitId, $userId);
                     $deviceOutcome = 'device_assigned';
                 } else {
-                    $this->unbindUnitDevices($unitId);
+                    $this->unbindUnitDevices($unitId, $userId);
                     $deviceOutcome = 'device_unbound';
                 }
             }
@@ -1176,19 +1208,33 @@ final class BmgService extends BaseService
      * Point a device at a drum: release whatever board the drum
      * currently holds (the drum keeps exactly one), then bind the new
      * one. Caller holds the device lock (see `assertDeviceAvailable`).
+     * Every transition lands in the assignment ledger — the UNIQUE
+     * unit_id erases the previous binding from the device row, the
+     * history keeps it.
      */
-    private function bindDeviceToUnit(int $deviceId, int $unitId): void
+    private function bindDeviceToUnit(int $deviceId, int $unitId, ?int $actorId = null): void
     {
         $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
+        $freedIds = $this->db->table('facilities_bmg_devices')
+            ->select('id')
+            ->where('tenant_id', CurrentTenant::id())
+            ->where('unit_id', $unitId)
+            ->where('id !=', $deviceId)
+            ->get()->getResultArray();
         $this->db->table('facilities_bmg_devices')
             ->where('tenant_id', CurrentTenant::id())
             ->where('unit_id', $unitId)
             ->where('id !=', $deviceId)
             ->update(['unit_id' => null, 'updated_at' => $now]);
+        foreach ($freedIds as $freed) {
+            $this->closeAssignment((int) $freed['id'], $actorId, $now);
+        }
         $this->db->table('facilities_bmg_devices')
             ->where('tenant_id', CurrentTenant::id())
             ->where('id', $deviceId)
             ->update(['unit_id' => $unitId, 'updated_at' => $now]);
+        $this->closeAssignment($deviceId, $actorId, $now);
+        $this->openAssignment($deviceId, $unitId, $actorId, $now);
     }
 
     /**
@@ -1196,13 +1242,57 @@ final class BmgService extends BaseService
      * swapped out). The board returns to the available pool so another
      * drum can integrate it.
      */
-    private function unbindUnitDevices(int $unitId): void
+    private function unbindUnitDevices(int $unitId, ?int $actorId = null): void
     {
         $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
+        $boundIds = $this->db->table('facilities_bmg_devices')
+            ->select('id')
+            ->where('tenant_id', CurrentTenant::id())
+            ->where('unit_id', $unitId)
+            ->get()->getResultArray();
         $this->db->table('facilities_bmg_devices')
             ->where('tenant_id', CurrentTenant::id())
             ->where('unit_id', $unitId)
             ->update(['unit_id' => null, 'updated_at' => $now]);
+        foreach ($boundIds as $bound) {
+            $this->closeAssignment((int) $bound['id'], $actorId, $now);
+        }
+    }
+
+    /**
+     * Assignment ledger — close the device's open assignment (if any).
+     * A no-op when the device was never bound.
+     */
+    private function closeAssignment(int $deviceId, ?int $actorId, string $now): void
+    {
+        $this->db->table('facilities_bmg_device_assignments')
+            ->where('tenant_id', CurrentTenant::id())
+            ->where('device_id', $deviceId)
+            ->where('unassigned_at', null)
+            ->update([
+                'unassigned_at'         => $now,
+                'unassigned_by_user_id' => $actorId,
+            ]);
+    }
+
+    /**
+     * Assignment ledger — open a new assignment row. Only meaningful
+     * after a close; callers pair them in the same transaction.
+     */
+    private function openAssignment(int $deviceId, int $unitId, ?int $actorId, string $now): void
+    {
+        if ($actorId === null) {
+            return;
+        }
+        $this->db->table('facilities_bmg_device_assignments')->insert([
+            'tenant_id'           => CurrentTenant::id(),
+            'device_id'           => $deviceId,
+            'unit_id'             => $unitId,
+            'assigned_by_user_id' => $actorId,
+            'assigned_at'         => $now,
+            'unassigned_at'       => null,
+            'created_at'          => $now,
+        ]);
     }
 
     /**
@@ -1413,11 +1503,11 @@ final class BmgService extends BaseService
             // replacement drum when one was named. Unarchiving does not
             // re-bind — assignment is an explicit act from the drum or
             // device screen.
-            $this->unbindUnitDevices($unitId);
+            $this->unbindUnitDevices($unitId, $userId);
 
             $relocatedToCode = null;
             if ($relocateTo !== null && $board !== null) {
-                $relocatedToCode = $this->relocateFreedDevice((int) $board['id'], (string) $board['code'], $unitId, $relocateTo);
+                $relocatedToCode = $this->relocateFreedDevice((int) $board['id'], (string) $board['code'], $unitId, $relocateTo, $userId);
             }
 
             $this->audit->enqueue(
@@ -1448,7 +1538,7 @@ final class BmgService extends BaseService
      *
      * @return string the target drum's code, for the audit trail
      */
-    private function relocateFreedDevice(int $deviceId, string $deviceCode, int $archivedUnitId, int $targetUnitId): string
+    private function relocateFreedDevice(int $deviceId, string $deviceCode, int $archivedUnitId, int $targetUnitId, ?int $actorId = null): string
     {
         $target = $this->selectForUpdate('facilities_bmg_units', ['id' => $targetUnitId, 'tenant_id' => CurrentTenant::id(), 'archived_at' => null]);
         if ($target === null) {
@@ -1477,6 +1567,8 @@ final class BmgService extends BaseService
             ->where('tenant_id', CurrentTenant::id())
             ->where('id', $deviceId)
             ->update(['unit_id' => $targetUnitId, 'updated_at' => $now]);
+        $this->closeAssignment($deviceId, $actorId, $now);
+        $this->openAssignment($deviceId, $targetUnitId, $actorId, $now);
 
         return (string) $target['code'];
     }
@@ -1789,14 +1881,7 @@ final class BmgService extends BaseService
                 ]);
             }
 
-            $batch = $this->db->table('facilities_bmg_batches')
-                ->where('unit_id', $unitId)
-                ->where('tenant_id', CurrentTenant::id())
-                ->where('archived_at', null)
-                ->whereIn('status', [BMG_STATE_PROCESSING, BMG_STATE_AWAITING_OUTPUT])
-                ->orderBy('id', 'DESC')
-                ->limit(1)
-                ->get()->getRowArray();
+            $batch = $this->activeBatchForUnit($unitId);
             if ($batch === null) {
                 throw new ApiException('statemachine.bmg.log_terminal_batch', 409, [
                     ['code' => 'statemachine.bmg.log_terminal_batch', 'message' => 'Process logs can only be added while a batch is active.'],
@@ -1810,24 +1895,12 @@ final class BmgService extends BaseService
             $sets     = isset($input['sets_count']) && $input['sets_count'] !== '' ? (int) $input['sets_count'] : null;
             $note     = trim((string) ($input['observation_note'] ?? ''));
 
-            // RTC-stamped session window. Sane = ended >= started, ended
-            // no further than 7 days in the past (offline-queue horizon)
-            // and no more than 10 min in the future (clock skew). Outside
-            // the window — unsynced DS3231, tampered payload — fall back
-            // to receipt time and leave the columns null. created_at
+            // RTC-stamped session window, sanity-checked by the shared
+            // helper (same contract as the run ingest). created_at
             // ALWAYS stays at receipt: that is the audit fact.
             $startedEpoch = isset($input['started_at_epoch']) && $input['started_at_epoch'] !== null ? (int) $input['started_at_epoch'] : null;
             $endedEpoch   = isset($input['ended_at_epoch']) && $input['ended_at_epoch'] !== null ? (int) $input['ended_at_epoch'] : null;
-            $nowUnix      = time();
-            $sessionStartedSql = null;
-            $sessionEndedSql   = null;
-            if ($startedEpoch !== null && $endedEpoch !== null
-                && $endedEpoch >= $startedEpoch
-                && $endedEpoch <= $nowUnix + 600
-                && $endedEpoch >= $nowUnix - 604800) {
-                $sessionStartedSql = gmdate('Y-m-d H:i:s', $startedEpoch);
-                $sessionEndedSql   = gmdate('Y-m-d H:i:s', $endedEpoch);
-            }
+            [$sessionStartedSql, $sessionEndedSql] = $this->saneSessionWindow($startedEpoch, $endedEpoch);
             $logDate = $sessionStartedSql !== null
                 ? ManilaDay::fromUtcSql($sessionStartedSql)
                 : ManilaDay::fromUtcSql($now);
@@ -1900,6 +1973,295 @@ final class BmgService extends BaseService
                 $persistedAlerts,
             );
         });
+    }
+
+    /**
+     * The unit's live batch — Processing or AwaitingOutput, newest
+     * first. Shared by the turn-session and run ingest paths.
+     *
+     * @return array<string, mixed>|null
+     */
+    private function activeBatchForUnit(int $unitId): ?array
+    {
+        return $this->db->table('facilities_bmg_batches')
+            ->where('unit_id', $unitId)
+            ->where('tenant_id', CurrentTenant::id())
+            ->where('archived_at', null)
+            ->whereIn('status', [BMG_STATE_PROCESSING, BMG_STATE_AWAITING_OUTPUT])
+            ->orderBy('id', 'DESC')
+            ->limit(1)
+            ->get()->getRowArray();
+    }
+
+    /**
+     * RTC-stamped ingest window sanity, shared by the turn-session and
+     * run paths: ended >= started, ended no further than 7 days in the
+     * past (offline-queue horizon) and no more than 10 min in the
+     * future (clock skew). Outside the window — unsynced DS3231,
+     * tampered payload — the columns are left null and callers fall
+     * back to receipt time; created_at ALWAYS stays at receipt.
+     *
+     * @return array{0:?string,1:?string} UTC SQL [started, ended]
+     */
+    private function saneSessionWindow(?int $startedEpoch, ?int $endedEpoch): array
+    {
+        if ($startedEpoch === null || $endedEpoch === null) {
+            return [null, null];
+        }
+        $nowUnix = time();
+        if ($endedEpoch < $startedEpoch
+            || $endedEpoch > $nowUnix + 600
+            || $endedEpoch < $nowUnix - 604800) {
+            return [null, null];
+        }
+        return [gmdate('Y-m-d H:i:s', $startedEpoch), gmdate('Y-m-d H:i:s', $endedEpoch)];
+    }
+
+    /**
+     * recordDeviceHeartbeat — the board's liveness + telemetry post.
+     * Small and lock-free: one UPDATE on the device row, no unit or
+     * batch resolution, so an unbound board still proves liveness.
+     * The heartbeat stamps BOTH last_seen_at (generic liveness) and
+     * last_heartbeat_at (the dashboard's offline indicator), mirrors
+     * the reported telemetry, and measures RTC drift at receipt —
+     * device epoch minus server epoch — only when the device claims a
+     * valid DS3231. A valid clock re-arms RTC alerting (rtc_notified_at
+     * cleared), the same per-episode posture as the silence watchdog.
+     *
+     * @param array<string, mixed> $device bound by DeviceAuthFilter
+     * @param array{firmware:string, uptime_seconds:?int, rtc_epoch:?int, rtc_valid:?bool, rssi_dbm:?int, last_run_result:string, motor_state:string} $input
+     */
+    public function recordDeviceHeartbeat(array $device, array $input): void
+    {
+        $deviceId = (int) $device['id'];
+        $now      = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
+
+        $update = [
+            'last_seen_at'      => $now,
+            'last_heartbeat_at' => $now,
+            'updated_at'        => $now,
+        ];
+        if (($input['firmware'] ?? '') !== '') {
+            $update['firmware'] = (string) $input['firmware'];
+        }
+        if ($input['uptime_seconds'] !== null) {
+            $update['last_uptime_seconds'] = (int) $input['uptime_seconds'];
+        }
+        if ($input['rssi_dbm'] !== null) {
+            $update['last_rssi_dbm'] = (int) $input['rssi_dbm'];
+        }
+        if (($input['last_run_result'] ?? '') !== '') {
+            $update['last_run_result'] = (string) $input['last_run_result'];
+        }
+        if (($input['motor_state'] ?? '') !== '') {
+            $update['motor_state'] = (string) $input['motor_state'];
+        }
+        if ($input['rtc_valid'] !== null) {
+            $update['rtc_valid'] = $input['rtc_valid'] ? 1 : 0;
+            if ($input['rtc_valid'] === true) {
+                // Measured drift — negative means the board's clock runs
+                // behind the server's. Only meaningful with a live RTC.
+                $update['rtc_offset_seconds'] = $input['rtc_epoch'] !== null
+                    ? (int) $input['rtc_epoch'] - time()
+                    : null;
+                $update['rtc_notified_at'] = null;
+            }
+        }
+
+        $this->db->table('facilities_bmg_devices')
+            ->where('tenant_id', CurrentTenant::id())
+            ->where('id', $deviceId)
+            ->update($update);
+    }
+
+    /**
+     * recordDeviceRun — the board's run ingest (scheduled or manual).
+     * Idempotent on `run_uid`. Unlike the turn-session surface, a run
+     * is RECORDED even when the unit has no active batch — the old 409
+     * made the board retry forever and hid real motor activity; the
+     * no-batch run is stored, audited, and pushed to the facilities
+     * audience instead. When a batch IS active, the run attaches to it
+     * and mirrors as a turning process log so cadence alerts and the
+     * analytics pipeline keep seeing the same fact.
+     *
+     * @param array<string, mixed> $device bound by DeviceAuthFilter
+     * @param array{run_uid:string, origin:string, result:string, duration_seconds:int, turns_count:?int, note:string, started_at_epoch:?int, ended_at_epoch:?int} $input
+     * @return array{run_uid:string, created:bool, batch_id:?int}
+     */
+    public function recordDeviceRun(array $device, array $input): array
+    {
+        $this->policy->check('device_logs_record');
+        $deviceId = (int) $device['id'];
+
+        return $this->txn(function () use ($device, $deviceId, $input): array {
+            // Re-read AND lock the device inside the txn: a concurrent
+            // revoke must not race a run that is already in flight.
+            $device = $this->selectForUpdate('facilities_bmg_devices', [
+                'id'        => $deviceId,
+                'tenant_id' => CurrentTenant::id(),
+            ]);
+            if ($device === null || $device['status'] !== 'active' || $device['archived_at'] !== null) {
+                throw new ApiException('device.disabled', 403, [
+                    ['code' => 'device.disabled', 'message' => 'This device has been disabled.'],
+                ]);
+            }
+
+            // Idempotency first: a retried run resolves to the original
+            // row without touching batch state.
+            $runUid   = (string) $input['run_uid'];
+            $existing = $this->db->table('facilities_bmg_device_runs')
+                ->where('tenant_id', CurrentTenant::id())
+                ->where('run_uid', $runUid)
+                ->get()->getRowArray();
+            if ($existing !== null) {
+                return [
+                    'run_uid'  => $runUid,
+                    'created'  => false,
+                    'batch_id' => $existing['batch_id'] !== null ? (int) $existing['batch_id'] : null,
+                ];
+            }
+
+            $unitId = $device['unit_id'] !== null ? (int) $device['unit_id'] : null;
+            if ($unitId === null) {
+                throw new ApiException('device.not_bound', 409, [
+                    ['code' => 'device.not_bound', 'message' => 'This device is not bound to a BMG unit.'],
+                ]);
+            }
+
+            $unit = $this->selectForUpdate('facilities_bmg_units', [
+                'id'          => $unitId,
+                'tenant_id'   => CurrentTenant::id(),
+                'archived_at' => null,
+            ]);
+            if ($unit === null) {
+                throw new ApiException('resource.not_found', 404, [
+                    ['code' => 'resource.not_found', 'message' => 'The bound BMG unit no longer exists.'],
+                ]);
+            }
+
+            $actorId = (int) $device['linked_user_id'];
+            $now     = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
+            [$startedSql, $endedSql] = $this->saneSessionWindow($input['started_at_epoch'], $input['ended_at_epoch']);
+            $batch   = $this->activeBatchForUnit($unitId);
+
+            $this->db->table('facilities_bmg_device_runs')->insert([
+                'tenant_id'        => CurrentTenant::id(),
+                'device_id'        => $deviceId,
+                'unit_id'          => $unitId,
+                'batch_id'         => $batch !== null ? (int) $batch['id'] : null,
+                'run_uid'          => $runUid,
+                'origin'           => (string) $input['origin'],
+                'started_at'       => $startedSql,
+                'ended_at'         => $endedSql,
+                'duration_seconds' => (int) $input['duration_seconds'],
+                'result'           => (string) $input['result'],
+                'turns_count'      => $input['turns_count'],
+                'note'             => trim((string) ($input['note'] ?? '')) ?: null,
+                'created_at'       => $now,
+            ]);
+            $runId = (int) $this->db->insertID();
+
+            $this->audit->enqueue(
+                'bmg.device_run_recorded',
+                'facilities_bmg_device_runs',
+                $runId,
+                $actorId,
+                [
+                    'resource_code' => (string) $unit['code'] . ':' . $runUid,
+                    'outcome'       => (string) $input['result'],
+                    'reason_code'   => (string) $input['origin'],
+                ],
+            );
+
+            $deviceUpdate = ['last_seen_at' => $now, 'updated_at' => $now, 'last_run_result' => (string) $input['result']];
+            $firmware = trim((string) ($input['firmware'] ?? ''));
+            if ($firmware !== '') {
+                $deviceUpdate['firmware'] = $firmware;
+            }
+            $this->db->table('facilities_bmg_devices')
+                ->where('tenant_id', CurrentTenant::id())
+                ->where('id', $deviceId)
+                ->update($deviceUpdate);
+
+            if ($batch !== null) {
+                $this->mirrorRunAsProcessLog($device, $batch, $runUid, $input, $startedSql, $endedSql, $actorId, $now);
+            } else {
+                $this->audit->enqueue(
+                    'bmg.device_run_no_batch',
+                    'facilities_bmg_device_runs',
+                    $runId,
+                    $actorId,
+                    ['resource_code' => (string) $unit['code'], 'reason_code' => 'facilities.device.run_no_batch'],
+                );
+                $this->notify->enqueueToPermissions(
+                    ['facilities.bmg.logs.read'],
+                    'bmg.device_run_no_batch',
+                    ['resource_code' => (string) $unit['code'], 'source_module' => 'facilities'],
+                );
+            }
+
+            return [
+                'run_uid'  => $runUid,
+                'created'  => true,
+                'batch_id' => $batch !== null ? (int) $batch['id'] : null,
+            ];
+        });
+    }
+
+    /**
+     * Mirror a device run onto the batch's process-log stream as a
+     * `turning` row keyed by the run uid (UNIQUE tenant+session_uid
+     * makes it 1:1 and replay-safe). The cadence alerts (TURNING_DUE,
+     * STALLED) and the analytics pipeline read process logs — without
+     * this mirror a unit driven purely by /runs would look stalled.
+     *
+     * @param array<string, mixed> $device
+     * @param array<string, mixed> $batch
+     * @param array<string, mixed> $input
+     */
+    private function mirrorRunAsProcessLog(array $device, array $batch, string $runUid, array $input, ?string $startedSql, ?string $endedSql, int $actorId, string $now): void
+    {
+        $turns = $input['turns_count'];
+        $note  = trim((string) ($input['note'] ?? ''));
+        if ($note === '') {
+            $turnsPart = $turns !== null ? sprintf('%d rotations, ', $turns) : '';
+            $note = sprintf('Automated run (%s): %s%s, %d s', (string) $input['origin'], $turnsPart, (string) $input['result'], (int) $input['duration_seconds']);
+        }
+
+        $logDate = $startedSql !== null
+            ? ManilaDay::fromUtcSql($startedSql)
+            : ManilaDay::fromUtcSql($now);
+
+        $this->db->table('facilities_bmg_process_logs')->insert([
+            'batch_id'            => (int) $batch['id'],
+            'tenant_id'           => CurrentTenant::id(),
+            'log_date'            => $logDate,
+            'event_type'          => 'turning',
+            'observation_note'    => $note,
+            'temperature_celsius' => null,
+            'moisture_level'      => null,
+            'oxygen_pct'          => null,
+            'device_id'           => (string) $device['code'],
+            'calibration_status'  => null,
+            'session_uid'         => $runUid,
+            'turns_count'         => $turns,
+            'duration_seconds'    => (int) $input['duration_seconds'],
+            'session_started_at'  => $startedSql,
+            'session_ended_at'    => $endedSql,
+            'recorded_by_user_id' => $actorId,
+            'created_at'          => $now,
+        ]);
+        $logId = (int) $this->db->insertID();
+
+        $this->audit->enqueue(
+            'bmg.process_log_recorded',
+            'facilities_bmg_process_logs',
+            $logId,
+            $actorId,
+            ['resource_code' => (string) $batch['reference_code']],
+        );
+
+        $this->evaluateAlertsForLog((int) $batch['id'], $batch, $logId, $actorId, $now);
     }
 
     /**
@@ -2247,6 +2609,17 @@ final class BmgService extends BaseService
                 'updated_at'     => $now,
             ]);
             $deviceId = (int) $this->db->insertID();
+            if ($unitId !== null) {
+                // The binding at registration is a real assignment. The
+                // acting human is recorded when one exists (UI path); the
+                // CLI has no actor, so the machine user stands in.
+                $this->openAssignment(
+                    $deviceId,
+                    $unitId,
+                    \App\Auth\CurrentUser::id() ?? $userId,
+                    $now,
+                );
+            }
 
             $this->audit->enqueue(
                 'bmg.device_registered',
@@ -2512,33 +2885,62 @@ final class BmgService extends BaseService
      * session runs) — the threshold should exceed the turning cadence,
      * which is why the default is 48 h against a 4-day cadence.
      *
+     * The sweep has three rules:
+     *   1. OFFLINE — an active bound device whose last check-in (any
+     *      ingest, command poll, or heartbeat) is older than the
+     *      threshold. Every bound device is in scope, batch or not: a
+     *      dead board between batches is still a dead board. Default
+     *      20 min (BMG_OFFLINE_AFTER_MIN); the old hours-scale default
+     *      was sized for report-only firmware and made the dashboard's
+     *      "offline" state meaningless.
+     *   2. RTC INVALID — a device that reports `rtc_valid = false`.
+     *      Once per episode: a valid-clock heartbeat clears
+     *      `rtc_notified_at` (recordDeviceHeartbeat), so each episode
+     *      notifies exactly once.
+     *   3. SCHEDULE MISSED — an enabled schedule slot whose grace
+     *      window elapsed with no run near it on a unit holding an
+     *      active batch. Raised as the batch-scoped SCHEDULE_MISSED
+     *      alert with the standard unacked-alert dedupe.
+     *
      * CLI variant: no acting user exists on the shell, so there is no
      * permission gate here (same posture as `registerDeviceUnchecked`);
      * the notify/audit fan-out is the system speaking.
      *
-     * @return int devices notified this run
+     * @param int $silenceMinutes offline threshold, in minutes
+     * @return int notifications raised this run
      */
-    public function deviceWatchdogUnchecked(int $silenceHours): int
+    public function deviceWatchdogUnchecked(int $silenceMinutes): int
+    {
+        $notified = $this->sweepOfflineDevices($silenceMinutes);
+        $notified += $this->sweepRtcInvalidDevices();
+        $notified += $this->sweepMissedScheduledRuns();
+        // A board that is offline never polls, so its lazy expiry in
+        // `listDeviceCommands` never runs: without this sweep the operator
+        // who started a batch would never learn the drum did not turn.
+        $notified += $this->failExpiredDeviceCommands(
+            (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s'),
+        );
+        return $notified;
+    }
+
+    private function sweepOfflineDevices(int $silenceMinutes): int
     {
         $nowUnix = time();
         $notified = 0;
 
-        // Candidate devices: active, bound, tenant-scoped, unit holds an
-        // active batch. The silence/dedupe decision is re-validated per
-        // device under lock.
+        // Candidates: active, bound, tenant-scoped. No batch join — a
+        // board is expected to heartbeat whether or not a batch runs.
         $candidates = $this->db->table('facilities_bmg_devices AS d')
             ->select('d.id, d.code, d.last_seen_at, d.created_at, d.silence_notified_at')
-            ->join('facilities_bmg_batches AS b', 'b.unit_id = d.unit_id AND b.archived_at IS NULL', 'inner', false)
             ->where('d.tenant_id', CurrentTenant::id())
             ->where('d.status', 'active')
             ->where('d.archived_at', null)
             ->where('d.unit_id IS NOT NULL', null, false)
-            ->whereIn('b.status', [BMG_STATE_PROCESSING, BMG_STATE_AWAITING_OUTPUT])
             ->get()->getResultArray();
 
         foreach ($candidates as $candidate) {
             try {
-                $notified += $this->txn(function () use ($candidate, $silenceHours, $nowUnix): int {
+                $notified += $this->txn(function () use ($candidate, $silenceMinutes, $nowUnix): int {
                     $device = $this->selectForUpdate('facilities_bmg_devices', [
                         'id'        => (int) $candidate['id'],
                         'tenant_id' => CurrentTenant::id(),
@@ -2551,8 +2953,8 @@ final class BmgService extends BaseService
                     if ($lastSeen === null) {
                         return 0;
                     }
-                    $hoursSilent = ($nowUnix - (strtotime((string) $lastSeen) ?: $nowUnix)) / 3600;
-                    if ($hoursSilent <= $silenceHours) {
+                    $minutesSilent = ($nowUnix - (strtotime((string) $lastSeen) ?: $nowUnix)) / 60;
+                    if ($minutesSilent <= $silenceMinutes) {
                         return 0;
                     }
 
@@ -2586,7 +2988,7 @@ final class BmgService extends BaseService
                         [
                             'resource_code' => (string) $device['code'],
                             'reason_code'   => 'synapse:bmg-device-watchdog',
-                            'outcome'       => sprintf('silent %.1fh', $hoursSilent),
+                            'outcome'       => sprintf('silent %.0fm', $minutesSilent),
                         ],
                     );
 
@@ -2602,6 +3004,199 @@ final class BmgService extends BaseService
         }
 
         return $notified;
+    }
+
+    /**
+     * RTC-invalid sweep — one notification per episode, deduped on
+     * `rtc_notified_at` (cleared by any valid-clock heartbeat).
+     */
+    private function sweepRtcInvalidDevices(): int
+    {
+        $notified = 0;
+
+        $candidates = $this->db->table('facilities_bmg_devices')
+            ->select('id, code, rtc_valid, rtc_notified_at, last_heartbeat_at, last_seen_at')
+            ->where('tenant_id', CurrentTenant::id())
+            ->where('status', 'active')
+            ->where('archived_at', null)
+            ->where('rtc_valid', 0)
+            ->get()->getResultArray();
+
+        foreach ($candidates as $candidate) {
+            try {
+                $notified += $this->txn(function () use ($candidate): int {
+                    $device = $this->selectForUpdate('facilities_bmg_devices', [
+                        'id'        => (int) $candidate['id'],
+                        'tenant_id' => CurrentTenant::id(),
+                    ]);
+                    if ($device === null || $device['status'] !== 'active' || (int) ($device['rtc_valid'] ?? 0) !== 0) {
+                        return 0;
+                    }
+
+                    $anchor    = $device['last_heartbeat_at'] ?? $device['last_seen_at'];
+                    $notifiedAt = $device['rtc_notified_at'] ?? null;
+                    if ($notifiedAt !== null && ($anchor === null || (string) $notifiedAt >= (string) $anchor)) {
+                        return 0;
+                    }
+
+                    $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
+                    $this->db->table('facilities_bmg_devices')->where('id', (int) $device['id'])->update([
+                        'rtc_notified_at' => $now,
+                        'updated_at'      => $now,
+                    ]);
+
+                    $this->notify->enqueueToPermissions(
+                        ['facilities.bmg.logs.read'],
+                        'bmg.device_rtc_invalid',
+                        [
+                            'resource_code' => (string) $device['code'],
+                            'urgency'       => 'warning',
+                            'source_module' => 'facilities',
+                        ],
+                    );
+                    $this->audit->enqueue(
+                        'bmg.device_rtc_invalid',
+                        'facilities_bmg_devices',
+                        (int) $device['id'],
+                        null,
+                        [
+                            'resource_code' => (string) $device['code'],
+                            'reason_code'   => 'synapse:bmg-device-watchdog',
+                        ],
+                    );
+
+                    return 1;
+                });
+            } catch (\Throwable $e) {
+                log_message('warning', 'bmg rtc watchdog: device #{id} failed: {m}', [
+                    'id' => (int) $candidate['id'],
+                    'm'  => $e->getMessage(),
+                ]);
+            }
+        }
+
+        return $notified;
+    }
+
+    /**
+     * Missed-run sweep — for every enabled schedule on a unit holding
+     * an active batch, compare the recent slots against the runs the
+     * board reported. A slot whose grace window elapsed unmatched
+     * raises SCHEDULE_MISSED on the batch, deduped by the standard
+     * unacked-alert window so one missed morning is one alert.
+     */
+    private function sweepMissedScheduledRuns(): int
+    {
+        $graceMinutes = max(1, (int) (getenv('BMG_MISSED_RUN_GRACE_MIN') ?: 30));
+        $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
+
+        $candidates = $this->db->table('facilities_bmg_unit_schedules AS s')
+            ->select('s.unit_id, s.times, s.updated_at AS schedule_published_at, u.code AS unit_code, b.id AS batch_id, b.reference_code, b.status AS batch_status, b.started_at')
+            ->join('facilities_bmg_units AS u', 'u.id = s.unit_id AND u.archived_at IS NULL', 'inner', false)
+            ->join('facilities_bmg_batches AS b', 'b.unit_id = s.unit_id AND b.archived_at IS NULL', 'inner', false)
+            ->where('s.tenant_id', CurrentTenant::id())
+            ->where('s.enabled', 1)
+            ->whereIn('b.status', [BMG_STATE_PROCESSING, BMG_STATE_AWAITING_OUTPUT])
+            ->get()->getResultArray();
+
+        $raised = 0;
+        foreach ($candidates as $candidate) {
+            try {
+                $times = json_decode((string) $candidate['times'], true, 512, JSON_THROW_ON_ERROR);
+                if (! is_array($times) || $times === []) {
+                    continue;
+                }
+
+                $runs = $this->db->table('facilities_bmg_device_runs')
+                    ->select('started_at')
+                    ->where('tenant_id', CurrentTenant::id())
+                    ->where('unit_id', (int) $candidate['unit_id'])
+                    ->where('started_at IS NOT NULL', null, false)
+                    ->orderBy('started_at', 'DESC')
+                    ->limit(50)
+                    ->get()->getResultArray();
+
+                // A slot is only owed once the board could know about it AND
+                // the batch existed: take the later of the two, so neither a
+                // freshly published schedule nor a freshly started batch is
+                // blamed for slots that fell before it.
+                $owedFrom = MonitorService::slotsOwedFrom(
+                    $candidate['schedule_published_at'] !== null ? (string) $candidate['schedule_published_at'] : null,
+                );
+                if ($candidate['started_at'] !== null) {
+                    $batchStart = new DateTimeImmutable((string) $candidate['started_at'], new DateTimeZone('UTC'));
+                    $owedFrom   = ($owedFrom === null || $batchStart > $owedFrom) ? $batchStart : $owedFrom;
+                }
+
+                $missed = MonitorService::missedSlots(
+                    array_values(array_map('strval', $times)),
+                    array_map(static fn (array $r): ?string => $r['started_at'] !== null ? (string) $r['started_at'] : null, $runs),
+                    $graceMinutes,
+                    null,
+                    $owedFrom,
+                );
+                if ($missed === []) {
+                    continue;
+                }
+
+                $raised += $this->txn(function () use ($candidate, $missed, $now): int {
+                    $batchId = (int) $candidate['batch_id'];
+                    if ($this->hasUnackedAlertWithin($batchId, 'SCHEDULE_MISSED', $now)) {
+                        return 0;
+                    }
+
+                    $message = sprintf(
+                        'Missed scheduled run(s) on %s (%s): %s',
+                        (string) $candidate['unit_code'],
+                        (string) $candidate['reference_code'],
+                        implode(', ', $missed),
+                    );
+
+                    $this->db->table('facilities_bmg_alerts')->insert([
+                        'batch_id'     => $batchId,
+                        'tenant_id'    => CurrentTenant::id(),
+                        'code'         => 'SCHEDULE_MISSED',
+                        'severity'     => 'warning',
+                        'message'      => mb_substr($message, 0, 512),
+                        'triggered_at' => $now,
+                        'created_at'   => $now,
+                        'updated_at'   => $now,
+                    ]);
+                    $alertId = (int) $this->db->insertID();
+
+                    $this->audit->enqueue(
+                        'bmg.alert_triggered',
+                        'facilities_bmg_alerts',
+                        $alertId,
+                        null,
+                        [
+                            'resource_code' => (string) $candidate['reference_code'],
+                            'alert_code'    => 'SCHEDULE_MISSED',
+                            'severity'      => 'warning',
+                            'reason_code'   => 'synapse:bmg-device-watchdog',
+                        ],
+                    );
+                    $this->notify->enqueueToPermissions(
+                        ['facilities.bmg.logs.read'],
+                        'bmg.alert_triggered',
+                        [
+                            'resource_code' => (string) $candidate['reference_code'],
+                            'urgency'       => 'warning',
+                            'source_module' => 'facilities',
+                        ],
+                    );
+
+                    return 1;
+                });
+            } catch (\Throwable $e) {
+                log_message('warning', 'bmg missed-run sweep: unit #{id} failed: {m}', [
+                    'id' => (int) $candidate['unit_id'],
+                    'm'  => $e->getMessage(),
+                ]);
+            }
+        }
+
+        return $raised;
     }
 
     /**
@@ -2734,19 +3329,64 @@ final class BmgService extends BaseService
     // -------------------------------------------------- device commands
 
     /**
-     * Queue an outbound command for a device (`start` at batch start
-     * today; the table's CHECK admits `stop` for a later lifecycle
-     * hook). Same transaction as the caller's state change, so the
+     * Stop the unit's active ESP32 and clear any pending start commands.
+     *
+     * @param array<string, mixed> $context
+     */
+    private function stopUnitDevice(int $unitId, string $now, ?int $actorId, array $context = []): void
+    {
+        $board = $this->db->table('facilities_bmg_devices')
+            ->where('tenant_id', CurrentTenant::id())
+            ->where('unit_id', $unitId)
+            ->where('archived_at', null)
+            ->get()->getRowArray();
+
+        if ($board === null || $board['status'] !== 'active') {
+            return;
+        }
+
+        // Cancel/supersede any pending start/run-now commands for this board
+        $this->db->table('facilities_bmg_device_commands')
+            ->where('tenant_id', CurrentTenant::id())
+            ->where('device_id', (int) $board['id'])
+            ->where('status', 'pending')
+            ->whereIn('command', ['start', 'run_now'])
+            ->update([
+                'status'     => 'failed',
+                'updated_at' => $now,
+            ]);
+
+        // Enqueue stop command
+        $this->enqueueDeviceCommand((int) $board['id'], (string) $board['code'], 'stop', array_merge([
+            'unit_id' => $unitId,
+        ], $context), $now, $actorId);
+    }
+
+    /**
+     * Queue an outbound command for a device (`start` at batch start,
+     * `stop` on cancel/finish/maintenance, `run_now` from the admin
+     * surface). Same transaction as the caller's state change, so the
      * command can never outlive the thing that produced it.
+     *
+     * Every command carries a TTL (`expires_at`): the board polls on a
+     * ~10 min cadence when online, so a pending command older than the
+     * TTL is stale by construction — the feed fails it instead of
+     * delivering a "run now" the operator pressed yesterday.
      */
     private function enqueueDeviceCommand(int $deviceId, string $deviceCode, string $command, array $payload, string $now, ?int $actorId): void
     {
+        $ttlMinutes = max(1, (int) (getenv('BMG_COMMAND_TTL_MIN') ?: 10));
+        $expiresAt  = (new DateTimeImmutable($now, new DateTimeZone('UTC')))
+            ->modify('+' . $ttlMinutes . ' minutes')
+            ->format('Y-m-d H:i:s');
+
         $this->db->table('facilities_bmg_device_commands')->insert([
             'tenant_id'  => CurrentTenant::id(),
             'device_id'  => $deviceId,
             'command'    => $command,
             'payload'    => json_encode($payload, JSON_THROW_ON_ERROR),
             'status'     => 'pending',
+            'expires_at' => $expiresAt,
             'created_at' => $now,
             'updated_at' => $now,
         ]);
@@ -2766,6 +3406,127 @@ final class BmgService extends BaseService
     }
 
     /**
+     * Fail every pending command whose deadline passed and tell staff.
+     *
+     * An expired command means the operator's action never reached the
+     * motor: a `start` leaves a batch "processing" on a drum that never
+     * turned, and an expired `stop` leaves a drum that may still be
+     * running. Nothing else surfaces either, so the transition to
+     * `failed` and the notification happen together, under the row lock:
+     * whichever of the board's poll and the watchdog sweep gets there
+     * first raises the one notification, the other finds the row already
+     * settled.
+     *
+     * Superseded commands (failed by a later `stop`/maintenance) are not
+     * pending any more, so they are never selected here. Stale rows (past
+     * COMMAND_EXPIRY_NOTIFY_HOURS) and rows of disabled/archived boards
+     * are failed without a notification.
+     *
+     * @param int|null $deviceId limit to one board (its own poll); null = whole tenant (sweep)
+     * @return int notifications raised
+     */
+    private function failExpiredDeviceCommands(string $now, ?int $deviceId = null): int
+    {
+        $horizon = (new DateTimeImmutable($now, new DateTimeZone('UTC')))
+            ->modify('-' . self::COMMAND_EXPIRY_NOTIFY_HOURS . ' hours')
+            ->format('Y-m-d H:i:s');
+
+        // Settle the stale backlog in one statement so it can neither flood
+        // staff nor crowd fresh rows out of the capped batch below.
+        $stale = $this->db->table('facilities_bmg_device_commands')
+            ->where('tenant_id', CurrentTenant::id())
+            ->where('status', 'pending')
+            ->where('expires_at IS NOT NULL', null, false)
+            ->where('expires_at <', $horizon);
+        if ($deviceId !== null) {
+            $stale->where('device_id', $deviceId);
+        }
+        $stale->update(['status' => 'failed', 'updated_at' => $now]);
+
+        $builder = $this->db->table('facilities_bmg_device_commands')
+            ->select('id')
+            ->where('tenant_id', CurrentTenant::id())
+            ->where('status', 'pending')
+            ->where('expires_at IS NOT NULL', null, false)
+            ->where('expires_at <=', $now)
+            ->orderBy('id', 'ASC')
+            ->limit(100);
+        if ($deviceId !== null) {
+            $builder->where('device_id', $deviceId);
+        }
+
+        $raised = 0;
+        foreach ($builder->get()->getResultArray() as $candidate) {
+            try {
+                $raised += $this->txn(function () use ($candidate, $now): int {
+                    $cmd = $this->selectForUpdate('facilities_bmg_device_commands', [
+                        'id'        => (int) $candidate['id'],
+                        'tenant_id' => CurrentTenant::id(),
+                    ]);
+                    if ($cmd === null || $cmd['status'] !== 'pending'
+                        || $cmd['expires_at'] === null || (string) $cmd['expires_at'] > $now) {
+                        return 0;   // acked, superseded or already settled by the other path
+                    }
+
+                    $this->db->table('facilities_bmg_device_commands')
+                        ->where('tenant_id', CurrentTenant::id())
+                        ->where('id', (int) $cmd['id'])
+                        ->update(['status' => 'failed', 'updated_at' => $now]);
+
+                    $board = $this->db->table('facilities_bmg_devices AS d')
+                        ->select('d.code AS device_code, d.status AS device_status, d.archived_at, u.code AS unit_code')
+                        ->join('facilities_bmg_units AS u', 'u.id = d.unit_id', 'left')
+                        ->where('d.id', (int) $cmd['device_id'])
+                        ->where('d.tenant_id', CurrentTenant::id())
+                        ->get()->getRowArray();
+                    // A disabled or archived board was taken out of service on
+                    // purpose; its leftover commands are not an incident.
+                    if ($board === null || $board['device_status'] !== 'active' || $board['archived_at'] !== null) {
+                        return 0;
+                    }
+                    // Operators think in drums; fall back to the board's own code.
+                    $ref = (string) (($board['unit_code'] ?? null) ?: ($board['device_code'] ?? 'unknown'));
+
+                    $this->audit->enqueue(
+                        'bmg.device_command_expired',
+                        'facilities_bmg_device_commands',
+                        (int) $cmd['id'],
+                        null,
+                        [
+                            'resource_code' => $ref . ':' . (string) $cmd['command'],
+                            'reason_code'   => 'facilities.device.command.expired',
+                            'outcome'       => $cmd['delivered_at'] !== null ? 'expired_unacknowledged' : 'expired_undelivered',
+                        ],
+                    );
+                    $this->notify->enqueueToPermissions(
+                        ['facilities.bmg.logs.read'],
+                        'bmg.device_command_expired',
+                        [
+                            'resource_code' => $ref,
+                            // The command name rides the whitelisted `next_status` key
+                            // so the label can say WHAT never reached the board.
+                            'next_status'   => (string) $cmd['command'],
+                            // A stop that never landed means a drum may still be turning.
+                            'urgency'       => $cmd['command'] === 'stop' ? 'critical' : 'warning',
+                            'source_module' => 'facilities',
+                        ],
+                    );
+
+                    return 1;
+                });
+            } catch (\Throwable $e) {
+                // One wedged row must not block the board's command feed or the sweep.
+                log_message('warning', 'bmg command expiry: command #{id} failed: {m}', [
+                    'id' => (int) $candidate['id'],
+                    'm'  => $e->getMessage(),
+                ]);
+            }
+        }
+
+        return $raised;
+    }
+
+    /**
      * The device's pending command feed — the pull half of the start
      * integration (`GET /api/v1/devices/bmg/commands`, device-token
      * auth). Oldest first, capped per poll. Fetching stamps
@@ -2777,6 +3538,14 @@ final class BmgService extends BaseService
      */
     public function listDeviceCommands(array $device): array
     {
+        $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
+
+        // Expire stale pending rows BEFORE selecting the feed: a command
+        // the board missed by more than its TTL must not be delivered to
+        // a board that reappears hours later. Staff are told here too —
+        // the watchdog sweep covers boards that never come back.
+        $this->failExpiredDeviceCommands($now, (int) $device['id']);
+
         $rows = $this->db->table('facilities_bmg_device_commands')
             ->where('tenant_id', CurrentTenant::id())
             ->where('device_id', (int) $device['id'])
@@ -2785,7 +3554,13 @@ final class BmgService extends BaseService
             ->limit(20)
             ->get()->getResultArray();
 
-        $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
+        // Command polling proves the device is online and reachable — keep last_seen_at fresh
+        // so the device is not falsely flagged as silent by the watchdog.
+        $this->db->table('facilities_bmg_devices')
+            ->where('tenant_id', CurrentTenant::id())
+            ->where('id', (int) $device['id'])
+            ->update(['last_seen_at' => $now, 'updated_at' => $now]);
+
         if ($rows !== []) {
             // First delivery only — a redelivered row keeps its original
             // stamp so the watchdog can reason about staleness later.
@@ -2808,6 +3583,7 @@ final class BmgService extends BaseService
                 : null,
             'status'         => (string) $r['status'],
             'delivered_at'   => $r['delivered_at'] !== null ? (string) $r['delivered_at'] : $now,
+            'expires_at'     => $r['expires_at'] !== null ? (string) $r['expires_at'] : null,
             'created_at'     => (string) $r['created_at'],
         ], $rows);
     }
@@ -2860,6 +3636,109 @@ final class BmgService extends BaseService
                 'acknowledged_at' => $cmd['acknowledged_at'] !== null ? (string) $cmd['acknowledged_at'] : null,
             ];
         });
+    }
+
+    /**
+     * Send a manual command ('start', 'stop', or 'run_now') to a
+     * registered BMG device. Admin-only (facilities.units.manage): an
+     * operator who can reach a motor over the network is a trusted
+     * administrator; batch transitions remain operator-gated.
+     *
+     * @param array<string, mixed> $input
+     * @return array<string, mixed>
+     */
+    public function sendDeviceCommand(int $deviceId, array $input): array
+    {
+        $this->policy->check('device_command');
+        $userId = \App\Auth\CurrentUser::assert();
+
+        $cmdName = strtolower(trim((string) ($input['command'] ?? '')));
+        if (! in_array($cmdName, ['start', 'stop', 'run_now'], true)) {
+            throw ApiException::validationFailure([
+                ['code' => 'validation.invalid', 'message' => "Command must be 'start', 'stop', or 'run_now'.", 'field' => 'command'],
+            ]);
+        }
+
+        return $this->txn(function () use ($deviceId, $cmdName, $userId): array {
+            $device = $this->selectForUpdate('facilities_bmg_devices', [
+                'id'        => $deviceId,
+                'tenant_id' => CurrentTenant::id(),
+            ]);
+
+            if ($device === null || $device['archived_at'] !== null) {
+                throw new ApiException('resource.not_found', 404, [
+                    ['code' => 'resource.not_found', 'message' => "Device #{$deviceId} not found."],
+                ]);
+            }
+
+            if ($device['status'] !== 'active') {
+                throw new ApiException('device.disabled', 409, [
+                    ['code' => 'device.disabled', 'message' => "Device {$device['code']} is disabled."],
+                ]);
+            }
+
+            $unitId = $device['unit_id'] !== null ? (int) $device['unit_id'] : null;
+            if ($unitId === null) {
+                throw new ApiException('device.not_bound', 409, [
+                    ['code' => 'device.not_bound', 'message' => "Device {$device['code']} is not bound to any drum."],
+                ]);
+            }
+
+            $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
+
+            if ($cmdName === 'stop') {
+                // Clear any pending start/run-now commands — a stop that
+                // lands after a queued "go" would be an accident.
+                $this->db->table('facilities_bmg_device_commands')
+                    ->where('tenant_id', CurrentTenant::id())
+                    ->where('device_id', $deviceId)
+                    ->where('status', 'pending')
+                    ->whereIn('command', ['start', 'run_now'])
+                    ->update([
+                        'status'     => 'failed',
+                        'updated_at' => $now,
+                    ]);
+            }
+
+            $this->enqueueDeviceCommand($deviceId, (string) $device['code'], $cmdName, [
+                'unit_id' => $unitId,
+                'manual'  => true,
+            ], $now, $userId);
+
+            return [
+                'device_id' => $deviceId,
+                'command'   => $cmdName,
+                'status'    => 'pending',
+                'enqueued'  => true,
+            ];
+        });
+    }
+
+    /**
+     * List recent outbound commands for a device.
+     *
+     * @return list<array<string, mixed>>
+     */
+    public function listDeviceCommandHistory(int $deviceId, int $limit = 20): array
+    {
+        $this->policy->check('devices_list');
+
+        $rows = $this->db->table('facilities_bmg_device_commands')
+            ->where('tenant_id', CurrentTenant::id())
+            ->where('device_id', $deviceId)
+            ->orderBy('id', 'DESC')
+            ->limit($limit)
+            ->get()->getResultArray();
+
+        return array_map(static fn (array $r): array => [
+            'id'              => (int) $r['id'],
+            'command'         => (string) $r['command'],
+            'status'          => (string) $r['status'],
+            'payload'         => $r['payload'] !== null ? json_decode((string) $r['payload'], true) : null,
+            'delivered_at'    => $r['delivered_at'] !== null ? (string) $r['delivered_at'] : null,
+            'acknowledged_at' => $r['acknowledged_at'] !== null ? (string) $r['acknowledged_at'] : null,
+            'created_at'      => (string) $r['created_at'],
+        ], $rows);
     }
 
     // -------------------------------------------------------- losses
@@ -3080,6 +3959,114 @@ final class BmgService extends BaseService
     }
 
     /**
+     * @param array<string, mixed> $input
+     * @return array<string, mixed>
+     */
+    public function voidBatchInput(int $batchId, int $inputId, array $input): array
+    {
+        return $this->batchIo->voidBatchInput($batchId, $inputId, $input);
+    }
+
+    /**
+     * @param array<string, mixed> $input
+     * @return array<string, mixed>
+     */
+    public function voidBatchOutput(int $batchId, int $outputId, array $input): array
+    {
+        return $this->batchIo->voidBatchOutput($batchId, $outputId, $input);
+    }
+
+    /**
+     * @return array<int, array<string, mixed>>
+     */
+    public function listBatchInputs(int $batchId): array
+    {
+        return $this->batchIo->listBatchInputs($batchId);
+    }
+
+    /**
+     * @return array<int, array<string, mixed>>
+     */
+    public function listBatchOutputs(int $batchId): array
+    {
+        return $this->batchIo->listBatchOutputs($batchId);
+    }
+
+    /**
+     * The per-unit monitoring dashboard aggregate.
+     *
+     * @return array<string, mixed>
+     */
+    public function unitMonitor(int $unitId): array
+    {
+        return $this->monitor->unitMonitor($unitId);
+    }
+
+    /**
+     * Device schedule administration — current config + history.
+     *
+     * @return array<string, mixed>
+     */
+    public function unitSchedule(int $unitId): array
+    {
+        return $this->schedules->forUnit($unitId);
+    }
+
+    /**
+     * @param array{times:list<string>, duration_seconds:int, pwm:int, enabled:bool} $input
+     * @return array<string, mixed>
+     */
+    public function updateUnitSchedule(int $unitId, array $input): array
+    {
+        return $this->schedules->update($unitId, $input);
+    }
+
+    /**
+     * Assignment history for one device (drum binding ledger, newest
+     * first).
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public function listDeviceAssignments(int $deviceId): array
+    {
+        $this->policy->check('devices_list');
+
+        $device = $this->db->table('facilities_bmg_devices')
+            ->select('id, code')
+            ->where('id', $deviceId)
+            ->where('tenant_id', CurrentTenant::id())
+            ->get()->getRowArray();
+        if ($device === null) {
+            throw new ApiException('resource.not_found', 404, [
+                ['code' => 'resource.not_found', 'message' => "Device #{$deviceId} not found."],
+            ]);
+        }
+
+        $rows = $this->db->table('facilities_bmg_device_assignments AS a')
+            ->select('a.id, a.device_id, a.unit_id, u.code AS unit_code, u.display_name AS unit_display_name, a.assigned_by_user_id, a.unassigned_by_user_id, a.assigned_at, a.unassigned_at')
+            ->join('facilities_bmg_units AS u', 'u.id = a.unit_id', 'left')
+            ->where('a.tenant_id', CurrentTenant::id())
+            ->where('a.device_id', $deviceId)
+            ->orderBy('a.assigned_at', 'DESC')
+            ->orderBy('a.id', 'DESC')
+            ->limit(50)
+            ->get()->getResultArray();
+
+        return array_map(static fn (array $r): array => [
+            'id'                    => (int) $r['id'],
+            'device_id'             => (int) $r['device_id'],
+            'unit_id'               => (int) $r['unit_id'],
+            'unit_code'             => $r['unit_code'] !== null ? (string) $r['unit_code'] : null,
+            'unit_display_name'     => $r['unit_display_name'] !== null ? (string) $r['unit_display_name'] : null,
+            'assigned_by_user_id'   => (int) $r['assigned_by_user_id'],
+            'unassigned_by_user_id' => $r['unassigned_by_user_id'] !== null ? (int) $r['unassigned_by_user_id'] : null,
+            'assigned_at'           => (string) $r['assigned_at'],
+            'unassigned_at'         => $r['unassigned_at'] !== null ? (string) $r['unassigned_at'] : null,
+            'is_active'             => $r['unassigned_at'] === null,
+        ], $rows);
+    }
+
+    /**
      * Deterministic yield/ETA analytics for a batch (Phase P4).
      *
      * @return array<string, mixed>
@@ -3114,6 +4101,11 @@ final class BmgService extends BaseService
                 throw StateMachineException::invalidTransition($current, $next, 'bmg');
             }
             $now = $this->support->utcNow();
+            if ($maintenance) {
+                $this->stopUnitDevice($unitId, $now, $userId, [
+                    'context' => 'maintenance',
+                ]);
+            }
             $this->db->table('facilities_bmg_units')
                 ->where('facilities_bmg_units.tenant_id', CurrentTenant::id())
                 ->where('id', $unitId)->update([

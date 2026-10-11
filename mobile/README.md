@@ -8,11 +8,11 @@ The Flutter client. It consumes the existing CodeIgniter 4 backend (`../backend`
 |---|---|---|
 | Login / session restore / logout | `POST /auth/login`, `GET /auth/me`, `POST /auth/refresh`, `POST /auth/logout` | JWT + HttpOnly refresh cookie (`synapse_rt`) via a cookie jar, mirroring the browser |
 | Dashboard counters | `GET /dashboard/counters` | permission-gated tiles (staff Home tab) |
-| Appointments (list + search) | `GET /clinic/appointments` | status filter + text search |
+| Appointments (list + search + scheduling) | `GET /clinic/appointments`, `POST /clinic/appointments`, `POST /clinic/appointments/{id}/transition` | status filter + text search; staff confirm, manual check-in, cancel and no-show; encounter/queue flows retained |
 | Student self-booking | `GET /me/student-providers`, `POST /me/student-appointments` | no staff permission needed |
 | Queue (public waiting room + my status) | `GET /clinic/queue/state`, `/me/queue-status`, `/me/student-queue-status` | same feed as the lobby TV |
 | My portal | `GET /me/employee-profile`, `/me/student-profile`, `/me/clinic-visits` | identity + visit history |
-| Patients | `GET /clinic/students`, `/clinic/employees` (+ search) | Students/Employees toggle |
+| Patients | `GET /clinic/students`, `/clinic/employees` (+ search) | Students/Employees toggle; patient identity QR badges retained, no RFID fields/badges |
 | Inventory (supplies) | `GET /clinic/inventory` | low-stock badges |
 | Medicines | `GET /clinic/medicines` | low-stock + expiry chips |
 | Counselling | `GET /counselling/sessions` | open/closed status |
@@ -23,6 +23,8 @@ The Flutter client. It consumes the existing CodeIgniter 4 backend (`../backend`
 | Notifications | `GET /notifications`, `POST /notifications/{id}/read` | bell in the app bar + module tile |
 | Admin users | `GET /admin/users` | role badges + active status |
 
+Appointment booking and staff scheduling use normal success feedback and close their dialogs without QR sheets. The mobile client does not render, store, issue or verify appointment QR tokens. Startup (including logged-out startup) and logout purge only legacy `synapse_appointment_qr_` SharedPreferences keys; auth storage and unrelated preferences are preserved. Patient identity QR badges and unrelated referral state are separate and unchanged.
+
 ## How it's built
 
 - **Auth mirrors the browser exactly.** Access token in `flutter_secure_storage` (keystore/Keychain, with a one-time migration from legacy plaintext). Refresh token in a persistent `PersistCookieJar`. Single-replay silent refresh on 401, proactive refresh when the JWT `exp` approaches, and one in-flight refresh future to deduplicate concurrent 401s. `AuthController.bootstrap()` restores the session before the first frame — splash screen instead of a login flash.
@@ -30,7 +32,7 @@ The Flutter client. It consumes the existing CodeIgniter 4 backend (`../backend`
 - **Three-layer API stack** — `core/config.dart` (URL resolution) → `core/api/api_client.dart` (Dio + interceptors) → `core/services/api_service.dart` (one method per endpoint) → typed models in `core/models/` mirroring the SPA schemas.
 - **Navigation** — auth gate in `RootGate`, bottom-nav `IndexedStack` shell, imperative pushes for module screens. Permission gating mirrors the SPA sidebar (wildcard `*` for admins, student-vs-staff variants).
 
-Stack: Flutter (Dart ≥ 3.6, tested on 3.44) · dio 5 + cookie_jar · flutter_secure_storage · provider · Material 3 with a hand-tuned maroon theme and Figtree variable font · pdf + share_plus · qr_flutter.
+Stack: Flutter (Dart ≥ 3.6, tested on 3.44) · dio 5 + cookie_jar · flutter_secure_storage · provider · Material 3 with a hand-tuned maroon theme and Figtree variable font · pdf + share_plus.
 
 ```
 lib/
@@ -84,10 +86,11 @@ API base URL resolution lives in `lib/core/config.dart`: dev defaults cover `10.
 ## Tests
 
 ```bash
+flutter analyze
 flutter test
 ```
 
-Model JSON-parsing tests (session, appointment, queue, notification) plus `SessionProgressTracker` unit/widget tests. CI runs this on every push/PR ([`../.github/workflows/ci.yml`](../.github/workflows/ci.yml)).
+Model JSON-parsing tests (session, appointment, queue, notification), QR-free appointment API/UI and legacy preference cleanup regressions, plus `SessionProgressTracker` unit/widget tests. CI runs this on every push/PR ([`../.github/workflows/ci.yml`](../.github/workflows/ci.yml)).
 
 ## Platform notes
 

@@ -249,13 +249,15 @@ const NAV_SECTIONS: ReadonlyArray<{ title: string; items: ReadonlyArray<NavItem>
         },
         // Trial (2026-09-27): the page's tab strip moved here as an
         // accordion. Children gate and order-match the page's own
-        // allowedTabs; Appointments and Scheduling stay ungated on the
-        // page for everyone who passes the module gate.
+        // allowedTabs; Appointments and Staff schedules stay ungated on the
+        // page for everyone who passes the module gate. The last row is
+        // labelled "Staff schedules" to match Clinic's equivalent tab; its
+        // `scheduling` key is the URL/deep-link identity and is unchanged.
         children: [
           { label: 'Queue', tab: 'queue', permission: 'counselling.queue.read' },
           { label: 'Appointments', tab: 'appointments', permission: null },
           { label: 'Follow-ups', tab: 'followups', permission: 'counselling.responses.read_any' },
-          { label: 'Scheduling', tab: 'scheduling', permission: null },
+          { label: 'Staff schedules', tab: 'scheduling', permission: null },
         ],
       },
       // The same registry, surfaced for guidance staff — but NOT the same
@@ -453,14 +455,30 @@ export function AppSidebar() {
     (item.children ?? [])
       .filter(() => !(item.studentChildren === true && !isPureStudent))
       .filter((ch) => hasAnyPermission(state, ch.permission));
+
+  /** Row highlighting goes to the path's OWNER (see accordionOwner) plus
+   * the last-tapped module — never to every item sharing the href. */
+  const ownerKey = (() => {
+    const owner = accordionOwner(pathname, sideParam);
+    return owner !== undefined ? itemKey(owner) : null;
+  })();
+
   /** Child-link URL: the item's own query seeds the target (Guidance
    * Records pins `side=guidance`; the item's side wins over whatever side
-   * the current page is on), the current page's params overlay it
-   * (Reports' start/end survives), and `tab` is set last. */
+   * the current page is on), the current page's params overlay it ONLY when
+   * navigating within the same module (Reports' start/end survives), and
+   * `tab` is set last.
+   *
+   * Crucial: Clinic Records (`records-clinic`) and Guidance Records
+   * (`records-guidance`) are independent modules sharing `/patients`.
+   * When navigating between them (`itemKey(item) !== ownerKey`), NO
+   * parameters from the other side are copied — so toggling "Archived"
+   * or typing a search in Clinic Records NEVER bleeds into Guidance Records!
+   */
   const childHref = (item: NavItem, ch: NavChild): string => {
     const [base, itemQuery = ''] = item.href.split('?');
     const target = new URLSearchParams(itemQuery);
-    if (pathname === base) {
+    if (pathname === base && itemKey(item) === ownerKey) {
       for (const [k, v] of params) {
         if (k !== 'side') target.append(k, v);
       }
@@ -468,12 +486,7 @@ export function AppSidebar() {
     target.set('tab', ch.tab);
     return `${base}?${target.toString()}`;
   };
-  /** Row highlighting goes to the path's OWNER (see accordionOwner) plus
-   * the last-tapped module — never to every item sharing the href. */
-  const ownerKey = (() => {
-    const owner = accordionOwner(pathname, sideParam);
-    return owner !== undefined ? itemKey(owner) : null;
-  })();
+
   const isRowActive = (item: NavItem): boolean =>
     (ownerKey !== null && itemKey(item) === ownerKey) || selectedModule === itemKey(item);
 

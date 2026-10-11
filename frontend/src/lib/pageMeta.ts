@@ -13,6 +13,12 @@
 export interface PageMeta {
   /** Short title shown in the topbar; should match the page H1. */
   title: string;
+  /**
+   * Set to `false` for a path that is only a grouping label and has no
+   * page of its own (e.g. `/admin`). Breadcrumbs render it as plain text
+   * instead of a link that would 404. Defaults to linkable.
+   */
+  linkable?: boolean;
 }
 
 export const PAGE_META: Readonly<Record<string, PageMeta>> = {
@@ -31,7 +37,7 @@ export const PAGE_META: Readonly<Record<string, PageMeta>> = {
   '/facilities/drums': { title: 'Drums' },
   '/facilities/waste-categories': { title: 'Waste categories' },
   '/facilities/devices': { title: 'Devices' },
-  '/admin': { title: 'Administration' },
+  '/admin': { title: 'Administration', linkable: false },
   '/admin/users': { title: 'Users' },
   '/notifications': { title: 'Notifications' },
   '/referrals': { title: 'Referrals' },

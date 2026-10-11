@@ -35,6 +35,28 @@ final class AppointmentQueueParityContractTest extends TestCase
         $this->assertStringContainsString('assigned_counsellor_user_id',$migration);$this->assertStringContainsString('uq_cqe_active_service_counsellor',$migration);
         $this->assertStringContainsString('assigned_counsellor_user_id',$queue);
     }
+    public function testBothGuidanceBookingPathsEnforceTheThreeStrikeLimit(): void
+    {
+        // Staff booking enforced the limit but student self-booking did not,
+        // so a student at three strikes could book themselves back in.
+        $schedule=$this->read('app/Modules/Counselling/Services/ScheduleService.php');
+        $portal=$this->read('app/Modules/Clinic/Services/PortalAppointmentService.php');
+        $this->assertStringContainsString('public const NO_SHOW_STRIKE_LIMIT',$schedule);
+        // Same constant, same error code on both paths — they cannot drift.
+        $this->assertStringContainsString('GuidanceScheduleService::NO_SHOW_STRIKE_LIMIT',$portal);
+        $this->assertStringContainsString('counselling.schedule.no_show_limit',$schedule);
+        $this->assertStringContainsString('counselling.schedule.no_show_limit',$portal);
+        // The gate must run inside bookGuidance, before the slot is written.
+        $body=substr($portal,(int)strpos($portal,'function bookGuidance'));
+        $gate=strpos($body,'assertUnderNoShowLimit');
+        $insert=strpos($body,"insert(['tenant_id'");
+        $this->assertNotFalse($gate);
+        $this->assertNotFalse($insert);
+        $this->assertLessThan($insert,$gate);
+        // Clinic bookings are not subject to the Guidance counter.
+        $clinicBranch=substr($portal,(int)strpos($portal,"if (\$department === 'clinic')"),400);
+        $this->assertStringNotContainsString('assertUnderNoShowLimit',$clinicBranch);
+    }
     public function testStaffRoleDoesNotGrantUserAdministration(): void
     {
         $groups=$this->read('app/Config/AuthGroups.php');preg_match("/'clinic_staff'\s*=>\s*\[(.*?)\n\s*\],/s",$groups,$clinic);

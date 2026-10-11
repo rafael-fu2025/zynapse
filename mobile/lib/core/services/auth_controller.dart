@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 import '../api/api_client.dart';
 import '../api/api_envelope.dart';
 import '../models/session.dart';
+import 'legacy_preferences.dart';
 
 /// Holds the authenticated session and drives the auth lifecycle.
 ///
@@ -37,6 +38,8 @@ class AuthController extends ChangeNotifier {
     _busy = true;
     notifyListeners();
     try {
+      // Remove obsolete plaintext booking credentials even when logged out.
+      await purgeLegacyAppointmentQrPreferences();
       // Kick off the two cheap local initializations CONCURRENTLY (cookie
       // jar + token restore are independent disk reads), so the network
       // validation starts as soon as possible and the splash is shorter.
@@ -134,6 +137,7 @@ class AuthController extends ChangeNotifier {
 
   /// Revokes the refresh family and clears local session state.
   Future<void> logout() async {
+    await purgeLegacyAppointmentQrPreferences();
     try {
       await ApiClient.I.dio.post('/auth/logout');
     } catch (e) {

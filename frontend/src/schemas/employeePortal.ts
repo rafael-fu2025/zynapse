@@ -44,7 +44,7 @@ export const employeePortalProfileSchema = z.object({
   date_of_birth: z.string().nullable(),
   gender: z.string().nullable(),
   has_qr: z.boolean(),
-  has_rfid: z.boolean(),
+
   is_teaching: z.boolean().nullable(),
   archived: z.boolean(),
   created_at: z.string(),

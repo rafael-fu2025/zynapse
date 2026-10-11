@@ -305,6 +305,10 @@ const router = createBrowserRouter([
           </ProtectedRoute>
         ),
       },
+      // The drums list is the Facilities page itself. `/facilities/drums`
+      // is the parent of the detail route (and a breadcrumb label), so
+      // send it there instead of dead-ending on the 404 page.
+      { path: '/facilities/drums', element: <Navigate to="/facilities" replace /> },
       {
         path: '/facilities/drums/:unitId',
         element: (

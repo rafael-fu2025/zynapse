@@ -8,6 +8,12 @@
  * three inline Selects (`[ 02 ▾] : [ 30 ▾] [ PM ▾]`) rather than a
  * Select-inside-Popover, which avoids Radix's portal/outside-click
  * conflict and needs fewer clicks.
+ *
+ * Sizing: the three triggers have a preferred width (4.25rem) but may
+ * shrink (`min-w-0 shrink`) and the row is `min-w-0`, so the picker fits
+ * whatever column it is dropped into instead of overflowing and
+ * overlapping a neighbouring field. A parent that is a grid/flex item
+ * must also be `min-w-0` for the shrink to reach this row.
  */
 import { Clock } from 'lucide-react';
 import {
@@ -85,7 +91,7 @@ export function TimePicker({
   };
 
   return (
-    <div className={cn('flex items-center gap-1.5', className)} aria-invalid={ariaInvalid}>
+    <div className={cn('flex w-full min-w-0 items-center gap-1.5', className)} aria-invalid={ariaInvalid}>
       <Clock className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
       <Select
         value={displayHour}
@@ -94,7 +100,7 @@ export function TimePicker({
           emit(next, mm === '' ? '00' : mm, meridiem === '' ? 'AM' : meridiem)
         }
       >
-        <SelectTrigger id={id} aria-invalid={ariaInvalid} className="w-[4.25rem]" onBlur={onBlur} aria-label="Hour">
+        <SelectTrigger id={id} aria-invalid={ariaInvalid} className="w-[4.25rem] min-w-0 shrink px-2" onBlur={onBlur} aria-label="Hour">
           <SelectValue placeholder="HH" />
         </SelectTrigger>
         <SelectContent className="max-h-60">
@@ -113,7 +119,7 @@ export function TimePicker({
           emit(displayHour === '' ? '12' : displayHour, next, meridiem === '' ? 'AM' : meridiem)
         }
       >
-        <SelectTrigger aria-invalid={ariaInvalid} className="w-[4.25rem]" aria-label="Minute">
+        <SelectTrigger aria-invalid={ariaInvalid} className="w-[4.25rem] min-w-0 shrink px-2" aria-label="Minute">
           <SelectValue placeholder="MM" />
         </SelectTrigger>
         <SelectContent className="max-h-60">
@@ -131,7 +137,7 @@ export function TimePicker({
           emit(displayHour === '' ? '12' : displayHour, mm === '' ? '00' : mm, next)
         }
       >
-        <SelectTrigger aria-invalid={ariaInvalid} className="w-[4.25rem]" aria-label="AM/PM">
+        <SelectTrigger aria-invalid={ariaInvalid} className="w-[4.25rem] min-w-0 shrink px-2" aria-label="AM/PM">
           <SelectValue placeholder="--" />
         </SelectTrigger>
         <SelectContent>

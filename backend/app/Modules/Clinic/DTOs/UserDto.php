@@ -45,7 +45,6 @@ final class UserDto extends BaseDTO
             'gender'           => $this->nullableString($row['gender'] ?? null),
             'address'          => $this->nullableString($row['address'] ?? null),
             'has_qr'           => isset($row['qr_code']) && $row['qr_code'] !== null,
-            'has_rfid'         => isset($row['rfid_tag']) && $row['rfid_tag'] !== null,
             'archived'         => isset($row['archived_at']) && $row['archived_at'] !== null,
             'created_at'       => (string) ($row['created_at'] ?? ''),
             'updated_at'       => (string) ($row['updated_at'] ?? ''),

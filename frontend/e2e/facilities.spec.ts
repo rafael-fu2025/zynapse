@@ -172,6 +172,47 @@ test.describe('BMG drum menu gating', () => {
     await expect(menu.getByRole('menuitem', { name: 'Finish batch' })).toBeDisabled();
     await expect(menu.getByRole('menuitem', { name: 'Cancel batch' })).toBeDisabled();
     await expect(menu.getByRole('menuitem', { name: 'Drum status' })).toBeEnabled();
+    // The drum page (device liveness, schedule editor, I/O ledger) must
+    // be reachable for an IDLE drum — that is exactly when staff set the
+    // run schedule, and the Processing Drums widget only links drums
+    // that already have an active batch.
+    await expect(menu.getByRole('menuitem', { name: 'Open drum page' })).toBeEnabled();
+  });
+
+  test('the drum-page link opens the unit automation surface for an idle drum', async ({ page }) => {
+    await signIn(page);
+    // The drum page polls the per-unit monitor aggregate; stub it so the
+    // automation card renders from the unit (not the batch).
+    await page.route('**/api/v1/facilities/units/*/monitor*', (route) =>
+      route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({
+          success: true,
+          data: {
+            unit: { id: 1, code: IDLE.code, display_name: IDLE.code, status: 'idle', archived_at: null },
+            device: null,
+            schedule: { times: [], duration_seconds: 600, pwm: 200, enabled: false, version: 1, next_run_at: null },
+            runs: { recent: [], failed_count: 0, missed_times: [], missed_count: 0 },
+            active_batch: null,
+            totals: { input_kg: 0, output_kg: 0 },
+            open_alerts: [],
+          },
+          errors: [],
+          meta: null,
+        }),
+      }),
+    );
+    await gotoFacilities(page);
+
+    const menu = await openMenu(page, IDLE.code);
+    await menu.getByRole('menuitem', { name: 'Open drum page' }).click();
+    await page.waitForURL(/\/facilities\/drums\/1$/);
+
+    // The automation card renders from the unit, not the batch — an
+    // idle drum still shows it (this is the surface the schedule editor
+    // lives on).
+    await expect(page.getByText('Drum automation')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Edit schedule' })).toBeVisible();
   });
 
   test('a processing drum offers the batch actions and hides Start batch', async ({ page }) => {

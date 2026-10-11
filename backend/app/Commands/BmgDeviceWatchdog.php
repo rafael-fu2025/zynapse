@@ -11,42 +11,56 @@ use Modules\Facilities\Services\BmgService;
 use Config\Services;
 
 /**
- * BmgDeviceWatchdog — scheduled sweep that flags BMG devices gone
- * silent. Thin CLI wrapper over `BmgService::deviceWatchdogUnchecked`.
+ * BmgDeviceWatchdog — scheduled sweep over the mechanized BMG fleet.
  *
- *   php spark synapse:bmg-device-watchdog            (48 h default)
- *   php spark synapse:bmg-device-watchdog --hours=24 (stricter)
+ * Four rules (see `BmgService::deviceWatchdogUnchecked`); the first
+ * three dedupe per episode, the fourth notifies once per command:
+ *   - OFFLINE: an active bound device silent beyond the threshold
+ *     (default 20 min, BMG_OFFLINE_AFTER_MIN).
+ *   - RTC INVALID: a device reporting `rtc_valid = false`.
+ *   - SCHEDULE MISSED: an enabled schedule slot with no run near it
+ *     while its batch is active (grace BMG_MISSED_RUN_GRACE_MIN).
+ *   - COMMAND EXPIRED: a start/stop/run_now whose TTL (BMG_COMMAND_TTL_MIN)
+ *     passed before the board picked it up. An offline board never polls,
+ *     so only this sweep can tell staff the drum did not turn.
  *
- * A device "went silent" when its bound unit holds an active batch and
- * the device hasn't checked in (last_seen_at) for longer than the
- * threshold. Silence between sessions is normal — the device only
- * reports when a session runs — so the default 48 h sits well above the
- * 4-day turning cadence the TURNING_DUE alert covers. Notifications are
- * deduped per silence episode (silence_notified_at); schedule hourly.
+ *   php spark synapse:bmg-device-watchdog                 (env default)
+ *   php spark synapse:bmg-device-watchdog --minutes=20    (explicit)
+ *   php spark synapse:bmg-device-watchdog --hours=48      (legacy scale)
+ *
+ * The firmware heartbeats on a ~10 min cadence, so the offline
+ * threshold must sit above it; the old hours-scale default still works
+ * via `--hours` for report-only firmware. Schedule every 15 min.
  */
 final class BmgDeviceWatchdog extends BaseCommand
 {
     protected $group       = 'SYNAPSE';
     protected $name        = 'synapse:bmg-device-watchdog';
-    protected $description = 'Flag BMG devices silent beyond the threshold (bound to a drum with an active batch). Deduped per silence episode.';
-    protected $usage       = 'synapse:bmg-device-watchdog [--hours <48>]';
+    protected $description = 'Sweep BMG devices: offline, RTC-invalid, missed scheduled runs, and expired commands. Deduped per episode.';
+    protected $usage       = 'synapse:bmg-device-watchdog [--minutes <20>] [--hours <n>]';
     protected $options     = [
-        '--hours' => 'Silence threshold in hours (default 48).',
+        '--minutes' => 'Offline threshold in minutes (default BMG_OFFLINE_AFTER_MIN or 20).',
+        '--hours'   => 'Legacy hours-scale threshold; wins over --minutes when both are given.',
     ];
 
     public function run(array $params): int
     {
-        $hours = 48;
+        $minutes = max(1, (int) (getenv('BMG_OFFLINE_AFTER_MIN') ?: 20));
+        if (array_key_exists('minutes', $params) && is_numeric((string) $params['minutes'])) {
+            $minutes = max(1, (int) $params['minutes']);
+        }
+        // --hours is the legacy flag (pre-heartbeat report-only firmware
+        // was silent for days); it stays authoritative when supplied.
         if (array_key_exists('hours', $params) && is_numeric((string) $params['hours'])) {
-            $hours = max(1, (int) $params['hours']);
+            $minutes = max(1, (int) $params['hours']) * 60;
         }
 
         $count = (new BmgService(new BmgPolicy(), Services::auditOutbox(), null, Services::notificationOutbox()))
-            ->deviceWatchdogUnchecked($hours);
+            ->deviceWatchdogUnchecked($minutes);
 
         CLI::write($count === 0
-            ? "Watchdog sweep complete — no silent devices beyond {$hours} h."
-            : "Watchdog sweep complete — {$count} silent device(s) notified.", $count === 0 ? 'green' : 'yellow');
+            ? "Watchdog sweep complete — nothing to flag (offline threshold {$minutes} min)."
+            : "Watchdog sweep complete — {$count} notification(s) raised.", $count === 0 ? 'green' : 'yellow');
         return 0;
     }
 }

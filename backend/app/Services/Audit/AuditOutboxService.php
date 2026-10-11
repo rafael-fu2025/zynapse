@@ -29,6 +29,10 @@ final class AuditOutboxService
     private const CONTEXT_KEYS = [
         'resource_code', 'previous_status', 'next_status', 'reason_code',
         'auth_method', 'outcome', 'family_id',
+        // Which BMG alert fired and how loudly. The alert call sites
+        // already pass these; they were being dropped, which left alert
+        // audit rows without the code they reference.
+        'alert_code', 'severity',
         // Network provenance for auth/session events (non-PII, standard
         // in security audit trails). Populated by AuthController.
         'ip_address', 'user_agent',

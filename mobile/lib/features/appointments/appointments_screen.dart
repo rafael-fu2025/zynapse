@@ -17,7 +17,6 @@ import '../../core/utils/dates.dart';
 import '../common/auto_polling.dart';
 import '../common/crud_form.dart';
 import '../common/widgets.dart';
-import 'appointment_qr_sheet.dart';
 
 /// Appointments — list + search + status filter, plus student self-booking.
 ///
@@ -435,26 +434,9 @@ class _AppointmentCard extends StatelessWidget {
             ],
           ),
         ),
-        trailing: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            // Proof-of-booking QR — available to staff and to the student
-            // owner (their own appointments). Opens the QR sheet, which can
-            // also re-issue + verify the token.
-            IconButton(
-              tooltip: 'Show appointment QR',
-              onPressed: () => showAppointmentQrSheet(
-                context,
-                appointment: appointment,
-                initialToken: appointment.qrToken,
-                // In this screen the viewer is either staff or the booking
-                // owner — both may (re)issue the token on the backend.
-                canIssue: true,
-              ),
-              icon: const Icon(HugeIcons.strokeRoundedQrCode01),
-            ),
-            if (actions.isNotEmpty)
-              PopupMenuButton<String>(
+        trailing: actions.isEmpty
+            ? null
+            : PopupMenuButton<String>(
                 tooltip: 'Appointment actions',
                 onSelected: onTransition,
                 itemBuilder: (_) => [
@@ -475,8 +457,6 @@ class _AppointmentCard extends StatelessWidget {
                   child: Icon(HugeIcons.strokeRoundedMore),
                 ),
               ),
-          ],
-        ),
         isThreeLine: true,
       ),
     );
@@ -624,15 +604,7 @@ class _StaffScheduleDialogState extends State<_StaffScheduleDialog> {
           ),
         ),
       );
-      // Show the proof-of-booking QR for the newly scheduled appointment on
-      // top of this sheet; when it closes, close the scheduling dialog.
-      await showAppointmentQrSheet(
-        context,
-        appointment: appointment,
-        initialToken: appointment.qrToken,
-        canIssue: true,
-      );
-      if (mounted) Navigator.of(context).pop();
+      Navigator.of(context).pop();
     } on ApiException catch (e) {
       setState(() {
         _submitError = e.message;
@@ -937,16 +909,7 @@ class _BookingDialogState extends State<_BookingDialog> {
       // Pop shortly after showing success.
       await Future<void>.delayed(const Duration(seconds: 1));
       if (!mounted) return;
-      // Surface the proof-of-booking QR right after booking so the student
-      // sees it immediately; when the QR sheet closes, close the booking
-      // dialog and refresh the list.
-      await showAppointmentQrSheet(
-        context,
-        appointment: appointment,
-        initialToken: appointment.qrToken,
-        canIssue: true,
-      );
-      if (mounted) Navigator.of(context).pop();
+      Navigator.of(context).pop();
     } on ApiException catch (e) {
       setState(() {
         _submitError = e.message;

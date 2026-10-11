@@ -1,225 +1,1273 @@
+// =====================================================================
+// compost.ino — mechanized BMG compost-tumbler controller (ESP32-S3)
+//
+// Ownership (the rule that keeps the motor timing safe):
+//   Core 1 (setup/loop)  — the ONLY owner of the motor pins, the DS3231
+//                          (I2C) and the run state machine. Fires the
+//                          flash-resident schedule from the RTC and never
+//                          touches the network.
+//   Core 0 (networkTask) — the ONLY owner of WiFi/HTTP and of the report
+//                          queue in NVS.
+// The cores talk through two FreeRTOS queues (commands down, events up)
+// and one mutex-guarded schedule hand-off. No shared Strings, no motor
+// pin writes from Core 0.
+//
+// Backend contract: docs/BMG_DEVICE_API.md
+//   GET  /bmg/commands + POST /bmg/commands/ack   start | stop | run_now
+//   GET  /bmg/schedule                            applied only when `version` changes
+//   POST /bmg/heartbeat                           liveness + RTC/WiFi telemetry
+//   POST /bmg/runs                                one idempotent report per run
+// Serial Monitor (115200): 's' recipe run, 'r' timed run, 'x' stop, 'i' status.
+// =====================================================================
 #include <Arduino.h>
 #include <Wire.h>
 #include <RTClib.h>
 #include <WiFi.h>
 #include <HTTPClient.h>
 #include <Preferences.h>
+#include <esp_mac.h>
+#include <esp_timer.h>
+#include <time.h>
 
-constexpr uint8_t I2C_SDA_PIN=8, I2C_SCL_PIN=9;
-constexpr uint8_t MOTOR_IN1=4, MOTOR_IN2=5, MOTOR_ENABLE=6;
-
-constexpr uint8_t TURNS_PER_SET=7;
-constexpr uint8_t TOTAL_SETS=3;
-constexpr uint8_t MOTOR_PWM=180;
-constexpr uint32_t START_DELAY_MS=5000UL;
-constexpr uint32_t TIMED_TURN_MS=1200UL;
-constexpr uint32_t BETWEEN_TURNS_MS=300UL;
-constexpr uint32_t SET_PAUSE_MS=10000UL;
-
-// ---------------------------------------------------------------------
-// Device reporting (additive) — report each completed turning session
-// to the BMG backend. All motor logic above and the state machine below
-// are untouched; reporting only runs once the process reaches DONE.
-//
-// Prototype config — fill in per bench setup. Get the token from
-// `php spark synapse:bmg-device-register --mac <chip-mac> --unit <drum>`
-// or the Facilities UI (Devices → Register device).
-//
-// NOTE: the I2C LCD from the original sketch was removed (not part of
-// the prototype). All status goes to the Serial Monitor (115200).
-// The DS3231 RTC stays wired on I2C (GPIO 8/9) — the sketch needs the
-// Adafruit RTClib library installed in the IDE.
-// ---------------------------------------------------------------------
+// ----- Config: the four values you edit ------------------------------
 constexpr char WIFI_SSID[]     = "YOUR_WIFI_SSID";
 constexpr char WIFI_PASS[]     = "YOUR_WIFI_PASS";
 constexpr char API_BASE_URL[]  = "http://192.168.1.50:8090"; // no trailing slash
 constexpr char DEVICE_TOKEN[]  = "dev_PASTE_TOKEN_FROM_FACILITIES_UI_DEVICES_DIALOG";
-#define USE_HTTPS 0                  // 0 = LAN HTTP prototype. For 1: WiFiClientSecure — TODO pin the CA cert, setInsecure() is NOT for production.
-constexpr char FIRMWARE_TAG[]  = "compost-1.1";
+#define USE_HTTPS 0                  // 0 = LAN HTTP prototype. For 1: WiFiClientSecure (pin server CA)
+constexpr char FIRMWARE_TAG[]  = "compost-1.2";
 
+#if USE_HTTPS
+#include <WiFiClientSecure.h>
+#endif
+
+// ----- Hardware -------------------------------------------------------
+constexpr uint8_t I2C_SDA_PIN=8, I2C_SCL_PIN=9;
+constexpr uint8_t MOTOR_IN1=4, MOTOR_IN2=5, MOTOR_ENABLE=6;
+
+// ----- Recipe (the `start` command / serial 's'): prototype bench values
+constexpr uint8_t TURNS_PER_SET=7;
+constexpr uint8_t TOTAL_SETS=3;
+constexpr uint8_t MOTOR_PWM=180;
+constexpr uint32_t START_DELAY_MS=5000UL;   // safety countdown before ANY run
+constexpr uint32_t TIMED_TURN_MS=1200UL;
+constexpr uint32_t BETWEEN_TURNS_MS=300UL;
+constexpr uint32_t SET_PAUSE_MS=10000UL;
+
+// ----- Scheduled / run_now runs ---------------------------------------
+constexpr uint8_t  MAX_SLOTS=8;
+constexpr uint16_t MAX_RUN_SEC=3600;
+constexpr uint16_t FALLBACK_RUN_SEC=10;     // run_now before any schedule was ever pulled
+constexpr uint32_t SLOT_CATCHUP_MIN=5;      // a slot blocked this long (busy motor) still fires
+constexpr uint32_t MANILA_OFFSET_S=8UL*3600UL; // Asia/Manila is UTC+8, no DST
+
+// ----- Clock ----------------------------------------------------------
+constexpr uint32_t MIN_VALID_EPOCH=1700000000UL;
+constexpr uint32_t RTC_CHECK_MS=30000UL;
+constexpr int32_t  RTC_RESYNC_DRIFT_S=5;
+
+// ----- Network cadence ------------------------------------------------
 constexpr uint32_t WIFI_CONNECT_TIMEOUT_MS = 15000UL;
+constexpr uint32_t WIFI_RETRY_BACKOFF_MS   = 30000UL;
+constexpr uint32_t HTTP_TIMEOUT_MS         = 5000UL;   // contract: 5 s per request
+constexpr uint32_t HTTP_MAX_BODY           = 16384UL;  // 20 queued commands can exceed 8 KB
+constexpr uint32_t CMD_POLL_RUNNING_MS     = 1500UL;   // fast while running so `stop` lands promptly
+constexpr uint32_t CMD_POLL_IDLE_MS        = 3500UL;
+constexpr uint32_t HEARTBEAT_MS            = 300000UL; // 5 min (server offline threshold: 20 min)
+constexpr uint32_t HEARTBEAT_RETRY_MS      = 30000UL;
+constexpr uint32_t SCHEDULE_POLL_MS        = 600000UL; // 10 min
+constexpr uint32_t SCHEDULE_RETRY_MS       = 60000UL;
+constexpr uint32_t NET_BACKOFF_MS          = 10000UL;  // after a transport failure
+constexpr uint32_t RATE_BACKOFF_MS         = 60000UL;  // 429 / 401 / 403
 constexpr uint32_t REPORT_RETRY_MS         = 60000UL;
 constexpr uint32_t REPORT_GIVE_UP_MS       = 86400000UL; // 24 h of retries, then drop
+constexpr uint8_t  MAX_PENDING_RUNS=8;
+constexpr uint8_t  SEEN_CMDS=24;
 
-// Session length is COMPUTED from the constants above (never hardcoded),
-// so the reported number stays truthful if the recipe changes.
-constexpr uint32_t SESSION_ACTIVE_MS =
-    (uint32_t)TOTAL_SETS * TURNS_PER_SET * TIMED_TURN_MS
-  + (uint32_t)TOTAL_SETS * (TURNS_PER_SET - 1) * BETWEEN_TURNS_MS
-  + (uint32_t)(TOTAL_SETS - 1) * SET_PAUSE_MS;
+// ---------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------
+enum class ProcessState : uint8_t { IDLE, WAITING, TURNING, TURN_GAP, SET_PAUSE, TIMED_RUN };
+enum class RunKind : uint8_t { RECIPE, TIMED };
+enum class CmdType : uint8_t { START, STOP, RUN_NOW };
+enum class EvtType : uint8_t { RUN_BEGIN, RUN_END, RUN_CANCEL, CMD_DONE };
 
+struct ScheduleCfg {
+  uint32_t version;                // 0 = never pulled
+  uint16_t durationSec;
+  uint16_t slotMin[MAX_SLOTS];     // minutes since midnight, Asia/Manila
+  uint8_t  pwm;
+  uint8_t  count;
+  bool     enabled;
+};
+
+struct CoreCmd { int32_t id; CmdType type; };           // Core 0 -> Core 1
+
+struct CoreEvt {                                        // Core 1 -> Core 0
+  EvtType  type;
+  int32_t  cmdId;
+  char     uid[32];
+  char     origin[10];
+  char     result[10];
+  char     note[48];
+  uint32_t startEpoch;
+  uint32_t endEpoch;
+  uint32_t durationSec;
+  int32_t  turns;                                       // -1 = not reported
+};
+
+struct RunCtx {                                         // Core 1 only
+  RunKind  kind;
+  bool     scheduled;
+  bool     motorStarted;
+  char     uid[32];
+  uint16_t durationSec;
+  uint8_t  pwm;
+  uint16_t turnsDone;
+  uint32_t armedMs;
+  uint32_t motorStartMs;
+  uint32_t epochStart;
+};
+
+struct ParsedCmd { int32_t id; char name[12]; };
+
+struct PendingRun {                                     // Core 0 only
+  bool     used;
+  uint32_t seq;
+  uint32_t firstMs;
+  String   payload;
+};
+
+enum : uint8_t { SEEN_EMPTY = 0, SEEN_SENT = 1, SEEN_ACKPENDING = 2, SEEN_ACKED = 3 };
+struct SeenCmd { int32_t id; uint8_t st; uint32_t seq; };  // Core 0 only
+
+// ---------------------------------------------------------------------
+// Shared between cores
+// ---------------------------------------------------------------------
+QueueHandle_t     g_cmdQueue = nullptr;
+QueueHandle_t     g_evtQueue = nullptr;
+SemaphoreHandle_t g_schedMx  = nullptr;
+
+ScheduleCfg   g_sched = {};              // active; only Core 1 writes it
+ScheduleCfg   g_schedNext = {};          // candidate from Core 0, guarded by g_schedMx
+volatile bool g_schedNextValid = false;
+volatile bool g_schedDirty = false;      // active changed -> Core 0 persists it
+
+volatile bool     g_isRunning = false;
+volatile bool     g_rtcValid = false;
+volatile uint32_t g_rtcEpoch = 0;
+volatile uint32_t g_rtcEpochAtMs = 0;
+volatile bool     g_ntpSynced = false;   // set by Core 0 once SNTP really delivered time
+
+// ---------------------------------------------------------------------
+// Core 1 state
+// ---------------------------------------------------------------------
 RTC_DS3231 rtc;
+bool rtcOk = false;
 
-enum class ProcessState:uint8_t {WAITING,TURNING,TURN_GAP,SET_PAUSE,DONE};
-ProcessState state=ProcessState::WAITING;
-uint32_t processStartMs=0, phaseStartMs=0;
-uint8_t currentSet=0, currentTurn=0;
+ProcessState state = ProcessState::IDLE;
+RunCtx run = {};
+uint32_t phaseStartMs = 0;
+uint8_t currentSet = 0, currentTurn = 0;
+uint32_t lastShownCountdownSec = 0xFFFFFFFFUL;
 
-// ---- reporting state (additive) ----
+uint32_t firedDay[MAX_SLOTS] = {};
+bool slotsInited = false;
+uint32_t lastSlotTickMs = 0, lastRtcTickMs = 0;
+
+// ---------------------------------------------------------------------
+// Core 0 state
+// ---------------------------------------------------------------------
 Preferences prefs;
-bool sessionReported=false;
-String queuedPayload="";
-uint32_t lastAttemptMs=0, firstAttemptMs=0;
-uint32_t lastShownCountdownSec=0;
+PendingRun g_pend[MAX_PENDING_RUNS];
+uint32_t g_pendSeq = 0, g_pendNextTryMs = 0;
+String   g_legacyPend;                   // session queued by firmware <= 1.1
+uint32_t g_legacyFirstMs = 0, g_legacyNextMs = 0;
+SeenCmd  g_seen[SEEN_CMDS];
+uint32_t g_seenSeq = 0;
+uint32_t g_nextCmdPollMs = 0, g_nextHeartbeatMs = 0, g_nextScheduleMs = 0;
+uint32_t g_netBackoffUntil = 0, g_lastAuthWarnMs = 0;
+char     c0LastResult[12] = "";
+bool     c0Stopped = false;
 
-void stopMotor(){analogWrite(MOTOR_ENABLE,0);digitalWrite(MOTOR_IN1,LOW);digitalWrite(MOTOR_IN2,LOW);}
-void startMotor(){digitalWrite(MOTOR_IN1,HIGH);digitalWrite(MOTOR_IN2,LOW);analogWrite(MOTOR_ENABLE,MOTOR_PWM);}
+inline bool due(uint32_t now, uint32_t at) { return (int32_t)(now - at) >= 0; }
 
-void showResult(){
+// ---------------------------------------------------------------------
+// Motor (Core 1 only)
+// ---------------------------------------------------------------------
+void stopMotor() {
+  analogWrite(MOTOR_ENABLE, 0);
+  digitalWrite(MOTOR_IN1, LOW);
+  digitalWrite(MOTOR_IN2, LOW);
+}
+
+void startMotor(uint8_t pwm) {
+  digitalWrite(MOTOR_IN1, HIGH);
+  digitalWrite(MOTOR_IN2, LOW);
+  analogWrite(MOTOR_ENABLE, pwm);
+}
+
+// ---------------------------------------------------------------------
+// Clock (Core 1 only — owns I2C)
+// ---------------------------------------------------------------------
+// Best trustworthy UTC epoch, or 0 when neither the RTC nor SNTP can vouch.
+uint32_t clockEpoch() {
+  if (g_rtcValid) return rtc.now().unixtime();
+  uint32_t s = (uint32_t)time(nullptr);
+  return (g_ntpSynced && s >= MIN_VALID_EPOCH) ? s : 0;
+}
+
+// Health + resync. Publishes the honest rtc_valid flag the heartbeat reports.
+void rtcTick() {
+  if (!rtcOk) { g_rtcValid = false; return; }
+  uint32_t sys = (uint32_t)time(nullptr);
+  bool sysOk = g_ntpSynced && sys >= MIN_VALID_EPOCH;
+  bool lost = rtc.lostPower();
+  uint32_t r = rtc.now().unixtime();
+  if (sysOk) {
+    int32_t drift = (int32_t)(r - sys);
+    if (lost || drift > RTC_RESYNC_DRIFT_S || drift < -RTC_RESYNC_DRIFT_S) {
+      rtc.adjust(DateTime(sys));
+      Serial.printf("RTC: adjusted from NTP (%s, drift was %ld s)\n",
+                    lost ? "lost backup power" : "drift", (long)drift);
+      lost = rtc.lostPower();
+      r = rtc.now().unixtime();
+    }
+  }
+  g_rtcValid = !lost && r >= MIN_VALID_EPOCH;
+  g_rtcEpoch = r;
+  g_rtcEpochAtMs = millis();
+}
+
+bool parseHHMM(const char* s, uint16_t& minutes) {
+  if (strlen(s) != 5 || s[2] != ':') return false;
+  for (uint8_t i : {0, 1, 3, 4}) if (s[i] < '0' || s[i] > '9') return false;
+  int h = (s[0] - '0') * 10 + (s[1] - '0');
+  int m = (s[3] - '0') * 10 + (s[4] - '0');
+  if (h > 23 || m > 59) return false;
+  minutes = (uint16_t)(h * 60 + m);
+  return true;
+}
+
+// ---------------------------------------------------------------------
+// Run lifecycle (Core 1 only)
+// ---------------------------------------------------------------------
+void emitEvt(const CoreEvt& ev) {
+  if (xQueueSend(g_evtQueue, &ev, 0) != pdTRUE) {
+    Serial.println("EVENT: queue full — event dropped");
+  }
+}
+
+void emitCmdDone(int32_t id) {
+  CoreEvt ev = {};
+  ev.type = EvtType::CMD_DONE;
+  ev.cmdId = id;
+  emitEvt(ev);
+}
+
+bool beginRun(RunKind kind, bool scheduled, uint16_t durationSec, uint8_t pwm) {
+  if (state != ProcessState::IDLE) return false;
+  memset(&run, 0, sizeof(run));
+  run.kind = kind;
+  run.scheduled = scheduled;
+  run.durationSec = durationSec;
+  run.pwm = pwm;
+  run.armedMs = millis();
+  uint32_t e = clockEpoch();
+  snprintf(run.uid, sizeof(run.uid), "run-%lu-%08lx", (unsigned long)e, (unsigned long)esp_random());
+
+  currentSet = 0;
+  currentTurn = 0;
+  lastShownCountdownSec = 0xFFFFFFFFUL;
+  state = ProcessState::WAITING;
+  g_isRunning = true;
+
+  Serial.printf("PROCESS START: %s %s run %s — starting countdown\n",
+                scheduled ? "scheduled" : "manual",
+                kind == RunKind::RECIPE ? "recipe" : "timed", run.uid);
+  return true;
+}
+
+void finishRun(const char* result, const char* note) {
+  stopMotor();
+  uint32_t now = millis();
+  CoreEvt ev = {};
+  snprintf(ev.uid, sizeof(ev.uid), "%s", run.uid);
+
+  if (!run.motorStarted) {
+    // Cancelled during the safety countdown: the drum never moved, so
+    // there is nothing to report — just clear the in-run marker.
+    ev.type = EvtType::RUN_CANCEL;
+    Serial.printf("PROCESS CANCELLED before motor start (%s)\n", note);
+  } else {
+    uint32_t dur = (now - run.motorStartMs + 500UL) / 1000UL;
+    if (dur < 1) dur = 1;
+    if (dur > 86399UL) dur = 86399UL;
+    ev.type = EvtType::RUN_END;
+    snprintf(ev.origin, sizeof(ev.origin), "%s", run.scheduled ? "scheduled" : "manual");
+    snprintf(ev.result, sizeof(ev.result), "%s", result);
+    snprintf(ev.note, sizeof(ev.note), "%s", note);
+    ev.startEpoch = run.epochStart;
+    ev.endEpoch = clockEpoch();
+    ev.durationSec = dur;
+    ev.turns = (run.kind == RunKind::RECIPE) ? (int32_t)run.turnsDone : -1;
+    Serial.printf("PROCESS %s: %lu s%s\n", result, (unsigned long)dur,
+                  run.kind == RunKind::RECIPE ? "" : " (timed)");
+  }
+  emitEvt(ev);
+
+  state = ProcessState::IDLE;
+  g_isRunning = false;
+}
+
+void requestStop(const char* note) {
+  if (state != ProcessState::IDLE) {
+    finishRun("aborted", note);
+  } else {
+    stopMotor();   // belt and braces: idle must always mean motor off
+  }
+}
+
+// ---------------------------------------------------------------------
+// Commands from the network task (Core 1 only)
+// ---------------------------------------------------------------------
+void handleCoreCmd(const CoreCmd& c) {
+  switch (c.type) {
+    case CmdType::START:
+      if (!beginRun(RunKind::RECIPE, false, 0, MOTOR_PWM)) {
+        Serial.printf("COMMAND #%ld start: already active — ignored\n", (long)c.id);
+      }
+      break;
+    case CmdType::RUN_NOW: {
+      uint16_t dur = g_sched.version != 0 ? g_sched.durationSec : FALLBACK_RUN_SEC;
+      uint8_t  pwm = g_sched.version != 0 ? g_sched.pwm : MOTOR_PWM;
+      if (!beginRun(RunKind::TIMED, false, dur, pwm)) {
+        Serial.printf("COMMAND #%ld run_now: already active — ignored\n", (long)c.id);
+      }
+      break;
+    }
+    case CmdType::STOP:
+      requestStop("stopped by command");
+      break;
+  }
+  // Ack after actuating. A command we ignored because the drum was busy is
+  // acked too: leaving it pending would only re-fire it after the run ends.
+  emitCmdDone(c.id);
+}
+
+// ---------------------------------------------------------------------
+// Schedule (Core 1 applies, only between runs)
+// ---------------------------------------------------------------------
+void schedApplyIfPending() {
+  if (!g_schedNextValid) return;
+  xSemaphoreTake(g_schedMx, portMAX_DELAY);
+  if (g_schedNextValid) {
+    g_sched = g_schedNext;
+    g_schedNextValid = false;
+    g_schedDirty = true;
+    slotsInited = false;   // re-evaluate "already passed today" for the new slots
+    Serial.printf("SCHEDULE: applied v%lu — %s, %u slot(s), %u s @ PWM %u\n",
+                  (unsigned long)g_sched.version, g_sched.enabled ? "enabled" : "disabled",
+                  g_sched.count, g_sched.durationSec, g_sched.pwm);
+  }
+  xSemaphoreGive(g_schedMx);
+}
+
+// Fires due slots from the RTC. Needs a trustworthy clock; without one it
+// does nothing (and the server's missed-run alert tells staff).
+void scheduleTick(uint32_t nowMs) {
+  if (nowMs - lastSlotTickMs < 1000UL) return;
+  lastSlotTickMs = nowMs;
+  if (!g_sched.enabled || g_sched.count == 0) return;
+  uint32_t epoch = clockEpoch();
+  if (epoch == 0) return;
+
+  uint32_t local = epoch + MANILA_OFFSET_S;
+  uint32_t day = local / 86400UL;
+  uint32_t minute = (local % 86400UL) / 60UL;
+
+  if (!slotsInited) {
+    // After a reboot or a schedule change, slots already behind us today
+    // are NOT re-run: a restart at 09:01 must not double-turn the 09:00 slot.
+    for (uint8_t i = 0; i < g_sched.count; i++) {
+      firedDay[i] = (g_sched.slotMin[i] <= minute) ? day : 0;
+    }
+    slotsInited = true;
+  }
+
+  for (uint8_t i = 0; i < g_sched.count; i++) {
+    if (firedDay[i] == day || minute < g_sched.slotMin[i]) continue;
+    if (minute > g_sched.slotMin[i] + SLOT_CATCHUP_MIN) {
+      firedDay[i] = day;
+      Serial.printf("SCHEDULE: slot %02u:%02u skipped (drum busy past the catch-up window)\n",
+                    g_sched.slotMin[i] / 60, g_sched.slotMin[i] % 60);
+      continue;
+    }
+    if (state == ProcessState::IDLE) {
+      firedDay[i] = day;
+      Serial.printf("SCHEDULE: slot %02u:%02u due\n", g_sched.slotMin[i] / 60, g_sched.slotMin[i] % 60);
+      beginRun(RunKind::TIMED, true, g_sched.durationSec, g_sched.pwm);
+      break;
+    }
+  }
+}
+
+void showResult() {
   Serial.println("PROCESS COMPLETE");
   Serial.println("Weight measurement is disabled.");
 }
 
-// ---- reporting helpers (additive) ----
-
-String makeSessionUid(){
-  char buf[33];
-  for(uint8_t i=0;i<4;i++){snprintf(buf+i*8,sizeof(buf)-i*8,"%08lx",(unsigned long)esp_random());}
-  return String(buf);
+// ---------------------------------------------------------------------
+// Tiny JSON helpers (Core 0). The device payloads are small and flat;
+// a hand-rolled scanner keeps the build dependency-free.
+// ---------------------------------------------------------------------
+void jsonSkipWs(const char*& p) {
+  while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') p++;
+}
+void jsonSkipSep(const char*& p) {
+  while (*p == ' ' || *p == ',' || *p == '\t' || *p == '\r' || *p == '\n') p++;
 }
 
-bool ensureWifi(){
-  if(WiFi.status()==WL_CONNECTED)return true;
-  Serial.println("WIFI: connecting...");
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(WIFI_SSID,WIFI_PASS);
-  uint32_t t0=millis();
-  while(WiFi.status()!=WL_CONNECTED&&millis()-t0<WIFI_CONNECT_TIMEOUT_MS){delay(100);}
-  if(WiFi.status()!=WL_CONNECTED){Serial.println("WIFI: connect FAILED");return false;}
-  Serial.print("WIFI: connected, IP ");Serial.println(WiFi.localIP());
+// p at the opening quote. `out` may be null (skip the string).
+bool jsonReadString(const char*& p, char* out, size_t cap) {
+  if (*p != '"') return false;
+  p++;
+  size_t n = 0;
+  while (*p && *p != '"') {
+    char c = *p++;
+    if (c == '\\' && *p) {
+      c = *p++;
+      if (c == 'n' || c == 't' || c == 'r' || c == 'u' || c == 'b' || c == 'f') c = '?';
+    }
+    if (out && n + 1 < cap) out[n++] = c;
+  }
+  if (*p != '"') return false;
+  p++;
+  if (out && cap) out[n] = 0;
   return true;
 }
 
-// POST one session payload. Returns the HTTP code, or a negative value
-// for network-level failure (connect refused / timeout / DNS).
-int postTurnSession(const String& payload){
+bool jsonSkipValue(const char*& p) {
+  jsonSkipWs(p);
+  if (*p == '"') return jsonReadString(p, nullptr, 0);
+  if (*p == '{' || *p == '[') {
+    int depth = 0;
+    while (*p) {
+      if (*p == '"') { if (!jsonReadString(p, nullptr, 0)) return false; continue; }
+      if (*p == '{' || *p == '[') depth++;
+      else if (*p == '}' || *p == ']') { depth--; if (depth == 0) { p++; return true; } }
+      p++;
+    }
+    return false;
+  }
+  const char* s = p;
+  while (*p && *p != ',' && *p != '}' && *p != ']') p++;
+  return p != s;
+}
+
+bool jsonReadLong(const char*& p, long& out) {
+  jsonSkipWs(p);
+  char* end = nullptr;
+  long v = strtol(p, &end, 10);
+  if (end == p) return false;
+  out = v;
+  p = end;
+  return true;
+}
+
+bool jsonReadBool(const char*& p, bool& out) {
+  jsonSkipWs(p);
+  if (strncmp(p, "true", 4) == 0)  { out = true;  p += 4; return true; }
+  if (strncmp(p, "false", 5) == 0) { out = false; p += 5; return true; }
+  return false;
+}
+
+// p just inside an object (or after a value). Leaves p at the value start.
+bool jsonNextKey(const char*& p, char* key, size_t cap) {
+  jsonSkipSep(p);
+  if (*p != '"') return false;             // '}' or malformed
+  if (!jsonReadString(p, key, cap)) return false;
+  jsonSkipWs(p);
+  if (*p != ':') return false;
+  p++;
+  jsonSkipWs(p);
+  return true;
+}
+
+// After a handler consumed (part of) a value: land on the next delimiter.
+void jsonEndValue(const char*& p) {
+  while (*p && *p != ',' && *p != '}' && *p != ']') p++;
+}
+
+// {"success":true,"data":[{"id":91,"command":"run_now","payload":{...},...}],...}
+size_t parseCommands(const char* json, ParsedCmd* out, size_t maxOut) {
+  const char* p = strstr(json, "\"data\"");   // top-level key precedes any nested one
+  if (!p) return 0;
+  p += 6;
+  jsonSkipWs(p);
+  if (*p != ':') return 0;
+  p++;
+  jsonSkipWs(p);
+  if (*p != '[') return 0;
+  p++;
+
+  size_t n = 0;
+  char key[24];
+  for (;;) {
+    jsonSkipSep(p);
+    if (*p != '{') break;                    // ']' or malformed
+    p++;
+    ParsedCmd c = {};
+    bool haveId = false;
+    while (jsonNextKey(p, key, sizeof(key))) {
+      if (strcmp(key, "id") == 0) {
+        long v;
+        if (jsonReadLong(p, v)) { c.id = (int32_t)v; haveId = true; }
+      } else if (strcmp(key, "command") == 0) {
+        jsonReadString(p, c.name, sizeof(c.name));
+      } else {
+        jsonSkipValue(p);                    // payload, status, timestamps…
+      }
+      jsonEndValue(p);
+    }
+    if (*p == '}') p++; else break;
+    if (haveId && c.id > 0 && c.name[0] && n < maxOut) out[n++] = c;
+  }
+  return n;
+}
+
+// {"times":["09:00"],"duration_seconds":10,"pwm":220,"enabled":true,"version":7}
+// Strict: any missing/out-of-range field rejects the WHOLE payload so a
+// half-parsed schedule can never reach the motor.
+bool parseSchedule(const char* json, ScheduleCfg& out) {
+  const char* p = json;
+  jsonSkipWs(p);
+  if (*p != '{') return false;
+  p++;
+
+  ScheduleCfg c = {};
+  bool hv = false, he = false, ht = false, hd = false, hp = false;
+  char key[24];
+  while (jsonNextKey(p, key, sizeof(key))) {
+    long v;
+    if (strcmp(key, "times") == 0) {
+      if (*p != '[') return false;
+      p++;
+      c.count = 0;
+      for (;;) {
+        jsonSkipSep(p);
+        if (*p == ']') { p++; break; }
+        char t[12];
+        uint16_t m;
+        if (*p != '"' || !jsonReadString(p, t, sizeof(t)) || !parseHHMM(t, m)) return false;
+        if (c.count >= MAX_SLOTS) return false;
+        c.slotMin[c.count++] = m;
+      }
+      ht = true;
+    } else if (strcmp(key, "duration_seconds") == 0) {
+      if (!jsonReadLong(p, v) || v < 1 || v > MAX_RUN_SEC) return false;
+      c.durationSec = (uint16_t)v; hd = true;
+    } else if (strcmp(key, "pwm") == 0) {
+      if (!jsonReadLong(p, v) || v < 0 || v > 255) return false;
+      c.pwm = (uint8_t)v; hp = true;
+    } else if (strcmp(key, "enabled") == 0) {
+      if (!jsonReadBool(p, c.enabled)) return false;
+      he = true;
+    } else if (strcmp(key, "version") == 0) {
+      if (!jsonReadLong(p, v) || v < 0) return false;
+      c.version = (uint32_t)v; hv = true;
+    } else {
+      jsonSkipValue(p);
+    }
+    jsonEndValue(p);
+  }
+  if (!(hv && he && ht && hd && hp)) return false;
+  out = c;
+  return true;
+}
+
+// ---------------------------------------------------------------------
+// WiFi + HTTP (Core 0 only)
+// ---------------------------------------------------------------------
+// Non-blocking: the task keeps draining run events while a connect is in
+// flight. Returns true while connected.
+bool wifiTick() {
+  static bool attempting = false, ntpConfigured = false, wasConnected = false;
+  static uint32_t t0 = 0, nextAttemptMs = 0;
+  uint32_t now = millis();
+
+  if (WiFi.status() == WL_CONNECTED) {
+    if (!wasConnected) {
+      wasConnected = true;
+      Serial.print("WIFI: connected, IP ");
+      Serial.println(WiFi.localIP());
+    }
+    attempting = false;
+    if (!ntpConfigured) {
+      configTzTime("PHT-8", "pool.ntp.org", "time.nist.gov");
+      ntpConfigured = true;
+    }
+    if (!g_ntpSynced && (uint32_t)time(nullptr) >= MIN_VALID_EPOCH) {
+      g_ntpSynced = true;
+      Serial.println("NTP: time synced");
+    }
+    return true;
+  }
+  wasConnected = false;
+
+  if (attempting) {
+    if (now - t0 >= WIFI_CONNECT_TIMEOUT_MS) {
+      Serial.print("WIFI: connect FAILED, status ");
+      Serial.println((int)WiFi.status());   // 1=no SSID found, 4=wrong password/auth, 6=disconnected
+      WiFi.disconnect(true, false);         // stop the driver's own retry loop
+      attempting = false;
+      nextAttemptMs = now + WIFI_RETRY_BACKOFF_MS;
+    }
+    return false;
+  }
+  if (!due(now, nextAttemptMs)) return false;
+
+  Serial.println("WIFI: connecting...");
+  WiFi.disconnect(true, false);   // abort any in-flight connect, keep stored creds
+  vTaskDelay(pdMS_TO_TICKS(200));
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  attempting = true;
+  t0 = millis();
+  return false;
+}
+
+// One request. Returns the HTTP status, or a negative HTTPClient error.
+// The body is returned only for 200/201 and only when `resp` is given.
+int httpCall(const char* path, const String* body, String* resp) {
+  HTTPClient http;
 #if USE_HTTPS
   WiFiClientSecure tls;
-  // TODO(production): pin the server CA here. setInsecure() disables
-  // verification and must never ship beyond the LAN prototype.
-  tls.setInsecure();
-  HTTPClient http;
-  if(!http.begin(tls,String(API_BASE_URL)+"/api/v1/devices/bmg/turn-sessions"))return -1;
+  tls.setInsecure();   // prototype only: pin the server CA before production
+  if (!http.begin(tls, String(API_BASE_URL) + path)) return -1;
 #else
-  HTTPClient http;
-  if(!http.begin(String(API_BASE_URL)+"/api/v1/devices/bmg/turn-sessions"))return -1;
+  if (!http.begin(String(API_BASE_URL) + path)) return -1;
 #endif
-  http.addHeader("X-Device-Token",DEVICE_TOKEN);
-  http.addHeader("Content-Type","application/json");
-  http.setTimeout(10000);
-  int code=http.POST(payload);
+  http.setConnectTimeout(HTTP_TIMEOUT_MS);
+  http.setTimeout(HTTP_TIMEOUT_MS);
+  http.addHeader("X-Device-Token", DEVICE_TOKEN);
+  int code;
+  if (body) {
+    http.addHeader("Content-Type", "application/json");
+    code = http.POST(*body);
+  } else {
+    code = http.GET();
+  }
+  if ((code == 200 || code == 201) && resp) {
+    int len = http.getSize();
+    if (len > (int)HTTP_MAX_BODY) code = -3;
+    else *resp = http.getString();
+  }
   http.end();
   return code;
 }
 
-// Persist the payload BEFORE the first attempt so a power cut never
-// loses a completed session. lastAttemptMs is backdated so the first
-// pump fires immediately even before millis() reaches RETRY_MS.
-void queuePayload(const String& payload){
-  queuedPayload=payload;
-  prefs.putString("pend",payload);
-  lastAttemptMs=millis()-REPORT_RETRY_MS;
-  firstAttemptMs=millis();
-}
+bool netAllowed(uint32_t now) { return due(now, g_netBackoffUntil); }
 
-void beginSessionReport(){
-  if(queuedPayload!=""&&ensureWifi()){
-    // A session from a previous power cycle is still queued: give it
-    // one flush attempt before the new session takes the slot.
-    Serial.println("REPORT: flushing previous pending session first");
-    int code=postTurnSession(queuedPayload);
-    if(code==200||code==201||(code>=400&&code<500)){queuedPayload="";prefs.remove("pend");}
+// Central place that turns a response code into pacing, so a dead server,
+// a revoked token or a rate limit never turns into a request storm.
+void noteHttp(int code, const char* what) {
+  uint32_t now = millis();
+  if (code < 0) {
+    g_netBackoffUntil = now + NET_BACKOFF_MS;
+    Serial.printf("NET: %s failed (%d) — backing off %lu s\n", what, code, (unsigned long)(NET_BACKOFF_MS / 1000));
+  } else if (code == 429) {
+    g_netBackoffUntil = now + RATE_BACKOFF_MS;
+    Serial.printf("NET: %s rate limited (429) — backing off %lu s\n", what, (unsigned long)(RATE_BACKOFF_MS / 1000));
+  } else if (code == 401 || code == 403) {
+    g_netBackoffUntil = now + RATE_BACKOFF_MS;
+    if (due(now, g_lastAuthWarnMs)) {
+      g_lastAuthWarnMs = now + RATE_BACKOFF_MS;
+      Serial.printf("NET: %s rejected (%d) — device token revoked/disabled? Replace DEVICE_TOKEN and reflash.\n", what, code);
+    }
   }
-
-  uint32_t turns=(uint32_t)TOTAL_SETS*TURNS_PER_SET;
-  String payload="{\"session_uid\":\""+makeSessionUid()+"\""+
-    ",\"turns_count\":"+String(turns)+
-    ",\"sets_count\":"+String(TOTAL_SETS)+
-    ",\"duration_seconds\":"+String(SESSION_ACTIVE_MS/1000UL)+
-    ",\"firmware\":\""+FIRMWARE_TAG+"\"}";
-  Serial.print("REPORT: session queued ");Serial.println(payload);
-  queuePayload(payload);
 }
 
-// Non-blocking retry pump. Called every loop; only ever does work while
-// a payload is queued. WiFi connect + HTTP are blocking (up to ~25 s),
-// which is why the pump is driven from DONE-entry only — reporting can
-// never stall the motor state machine.
-void pumpSessionReport(uint32_t now){
-  if(queuedPayload=="")return;
-  if(now-lastAttemptMs<REPORT_RETRY_MS)return;
-  lastAttemptMs=now;
-  if(now-firstAttemptMs>REPORT_GIVE_UP_MS){
-    Serial.println("REPORT: give up after 24 h of retries (SYNC DROPPED)");
-    queuedPayload="";prefs.remove("pend");
+// ---------------------------------------------------------------------
+// Command intake + ack (Core 0 only)
+// ---------------------------------------------------------------------
+SeenCmd* seenFind(int32_t id) {
+  for (uint8_t i = 0; i < SEEN_CMDS; i++) {
+    if (g_seen[i].st != SEEN_EMPTY && g_seen[i].id == id) return &g_seen[i];
+  }
+  return nullptr;
+}
+
+SeenCmd* seenAdd(int32_t id, uint8_t st) {
+  SeenCmd* slot = nullptr;
+  for (uint8_t i = 0; i < SEEN_CMDS && !slot; i++) {
+    if (g_seen[i].st == SEEN_EMPTY || g_seen[i].st == SEEN_ACKED) slot = &g_seen[i];
+  }
+  if (!slot) {                               // all in flight: evict the oldest
+    slot = &g_seen[0];
+    for (uint8_t i = 1; i < SEEN_CMDS; i++) if (g_seen[i].seq < slot->seq) slot = &g_seen[i];
+  }
+  slot->id = id;
+  slot->st = st;
+  slot->seq = ++g_seenSeq;
+  return slot;
+}
+
+void onCommand(const ParsedCmd& c) {
+  // Delivery is at-least-once: dedupe by id so a redelivery after a lost
+  // ack can never re-fire the motor.
+  SeenCmd* s = seenFind(c.id);
+  if (s) {
+    if (s->st == SEEN_ACKED) s->st = SEEN_ACKPENDING;   // server still lists it: our ack was lost
     return;
   }
-  if(!ensureWifi()){Serial.println("REPORT: wifi unavailable — session stays queued");return;}
+  CoreCmd cc = {};
+  cc.id = c.id;
+  if (strcmp(c.name, "start") == 0)        cc.type = CmdType::START;
+  else if (strcmp(c.name, "stop") == 0)    cc.type = CmdType::STOP;
+  else if (strcmp(c.name, "run_now") == 0) cc.type = CmdType::RUN_NOW;
+  else {
+    Serial.printf("COMMAND UNKNOWN: #%ld '%s' — acking to clear\n", (long)c.id, c.name);
+    seenAdd(c.id, SEEN_ACKPENDING);
+    return;
+  }
+  if (xQueueSend(g_cmdQueue, &cc, 0) != pdTRUE) {
+    Serial.println("COMMAND: queue full — will be redelivered");
+    return;
+  }
+  seenAdd(c.id, SEEN_SENT);
+  Serial.printf("COMMAND RECEIVED: #%ld '%s'\n", (long)c.id, c.name);
+}
 
-  int code=postTurnSession(queuedPayload);
-  Serial.print("REPORT: HTTP ");Serial.println(code);
-  if(code==200||code==201){
-    Serial.println("REPORT: SYNC OK");
-    queuedPayload="";prefs.remove("pend");
-  }else if(code>=400&&code<500){
-    // Permanent (409 no active batch, 401 bad token, 422): retrying
-    // cannot fix these — surface the code and drop the session.
-    Serial.print("REPORT: permanent failure ");Serial.println(code);
-    queuedPayload="";prefs.remove("pend");
-  }else{
-    // Network failure or 5xx: keep the queue, retry on REPORT_RETRY_MS.
+void pumpAcks() {
+  uint8_t sent = 0;
+  for (uint8_t i = 0; i < SEEN_CMDS && sent < 2; i++) {
+    if (g_seen[i].st != SEEN_ACKPENDING) continue;
+    String body = "{\"command_id\":" + String(g_seen[i].id) + "}";
+    int code = httpCall("/api/v1/devices/bmg/commands/ack", &body, nullptr);
+    noteHttp(code, "ack");
+    sent++;
+    if (code == 200 || code == 404) {        // 404 = not ours / already gone: nothing left to confirm
+      g_seen[i].st = SEEN_ACKED;
+      Serial.printf("COMMAND ACK: #%ld (%d)\n", (long)g_seen[i].id, code);
+    } else {
+      return;                                // retry next pass; never skip ahead past a failure
+    }
+  }
+}
+
+void pollCommands() {
+  uint32_t now = millis();
+  if (!due(now, g_nextCmdPollMs)) return;
+  g_nextCmdPollMs = now + (g_isRunning ? CMD_POLL_RUNNING_MS : CMD_POLL_IDLE_MS);
+
+  String resp;
+  int code = httpCall("/api/v1/devices/bmg/commands", nullptr, &resp);
+  noteHttp(code, "command poll");
+  if (code != 200) return;
+
+  ParsedCmd cmds[20];
+  size_t n = parseCommands(resp.c_str(), cmds, 20);
+  for (size_t i = 0; i < n; i++) onCommand(cmds[i]);
+}
+
+// ---------------------------------------------------------------------
+// Run report queue (Core 0 only; persisted in NVS keys q0..q7)
+// ---------------------------------------------------------------------
+void pendKey(uint8_t i, char (&out)[6]) { snprintf(out, sizeof(out), "q%u", (unsigned)(i % 10)); }
+
+// The note strings come from firmware constants, so no JSON escaping is needed.
+String buildRunPayload(const CoreEvt& e) {
+  String b;
+  b.reserve(256);
+  b += "{\"run_uid\":\""; b += e.uid;
+  b += "\",\"origin\":\""; b += e.origin; b += "\"";
+  if (e.startEpoch != 0 && e.endEpoch != 0 && e.endEpoch >= e.startEpoch) {
+    b += ",\"started_at_epoch\":"; b += String(e.startEpoch);
+    b += ",\"ended_at_epoch\":";   b += String(e.endEpoch);
+  }
+  b += ",\"duration_seconds\":"; b += String(e.durationSec);
+  b += ",\"result\":\""; b += e.result; b += "\"";
+  if (e.turns >= 0) { b += ",\"turns_count\":"; b += String(e.turns); }
+  if (e.note[0])    { b += ",\"note\":\""; b += e.note; b += "\""; }
+  b += "}";
+  return b;
+}
+
+void pendEnqueue(const String& payload) {
+  int slot = -1;
+  for (uint8_t i = 0; i < MAX_PENDING_RUNS; i++) if (!g_pend[i].used) { slot = i; break; }
+  if (slot < 0) {
+    slot = 0;
+    for (uint8_t i = 1; i < MAX_PENDING_RUNS; i++) if (g_pend[i].seq < g_pend[slot].seq) slot = i;
+    Serial.println("REPORT: queue full — dropping the oldest unsent run");
+  }
+  g_pend[slot].used = true;
+  g_pend[slot].seq = ++g_pendSeq;
+  g_pend[slot].firstMs = millis();
+  g_pend[slot].payload = payload;
+  char k[6];
+  pendKey((uint8_t)slot, k);
+  prefs.putString(k, payload);
+  g_pendNextTryMs = millis();                // first attempt right away
+  Serial.print("REPORT: run queued ");
+  Serial.println(payload);
+}
+
+void pendRemove(uint8_t i) {
+  char k[6];
+  pendKey(i, k);
+  prefs.remove(k);
+  g_pend[i].used = false;
+  g_pend[i].payload = "";
+}
+
+// 4xx other than these are permanent: retrying the same payload cannot help.
+// 401/403 (token), 404 (unit gone), 408, 409 (not bound), 429 can all be
+// fixed on the server side, so those stay queued.
+bool permanentReject(int code) {
+  return code >= 400 && code < 500 &&
+         code != 401 && code != 403 && code != 404 && code != 408 && code != 409 && code != 429;
+}
+
+void pumpRuns() {
+  for (;;) {
+    int oldest = -1;
+    for (uint8_t i = 0; i < MAX_PENDING_RUNS; i++) {
+      if (g_pend[i].used && (oldest < 0 || g_pend[i].seq < g_pend[oldest].seq)) oldest = i;
+    }
+    if (oldest < 0) return;
+    uint32_t now = millis();
+    if (!due(now, g_pendNextTryMs)) return;
+    if (now - g_pend[oldest].firstMs > REPORT_GIVE_UP_MS) {
+      Serial.println("REPORT: give up after 24 h of retries (SYNC DROPPED)");
+      pendRemove((uint8_t)oldest);
+      continue;
+    }
+    int code = httpCall("/api/v1/devices/bmg/runs", &g_pend[oldest].payload, nullptr);
+    noteHttp(code, "run report");
+    Serial.printf("REPORT: HTTP %d\n", code);
+    if (code == 200 || code == 201) {        // 200 = idempotent replay of a run the server already has
+      Serial.println("REPORT: SYNC OK");
+      pendRemove((uint8_t)oldest);
+      continue;
+    }
+    if (permanentReject(code)) {
+      Serial.printf("REPORT: permanent failure %d — run dropped\n", code);
+      pendRemove((uint8_t)oldest);
+      continue;
+    }
     Serial.println("REPORT: SYNC QUEUED");
+    g_pendNextTryMs = millis() + REPORT_RETRY_MS;
+    return;
   }
 }
 
-void setup(){
-  Serial.begin(115200);delay(500);
-  Wire.end();Wire.begin(I2C_SDA_PIN,I2C_SCL_PIN,100000U);
-  rtc.begin();
-  pinMode(MOTOR_IN1,OUTPUT);pinMode(MOTOR_IN2,OUTPUT);pinMode(MOTOR_ENABLE,OUTPUT);stopMotor();
-  processStartMs=millis();
-  Serial.println("SYSTEM READY");
-  Serial.println("PROCESS START: timed operation mode");
-  Serial.println("Weight measurement is disabled.");
-  Serial.println("Sequence: 5 s delay, 3 sets x 7 timed turns, 10 s pauses");
-
-  // Reporting init (additive): reload a session queued by a previous
-  // power cycle so it can be flushed after this run completes.
-  prefs.begin("bmgdev",false);
-  queuedPayload=prefs.getString("pend","");
-  if(queuedPayload!=""){Serial.println("REPORT: pending session found in NVS");lastAttemptMs=millis()-REPORT_RETRY_MS;firstAttemptMs=millis();}
+// A turn-session left in NVS by firmware <= 1.1: deliver it once through the
+// legacy endpoint with the rules it was queued under, then never again.
+void pumpLegacy() {
+  if (g_legacyPend.length() == 0) return;
+  uint32_t now = millis();
+  if (!due(now, g_legacyNextMs)) return;
+  if (now - g_legacyFirstMs > REPORT_GIVE_UP_MS) {
+    Serial.println("REPORT: legacy session dropped after 24 h");
+    g_legacyPend = "";
+    prefs.remove("pend");
+    return;
+  }
+  int code = httpCall("/api/v1/devices/bmg/turn-sessions", &g_legacyPend, nullptr);
+  noteHttp(code, "legacy report");
+  if ((code >= 200 && code < 300) || (code >= 400 && code < 500 && code != 401 && code != 403 && code != 429)) {
+    Serial.printf("REPORT: legacy session settled (HTTP %d)\n", code);
+    g_legacyPend = "";
+    prefs.remove("pend");
+  } else {
+    g_legacyNextMs = millis() + REPORT_RETRY_MS;
+  }
 }
 
-void loop(){
-  uint32_t now=millis();
-  // Reporting hooks (additive): fire once at DONE-entry, then pump the
-  // retry queue. The switch below is the untouched motor state machine.
-  if(state==ProcessState::DONE&&!sessionReported){sessionReported=true;beginSessionReport();}
-  pumpSessionReport(now);
-  switch(state){
+// ---------------------------------------------------------------------
+// Heartbeat + schedule pull (Core 0 only)
+// ---------------------------------------------------------------------
+String buildHeartbeat() {
+  String b;
+  b.reserve(200);
+  b += "{\"firmware\":\""; b += FIRMWARE_TAG; b += "\"";
+  b += ",\"uptime_seconds\":"; b += String((uint32_t)(esp_timer_get_time() / 1000000LL));
+  // The flag is reported honestly: a lying rtc_valid disables drift monitoring.
+  b += ",\"rtc_valid\":"; b += g_rtcValid ? "1" : "0";
+  if (g_rtcValid) {
+    uint32_t e = g_rtcEpoch + (millis() - g_rtcEpochAtMs) / 1000UL;
+    b += ",\"rtc_epoch\":"; b += String(e);
+  }
+  int rssi = WiFi.RSSI();
+  if (rssi < 0 && rssi >= -120) { b += ",\"rssi_dbm\":"; b += String(rssi); }
+  if (c0LastResult[0]) { b += ",\"last_run_result\":\""; b += c0LastResult; b += "\""; }
+  b += ",\"motor_state\":\"";
+  b += g_isRunning ? "running" : (c0Stopped ? "stopped" : "idle");
+  b += "\"}";
+  return b;
+}
+
+void sendHeartbeat() {
+  uint32_t now = millis();
+  if (!due(now, g_nextHeartbeatMs)) return;
+  String body = buildHeartbeat();
+  int code = httpCall("/api/v1/devices/bmg/heartbeat", &body, nullptr);
+  noteHttp(code, "heartbeat");
+  if (code == 200) {
+    g_nextHeartbeatMs = millis() + HEARTBEAT_MS;
+    Serial.printf("HEARTBEAT OK (rssi %d dBm, rtc %s, net stack free %u B)\n", WiFi.RSSI(),
+                  g_rtcValid ? "ok" : "INVALID", (unsigned)uxTaskGetStackHighWaterMark(nullptr));
+  } else {
+    g_nextHeartbeatMs = millis() + HEARTBEAT_RETRY_MS;
+  }
+}
+
+void pullSchedule() {
+  uint32_t now = millis();
+  if (!due(now, g_nextScheduleMs)) return;
+  String resp;
+  int code = httpCall("/api/v1/devices/bmg/schedule", nullptr, &resp);
+  noteHttp(code, "schedule pull");
+  if (code != 200) {
+    g_nextScheduleMs = millis() + SCHEDULE_RETRY_MS;   // 409 not bound etc: keep what we have
+    return;
+  }
+  g_nextScheduleMs = millis() + SCHEDULE_POLL_MS;
+
+  ScheduleCfg c;
+  if (!parseSchedule(resp.c_str(), c)) {
+    Serial.println("SCHEDULE: unreadable payload — keeping the current schedule");
+    return;
+  }
+  xSemaphoreTake(g_schedMx, portMAX_DELAY);
+  uint32_t known = g_schedNextValid ? g_schedNext.version : g_sched.version;
+  if (c.version != known) {
+    g_schedNext = c;
+    g_schedNextValid = true;
+    Serial.printf("SCHEDULE: v%lu received — applies when the drum is idle\n", (unsigned long)c.version);
+  }
+  xSemaphoreGive(g_schedMx);
+}
+
+// ---------------------------------------------------------------------
+// Event intake from Core 1 (Core 0 only)
+// ---------------------------------------------------------------------
+void handleEvt(const CoreEvt& e) {
+  switch (e.type) {
+    case EvtType::RUN_BEGIN: {
+      // In-run marker: if power dies mid-run, the next boot reports it.
+      String m = String(e.uid) + "|" + e.origin + "|" + String(e.startEpoch);
+      prefs.putString("inrun", m);
+      c0Stopped = false;
+      break;
+    }
+    case EvtType::RUN_END: {
+      pendEnqueue(buildRunPayload(e));       // persist the report FIRST…
+      prefs.remove("inrun");                 // …then drop the marker
+      snprintf(c0LastResult, sizeof(c0LastResult), "%s", e.result);
+      c0Stopped = (strcmp(e.result, "aborted") == 0);
+      break;
+    }
+    case EvtType::RUN_CANCEL:
+      prefs.remove("inrun");
+      break;
+    case EvtType::CMD_DONE: {
+      SeenCmd* s = seenFind(e.cmdId);
+      if (s) s->st = SEEN_ACKPENDING;
+      else seenAdd(e.cmdId, SEEN_ACKPENDING);
+      break;
+    }
+  }
+}
+
+void drainEvents() {
+  CoreEvt e;
+  while (xQueueReceive(g_evtQueue, &e, 0) == pdTRUE) handleEvt(e);
+}
+
+void persistScheduleIfDirty() {
+  if (!g_schedDirty) return;
+  ScheduleCfg copy;
+  xSemaphoreTake(g_schedMx, portMAX_DELAY);
+  copy = g_sched;
+  g_schedDirty = false;
+  xSemaphoreGive(g_schedMx);
+  prefs.putBytes("sched", &copy, sizeof(copy));   // stored only after Core 1 applied it
+}
+
+void networkPass() {
+  if (!netAllowed(millis())) return;
+  pumpAcks();       if (!netAllowed(millis())) return;
+  pollCommands();   if (!netAllowed(millis())) return;
+  pumpRuns();       if (!netAllowed(millis())) return;
+  pumpLegacy();     if (!netAllowed(millis())) return;
+  sendHeartbeat();  if (!netAllowed(millis())) return;
+  pullSchedule();
+}
+
+void networkTask(void* pvParameters) {
+  for (;;) {
+    drainEvents();                 // offline runs must still be persisted
+    persistScheduleIfDirty();
+    if (wifiTick()) networkPass();
+    vTaskDelay(pdMS_TO_TICKS(100));
+  }
+}
+
+// ---------------------------------------------------------------------
+// Boot-time recovery (runs in setup, before the network task exists)
+// ---------------------------------------------------------------------
+void loadScheduleFromFlash() {
+  if (prefs.getBytesLength("sched") != sizeof(ScheduleCfg)) return;
+  ScheduleCfg c;
+  prefs.getBytes("sched", &c, sizeof(c));
+  if (c.count > MAX_SLOTS || c.durationSec < 1 || c.durationSec > MAX_RUN_SEC) return;
+  g_sched = c;
+  Serial.printf("SCHEDULE: loaded v%lu from flash — %s, %u slot(s)\n",
+                (unsigned long)g_sched.version, g_sched.enabled ? "enabled" : "disabled", g_sched.count);
+}
+
+void loadPendingFromFlash() {
+  for (uint8_t i = 0; i < MAX_PENDING_RUNS; i++) {
+    char k[6];
+    pendKey(i, k);
+    String s = prefs.getString(k, "");
+    if (s.length() == 0) continue;
+    g_pend[i].used = true;
+    g_pend[i].seq = ++g_pendSeq;
+    g_pend[i].firstMs = millis();
+    g_pend[i].payload = s;
+  }
+  g_legacyPend = prefs.getString("pend", "");
+  g_legacyFirstMs = millis();
+  g_legacyNextMs = millis();
+  uint8_t n = 0;
+  for (uint8_t i = 0; i < MAX_PENDING_RUNS; i++) if (g_pend[i].used) n++;
+  if (n || g_legacyPend.length()) {
+    Serial.printf("REPORT: %u pending run(s)%s found in NVS\n", n, g_legacyPend.length() ? " + 1 legacy session" : "");
+  }
+}
+
+// A marker still in NVS means the previous boot died mid-run (power loss,
+// brownout, watchdog). Report it as aborted so staff see the gap.
+void recoverInterruptedRun() {
+  String m = prefs.getString("inrun", "");
+  if (m.length() == 0) return;
+  int a = m.indexOf('|');
+  int b = a < 0 ? -1 : m.indexOf('|', a + 1);
+  if (a <= 0 || b < 0) { prefs.remove("inrun"); return; }
+  String uid = m.substring(0, a);
+  String origin = m.substring(a + 1, b);
+  uint32_t startedEpoch = (uint32_t)strtoul(m.c_str() + b + 1, nullptr, 10);
+
+  for (uint8_t i = 0; i < MAX_PENDING_RUNS; i++) {
+    if (g_pend[i].used && g_pend[i].payload.indexOf(uid) >= 0) {   // already reported before the crash
+      prefs.remove("inrun");
+      return;
+    }
+  }
+  CoreEvt e = {};
+  snprintf(e.uid, sizeof(e.uid), "%s", uid.c_str());
+  snprintf(e.origin, sizeof(e.origin), "%s", origin == "scheduled" ? "scheduled" : "manual");
+  snprintf(e.result, sizeof(e.result), "aborted");
+  snprintf(e.note, sizeof(e.note), "interrupted: device restarted mid-run");
+  e.durationSec = 1;     // real duration unknown; the contract requires >= 1
+  e.turns = -1;
+  if (startedEpoch >= MIN_VALID_EPOCH) {
+    // Date the run by when it began (end is unknown, so reuse the start):
+    // a run that died at 23:50 must not land on tomorrow's Manila day.
+    e.startEpoch = startedEpoch;
+    e.endEpoch = startedEpoch;
+  }
+  Serial.printf("RECOVERY: run %s was interrupted by a restart — reporting as aborted\n", e.uid);
+  pendEnqueue(buildRunPayload(e));
+  prefs.remove("inrun");
+  snprintf(c0LastResult, sizeof(c0LastResult), "aborted");
+}
+
+// ---------------------------------------------------------------------
+// Core 1: serial bench control, state machine, setup/loop
+// ---------------------------------------------------------------------
+void printStatus() {
+  static const char* names[] = {"IDLE", "WAITING", "TURNING", "TURN_GAP", "SET_PAUSE", "TIMED_RUN"};
+  Serial.printf("STATUS: state=%s wifi=%s ntp=%s rtc=%s sched=v%lu(%s,%u slots)\n",
+                names[(int)state], WiFi.status() == WL_CONNECTED ? "up" : "down",
+                g_ntpSynced ? "ok" : "no", g_rtcValid ? "ok" : "INVALID",
+                (unsigned long)g_sched.version, g_sched.enabled ? "on" : "off", g_sched.count);
+}
+
+void pollSerial() {
+  while (Serial.available()) {
+    char c = (char)Serial.read();
+    if (c == 's' || c == 'S') {
+      Serial.println("SERIAL: manual recipe start");
+      if (!beginRun(RunKind::RECIPE, false, 0, MOTOR_PWM)) Serial.println("SERIAL: already active — ignored");
+    } else if (c == 'r' || c == 'R') {
+      uint16_t dur = g_sched.version != 0 ? g_sched.durationSec : FALLBACK_RUN_SEC;
+      uint8_t  pwm = g_sched.version != 0 ? g_sched.pwm : MOTOR_PWM;
+      Serial.println("SERIAL: manual timed run");
+      if (!beginRun(RunKind::TIMED, false, dur, pwm)) Serial.println("SERIAL: already active — ignored");
+    } else if (c == 'x' || c == 'X') {
+      Serial.println("SERIAL: manual stop");
+      requestStop("stopped from serial");
+    } else if (c == 'i' || c == 'I') {
+      printStatus();
+    }
+  }
+}
+
+void runMachine(uint32_t now) {
+  switch (state) {
+    case ProcessState::IDLE:
+      break;
+
     case ProcessState::WAITING:
-      if(now-processStartMs>=START_DELAY_MS){
-        currentSet=1;currentTurn=1;startMotor();phaseStartMs=now;state=ProcessState::TURNING;
-        Serial.println("SET 1/3: TURN 1/7 START");
+      if (now - run.armedMs >= START_DELAY_MS) {
+        run.motorStarted = true;
+        run.motorStartMs = now;
+        run.epochStart = clockEpoch();
+        {
+          // The in-run marker is written only once the drum really moves, so
+          // a restart during the safety countdown never reports a phantom run.
+          CoreEvt ev = {};
+          ev.type = EvtType::RUN_BEGIN;
+          snprintf(ev.uid, sizeof(ev.uid), "%s", run.uid);
+          snprintf(ev.origin, sizeof(ev.origin), "%s", run.scheduled ? "scheduled" : "manual");
+          ev.startEpoch = run.epochStart;
+          emitEvt(ev);
+        }
+        if (run.kind == RunKind::RECIPE) {
+          currentSet = 1;
+          currentTurn = 1;
+          startMotor(MOTOR_PWM);
+          phaseStartMs = now;
+          state = ProcessState::TURNING;
+          Serial.printf("SET 1/%u: TURN 1/%u START\n", TOTAL_SETS, TURNS_PER_SET);
+        } else {
+          startMotor(run.pwm);
+          state = ProcessState::TIMED_RUN;
+          Serial.printf("TIMED RUN: %u s @ PWM %u\n", run.durationSec, run.pwm);
+        }
       } else {
-        uint32_t secs=(START_DELAY_MS-(now-processStartMs)+999UL)/1000UL;
-        if(secs!=lastShownCountdownSec){lastShownCountdownSec=secs;Serial.print("SYSTEM READY — START IN: ");Serial.print(secs);Serial.println("s");}
+        uint32_t secs = (START_DELAY_MS - (now - run.armedMs) + 999UL) / 1000UL;
+        if (secs != lastShownCountdownSec) {
+          lastShownCountdownSec = secs;
+          Serial.printf("START IN: %lus\n", (unsigned long)secs);
+        }
       }
       break;
+
+    case ProcessState::TIMED_RUN:
+      if (now - run.motorStartMs >= (uint32_t)run.durationSec * 1000UL) {
+        finishRun("completed", "");
+      }
+      break;
+
     case ProcessState::TURNING:
-      if(now-phaseStartMs>=TIMED_TURN_MS){
+      if (now - phaseStartMs >= TIMED_TURN_MS) {
         stopMotor();
-        if(currentTurn<TURNS_PER_SET){state=ProcessState::TURN_GAP;phaseStartMs=now;}
-        else if(currentSet<TOTAL_SETS){state=ProcessState::SET_PAUSE;phaseStartMs=now;Serial.println("SET COMPLETE: pause 10 s");}
-        else {state=ProcessState::DONE;Serial.println("ALL ROTATIONS COMPLETE");showResult();}
+        run.turnsDone++;
+        if (currentTurn < TURNS_PER_SET) {
+          state = ProcessState::TURN_GAP;
+          phaseStartMs = now;
+        } else if (currentSet < TOTAL_SETS) {
+          state = ProcessState::SET_PAUSE;
+          phaseStartMs = now;
+          Serial.println("SET COMPLETE: pause 10 s");
+        } else {
+          Serial.println("ALL ROTATIONS COMPLETE");
+          showResult();
+          finishRun("completed", "");
+          Serial.println("CYCLE COMPLETE: Returned to IDLE, waiting for commands");
+        }
       }
       break;
+
     case ProcessState::TURN_GAP:
-      if(now-phaseStartMs>=BETWEEN_TURNS_MS){currentTurn++;startMotor();phaseStartMs=now;Serial.printf("SET %u/3: TURN %u/7 START\n",currentSet,currentTurn);state=ProcessState::TURNING;}
+      if (now - phaseStartMs >= BETWEEN_TURNS_MS) {
+        currentTurn++;
+        startMotor(MOTOR_PWM);
+        phaseStartMs = now;
+        Serial.printf("SET %u/%u: TURN %u/%u START\n", currentSet, TOTAL_SETS, currentTurn, TURNS_PER_SET);
+        state = ProcessState::TURNING;
+      }
       break;
+
     case ProcessState::SET_PAUSE:
-      if(now-phaseStartMs>=SET_PAUSE_MS){currentSet++;currentTurn=1;startMotor();phaseStartMs=now;Serial.printf("SET %u/3: TURN 1/7 START\n",currentSet);state=ProcessState::TURNING;}
+      if (now - phaseStartMs >= SET_PAUSE_MS) {
+        currentSet++;
+        currentTurn = 1;
+        startMotor(MOTOR_PWM);
+        phaseStartMs = now;
+        Serial.printf("SET %u/%u: TURN 1/%u START\n", currentSet, TOTAL_SETS, TURNS_PER_SET);
+        state = ProcessState::TURNING;
+      }
       break;
-    case ProcessState::DONE: stopMotor(); break;
   }
+}
+
+void setup() {
+  Serial.begin(115200);
+  delay(500);
+  Serial.printf("BOOT: %s\n", FIRMWARE_TAG);
+  uint8_t mac[6];
+  if (esp_read_mac(mac, ESP_MAC_WIFI_STA) == ESP_OK) {
+    Serial.printf("BOOT: MAC %02x:%02x:%02x:%02x:%02x:%02x (default device code at registration)\n",
+                  mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+  }
+
+  pinMode(MOTOR_IN1, OUTPUT);
+  pinMode(MOTOR_IN2, OUTPUT);
+  pinMode(MOTOR_ENABLE, OUTPUT);
+  stopMotor();
+
+  Wire.end();
+  Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN, 100000U);
+  rtcOk = rtc.begin();
+  Serial.println(rtcOk ? "RTC: DS3231 found" : "RTC: NOT found — scheduled runs need NTP time");
+  rtcTick();
+  Serial.println(g_rtcValid ? "RTC: time valid" : "RTC: time NOT valid yet (waiting for NTP)");
+
+  g_schedMx  = xSemaphoreCreateMutex();
+  g_cmdQueue = xQueueCreate(8, sizeof(CoreCmd));
+  g_evtQueue = xQueueCreate(12, sizeof(CoreEvt));
+
+  prefs.begin("bmgdev", false);
+  loadScheduleFromFlash();
+  loadPendingFromFlash();
+  recoverInterruptedRun();
+
+  state = ProcessState::IDLE;
+  g_isRunning = false;
+
+  Serial.println("SYSTEM READY");
+  Serial.println("SERIAL: 's' recipe run, 'r' timed run, 'x' stop, 'i' status");
+  Serial.printf("RECIPE: %u sets x %u turns (1.2 s turn, 0.3 s gap, 10 s pause)\n", TOTAL_SETS, TURNS_PER_SET);
+
+  // WiFi, NTP, HTTP and the report queue all live on Core 0 from here on.
+  xTaskCreatePinnedToCore(networkTask, "net_task", 12288, NULL, 1, NULL, 0);
+}
+
+void loop() {
+  uint32_t now = millis();
+
+  pollSerial();
+
+  CoreCmd c;
+  while (xQueueReceive(g_cmdQueue, &c, 0) == pdTRUE) handleCoreCmd(c);
+
+  runMachine(now);
+
+  if (state == ProcessState::IDLE) {
+    schedApplyIfPending();                 // a new schedule only lands between runs
+    if (now - lastRtcTickMs >= RTC_CHECK_MS) {
+      lastRtcTickMs = now;
+      rtcTick();
+    }
+    scheduleTick(now);
+  }
+
+  delay(1);
 }

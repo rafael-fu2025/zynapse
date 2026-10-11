@@ -12,7 +12,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { useMarkAllNotificationsRead, useMarkNotificationRead, useNotifications, type AppNotification } from '@/hooks/useNotifications';
-import { getNotificationDestination, notificationLabel } from '@/utils/notifications';
+import { getNotificationDestination, notificationDetail, notificationLabel } from '@/utils/notifications';
 import { fmtRelative } from '@/utils/date';
 import { hasPermission, useAuthStore } from '@/store/auth';
 
@@ -68,7 +68,7 @@ export function NotificationBell() {
           )}
         </Button>
       </PopoverTrigger>
-      <PopoverContent align="end" sideOffset={8} className="w-80 p-2">
+      <PopoverContent align="end" sideOffset={8} className="w-96 max-w-[calc(100vw-1rem)] p-2">
         <div className="flex items-center justify-between px-2 py-1">
           <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
             Notifications
@@ -101,26 +101,32 @@ export function NotificationBell() {
         {!list.isLoading && !list.isError && items.length === 0 && (
           <p className="px-2 py-4 text-center text-xs text-muted-foreground">Nothing yet.</p>
         )}
-        <ul className="max-h-72 space-y-1 overflow-y-auto">
-          {items.map((n) => (
-            <li key={n.id}>
-              <button
-                type="button"
-                onClick={() => handleNotificationClick(n)}
-                className={`w-full rounded-md px-2 py-2 text-left text-xs transition-colors hover:bg-accent hover:text-accent-foreground ${
-                  n.read_at === null ? 'bg-accent/60' : ''
-                }`}
-              >
-                <span className="block font-medium text-foreground">
-                  {notificationLabel(n.template_code, n.context)}
-                </span>
-                <span className="mt-0.5 block text-[0.625rem] text-muted-foreground">
-                  {fmtRelative(n.created_at)}
-                  {n.read_at === null ? ' · unread' : ''}
-                </span>
-              </button>
-            </li>
-          ))}
+        <ul className="max-h-80 space-y-1 overflow-y-auto">
+          {items.map((n) => {
+            const detail = notificationDetail(n.template_code, n.context);
+            return (
+              <li key={n.id}>
+                <button
+                  type="button"
+                  onClick={() => handleNotificationClick(n)}
+                  className={`w-full rounded-md px-2 py-2 text-left text-sm transition-colors hover:bg-accent hover:text-accent-foreground ${
+                    n.read_at === null ? 'bg-accent/60' : ''
+                  }`}
+                >
+                  <span className="block font-medium text-foreground">
+                    {notificationLabel(n.template_code, n.context)}
+                  </span>
+                  {detail !== null && (
+                    <span className="mt-0.5 block text-xs text-foreground/80">{detail}</span>
+                  )}
+                  <span className="mt-0.5 block text-xs text-muted-foreground">
+                    {fmtRelative(n.created_at)}
+                    {n.read_at === null ? ' · New' : ''}
+                  </span>
+                </button>
+              </li>
+            );
+          })}
         </ul>
         <div className="mt-1 border-t pt-1">
           <Button asChild size="sm" variant="ghost" className="h-8 w-full justify-between px-2 text-[0.6875rem]">

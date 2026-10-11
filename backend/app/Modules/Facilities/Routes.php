@@ -47,10 +47,20 @@ final class Routes implements BaseRoutes
             $r->get('batches/(:num)/alerts',          'BmgController::listAlerts/$1');
             $r->post('alerts/(:num)/acknowledge',     'BmgController::acknowledgeAlert/$1');
             $r->post('batches/(:num)/inputs',         'BmgController::addBatchInput/$1');
+            $r->get('batches/(:num)/inputs',          'BmgController::listBatchInputs/$1');
+            $r->post('batches/(:num)/inputs/(:num)/void', 'BmgController::voidBatchInput/$1/$2');
             $r->post('batches/(:num)/outputs',        'BmgController::addBatchOutput/$1');
+            $r->get('batches/(:num)/outputs',         'BmgController::listBatchOutputs/$1');
+            $r->post('batches/(:num)/outputs/(:num)/void', 'BmgController::voidBatchOutput/$1/$2');
             $r->post('batches/(:num)/losses',         'BmgController::addBatchLoss/$1');
             $r->get('batches/(:num)/losses',          'BmgController::listBatchLosses/$1');
             $r->get('batches/(:num)/analytics',       'BmgController::batchAnalytics/$1');
+
+            // Per-unit automation: the UI-managed run schedule the ESP32
+            // pulls, and the monitoring dashboard aggregate.
+            $r->get('units/(:num)/schedule',          'BmgController::unitSchedule/$1');
+            $r->post('units/(:num)/schedule',         'BmgController::saveUnitSchedule/$1');
+            $r->get('units/(:num)/monitor',           'BmgController::unitMonitor/$1');
 
             // Device administration (mechanized tumbler). The device's
             // own INGEST surface lives under api/v1/devices with
@@ -61,17 +71,28 @@ final class Routes implements BaseRoutes
             $r->delete('devices/(:num)',              'BmgController::archiveDevice/$1');
             $r->post('devices/(:num)/status',         'BmgController::setDeviceStatus/$1');
             $r->post('devices/(:num)/regenerate-token','BmgController::regenerateDeviceToken/$1');
+            $r->post('devices/(:num)/commands',        'BmgController::sendDeviceCommand/$1');
+            $r->get('devices/(:num)/commands',         'BmgController::listDeviceCommandHistory/$1');
+            $r->get('devices/(:num)/assignments',      'BmgController::listDeviceAssignments/$1');
         });
 
         // Automated BMG hardware (mechanized tumbler): static device
         // token via DeviceAuthFilter, disjoint from the human JWT
         // surface. Deliberately OUTSIDE the api_auth group above.
-        $routes->group('api/v1/devices', ['namespace' => 'Modules\\Facilities\\Controllers', 'filter' => 'device_auth'], static function (RouteCollection $r): void {
+        // `api_ratelimit:device` keys its bucket on X-Device-Token, so
+        // one board cannot exhaust another's budget (and boards behind
+        // a shared NAT do not collide).
+        $routes->group('api/v1/devices', ['namespace' => 'Modules\\Facilities\\Controllers', 'filter' => ['api_ratelimit:device', 'device_auth']], static function (RouteCollection $r): void {
             $r->post('bmg/turn-sessions', 'DeviceTurnSessionController::store');
             // Outbound command channel — the board polls for queued
-            // commands (batch start) and ACKs after actuating.
+            // commands (batch start, run-now) and ACKs after actuating.
             $r->get('bmg/commands',       'DeviceCommandController::index');
             $r->post('bmg/commands/ack',  'DeviceCommandController::ack');
+            // The flash-persisted run schedule the board re-applies only
+            // when `version` differs, and its heartbeat telemetry post.
+            $r->get('bmg/schedule',       'DeviceScheduleController::show');
+            $r->post('bmg/heartbeat',     'DeviceHeartbeatController::store');
+            $r->post('bmg/runs',          'DeviceRunController::store');
         });
     }
 }

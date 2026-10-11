@@ -8,8 +8,10 @@ import { apiClient } from '@/api/client';
 import type { ApiEnvelopeError } from '@/api/envelope';
 import {
   createReferralSchema,
+  referToGuidanceSchema,
   referralSchema,
   type CreateReferralInput,
+  type ReferToGuidanceInput,
   type Referral,
 } from '@/schemas/referrals';
 import { kioskLookupSchema, type KioskLookupResult } from '@/hooks/usePatientLookup';
@@ -76,6 +78,31 @@ export function useCreateReferral() {
     onError: (err) => {
       toast.error(err.errors[0]?.message ?? 'Failed to create referral.');
     },
+  });
+}
+
+/**
+ * Clinic → Guidance referral from the student-records Actions menu.
+ * Only reason / notes / priority travel to Guidance; the student's
+ * clinic record is untouched. A 409 `referral.active_duplicate` carries
+ * the existing referral in `details.referral` for the dialog to show.
+ */
+export function useCreateGuidanceReferral() {
+  const qc = useQueryClient();
+  return useMutation<Referral, ApiEnvelopeError, ReferToGuidanceInput>({
+    mutationFn: async (input) => {
+      const valid = referToGuidanceSchema.parse(input);
+      const res = await apiClient.post<Referral>('/referrals', valid);
+      return referralSchema.parse(res.data);
+    },
+    onSuccess: (referral) => {
+      void qc.invalidateQueries({ queryKey: ['referrals'] });
+      void qc.invalidateQueries({ queryKey: ['notifications'] });
+      void qc.invalidateQueries({ queryKey: ['patients'] });
+      toast.success(`Referred to Guidance (#${referral.id}).`);
+    },
+    // No default onError toast: the dialog renders the duplicate state /
+    // inline errors itself.
   });
 }
 

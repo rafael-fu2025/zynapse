@@ -11,7 +11,8 @@
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { TableStateBlock } from '@/components/TableStates';
-import { DrumArt, DrumCard } from './DrumCard';
+import { DrumArt } from './DrumArt';
+import { DrumCard } from './DrumCard';
 import type { ActiveBatch } from '@/schemas/facilities';
 
 export interface ProcessingDrumsProps {

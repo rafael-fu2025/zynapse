@@ -15,25 +15,69 @@ function mockAuth(permissions: string[]): AuthParam {
 }
 
 describe('notificationLabel', () => {
-  it('formats template codes with resource code suffix', () => {
-    const context: NotificationContext = { resource_code: 'APT-100' };
-    expect(notificationLabel('appointment.scheduled', context)).toBe('Appointment booked (APT-100)');
-    expect(notificationLabel('referral.created', context)).toBe('New referral to handle (APT-100)');
-  });
-
-  it('formats queue.called with destination', () => {
-    expect(notificationLabel('queue.called', { destination: 'counselling' })).toBe("You're up — proceed to Guidance");
-    expect(notificationLabel('queue.called', { destination: 'clinic' })).toBe("You're up — proceed to Clinic");
-  });
-
-  it('formats the skip-window auto no-show notice', () => {
-    expect(notificationLabel('queue.skip_expired', { resource_code: 'queue#12' })).toBe(
-      'Skipped patient auto-marked no-show (queue#12)',
+  it('reads as a plain sentence and never shows internal record ids', () => {
+    const context: NotificationContext = { resource_code: 'appointment#15' };
+    expect(notificationLabel('appointment.scheduled', context)).toBe('Appointment booked');
+    expect(notificationLabel('appointment.confirmed', context)).toBe('Appointment confirmed');
+    expect(notificationLabel('referral.created', { resource_code: 'referral#2' })).toBe(
+      'A new referral is waiting for you',
+    );
+    expect(notificationLabel('referral.queue_handoff', { resource_code: 'referral#2' })).toBe(
+      'A referred patient was added to your queue',
     );
   });
 
-  it('falls back to raw template code for unknown codes', () => {
-    expect(notificationLabel('custom.unknown_event', null)).toBe('custom.unknown_event');
+  it('has copy for every appointment status the backend can send', () => {
+    // `checked_in` and `completed` used to fall through and show the raw code.
+    for (const status of ['assigned', 'scheduled', 'rescheduled', 'confirmed', 'checked_in', 'completed', 'cancelled', 'no_show']) {
+      const label = notificationLabel(`appointment.${status}`, null);
+      expect(label).not.toContain('appointment.');
+      expect(label).not.toContain('_');
+    }
+    expect(notificationLabel('appointment.checked_in', null)).toBe('Checked in for an appointment');
+  });
+
+  it('formats queue.called with destination', () => {
+    expect(notificationLabel('queue.called', { destination: 'counselling' })).toBe("It's your turn — please go to Guidance");
+    expect(notificationLabel('queue.called', { destination: 'clinic' })).toBe("It's your turn — please go to Clinic");
+  });
+
+  it('formats the skip-window auto no-show notice without the queue id', () => {
+    expect(notificationLabel('queue.skip_expired', { resource_code: 'queue#12' })).toBe(
+      'A skipped patient was automatically marked as no-show',
+    );
+  });
+
+  it('keeps recognisable references (batch, device) but drops internal ids', () => {
+    expect(notificationLabel('bmg.alert_triggered', { resource_code: 'BATCH-2026-014' })).toBe(
+      'Equipment alert on batch BATCH-2026-014',
+    );
+    expect(notificationLabel('bmg.alert_triggered', { resource_code: 'batch#9' })).toBe(
+      'Equipment alert needs attention',
+    );
+    expect(notificationLabel('bmg.device_silent', { resource_code: 'TUMBLER-01' })).toBe(
+      'Device TUMBLER-01 stopped sending data — please check it',
+    );
+  });
+
+  it('says which command never reached the drum, without leaking the raw code', () => {
+    expect(notificationLabel('bmg.device_command_expired', { resource_code: 'drum-01', next_status: 'start' })).toBe(
+      'The start command never reached drum drum-01 — the drum has not started turning',
+    );
+    expect(notificationLabel('bmg.device_command_expired', { resource_code: 'drum-01', next_status: 'stop' })).toBe(
+      'The stop command never reached drum drum-01 — check that it has stopped',
+    );
+    expect(notificationLabel('bmg.device_command_expired', { resource_code: 'drum-01', next_status: 'run_now' })).toBe(
+      'The run-now command never reached drum drum-01',
+    );
+    expect(notificationLabel('bmg.device_command_expired', { resource_code: 'unit#4', next_status: 'start' })).toBe(
+      'The start command never reached a drum — the drum has not started turning',
+    );
+    expect(notificationLabel('bmg.device_command_expired', null)).toBe('A command never reached a drum');
+  });
+
+  it('falls back to a plain sentence, never a raw code, for unknown codes', () => {
+    expect(notificationLabel('custom.unknown_event', null)).toBe('You have a new notification');
   });
 });
 
@@ -51,17 +95,34 @@ describe('notificationDetail', () => {
     expect(detail).toContain('Sep 15, 2026');
   });
 
+  it('shows the Guidance office for counselling appointments', () => {
+    const detail = notificationDetail('appointment.checked_in', {
+      destination: 'counselling',
+      appointment_at: '2026-09-15T01:30:00.000Z',
+    });
+    expect(detail).toContain('Guidance');
+    expect(detail).not.toContain('counselling');
+  });
+
   it('formats queue and referral details', () => {
-    expect(notificationDetail('queue.called', { queue_number: 'Q-042' })).toBe('Q-042');
+    expect(notificationDetail('queue.called', { queue_number: 'Q-042' })).toBe('Your number: Q-042');
     expect(
-      notificationDetail('referral.created', { source_module: 'Clinic', target_module: 'Guidance' }),
-    ).toBe('Clinic → Guidance');
+      notificationDetail('referral.created', { source_module: 'counselling', target_module: 'clinic' }),
+    ).toBe('From Guidance to Clinic');
   });
 
   it('formats the skip-window detail with the queue number', () => {
     expect(notificationDetail('queue.skip_expired', { queue_number: 'C-004' })).toBe(
-      'C-004 · recall window expired',
+      'Number C-004 · the time to call them back ran out',
     );
+  });
+
+  it('turns urgency and severity codes into plain words', () => {
+    expect(notificationDetail('reorder.created', { urgency: 'high' })).toBe('How urgent: High');
+    expect(notificationDetail('bmg.alert_triggered', { urgency: 'critical' })).toBe('How serious: Critical');
+    expect(notificationDetail('bmg.device_silent', { urgency: 'warning' })).toBe('How serious: Needs a check');
+    expect(notificationDetail('bmg.device_command_expired', { urgency: 'critical' })).toBe('How serious: Critical');
+    expect(notificationDetail('bmg.device_command_expired', { urgency: 'warning' })).toBe('How serious: Needs a check');
   });
 });
 

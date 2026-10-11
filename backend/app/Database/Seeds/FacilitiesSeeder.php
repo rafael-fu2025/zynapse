@@ -108,6 +108,7 @@ final class FacilitiesSeeder extends Seeder
         $this->wipe();
         $this->seedCategories();
         $this->seedUnits();
+        $this->seedSchedules();
 
         // Surface the canonical login so the developer can hit the
         // dashboard immediately after running the seeder.
@@ -131,6 +132,13 @@ final class FacilitiesSeeder extends Seeder
 
         // Batches reference units + categories; clear before either.
         $db->table('facilities_bmg_batches')->emptyTable();
+
+        // Device history + schedules reference units (RESTRICT) before
+        // the units themselves can go.
+        $db->table('facilities_bmg_device_runs')->emptyTable();
+        $db->table('facilities_bmg_device_assignments')->emptyTable();
+        $db->table('facilities_bmg_schedule_history')->emptyTable();
+        $db->table('facilities_bmg_unit_schedules')->emptyTable();
 
         // Units reference categories (default_category_id, nullable).
         $db->table('facilities_bmg_units')->emptyTable();
@@ -195,5 +203,32 @@ final class FacilitiesSeeder extends Seeder
             ];
         }
         $this->db->table('facilities_bmg_units')->insertBatch($rows);
+    }
+
+    /**
+     * Every drum gets a safe-default schedule row (disabled, no times)
+     * so the device's schedule pull and the drift-free version counter
+     * work out of the box. Demo staff publish real times through the
+     * UI — the seeder must not start motors on a dev machine.
+     */
+    private function seedSchedules(): void
+    {
+        $now = date('Y-m-d H:i:s');
+        $rows = [];
+        foreach ($this->db->table('facilities_bmg_units')->get()->getResultArray() as $unit) {
+            $rows[] = [
+                'unit_id'          => (int) $unit['id'],
+                'times'            => json_encode([], JSON_THROW_ON_ERROR),
+                'duration_seconds' => \Modules\Facilities\Services\Bmg\ScheduleService::DEFAULT_DURATION,
+                'pwm'              => \Modules\Facilities\Services\Bmg\ScheduleService::DEFAULT_PWM,
+                'enabled'          => 0,
+                'version'          => 1,
+                'created_at'       => $now,
+                'updated_at'       => $now,
+            ];
+        }
+        if ($rows !== []) {
+            $this->db->table('facilities_bmg_unit_schedules')->insertBatch($rows);
+        }
     }
 }

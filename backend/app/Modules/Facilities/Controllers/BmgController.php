@@ -350,6 +350,17 @@ final class BmgController extends ApiController
         return $this->ok($this->service->regenerateDeviceToken($deviceId), null, 201);
     }
 
+    public function sendDeviceCommand(int $deviceId): ResponseInterface
+    {
+        $payload = $this->request->getJSON(true) ?? [];
+        return $this->ok($this->service->sendDeviceCommand($deviceId, $payload), null, 201);
+    }
+
+    public function listDeviceCommandHistory(int $deviceId): ResponseInterface
+    {
+        return $this->ok($this->service->listDeviceCommandHistory($deviceId));
+    }
+
     public function addProcessLog(int $batchId): ResponseInterface
     {
         $payload = $this->request->getJSON(true) ?? [];
@@ -445,6 +456,8 @@ final class BmgController extends ApiController
         $payload = $this->request->getJSON(true) ?? [];
         $rules = [
             'weight_kg'                => 'required|decimal|greater_than[0]',
+            'category_id'              => 'permit_empty|is_natural_no_zero',
+            'recorded_at'              => 'permit_empty|max_length[19]',
             'cn_ratio'                 => 'permit_empty|decimal|greater_than_equal_to[0.1]|less_than_equal_to[200]',
             'bulk_density_kg_per_m3'   => 'permit_empty|decimal|greater_than[0]',
             'ph'                       => 'permit_empty|decimal|greater_than_equal_to[0]|less_than_equal_to[14]',
@@ -463,12 +476,95 @@ final class BmgController extends ApiController
             'output_weight_kg' => 'required|decimal|greater_than[0]',
             'harvest_date'     => 'permit_empty|valid_date[Y-m-d]',
             'quality_grade'    => 'permit_empty|in_list[excellent,good,fair]',
+            'recorded_at'      => 'permit_empty|max_length[19]',
             'note'             => 'permit_empty|max_length[255]',
         ];
         if (! $this->makeValidation($rules)->run($payload)) {
             throw ApiException::validationFailure($this->collectErrors());
         }
         return $this->ok($this->service->addBatchOutput($batchId, $payload), null, 201);
+    }
+
+    public function listBatchInputs(int $batchId): ResponseInterface
+    {
+        return $this->ok($this->service->listBatchInputs($batchId));
+    }
+
+    public function listBatchOutputs(int $batchId): ResponseInterface
+    {
+        return $this->ok($this->service->listBatchOutputs($batchId));
+    }
+
+    public function voidBatchInput(int $batchId, int $inputId): ResponseInterface
+    {
+        return $this->ok($this->service->voidBatchInput($batchId, $inputId, $this->voidPayload()));
+    }
+
+    public function voidBatchOutput(int $batchId, int $outputId): ResponseInterface
+    {
+        return $this->ok($this->service->voidBatchOutput($batchId, $outputId, $this->voidPayload()));
+    }
+
+    /**
+     * The per-unit monitoring dashboard aggregate — device liveness +
+     * RTC health, schedule with next run, last 30 runs with
+     * failed/missed breakdowns, active batch, void-aware I/O totals,
+     * open alerts. One poll-friendly endpoint.
+     */
+    public function unitMonitor(int $unitId): ResponseInterface
+    {
+        return $this->ok($this->service->unitMonitor($unitId));
+    }
+
+    /**
+     * Current schedule + published history for a unit. The SAVE side
+     * (version bump, who changed what) is `saveUnitSchedule`.
+     */
+    public function unitSchedule(int $unitId): ResponseInterface
+    {
+        return $this->ok($this->service->unitSchedule($unitId));
+    }
+
+    /**
+     * Publish a schedule change. The version bump is what the device
+     * polls for — this is the only write path that reaches the ESP32s.
+     */
+    public function saveUnitSchedule(int $unitId): ResponseInterface
+    {
+        $payload = $this->request->getJSON(true) ?? [];
+        if (! array_key_exists('enabled', $payload) || ! is_bool($payload['enabled'])) {
+            throw ApiException::validationFailure([
+                ['code' => 'validation.field', 'message' => 'enabled must be a boolean.', 'field' => 'enabled'],
+            ]);
+        }
+
+        return $this->ok($this->service->updateUnitSchedule($unitId, [
+            'times'            => $payload['times'] ?? [],
+            'duration_seconds' => (int) ($payload['duration_seconds'] ?? 0),
+            'pwm'              => (int) ($payload['pwm'] ?? -1),
+            'enabled'          => (bool) $payload['enabled'],
+        ]));
+    }
+
+    /**
+     * Drum-binding history for one device (who moved it where, when).
+     */
+    public function listDeviceAssignments(int $deviceId): ResponseInterface
+    {
+        return $this->ok($this->service->listDeviceAssignments($deviceId));
+    }
+
+    /**
+     * @return array{reason:string}
+     */
+    private function voidPayload(): array
+    {
+        $payload = $this->request->getJSON(true) ?? [];
+        $rules   = ['reason' => 'required|max_length[255]'];
+        if (! $this->makeValidation($rules)->run($payload)) {
+            throw ApiException::validationFailure($this->collectErrors());
+        }
+        return ['reason' => trim((string) $payload['reason'])];
     }
 
     public function batchAnalytics(int $batchId): ResponseInterface

@@ -2,12 +2,19 @@ import { describe, expect, it } from 'vitest';
 
 import {
   describeBatchPhase,
+  describeClockDrift,
   describeEta,
+  describeHeartbeatAge,
+  describeNextRun,
+  describeRunResult,
   describeTurning,
+  formatAge,
   formatDayCount,
   formatDaysAgo,
+  formatIoTotals,
   formatKg,
   formatProgress,
+  parseUtcSql,
 } from './bmgFormat';
 
 /**
@@ -125,5 +132,102 @@ describe('describeBatchPhase', () => {
 
   it('names the running phase once input is recorded', () => {
     expect(describeBatchPhase(0.5)).toEqual({ label: 'Processing', tone: 'info' });
+  });
+});
+
+describe('parseUtcSql', () => {
+  it('parses the server SQL shape as UTC, not local time', () => {
+    const parsed = parseUtcSql('2026-10-07 09:00:00');
+    expect(parsed?.toISOString()).toBe('2026-10-07T09:00:00.000Z');
+  });
+
+  it('parses an ISO-ish T separator too, and rejects garbage', () => {
+    expect(parseUtcSql('2026-10-07T09:00:00')?.toISOString()).toBe('2026-10-07T09:00:00.000Z');
+    expect(parseUtcSql('not a date')).toBeNull();
+  });
+});
+
+describe('formatAge / describeHeartbeatAge', () => {
+  it('phrases ages at the minute, hour and day scales', () => {
+    expect(formatAge(null)).toBe('never');
+    expect(formatAge(0)).toBe('just now');
+    expect(formatAge(12)).toBe('12 min ago');
+    expect(formatAge(90)).toBe('1 h ago');
+    expect(formatAge(60 * 24 * 3)).toBe('3 days ago');
+  });
+
+  it('calls a device offline past the threshold and online inside it', () => {
+    expect(describeHeartbeatAge(5, 20).tone).toBe('neutral');
+    expect(describeHeartbeatAge(5, 20).label).toContain('Online');
+    expect(describeHeartbeatAge(25, 20)).toEqual({ label: 'Offline — 25 min ago', tone: 'danger' });
+  });
+
+  it('treats a never-seen device as flagged, not merely muted', () => {
+    expect(describeHeartbeatAge(null, 20)).toEqual({ label: 'Never checked in', tone: 'warning' });
+  });
+
+  it('falls back to the backend default threshold when none is shipped', () => {
+    // 21 minutes: offline at the 20-minute default.
+    expect(describeHeartbeatAge(21, null).tone).toBe('danger');
+  });
+});
+
+describe('describeClockDrift', () => {
+  it('distinguishes unknown, invalid and healthy RTC states', () => {
+    expect(describeClockDrift(null, null)).toEqual({ label: 'RTC unknown', tone: 'muted' });
+    expect(describeClockDrift(false, null)).toEqual({ label: 'RTC invalid', tone: 'danger' });
+    expect(describeClockDrift(true, 12).tone).toBe('neutral');
+    expect(describeClockDrift(true, 12).label).toContain('+12s');
+  });
+
+  it('escalates from warning to danger as drift grows', () => {
+    expect(describeClockDrift(true, 120).tone).toBe('warning');
+    expect(describeClockDrift(true, -600).tone).toBe('danger');
+  });
+});
+
+describe('describeNextRun', () => {
+  const now = new Date('2026-10-07T09:00:00.000Z');
+
+  it('renders the clock time and a countdown when imminent', () => {
+    // 09:30 UTC — 30 minutes away.
+    const readout = describeNextRun('2026-10-07 09:30:00', true, now);
+    expect(readout.label).toContain('(in 30 min)');
+    expect(readout.tone).toBe('info');
+  });
+
+  it('marks an overdue slot as due rather than silently passing it', () => {
+    expect(describeNextRun('2026-10-07 08:00:00', true, now).label).toContain('(due)');
+  });
+
+  it('explains the off and unset states', () => {
+    expect(describeNextRun('2026-10-07 09:30:00', false, now)).toEqual({ label: 'Schedule off', tone: 'muted' });
+    expect(describeNextRun(null, true, now)).toEqual({ label: 'No run times set', tone: 'muted' });
+  });
+});
+
+describe('describeRunResult', () => {
+  it('reads anything short of completed loudly', () => {
+    expect(describeRunResult('completed').tone).toBe('neutral');
+    expect(describeRunResult('failed')).toEqual({ label: 'Failed', tone: 'danger' });
+    expect(describeRunResult('aborted')).toEqual({ label: 'Aborted', tone: 'warning' });
+  });
+});
+
+describe('formatIoTotals', () => {
+  it('reports input, output and the balance', () => {
+    const totals = formatIoTotals(12.5, 4);
+    expect(totals.input).toBe('12.50 kg');
+    expect(totals.output).toBe('4.00 kg');
+    expect(totals.balance.label).toBe('8.50 kg');
+    expect(totals.balance.tone).toBe('muted');
+  });
+
+  it('flags a negative balance — outputs exceeding inputs', () => {
+    expect(formatIoTotals(2, 5).balance.tone).toBe('danger');
+  });
+
+  it('treats missing totals as zero rather than NaN', () => {
+    expect(formatIoTotals(null, undefined).balance.label).toBe('0.00 kg');
   });
 });

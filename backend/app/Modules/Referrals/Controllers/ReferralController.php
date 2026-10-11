@@ -61,6 +61,7 @@ final class ReferralController extends ApiController
             'source_module'     => 'required|in_list[clinic,counselling]',
             'target_module'     => 'required|in_list[clinic,counselling]',
             'artifact_type'     => 'required|max_length[64]',
+            'priority'          => 'permit_empty|in_list[low,normal,high,urgent]',
             'reason_code'       => 'permit_empty|max_length[64]',
             'notes_plaintext'   => 'permit_empty|max_length[8192]',
             'provider_user_id'  => 'permit_empty|is_natural_no_zero',
@@ -77,6 +78,10 @@ final class ReferralController extends ApiController
             isset($payload['reason_code']) ? (string) $payload['reason_code'] : null,
             isset($payload['notes_plaintext']) ? (string) $payload['notes_plaintext'] : null,
             isset($payload['provider_user_id']) && $payload['provider_user_id'] !== '' ? (int) $payload['provider_user_id'] : null,
+            null,
+            null,
+            false,
+            isset($payload['priority']) && $payload['priority'] !== '' ? (string) $payload['priority'] : null,
         );
 
         return $this->ok($dto->toArray(), null, 201);

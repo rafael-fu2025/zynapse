@@ -108,7 +108,7 @@ panel has a screen.
 
 > "**Clinic → Appointments** at `/appointments`, with Upcoming, Needs action,
 > Past, and All tabs. Students book these either from their portal or the
-> mobile app; every confirmed booking carries a QR code for check-in."
+> mobile app; staff confirm each booking and check the patient in manually."
 
 ### A8. "Where is the inventory / medicines?"
 
@@ -185,7 +185,7 @@ panel has a screen.
 > "The **My portal** sidebar item at `/me`, with Overview, Appointments,
 > History, Guidance, and Notifications tabs. Pure students land there
 > automatically after login instead of the staff dashboard. The mobile app
-> mirrors it — including taking surveys and getting the appointment QR code."
+> mirrors it — including booking appointments and taking surveys."
 
 ### A19. "Where do users change their password?"
 

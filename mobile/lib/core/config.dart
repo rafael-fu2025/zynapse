@@ -46,15 +46,4 @@ class AppConfig {
 
   /// Key used to persist the access token in SharedPreferences.
   static const String accessTokenPrefKey = 'synapse_access_token';
-
-  /// Key used to persist a proof-of-booking QR token per appointment.
-  ///
-  /// The backend returns the plaintext token ONLY at booking/issue time
-  /// and stores just the HMAC hash, so without local persistence the app
-  /// would have to re-mint (and thereby ROTATE) the token every time the
-  /// sheet is reopened — silently invalidating any previously shown QR.
-  /// Persisting the issued plaintext keeps the same QR valid across
-  /// reopens until the user explicitly taps "Re-issue".
-  static String appointmentQrPrefKey(int appointmentId) =>
-      'synapse_appointment_qr_$appointmentId';
 }

@@ -11,6 +11,7 @@ class CounsellingSession {
     required this.counsellorUserId,
     required this.startedAt,
     this.endedAt,
+    this.counsellorName,
     this.patientDisplayName,
     this.queueEntryId,
     this.queueNumber,
@@ -29,6 +30,9 @@ class CounsellingSession {
         counsellorUserId: (json['counsellor_user_id'] ?? 0) as int,
         startedAt: (json['started_at'] ?? '') as String,
         endedAt: json['ended_at'] as String?,
+        // Present on the per-person guidance record (2026-10, SPA parity);
+        // absent on older list payloads, hence nullable.
+        counsellorName: json['counsellor_name'] as String?,
         patientDisplayName: json['patient_display_name'] as String?,
         queueEntryId: json['queue_entry_id'] as int?,
         queueNumber: json['queue_number'] as String?,
@@ -48,6 +52,11 @@ class CounsellingSession {
   final int counsellorUserId;
   final String startedAt;
   final String? endedAt;
+
+  /// Display name of the session's counsellor; null on payloads that do
+  /// not join the users table.
+  final String? counsellorName;
+
   final String? patientDisplayName;
   final int? queueEntryId;
   final String? queueNumber;

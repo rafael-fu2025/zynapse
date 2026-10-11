@@ -62,8 +62,12 @@ final class ScheduleService extends BaseService
      * Override: `counselling.schedule.team_manage` (supervisor) may
      * still book — the refusal is then the supervisor's documented
      * decision, and it lands in the audit chain like every booking.
+     *
+     * Public because the student self-booking path
+     * (`PortalAppointmentService::bookGuidance`) enforces the same limit —
+     * one constant, so the two entry points cannot drift apart.
      */
-    private const NO_SHOW_STRIKE_LIMIT = 3;
+    public const NO_SHOW_STRIKE_LIMIT = 3;
 
     public function __construct(
         private readonly CounsellingPolicy $policy,

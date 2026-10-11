@@ -334,4 +334,53 @@ final class BmgDeviceBindingTest extends FeatureTestCase
         $res->assertStatus(422);
         $this->assertErrorCode('validation.invalid', $res);
     }
+
+    // --- assignment history ---------------------------------------------------
+
+    public function testRebindingWritesAssignmentHistory(): void
+    {
+        $board  = $this->createBmgDevice();
+        $unit   = $this->createUnit($board['deviceId'], 'History Drum');
+        $unitId = (int) $unit['data']['id'];
+
+        // Unbind then rebind — each transition is a ledger row.
+        $this->postJson('api/v1/facilities/units/' . $unitId, ['device_id' => null]);
+        $this->postJson('api/v1/facilities/units/' . $unitId, ['device_id' => $board['deviceId']]);
+
+        $db   = db_connect();
+        $rows = $db->table('facilities_bmg_device_assignments')
+            ->where('device_id', $board['deviceId'])
+            ->orderBy('id', 'ASC')
+            ->get()->getResultArray();
+
+        $this->assertCount(2, $rows, 'Registration binding + rebinding = two assignment rows.');
+        $this->assertSame($unitId, (int) $rows[0]['unit_id']);
+        $this->assertNotNull($rows[0]['unassigned_at'], 'The first binding was closed by the unbind.');
+        $this->assertSame($this->session['userId'], (int) $rows[0]['assigned_by_user_id'], 'The human who created the drum is the binder.');
+        $this->assertNull($rows[1]['unassigned_at'], 'The rebind stays open.');
+
+        // The API exposes the history, newest first, active row flagged.
+        $res = $this->authed($this->token(), 'get', "api/v1/facilities/devices/{$board['deviceId']}/assignments");
+        $res->assertStatus(200);
+        $items = $this->envelope($res)['data'];
+        $this->assertCount(2, $items);
+        $this->assertTrue($items[0]['is_active']);
+        $this->assertFalse($items[1]['is_active']);
+        $this->assertSame($this->session['userId'], $items[1]['unassigned_by_user_id'], 'The human who unbound is recorded.');
+    }
+
+    public function testArchivingADrumClosesTheAssignment(): void
+    {
+        $board = $this->createBmgDevice();
+        $unit  = $this->createUnit($board['deviceId'], 'Closing Drum');
+
+        $this->authed($this->token(), 'delete', 'api/v1/facilities/units/' . $unit['data']['id'])->assertStatus(200);
+
+        $row = db_connect()->table('facilities_bmg_device_assignments')
+            ->where('device_id', $board['deviceId'])
+            ->orderBy('id', 'DESC')
+            ->get()->getRowArray();
+        $this->assertNotNull($row['unassigned_at'], 'Archiving the drum closes the open assignment.');
+        $this->assertSame($this->session['userId'], (int) $row['unassigned_by_user_id']);
+    }
 }

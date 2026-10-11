@@ -196,7 +196,7 @@ export function SkippedPatientsTab({ onOpenEncounter }: SkippedPatientsTabProps)
         </Button>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button className="min-h-11" size="sm" variant="outline" aria-label={`Skipped patient actions for ${row.queue_number}`}>
+            <Button className="min-h-11 md:min-h-0" size="sm" variant="outline" aria-label={`Skipped patient actions for ${row.queue_number}`}>
               Actions <ChevronDown className="size-3.5" aria-hidden />
             </Button>
           </DropdownMenuTrigger>

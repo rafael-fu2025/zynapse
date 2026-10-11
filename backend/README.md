@@ -41,8 +41,8 @@ tests/
 # utf8mb4_0900_ai_ci is MySQL-8-only
 mysql -u root -e "CREATE DATABASE IF NOT EXISTS synapse_zcode CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
 
-cp .env.example .env        # then generate JWT_SECRET, REFERRAL_HMAC_KEY,
-                            # COUNSELLING_KEY (each: openssl rand -hex 32)
+cp .env.example .env        # then generate JWT_SECRET and COUNSELLING_KEY
+                            # (each: openssl rand -hex 32)
 composer install
 php spark migrate --all
 php spark db:seed App\\Database\\Seeds\\PermissionsAndGroupsSeeder
@@ -61,11 +61,15 @@ Key `.env` variables (full annotated template in `.env.example`):
 |---|---|
 | `JWT_SECRET` / `JWT_ALG` / `JWT_ACCESS_TTL_SECONDS` / `JWT_REFRESH_TTL_SECONDS` | Token signing + lifetimes (900 s / 30 d defaults) |
 | `COUNSELLING_KEY` / `COUNSELLING_KEY_VERSION` | AES-256-GCM note encryption. Rotate by bumping the version, inserting a `counselling_key_versions` row, and exposing the retired key as `COUNSELLING_KEY_V1` etc. |
-| `REFERRAL_HMAC_KEY` | QR token HMAC |
+
 | `REFRESH_COOKIE_*` | Refresh cookie attributes (`synapse_rt`, Secure, HttpOnly, SameSite=Strict) |
 | `CORS_ALLOWED_ORIGINS` | Strict origin allowlist — no wildcards in production (enforced by `Config\Boot`) |
 | `RATELIMIT_GLOBAL_PER_MIN` / `RATELIMIT_AUTH_PER_MIN` | Fixed-window buckets (600 / 30) |
 | `LOGIN_LOCKOUT_MAX_FAILURES` / `LOGIN_LOCKOUT_WINDOW_SECONDS` | Per-account lockout (5 failures / 900 s) |
+
+Appointment QR tokens and RFID registry handles are retired. Booking (including `bookSelf` and the portal) needs neither `APPOINTMENT_HMAC_KEY` nor the old `REFERRAL_HMAC_KEY` fallback. Patient QR identity (`users.qr_code` / `has_qr`) is unrelated and remains supported. Older environment templates may still list these retired keys; they are not required.
+
+The append-only `DropAppointmentQrColumns` and `DropRfidIdentityColumns` migrations remove only the retired hash/handle and their indexes. Review and back up before applying: rollback restores empty nullable columns/indexes, **not deleted values**. Historical migrations are unchanged. The legacy identity tables and kiosk check-in table were already dropped by earlier migrations.
 
 Note: the Database config reads collation from `database.default.DBCollat` (not `collation`) — setting `database.default.collation` is a no-op.
 
@@ -88,7 +92,7 @@ Authorization is two-stage: `ApiController::authorize()` checks the permission c
 
 - **Envelope** — `{ success, data, errors, meta }` on every response; stable error codes; 5xx redacted to `internal.error` with no message/trace leakage; logs keep only exception class + object id.
 - **Pagination** — keyset cursors only (`KeysetPaginator`); OFFSET is banned.
-- **Public endpoints (deliberate)** — `/health`, `/auth/login`, `/auth/refresh`, `/appointments/verify` + `/referrals/verify` (QR; returns only `{ status, artifact_type, issuer }`). All locked open *and* leak-free by `PublicRoutesTest`.
+- **Public endpoints (deliberate)** — `/health`, `/auth/login`, `/auth/refresh`. Appointment and referral QR verification routes are retired; `PublicRoutesTest` guards their absence.
 - **Rate limits** — `api_ratelimit` across `api/*`; a strict `auth` bucket (30/min) on login/refresh; per-account lockout after 5 failures in 15 min (HMAC-keyed counters — attempted emails are never stored, logged, or audited).
 
 ## Background workers
@@ -100,16 +104,18 @@ Production drains the durable outbox and report queue outside HTTP processes:
 * * * * * cd /path/to/zynapse/backend && php spark synapse:reports-drain --limit=10
 * * * * * cd /path/to/zynapse/backend && php spark synapse:appointments-enqueue-due
 * * * * * cd /path/to/zynapse/backend && php spark synapse:queue-skip-sweep
+*/15 * * * * cd /path/to/zynapse/backend && php spark synapse:bmg-device-watchdog
 15 2 * * * cd /path/to/zynapse/backend && php spark synapse:audit-verify
 ```
 
 - The audit drain uses `FOR UPDATE SKIP LOCKED`, carries the hash-chain tail across batches (no N+1), and ejects poison rows via `attempt_count`/`last_error`.
-- The appointment worker is idempotent and promotes Clinic and Guidance bookings into their destination queues at T−15.
+- The appointment worker idempotently enqueues due Guidance bookings at T−15. Clinic confirmation and check-in remain staff-actioned; check-in opens the linked encounter and queue entry.
 - The skip sweep resolves a skipped clinic patient's 60-minute recall window to no-show. It is idempotent (every candidate re-validated under a row lock), so the `post_system` hook can run the same sweep concurrently on dev/demo machines without double-writing.
 - The reports worker claims queued jobs, streams aggregate CSV rows to disk without holding a transaction open, records provenance and row counts, and expires files after 30 days. Run **one** reports worker unless the claim is upgraded to `SKIP LOCKED`.
+- The BMG watchdog sweeps every 15 min: offline devices (`BMG_OFFLINE_AFTER_MIN`, default 20 min), RTC-invalid devices, missed scheduled runs (`BMG_MISSED_RUN_GRACE_MIN`, default 30; only slots after the schedule was published plus a 10 min sync allowance, and after the batch started, can count as missed), and device commands that expired before the board picked them up (`BMG_COMMAND_TTL_MIN`, default 10). The first three dedupe per episode; an expired command notifies once, at the moment it is failed — `stop` is critical (the drum may still be turning), `start`/`run_now` are warnings. Only the last 24 h are announced, and disabled/archived boards are settled silently. `--hours` remains for legacy report-only firmware.
 - Route non-zero exits and the nightly `synapse:audit-verify` result to operational alerting.
 
-All ten commands: `synapse:smoke`, `synapse:audit-drain`, `synapse:audit-verify`, `synapse:audit-clear`, `synapse:audit-orphans`, `synapse:reports-drain`, `synapse:appointments-enqueue-due`, `synapse:queue-skip-sweep`, `synapse:notify-drain`, `synapse:reorder-auto-check`.
+All eleven commands: `synapse:smoke`, `synapse:audit-drain`, `synapse:audit-verify`, `synapse:audit-clear`, `synapse:audit-orphans`, `synapse:reports-drain`, `synapse:appointments-enqueue-due`, `synapse:queue-skip-sweep`, `synapse:notify-drain`, `synapse:reorder-auto-check`, `synapse:bmg-device-watchdog`.
 
 ## Tests
 
@@ -121,6 +127,7 @@ composer scan:tenancy   # list every unscoped tenant query site with file:line
 ```
 
 - **Unit (220 tests)** — crypto round-trip/tamper, keyset cursors, CSV redaction, BMG mass invariant, alert engine, analytics boundaries. Never boots the framework.
+- **Non-migrating feature run** — `SYNAPSE_TEST_SKIP_MIGRATIONS=1 composer test:feature` uses an already-provisioned dedicated test schema without executing migrations. Tests still seed RBAC and write disposable test records. New migrations must be reviewed/applied separately before schema-removal behavior can be validated against the database.
 - **Feature (25 tests)** — `AuthenticationFlowTest`, `BmgWorkflowTest`, `RbacMatrixTest` (403 matrix), `PublicRoutesTest`, `BootstrapSmokeTest`. Runs the real Router → Filters → Controller → Service → MySQL pipeline; migrations run once per suite. The two PHPUnit configs exist because the two bootstraps are mutually exclusive.
 - **Tenancy ratchet** — `TenantScopeFitnessTest` source-scans every `->table()` site on 36 tenant tables and fails CI on any new unscoped site. On CI, the feature bootstrap hydrates DB credentials from `SYNAPSE_TEST_DB_HOST/USER/PASS` (plain names — GitHub Actions drops dotted env keys).
 

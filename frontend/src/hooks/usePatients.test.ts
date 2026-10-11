@@ -1,13 +1,49 @@
 import { describe, expect, it } from 'vitest';
 
-import { employeeListParams, employeeSearchParams, studentListParams, studentSearchParams } from './usePatients';
+import {
+  employeeListParams,
+  employeeSearchParams,
+  parseArchiveStatus,
+  patientMedicalSegment,
+  studentListParams,
+  studentSearchParams,
+} from './usePatients';
+
+/**
+ * patientMedicalSegment — the person-level medical record is shared by
+ * both registry tabs, but each kind reaches it through its OWN route
+ * prefix. Getting this wrong would send an employee's allergy write to
+ * the students route (404) or worse, the wrong person.
+ */
+describe('patientMedicalSegment', () => {
+  it('routes employees to the employees segment and everyone else to students', () => {
+    expect(patientMedicalSegment('employee')).toBe('employees');
+    expect(patientMedicalSegment('student')).toBe('students');
+  });
+});
+
+describe('parseArchiveStatus', () => {
+  it('accepts the three scopes', () => {
+    expect(parseArchiveStatus('active')).toBe('active');
+    expect(parseArchiveStatus('archived')).toBe('archived');
+    expect(parseArchiveStatus('all')).toBe('all');
+  });
+
+  it('treats anything else as active so a hand-edited URL never widens the view', () => {
+    expect(parseArchiveStatus(null)).toBe('active');
+    expect(parseArchiveStatus(undefined)).toBe('active');
+    expect(parseArchiveStatus('')).toBe('active');
+    expect(parseArchiveStatus('1')).toBe('active');
+    expect(parseArchiveStatus('everything')).toBe('active');
+  });
+});
 
 describe('employeeListParams', () => {
   it('omits the first-page cursor and the "all" facet sentinel', () => {
     const params = employeeListParams({
       cursor: null,
       limit: 25,
-      includeArchived: false,
+      status: 'active',
       teaching: 'all',
       department: 'all',
       position: 'all',
@@ -23,7 +59,7 @@ describe('employeeListParams', () => {
     const params = employeeListParams({
       cursor: 'abc123',
       limit: 25,
-      includeArchived: false,
+      status: 'active',
       department: 'College of Nursing',
       position: 'Dean',
     });
@@ -40,7 +76,7 @@ describe('employeeListParams', () => {
     const params = employeeListParams({
       cursor: null,
       limit: 25,
-      includeArchived: false,
+      status: 'active',
       department: 'all',
       position: 'all',
     });
@@ -54,22 +90,36 @@ describe('employeeListParams', () => {
     const params = employeeListParams({
       cursor: '',
       limit: 25,
-      includeArchived: false,
+      status: 'active',
     });
 
     expect(params.has('cursor')).toBe(false);
   });
 
-  it('flags archived inclusion and passes the retained teaching parameter through', () => {
+  it('requests archived-only and passes the retained teaching parameter through', () => {
     const params = employeeListParams({
       cursor: null,
       limit: 50,
-      includeArchived: true,
+      status: 'archived',
       teaching: 'non_teaching',
     });
 
-    expect(params.get('include_archived')).toBe('1');
+    expect(params.get('archived')).toBe('archived');
     expect(params.get('teaching')).toBe('non_teaching');
+  });
+
+  it('requests live + archived together with status all', () => {
+    const params = employeeListParams({ cursor: null, limit: 25, status: 'all' });
+
+    expect(params.get('archived')).toBe('all');
+  });
+
+  it('sends nothing for the active default and never the legacy include flag', () => {
+    const params = employeeListParams({ cursor: null, limit: 25, status: 'active' });
+
+    expect(params.has('archived')).toBe(false);
+    expect(params.has('include_archived')).toBe(false);
+    expect(employeeListParams({ cursor: null, limit: 25 }).has('archived')).toBe(false);
   });
 });
 
@@ -91,6 +141,11 @@ describe('employeeSearchParams', () => {
     expect(params.get('department')).toBe('College of Law & Jurisprudence');
     expect(params.get('position')).toBe('Dean');
   });
+
+  it('carries the archive status so archived rows do not vanish when typing', () => {
+    expect(employeeSearchParams({ q: 'Torres', status: 'archived' }).get('archived')).toBe('archived');
+    expect(employeeSearchParams({ q: 'Torres', status: 'active' }).has('archived')).toBe(false);
+  });
 });
 
 describe('studentListParams', () => {
@@ -98,7 +153,7 @@ describe('studentListParams', () => {
     const params = studentListParams({
       cursor: null,
       limit: 25,
-      includeArchived: false,
+      status: 'active',
       department: 'all',
       course: 'all',
       yearLevel: 'all',
@@ -115,7 +170,7 @@ describe('studentListParams', () => {
     const params = studentListParams({
       cursor: 'abc123',
       limit: 25,
-      includeArchived: false,
+      status: 'active',
       department: 'CCS',
       course: 'BSIT',
       yearLevel: '3',
@@ -134,7 +189,7 @@ describe('studentListParams', () => {
     const params = studentListParams({
       cursor: null,
       limit: 25,
-      includeArchived: false,
+      status: 'active',
       department: 'all',
       course: 'all',
       yearLevel: 'all',
@@ -150,20 +205,24 @@ describe('studentListParams', () => {
     const params = studentListParams({
       cursor: '',
       limit: 25,
-      includeArchived: false,
+      status: 'active',
     });
 
     expect(params.has('cursor')).toBe(false);
   });
 
-  it('flags archived inclusion', () => {
-    const params = studentListParams({
-      cursor: null,
-      limit: 50,
-      includeArchived: true,
-    });
+  it('requests archived-only, live + archived, or nothing for the active default', () => {
+    expect(studentListParams({ cursor: null, limit: 50, status: 'archived' }).get('archived')).toBe('archived');
+    expect(studentListParams({ cursor: null, limit: 50, status: 'all' }).get('archived')).toBe('all');
 
-    expect(params.get('include_archived')).toBe('1');
+    const active = studentListParams({ cursor: null, limit: 50, status: 'active' });
+    expect(active.has('archived')).toBe(false);
+    expect(active.has('include_archived')).toBe(false);
+  });
+
+  it('carries the archive status into the search too', () => {
+    expect(studentSearchParams({ q: 'Dino', status: 'archived' }).get('archived')).toBe('archived');
+    expect(studentSearchParams({ q: 'Dino' }).has('archived')).toBe(false);
   });
 
   it('sends a year level as a numeric value, never a display label', () => {
@@ -172,7 +231,7 @@ describe('studentListParams', () => {
     const params = studentListParams({
       cursor: null,
       limit: 25,
-      includeArchived: false,
+      status: 'active',
       yearLevel: '2',
     });
 

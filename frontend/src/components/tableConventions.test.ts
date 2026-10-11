@@ -28,6 +28,14 @@
  *
  * These are conventions, not proofs. A pass means "no known regression",
  * not "the tables are right".
+ *
+ * 2026-10 — added the row-action height rule. Tables had drifted: a `size="sm"`
+ * action button is 32px on desktop, but several rows mixed in buttons carrying a
+ * bare `min-h-11` (the 44px mobile touch target) with no desktop reset. That made
+ * one button in a row two-thirds taller than the one beside it — visible in the
+ * Clinic "Archived" list, where "Restore" stood taller than "View". The app-wide
+ * convention is `min-h-11 md:min-h-0`: a 44px target on touch, compact on desktop.
+ * See `ui/button.tsx` for the `size` scale it corrects.
  */
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
@@ -244,5 +252,40 @@ describe('table conventions', () => {
     const primitive = FILES.find((f) => f.path === PRIMITIVE_FILE.split('\\').join('/'));
     expect(primitive, `${PRIMITIVE_FILE} should exist`).toBeDefined();
     expect(primitive?.source).toContain('scope="col"');
+  });
+
+  it('gives every row-action button the same height on desktop and mobile', () => {
+    // The convention (see the file docblock): a table row-action button that
+    // needs the 44px touch target carries `min-h-11 md:min-h-0` — tall on
+    // phones, compact (matching its `size="sm"` siblings) on desktop. A bare
+    // `min-h-11` with no desktop reset leaves that one button taller than the
+    // rest of the row, which is the "Restore" vs "View" defect this guards.
+    //
+    // Only BUTTONS are checked. A bare `min-h-11` on a `<DropdownMenuItem>`
+    // (the menu rows) or a pager is a different control with its own rule.
+    const offenders: string[] = [];
+
+    for (const file of FILES) {
+      const opener = /<Button[\s>]/g;
+      for (const match of [...file.source.matchAll(opener)]) {
+        // The opening tag runs to the first `>` that is not inside a
+        // `{...}` expression; simpler and stable here is a bounded window.
+        const tag = file.source.slice(match.index, match.index + 400);
+        const close = tag.indexOf('>');
+        const openingTag = close === -1 ? tag : tag.slice(0, close + 1);
+        if (!/min-h-11/.test(openingTag)) continue;
+        if (/md:min-h-0|lg:min-h-0|sm:min-h-0/.test(openingTag)) continue;
+        // The table-row actions live in the Actions column. A bare min-h-11
+        // on a dialog/footer button is out of scope for THIS rule, but the
+        // whole app benefits from the reset, so only row actions are named
+        // as offenders — detected by proximity to the actions renderer.
+        const context = file.source.slice(Math.max(0, match.index - 600), match.index);
+        if (!/actions=|Actions|<TableCell[^>]*text-right/.test(context)) continue;
+        const line = file.source.slice(0, match.index).split('\n').length;
+        offenders.push(`${file.path}:${line}: bare min-h-11 on a row-action button — add md:min-h-0`);
+      }
+    }
+
+    expect(offenders).toEqual([]);
   });
 });

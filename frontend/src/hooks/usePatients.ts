@@ -48,6 +48,31 @@ interface EmployeePage {
 export const FACET_ALL = 'all';
 
 /**
+ * Which records a registry list shows, by archive state.
+ *
+ *   active   — live records only (the default; nothing is sent)
+ *   archived — ONLY archived records
+ *   all      — live and archived together
+ *
+ * This replaced a boolean "include archived" switch, which could only mean
+ * "live" or "live + archived" — so reviewing archived records meant scrolling
+ * past every live one to find them.
+ */
+export type ArchiveStatus = 'active' | 'archived' | 'all';
+
+export const ARCHIVE_STATUSES: ReadonlyArray<ArchiveStatus> = ['active', 'archived', 'all'];
+
+/** Coerce an arbitrary URL value to a status; anything unknown is `active`. */
+export function parseArchiveStatus(value: string | null | undefined): ArchiveStatus {
+  return value === 'archived' || value === 'all' ? value : 'active';
+}
+
+/** `active` is the server default, so it stays off the wire. */
+function setArchiveParam(params: URLSearchParams, status: ArchiveStatus | undefined): void {
+  if (status !== undefined && status !== 'active') params.set('archived', status);
+}
+
+/**
  * Query string for the employee list.
  *
  * Pure so it can be tested directly: the `'all'` sentinel must never reach
@@ -58,7 +83,7 @@ export const FACET_ALL = 'all';
 export function employeeListParams(input: {
   cursor: string | null;
   limit: number;
-  includeArchived: boolean;
+  status?: ArchiveStatus;
   teaching?: string;
   department?: string;
   position?: string;
@@ -67,7 +92,7 @@ export function employeeListParams(input: {
 
   if (input.cursor !== null && input.cursor !== '') params.set('cursor', input.cursor);
   params.set('limit', String(input.limit));
-  if (input.includeArchived) params.set('include_archived', '1');
+  setArchiveParam(params, input.status);
 
   if (input.teaching !== undefined && input.teaching !== FACET_ALL) {
     params.set('teaching', input.teaching);
@@ -88,10 +113,12 @@ export function employeeListParams(input: {
  */
 export function employeeSearchParams(input: {
   q: string;
+  status?: ArchiveStatus;
   department?: string;
   position?: string;
 }): URLSearchParams {
   const params = new URLSearchParams({ q: input.q });
+  setArchiveParam(params, input.status);
 
   if (input.department !== undefined && input.department !== FACET_ALL) {
     params.set('department', input.department);
@@ -117,7 +144,7 @@ export function employeeSearchParams(input: {
 export function studentListParams(input: {
   cursor: string | null;
   limit: number;
-  includeArchived: boolean;
+  status?: ArchiveStatus;
   department?: string;
   course?: string;
   yearLevel?: string;
@@ -126,7 +153,7 @@ export function studentListParams(input: {
 
   if (input.cursor !== null && input.cursor !== '') params.set('cursor', input.cursor);
   params.set('limit', String(input.limit));
-  if (input.includeArchived) params.set('include_archived', '1');
+  setArchiveParam(params, input.status);
 
   if (input.department !== undefined && input.department !== FACET_ALL) {
     params.set('department', input.department);
@@ -148,11 +175,13 @@ export function studentListParams(input: {
  */
 export function studentSearchParams(input: {
   q: string;
+  status?: ArchiveStatus;
   department?: string;
   course?: string;
   yearLevel?: string;
 }): URLSearchParams {
   const params = new URLSearchParams({ q: input.q });
+  setArchiveParam(params, input.status);
 
   if (input.department !== undefined && input.department !== FACET_ALL) {
     params.set('department', input.department);
@@ -170,7 +199,7 @@ export function studentSearchParams(input: {
 export function useStudents(
   cursor: string | null,
   limit = 25,
-  includeArchived = false,
+  status: ArchiveStatus = 'active',
   department = FACET_ALL,
   course = FACET_ALL,
   yearLevel = FACET_ALL,
@@ -178,13 +207,13 @@ export function useStudents(
   return useQuery<StudentPage, ApiEnvelopeError>({
     queryKey: [
       'patients', 'students',
-      { cursor, limit, includeArchived, department, course, yearLevel },
+      { cursor, limit, status, department, course, yearLevel },
     ],
     queryFn: async () => {
       const params = studentListParams({
         cursor,
         limit,
-        includeArchived,
+        status,
         department,
         course,
         yearLevel,
@@ -205,16 +234,18 @@ export function useStudentSearch(
   q: string,
   opts: {
     enabled?: boolean;
+    status?: ArchiveStatus;
     department?: string;
     course?: string;
     yearLevel?: string;
   } = {},
 ) {
+  const status = opts.status ?? 'active';
   const department = opts.department ?? FACET_ALL;
   const course = opts.course ?? FACET_ALL;
   const yearLevel = opts.yearLevel ?? FACET_ALL;
   return useQuery<Student[], ApiEnvelopeError>({
-    queryKey: ['patients', 'students', 'search', q, { department, course, yearLevel }],
+    queryKey: ['patients', 'students', 'search', q, { status, department, course, yearLevel }],
     // `enabled` must include the CALLER's permission gate, not just the
     // query length — surfaces like the command palette render the search
     // only for `clinic.patients.read` holders, and without this gate
@@ -222,7 +253,7 @@ export function useStudentSearch(
     // (2026-09 audit).
     enabled: (opts.enabled ?? true) && q.trim().length >= 2,
     queryFn: async () => {
-      const params = studentSearchParams({ q: q.trim(), department, course, yearLevel });
+      const params = studentSearchParams({ q: q.trim(), status, department, course, yearLevel });
       const res = await apiClient.get<unknown[]>(
         `/clinic/students/search?${params.toString()}`,
       );
@@ -233,17 +264,22 @@ export function useStudentSearch(
 
 /**
  * Facet options for the Students tab filters — distinct MIS-supplied
- * department / course / year level values present in the live registry.
+ * department / course / year level values present in the registry, within
+ * the archive `status` being viewed (live by default). In the archived view
+ * the selects must offer what archived students actually have.
  *
  * Unlike `useEmployeeFacets`' source, these come from our own synced rows
  * rather than a MIS lookup call, so the selects still populate when the
  * campus network (and therefore the MIS API) is unreachable.
  */
-export function useStudentFacets() {
+export function useStudentFacets(status: ArchiveStatus = 'active') {
   return useQuery<StudentFacets, ApiEnvelopeError>({
-    queryKey: ['patients', 'students', 'facets'],
+    queryKey: ['patients', 'students', 'facets', status],
     queryFn: async () => {
-      const res = await apiClient.get<unknown>('/clinic/students/facets');
+      const params = new URLSearchParams();
+      setArchiveParam(params, status);
+      const qs = params.toString();
+      const res = await apiClient.get<unknown>(`/clinic/students/facets${qs === '' ? '' : `?${qs}`}`);
       return studentFacetsSchema.parse(res.data);
     },
     // Facets change only when the registry is re-synced.
@@ -257,6 +293,28 @@ export function useStudent(idOrIdentifier: number | string | null) {
     enabled: idOrIdentifier !== null && idOrIdentifier !== '',
     queryFn: async () => {
       const res = await apiClient.get<unknown>(`/clinic/students/${encodeURIComponent(String(idOrIdentifier))}`);
+      return studentSchema.parse(res.data);
+    },
+  });
+}
+
+/** URL segment for the medical-record endpoints of a patient kind. */
+export function patientMedicalSegment(kind: 'student' | 'employee'): 'students' | 'employees' {
+  return kind === 'employee' ? 'employees' : 'students';
+}
+
+/**
+ * Detail for either registry kind — students and employees share one
+ * person shape (allergies + emergency contacts included on both).
+ */
+export function usePatientDetail(kind: 'student' | 'employee', idOrIdentifier: number | string | null) {
+  return useQuery<Student, ApiEnvelopeError>({
+    queryKey: ['patients', kind, 'detail', idOrIdentifier],
+    enabled: idOrIdentifier !== null && idOrIdentifier !== '',
+    queryFn: async () => {
+      const res = await apiClient.get<unknown>(
+        `/clinic/${patientMedicalSegment(kind)}/${encodeURIComponent(String(idOrIdentifier))}`,
+      );
       return studentSchema.parse(res.data);
     },
   });
@@ -343,10 +401,10 @@ export function useSetStudentArchived() {
 
 export function useAddAllergy() {
   const qc = useQueryClient();
-  return useMutation<Student, ApiEnvelopeError, { studentId: number; input: AddAllergyInput }>({
-    mutationFn: async ({ studentId, input }) => {
+  return useMutation<Student, ApiEnvelopeError, { kind: 'student' | 'employee'; patientId: number; input: AddAllergyInput }>({
+    mutationFn: async ({ kind, patientId, input }) => {
       const valid = addAllergySchema.parse(input);
-      const res = await apiClient.post<unknown>(`/clinic/students/${studentId}/allergies`, valid);
+      const res = await apiClient.post<unknown>(`/clinic/${patientMedicalSegment(kind)}/${patientId}/allergies`, valid);
       return studentSchema.parse(res.data);
     },
     onSuccess: () => {
@@ -361,10 +419,10 @@ export function useAddAllergy() {
 
 export function useAddContact() {
   const qc = useQueryClient();
-  return useMutation<Student, ApiEnvelopeError, { studentId: number; input: AddContactInput }>({
-    mutationFn: async ({ studentId, input }) => {
+  return useMutation<Student, ApiEnvelopeError, { kind: 'student' | 'employee'; patientId: number; input: AddContactInput }>({
+    mutationFn: async ({ kind, patientId, input }) => {
       const valid = addContactSchema.parse(input);
-      const res = await apiClient.post<unknown>(`/clinic/students/${studentId}/contacts`, valid);
+      const res = await apiClient.post<unknown>(`/clinic/${patientMedicalSegment(kind)}/${patientId}/contacts`, valid);
       return studentSchema.parse(res.data);
     },
     onSuccess: () => {
@@ -381,18 +439,17 @@ export function useAddContact() {
 
 export function useUpdateAllergy() {
   const qc = useQueryClient();
-  return useMutation<Student, ApiEnvelopeError, { studentId: number; allergyId: number; input: AddAllergyInput }>({
-    mutationFn: async ({ studentId, allergyId, input }) => {
+  return useMutation<Student, ApiEnvelopeError, { kind: 'student' | 'employee'; patientId: number; allergyId: number; input: AddAllergyInput }>({
+    mutationFn: async ({ kind, patientId, allergyId, input }) => {
       const valid = addAllergySchema.parse(input);
       const res = await apiClient.post<unknown>(
-        `/clinic/students/${studentId}/allergies/${allergyId}`,
+        `/clinic/${patientMedicalSegment(kind)}/${patientId}/allergies/${allergyId}`,
         valid,
       );
       return studentSchema.parse(res.data);
     },
-    onSuccess: (s) => {
+    onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['patients'] });
-      void qc.invalidateQueries({ queryKey: ['patients', 'students', 'detail', s.id] });
       toast.success('Allergy updated.');
     },
     onError: (err) => {
@@ -403,17 +460,16 @@ export function useUpdateAllergy() {
 
 export function useDeleteAllergy() {
   const qc = useQueryClient();
-  return useMutation<Student, ApiEnvelopeError, { studentId: number; allergyId: number }>({
-    mutationFn: async ({ studentId, allergyId }) => {
+  return useMutation<Student, ApiEnvelopeError, { kind: 'student' | 'employee'; patientId: number; allergyId: number }>({
+    mutationFn: async ({ kind, patientId, allergyId }) => {
       const res = await apiClient.post<unknown>(
-        `/clinic/students/${studentId}/allergies/${allergyId}/delete`,
+        `/clinic/${patientMedicalSegment(kind)}/${patientId}/allergies/${allergyId}/delete`,
         {},
       );
       return studentSchema.parse(res.data);
     },
-    onSuccess: (s) => {
+    onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['patients'] });
-      void qc.invalidateQueries({ queryKey: ['patients', 'students', 'detail', s.id] });
       toast.success('Allergy removed.');
     },
     onError: (err) => {
@@ -424,18 +480,17 @@ export function useDeleteAllergy() {
 
 export function useUpdateContact() {
   const qc = useQueryClient();
-  return useMutation<Student, ApiEnvelopeError, { studentId: number; contactId: number; input: AddContactInput }>({
-    mutationFn: async ({ studentId, contactId, input }) => {
+  return useMutation<Student, ApiEnvelopeError, { kind: 'student' | 'employee'; patientId: number; contactId: number; input: AddContactInput }>({
+    mutationFn: async ({ kind, patientId, contactId, input }) => {
       const valid = addContactSchema.parse(input);
       const res = await apiClient.post<unknown>(
-        `/clinic/students/${studentId}/contacts/${contactId}`,
+        `/clinic/${patientMedicalSegment(kind)}/${patientId}/contacts/${contactId}`,
         valid,
       );
       return studentSchema.parse(res.data);
     },
-    onSuccess: (s) => {
+    onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['patients'] });
-      void qc.invalidateQueries({ queryKey: ['patients', 'students', 'detail', s.id] });
       toast.success('Emergency contact updated.');
     },
     onError: (err) => {
@@ -446,17 +501,16 @@ export function useUpdateContact() {
 
 export function useDeleteContact() {
   const qc = useQueryClient();
-  return useMutation<Student, ApiEnvelopeError, { studentId: number; contactId: number }>({
-    mutationFn: async ({ studentId, contactId }) => {
+  return useMutation<Student, ApiEnvelopeError, { kind: 'student' | 'employee'; patientId: number; contactId: number }>({
+    mutationFn: async ({ kind, patientId, contactId }) => {
       const res = await apiClient.post<unknown>(
-        `/clinic/students/${studentId}/contacts/${contactId}/delete`,
+        `/clinic/${patientMedicalSegment(kind)}/${patientId}/contacts/${contactId}/delete`,
         {},
       );
       return studentSchema.parse(res.data);
     },
-    onSuccess: (s) => {
+    onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['patients'] });
-      void qc.invalidateQueries({ queryKey: ['patients', 'students', 'detail', s.id] });
       toast.success('Emergency contact removed.');
     },
     onError: (err) => {
@@ -479,7 +533,7 @@ export function useDeleteContact() {
 export function useEmployees(
   cursor: string | null,
   limit = 25,
-  includeArchived = false,
+  status: ArchiveStatus = 'active',
   teaching: 'all' | 'teaching' | 'non_teaching' = 'all',
   department = 'all',
   position = 'all',
@@ -487,13 +541,13 @@ export function useEmployees(
   return useQuery<EmployeePage, ApiEnvelopeError>({
     queryKey: [
       'patients', 'employees',
-      { cursor, limit, includeArchived, teaching, department, position },
+      { cursor, limit, status, teaching, department, position },
     ],
     queryFn: async () => {
       const params = employeeListParams({
         cursor,
         limit,
-        includeArchived,
+        status,
         teaching,
         department,
         position,
@@ -510,16 +564,20 @@ export function useEmployees(
 
 /**
  * Facet options for the Employees tab filters — distinct MIS-supplied
- * department / position values present in the live directory. Served from
+ * department / position values present in the directory within the archive
+ * `status` being viewed (live by default). Served from
  * the synced rows so every option is guaranteed to match at least one
  * employee (unlike the dropped `clinic_departments` picker, whose
  * hand-entered rows never lined up with MIS values).
  */
-export function useEmployeeFacets() {
+export function useEmployeeFacets(status: ArchiveStatus = 'active') {
   return useQuery<{ departments: string[]; positions: string[] }, ApiEnvelopeError>({
-    queryKey: ['patients', 'employees', 'facets'],
+    queryKey: ['patients', 'employees', 'facets', status],
     queryFn: async () => {
-      const res = await apiClient.get<unknown>('/clinic/employees/facets');
+      const params = new URLSearchParams();
+      setArchiveParam(params, status);
+      const qs = params.toString();
+      const res = await apiClient.get<unknown>(`/clinic/employees/facets${qs === '' ? '' : `?${qs}`}`);
       return employeeFacetsSchema.parse(res.data);
     },
     // Facets change only when the directory is re-synced.
@@ -533,12 +591,17 @@ export function useEmployeeFacets() {
  * first, last, middle, department, and position. The facet filters stay in
  * force during search so narrowing does not silently reset while typing.
  */
-export function useEmployeeSearch(q: string, department = 'all', position = 'all') {
+export function useEmployeeSearch(
+  q: string,
+  department = 'all',
+  position = 'all',
+  status: ArchiveStatus = 'active',
+) {
   return useQuery<Employee[], ApiEnvelopeError>({
-    queryKey: ['patients', 'employees', 'search', q, { department, position }],
+    queryKey: ['patients', 'employees', 'search', q, { status, department, position }],
     enabled: q.trim().length >= 2,
     queryFn: async () => {
-      const params = employeeSearchParams({ q: q.trim(), department, position });
+      const params = employeeSearchParams({ q: q.trim(), status, department, position });
       const res = await apiClient.get<unknown[]>(
         `/clinic/employees/search?${params.toString()}`,
       );
