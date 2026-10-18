@@ -4,9 +4,15 @@ import 'package:provider/provider.dart';
 
 import '../../core/services/auth_controller.dart';
 import '../admin/admin_users_screen.dart';
+import '../admin/admin_carousel_screen.dart';
+import '../admin/admin_roles_screen.dart';
 import '../audit/audit_screen.dart';
 import '../clinic/clinic_screen.dart';
 import '../counselling/counselling_screen.dart';
+import '../counselling/guidance_content_screen.dart';
+import '../counselling/guidance_followups_screen.dart';
+import '../counselling/survey_management_screen.dart';
+import '../dashboard/workstation_dashboard_screen.dart';
 import '../equipment/equipment_screen.dart';
 import '../facilities/devices_screen.dart';
 import '../facilities/facilities_screen.dart';
@@ -18,6 +24,7 @@ import '../notifications/notifications_screen.dart';
 import '../patients/patients_screen.dart';
 import '../referrals/referrals_screen.dart';
 import '../reports/reports_screen.dart';
+import '../scheduling/scheduling_staff_screen.dart';
 
 class _Module {
   const _Module(
@@ -38,6 +45,20 @@ class _Module {
 }
 
 const _modules = <_Module>[
+  _Module('Clinic dashboard', HugeIcons.strokeRoundedChart01,
+      Color(0xFF0F766E), WorkstationDashboardScreen(unit: 'clinic'),
+      ['clinic.encounters.read']),
+  _Module('Guidance dashboard', HugeIcons.strokeRoundedChart01,
+      Color(0xFF5B4BA6), WorkstationDashboardScreen(unit: 'guidance'),
+      ['counselling.records.read']),
+  _Module('Facilities dashboard', HugeIcons.strokeRoundedChart01,
+      Color(0xFFB45309), WorkstationDashboardScreen(unit: 'facilities'),
+      ['facilities.units.read']),
+  _Module('Clinic staff', HugeIcons.strokeRoundedUserGroup, Color(0xFF0F766E),
+      SchedulingStaffScreen(unit: 'clinic'), ['clinic.schedules.manage']),
+  _Module('Guidance staff', HugeIcons.strokeRoundedUserGroup,
+      Color(0xFF5B4BA6), SchedulingStaffScreen(unit: 'guidance'),
+      ['counselling.schedule.team_manage']),
   _Module('Clinic', HugeIcons.strokeRoundedStethoscope, Color(0xFF0F766E),
       ClinicScreen(), ['clinic.encounters.read']),
   _Module('Records', HugeIcons.strokeRoundedUserMultiple, Color(0xFF1E6FD9),
@@ -55,6 +76,13 @@ const _modules = <_Module>[
       MedicinesScreen(), ['clinic.inventory.read']),
   _Module('Counselling', HugeIcons.strokeRoundedMessage01, Color(0xFF5B4BA6),
       CounsellingScreen(), ['counselling.records.read']),
+  _Module('Follow-ups', HugeIcons.strokeRoundedHeartCheck, Color(0xFFB3261E),
+      GuidanceFollowupsScreen(), ['counselling.responses.read_any']),
+  _Module('Guidance content', HugeIcons.strokeRoundedMegaphone01,
+      Color(0xFF8A5A00), GuidanceContentScreen(),
+      ['counselling.announcements.manage', 'counselling.services.manage']),
+  _Module('Surveys', HugeIcons.strokeRoundedClipboard, Color(0xFF5B4BA6),
+      SurveyManagementScreen(), ['counselling.surveys.manage']),
   _Module('Referrals', HugeIcons.strokeRoundedShare01, Color(0xFF0F766E),
       ReferralsScreen(), ['referrals.read']),
   _Module('Facilities', HugeIcons.strokeRoundedFactory01, Color(0xFF37474F),
@@ -78,6 +106,10 @@ const _modules = <_Module>[
       Color(0xFF8A5A00), NotificationsScreen(), ['notifications.read']),
   _Module('Users', HugeIcons.strokeRoundedUserGroup, Color(0xFF6A1B9A),
       AdminUsersScreen(), ['rbac.manage']),
+  _Module('Roles', HugeIcons.strokeRoundedShield01, Color(0xFF546E7A),
+      AdminRolesScreen(), ['rbac.read']),
+  _Module('Carousel', HugeIcons.strokeRoundedLayout02, Color(0xFF8D6E63),
+      AdminCarouselScreen(), ['rbac.manage']),
 ];
 
 /// The "More / Modules" tab — a permission-gated grid of every module

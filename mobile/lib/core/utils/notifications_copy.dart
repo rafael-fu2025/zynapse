@@ -18,10 +18,21 @@ const Map<String, String> _labels = {
   'referral.created': 'New referral to handle',
   'referral.acknowledged': 'Referral acknowledged',
   'referral.closed': 'Referral closed',
+  'referral.queue_handoff': 'Referral handed to the queue',
   'reorder.created': 'New reorder suggested',
   'bmg.alert_triggered': 'Facilities alert',
+  'bmg.device_silent': 'Facilities device offline',
+  'bmg.device_run_no_batch': 'Device ran without an active batch',
+  'bmg.device_rtc_invalid': 'Device clock needs attention',
+  'bmg.device_command_expired': 'Device command expired',
   'queue.called': 'Queue called',
+  'queue.skip_expired': 'Skipped patient recall expired',
   'counselling.queue_called': 'Guidance queue called',
+  'counselling.session_opened': 'Guidance session opened',
+  'counselling.session_closed': 'Guidance session closed',
+  'counselling.session_reassigned': 'Guidance session reassigned',
+  'counselling.session_archived': 'Guidance session archived',
+  'counselling.session_unarchived': 'Guidance session restored',
 };
 
 String notificationLabel(String templateCode) =>

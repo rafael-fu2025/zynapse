@@ -19,6 +19,7 @@ import '../../core/api/api_client.dart';
 import '../../core/models/facilities.dart';
 import '../../core/services/api_service.dart';
 import '../../core/services/auth_controller.dart';
+import '../../core/utils/dates.dart';
 import '../common/auto_polling.dart';
 import '../common/crud_form.dart';
 import '../common/widgets.dart';
@@ -101,7 +102,7 @@ class _DevicesScreenState extends State<DevicesScreen> with AutoPolling {
             icon: Icon(_showArchived
                 ? HugeIcons.strokeRoundedArchive01
                 : HugeIcons.strokeRoundedArchive),
-            tooltip: _showArchived ? 'Hide archived' : 'Show archived',
+            tooltip: _showArchived ? 'View active devices' : 'View archived',
           ),
           IconButton(
             onPressed: _load,
@@ -157,6 +158,10 @@ class _DevicesScreenState extends State<DevicesScreen> with AutoPolling {
               onRegenerate: _canManage ? () => _regenerate(_devices[i]) : null,
               onToggle: _canManage ? () => _toggle(_devices[i]) : null,
               onArchive: _canManage ? () => _archive(_devices[i]) : null,
+              onRestore: _canManage ? () => _restore(_devices[i]) : null,
+              onDelete: _canManage
+                  ? () => _deletePermanently(_devices[i])
+                  : null,
             ),
           );
         }),
@@ -339,6 +344,33 @@ class _DevicesScreenState extends State<DevicesScreen> with AutoPolling {
     if (ok) _load();
   }
 
+  Future<void> _restore(BmgDevice d) async {
+    final ok = await runCrudAction(
+      context,
+      () => ApiService.I.unarchiveFacilityDevice(d.id),
+      successMessage: 'Device restored.',
+    );
+    if (ok) _load();
+  }
+
+  Future<void> _deletePermanently(BmgDevice d) async {
+    final confirmed = await showCrudConfirm(
+      context,
+      title: 'Delete permanently?',
+      message: 'Permanently delete ${d.code}? This cannot be undone. Devices '
+          'with assignment, command or run history cannot be deleted.',
+      confirmLabel: 'Delete permanently',
+      destructive: true,
+    );
+    if (!confirmed || !mounted) return;
+    final ok = await runCrudAction(
+      context,
+      () => ApiService.I.deletePermanently('devices', d.id),
+      successMessage: 'Device permanently deleted.',
+    );
+    if (ok) _load();
+  }
+
   Future<void> _showToken(String title, String token, String explanation) {
     return showSynapseSheet<void>(
       context,
@@ -377,6 +409,8 @@ class _DeviceRow extends StatelessWidget {
     this.onRegenerate,
     this.onToggle,
     this.onArchive,
+    this.onRestore,
+    this.onDelete,
   });
 
   final BmgDevice device;
@@ -385,6 +419,8 @@ class _DeviceRow extends StatelessWidget {
   final VoidCallback? onRegenerate;
   final VoidCallback? onToggle;
   final VoidCallback? onArchive;
+  final VoidCallback? onRestore;
+  final VoidCallback? onDelete;
 
   @override
   Widget build(BuildContext context) {
@@ -473,19 +509,32 @@ class _DeviceRow extends StatelessWidget {
                     if (v == 'regenerate') onRegenerate?.call();
                     if (v == 'toggle') onToggle?.call();
                     if (v == 'archive') onArchive?.call();
+                    if (v == 'restore') onRestore?.call();
+                    if (v == 'delete') onDelete?.call();
+                    if (v == 'assignments') _openAssignments(context);
                   },
                   itemBuilder: (_) => [
                     const PopupMenuItem(
                         value: 'edit', child: Text('Edit device')),
                     const PopupMenuItem(
                         value: 'regenerate', child: Text('Regenerate token')),
+                    const PopupMenuItem(
+                        value: 'assignments',
+                        child: Text('Assignment history')),
                     PopupMenuItem(
                       value: 'toggle',
                       child: Text(
                           device.status == 'active' ? 'Disable' : 'Enable'),
                     ),
-                    const PopupMenuItem(
-                        value: 'archive', child: Text('Archive device')),
+                    if (!device.isArchived)
+                      const PopupMenuItem(
+                          value: 'archive', child: Text('Archive device')),
+                    if (device.isArchived) ...[
+                      const PopupMenuItem(
+                          value: 'restore', child: Text('Restore device')),
+                      const PopupMenuItem(
+                          value: 'delete', child: Text('Delete permanently')),
+                    ],
                   ],
                 ),
               ),
@@ -495,8 +544,82 @@ class _DeviceRow extends StatelessWidget {
     );
   }
 
-  static Widget _chip(String label, Color color) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+  Future<void> _openAssignments(BuildContext context) async {
+    try {
+      final items =
+          await ApiService.I.facilityDeviceAssignments(device.id);
+      if (!context.mounted) return;
+      await showSynapseSheet<void>(
+        context,
+        builder: (ctx) => SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                SheetHeader(
+                  title: 'Assignment history',
+                  subtitle: device.code,
+                ),
+                const SizedBox(height: 8),
+                Flexible(
+                  child: items.isEmpty
+                      ? const Padding(
+                          padding: EdgeInsets.symmetric(vertical: 18),
+                          child: Text(
+                            'No drum assignments on record.',
+                            style: TextStyle(
+                                fontSize: 12.5, color: Colors.black45),
+                          ),
+                        )
+                      : ListView.separated(
+                          shrinkWrap: true,
+                          itemCount: items.length,
+                          separatorBuilder: (_, __) =>
+                              const Divider(height: 1),
+                          itemBuilder: (_, i) {
+                            final row = items[i];
+                            return ListTile(
+                              contentPadding: EdgeInsets.zero,
+                              dense: true,
+                              title: Text(
+                                row.unitDisplayName ??
+                                    row.unitCode ??
+                                    'Drum #${row.unitId}',
+                                style: const TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w600),
+                              ),
+                              subtitle: Text(
+                                '${fmtUtcShort(row.assignedAt)} → '
+                                '${row.unassignedAt == null ? 'active' : fmtUtcShort(row.unassignedAt)}',
+                                style: const TextStyle(fontSize: 11),
+                              ),
+                              trailing: StatusBadge(
+                                label: row.isActive ? 'Active' : 'Closed',
+                                color: row.isActive
+                                    ? const Color(0xFF1B7A43)
+                                    : Colors.black45,
+                              ),
+                            );
+                          },
+                        ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    } catch (e) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(mapDioError(e).message)),
+      );
+    }
+  }
+
+  static Widget _chip(String label, Color color) => Container(        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
         decoration: BoxDecoration(
           color: color.withValues(alpha: 0.12),
           borderRadius: BorderRadius.circular(20),

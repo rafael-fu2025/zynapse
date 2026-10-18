@@ -12,9 +12,11 @@ import '../../core/api/api_client.dart';
 import '../../core/models/report.dart';
 import '../../core/services/api_service.dart';
 import '../../core/services/auth_controller.dart';
+import '../../core/utils/dates.dart';
 import '../common/crud_form.dart';
 import '../common/widgets.dart';
 import 'report_pdf.dart';
+import 'saved_reports_tab.dart';
 
 /// Institution reports — mirrors the SPA Reports page.
 ///
@@ -46,13 +48,20 @@ class _ReportsScreenState extends State<ReportsScreen>
       context.read<AuthController>().session?.hasPermission('reports.export') ??
       false;
 
+  bool get _canConfigure =>
+      context
+          .read<AuthController>()
+          .session
+          ?.hasPermission('reports.configure') ??
+      false;
+
   @override
   void initState() {
     super.initState();
     final now = DateTime.now();
     _end = now;
     _start = now.subtract(const Duration(days: 6));
-    _tabController = TabController(length: 6, vsync: this);
+    _tabController = TabController(length: 7, vsync: this);
     _load();
   }
 
@@ -154,6 +163,7 @@ class _ReportsScreenState extends State<ReportsScreen>
             Tab(text: 'Inventory'),
             Tab(text: 'Referrals'),
             Tab(text: 'Facilities'),
+            Tab(text: 'Saved'),
           ],
         ),
       ),
@@ -243,6 +253,13 @@ class _ReportsScreenState extends State<ReportsScreen>
                     start: start,
                     end: end,
                     canExport: _canExport),
+                SavedReportsTab(
+                  key: const ValueKey('saved-reports'),
+                  start: start,
+                  end: end,
+                  canConfigure: _canConfigure,
+                  canExport: _canExport,
+                ),
               ],
             ),
           ),
@@ -380,6 +397,7 @@ class _ModuleReportTabState extends State<_ModuleReportTab> {
   bool _loading = true;
   String? _error;
   Map<String, dynamic>? _data;
+  Map<String, dynamic>? _inventoryForecast;
   bool _exporting = false;
   bool _pdfExporting = false;
 
@@ -400,9 +418,18 @@ class _ModuleReportTabState extends State<_ModuleReportTab> {
         start: widget.start,
         end: widget.end,
       );
+      Map<String, dynamic>? forecast;
+      if (widget.module == 'inventory') {
+        try {
+          forecast = await ApiService.I.reportInventoryForecast();
+        } catch (_) {
+          // The report itself stays usable without the forecast section.
+        }
+      }
       if (!mounted) return;
       setState(() {
         _data = data;
+        _inventoryForecast = forecast;
         _loading = false;
       });
     } catch (e) {
@@ -795,6 +822,19 @@ class _ModuleReportTabState extends State<_ModuleReportTab> {
   }
 
   Widget _buildInventory(Map<String, dynamic> d) {
+    final equipment =
+        d['equipment'] as Map<String, dynamic>? ?? const {};
+    final statusSummary =
+        equipment['status_summary'] as Map<String, dynamic>? ?? const {};
+    final needsReplacement = (equipment['needs_replacement'] as List? ??
+            const [])
+        .whereType<Map<String, dynamic>>()
+        .toList();
+    final forecast = _inventoryForecast;
+    final forecastItems =
+        (forecast?['items'] as List? ?? const [])
+            .whereType<Map<String, dynamic>>()
+            .toList();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -803,6 +843,8 @@ class _ModuleReportTabState extends State<_ModuleReportTab> {
           ('Dispensed', '${d['total_dispensed'] ?? 0}'),
           ('Needs to reorder', '${(d['low_stock'] as List? ?? []).length}'),
           ('Expired', '${(d['expired'] as List? ?? []).length}'),
+          ('For repair', '${statusSummary['for_repair'] ?? 0}'),
+          ('For replacement', '${statusSummary['for_replacement'] ?? 0}'),
         ]),
         _medList('Needs to reorder',
             (d['low_stock'] as List? ?? []).cast<Map<String, dynamic>>()),
@@ -815,6 +857,46 @@ class _ModuleReportTabState extends State<_ModuleReportTab> {
         _medList('Top dispensed',
             (d['top_dispensed'] as List? ?? []).cast<Map<String, dynamic>>(),
             valueKey: 'qty'),
+        if (needsReplacement.isNotEmpty) ...[
+          const SizedBox(height: 16),
+          const Text(
+            'Equipment for replacement',
+            style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13),
+          ),
+          const SizedBox(height: 4),
+          for (final item in needsReplacement)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 2),
+              child: Text(
+                '${item['name'] ?? 'Equipment'}'
+                '${item['location'] != null ? ' · ${item['location']}' : ''}'
+                ' · ${item['units'] ?? 0} unit(s)'
+                '${item['oldest_flagged'] != null ? ' · flagged since ${fmtUtcToApp(item['oldest_flagged'] as String?)}' : ''}',
+                style: const TextStyle(fontSize: 12, color: Colors.black87),
+              ),
+            ),
+        ],
+        if (forecastItems.isNotEmpty) ...[
+          const SizedBox(height: 16),
+          Text(
+            'Stockout forecast (≤${forecast?['within_days'] ?? 90} days)',
+            style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13),
+          ),
+          const SizedBox(height: 4),
+          for (final item in forecastItems)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 2),
+              child: Text(
+                '${item['generic_name'] ?? 'Medicine'}'
+                '${item['brand_name'] != null ? ' (${item['brand_name']})' : ''}'
+                ' · ${item['total_stock'] ?? 0} ${item['unit'] ?? ''}'
+                ' · ~${item['predicted_daily_usage'] ?? 0}/day'
+                ' · stockout ${item['stockout_date'] ?? '—'}'
+                '${item['reorder_date'] != null ? ' · reorder ${item['reorder_date']}' : ''}',
+                style: const TextStyle(fontSize: 12, color: Colors.black87),
+              ),
+            ),
+        ],
       ],
     );
   }

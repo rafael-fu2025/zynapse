@@ -5,21 +5,28 @@ import '../api/api_envelope.dart';
 import '../models/admin_user.dart';
 import '../models/appointment.dart';
 import '../models/audit_event.dart';
+import '../models/appointment_portal.dart';
+import '../models/bmg_automation.dart';
+import '../models/carousel_slide.dart';
 import '../models/clinic.dart';
 import '../models/counselling.dart';
 import '../models/dashboard.dart';
 import '../models/facilities.dart';
 import '../models/equipment.dart';
 import '../models/inventory.dart';
+import '../models/guidance_content.dart';
+import '../models/guidance_followup.dart';
 import '../models/medicine.dart';
 import '../models/notification.dart';
 import '../models/profile.dart';
 import '../models/queue.dart';
 import '../models/reorder.dart';
-import '../models/appointment_portal.dart';
 import '../models/referral.dart';
 import '../models/report.dart';
+import '../models/report_config.dart';
+import '../models/scheduling_staff.dart';
 import '../models/survey.dart';
+import '../models/workstation_dashboard.dart';
 
 /// A paginated page of items plus keyset cursor metadata.
 class ApiPage<T> {
@@ -132,6 +139,15 @@ class ApiService {
     return DashboardCounters();
   }
 
+  /// `GET /dashboard/{unit}` — the workstation snapshot (`clinic`,
+  /// `guidance`, `facilities`). Guidance counsellors without
+  /// `counselling.records.read_any` get their own-session scope.
+  Future<WorkstationDashboard> workstationDashboard(String unit) async {
+    final res =
+        await _dio.get<Map<String, dynamic>>('/dashboard/$unit');
+    return WorkstationDashboard.fromJson(_unwrapObject(res));
+  }
+
   Future<List<StockTransaction>> inventoryTransactions(int itemId) async {
     final res = await _dio.get<Map<String, dynamic>>(
       '/clinic/inventory/$itemId/movements',
@@ -168,6 +184,96 @@ class ApiService {
         'new_password': newPassword,
       },
     );
+  }
+
+  /// `GET /auth/carousel-slides` — the public, active login slides.
+  /// Unauthenticated; failures should fall back to the static login art.
+  Future<List<CarouselSlide>> carouselSlides() async {
+    final res =
+        await _dio.get<Map<String, dynamic>>('/auth/carousel-slides');
+    return _unwrapList(res)
+        .whereType<Map<String, dynamic>>()
+        .map(CarouselSlide.fromJson)
+        .toList();
+  }
+
+  /// `GET /admin/carousel` — all slides (active and inactive).
+  Future<List<CarouselSlide>> adminCarouselSlides() async {
+    final res = await _dio.get<Map<String, dynamic>>('/admin/carousel');
+    return _unwrapList(res)
+        .whereType<Map<String, dynamic>>()
+        .map(CarouselSlide.fromJson)
+        .toList();
+  }
+
+  /// `POST /admin/carousel` — JSON path form (no multipart upload).
+  /// `light_image` must be an existing server-relative image path.
+  Future<CarouselSlide> createCarouselSlide(Map<String, dynamic> payload) async {
+    final res = await _dio.post<Map<String, dynamic>>(
+      '/admin/carousel',
+      data: payload,
+    );
+    return CarouselSlide.fromJson(_unwrapObject(res));
+  }
+
+  Future<CarouselSlide> updateCarouselSlide(
+    int id,
+    Map<String, dynamic> payload,
+  ) async {
+    final res = await _dio.post<Map<String, dynamic>>(
+      '/admin/carousel/$id',
+      data: payload,
+    );
+    return CarouselSlide.fromJson(_unwrapObject(res));
+  }
+
+  Future<void> deleteCarouselSlide(int id) async {
+    await _dio.post<Map<String, dynamic>>('/admin/carousel/$id/delete');
+  }
+
+  Future<CarouselSlide> toggleCarouselSlide(int id) async {
+    final res =
+        await _dio.post<Map<String, dynamic>>('/admin/carousel/$id/toggle');
+    return CarouselSlide.fromJson(_unwrapObject(res));
+  }
+
+  Future<void> reorderCarouselSlides(List<int> orderedIds) async {
+    await _dio.post<Map<String, dynamic>>(
+      '/admin/carousel/reorder',
+      data: {'ordered_ids': orderedIds},
+    );
+  }
+
+  /// Multipart create/update for carousel slides. Pass [id] to update;
+  /// omit it to create. At least one image file is normally required for
+  /// creation, but the backend also accepts a JSON `light_image` path.
+  Future<CarouselSlide> uploadCarouselSlide({
+    int? id,
+    required Map<String, String> fields,
+    String? lightImagePath,
+    String? darkImagePath,
+  }) async {
+    final form = FormData();
+    for (final entry in fields.entries) {
+      form.fields.add(MapEntry(entry.key, entry.value));
+    }
+    if (lightImagePath != null) {
+      form.files.add(MapEntry(
+        'light_image',
+        await MultipartFile.fromFile(lightImagePath),
+      ));
+    }
+    if (darkImagePath != null) {
+      form.files.add(MapEntry(
+        'dark_image',
+        await MultipartFile.fromFile(darkImagePath),
+      ));
+    }
+    final res = await _dio.post<Map<String, dynamic>>(
+      id == null ? '/admin/carousel' : '/admin/carousel/$id',
+      data: form,
+    );
+    return CarouselSlide.fromJson(_unwrapObject(res));
   }
 
   // ---------------------------------------------------------------------
@@ -209,33 +315,10 @@ class ApiService {
         .toList();
   }
 
-  /// `GET /me/student-providers` — minimal provider list for self-booking.
-  Future<List<ProviderRef>> studentProviders() async {
-    final res = await _dio.get<Map<String, dynamic>>('/me/student-providers');
-    return _unwrapList(res)
-        .whereType<Map<String, dynamic>>()
-        .map(ProviderRef.fromJson)
-        .toList();
-  }
-
-  /// `POST /me/student-appointments` — self-service booking.
-  ///
-  /// [scheduledAt] must be a UTC wall-clock string (`YYYY-MM-DD HH:mm:ss`).
-  Future<Appointment> bookStudentAppointment({
-    required int providerUserId,
-    required String scheduledAt,
-    String? reason,
-  }) async {
-    final res = await _dio.post<Map<String, dynamic>>(
-      '/me/student-appointments',
-      data: {
-        'provider_user_id': providerUserId,
-        'scheduled_at': scheduledAt,
-        if (reason != null && reason.isNotEmpty) 'reason': reason,
-      },
-    );
-    return Appointment.fromJson(_unwrapObject(res));
-  }
+  // Student self-booking uses the pooled slot endpoints below
+  // (`/me/appointment-slots` + `/me/appointments`). The retired
+  // `/me/student-appointments` free-time flow no longer books: the backend
+  // rejects arbitrary times and decides provider assignment itself.
 
   // ---------------------------------------------------------------------
   // Queue
@@ -298,6 +381,254 @@ class ApiService {
   // ---------------------------------------------------------------------
   // Student guidance surveys (/me/guidance/surveys)
   // ---------------------------------------------------------------------
+
+  /// `GET /counselling/followups?status=&mine=1` — the RA 11036 aftercare
+  /// caseload. Requires `counselling.responses.read_any`.
+  Future<List<GuidanceFollowup>> guidanceFollowups({
+    String status = 'all',
+    bool mineOnly = false,
+  }) async {
+    final res = await _dio.get<Map<String, dynamic>>(
+      '/counselling/followups',
+      queryParameters: {
+        if (status != 'all') 'status': status,
+        if (mineOnly) 'mine': '1',
+      },
+    );
+    return _unwrapList(res)
+        .whereType<Map<String, dynamic>>()
+        .map(GuidanceFollowup.fromJson)
+        .toList();
+  }
+
+  /// `POST /counselling/followups/{id}/assign`
+  Future<void> assignGuidanceFollowup(int id, int counsellorUserId) async {
+    await _dio.post<Map<String, dynamic>>(
+      '/counselling/followups/$id/assign',
+      data: {'counsellor_user_id': counsellorUserId},
+    );
+  }
+
+  /// `POST /counselling/followups/{id}/transition` — action:
+  /// start_review | mark_addressed | close. The last two require an
+  /// outcome note.
+  Future<String> transitionGuidanceFollowup(
+    int id,
+    String action, {
+    String? outcomeNote,
+  }) async {
+    final res = await _dio.post<Map<String, dynamic>>(
+      '/counselling/followups/$id/transition',
+      data: {
+        'action': action,
+        'outcome_note':
+            outcomeNote != null && outcomeNote.trim().isNotEmpty
+                ? outcomeNote.trim()
+                : null,
+      },
+    );
+    return (_unwrapObject(res)['status'] ?? '') as String;
+  }
+
+  // ---------------------------------------------------------------------
+  // Guidance announcements & services (staff management)
+  // ---------------------------------------------------------------------
+
+  /// `GET /counselling/announcements` — active, or archived-only with
+  /// [archived] (`?archived=1`).
+  Future<List<GuidanceAnnouncement>> guidanceAnnouncements({
+    bool archived = false,
+  }) async {
+    final res = await _dio.get<Map<String, dynamic>>(
+      '/counselling/announcements',
+      queryParameters: {if (archived) 'archived': '1'},
+    );
+    return _unwrapList(res)
+        .whereType<Map<String, dynamic>>()
+        .map(GuidanceAnnouncement.fromJson)
+        .toList();
+  }
+
+  Future<GuidanceAnnouncement> createGuidanceAnnouncement(
+    Map<String, dynamic> payload,
+  ) async {
+    final res = await _dio.post<Map<String, dynamic>>(
+      '/counselling/announcements',
+      data: payload,
+    );
+    return GuidanceAnnouncement.fromJson(_unwrapObject(res));
+  }
+
+  Future<GuidanceAnnouncement> updateGuidanceAnnouncement(
+    int id,
+    Map<String, dynamic> payload,
+  ) async {
+    final res = await _dio.post<Map<String, dynamic>>(
+      '/counselling/announcements/$id/update',
+      data: payload,
+    );
+    return GuidanceAnnouncement.fromJson(_unwrapObject(res));
+  }
+
+  Future<void> archiveGuidanceAnnouncement(int id,
+      {bool archived = true}) async {
+    await _dio.post<Map<String, dynamic>>(
+      '/counselling/announcements/$id/${archived ? 'archive' : 'unarchive'}',
+    );
+  }
+
+  /// `GET /counselling/services` — active, or archived-only with
+  /// [archived] (`?archived=1`).
+  Future<List<GuidanceService>> guidanceServices({
+    bool archived = false,
+  }) async {
+    final res = await _dio.get<Map<String, dynamic>>(
+      '/counselling/services',
+      queryParameters: {if (archived) 'archived': '1'},
+    );
+    return _unwrapList(res)
+        .whereType<Map<String, dynamic>>()
+        .map(GuidanceService.fromJson)
+        .toList();
+  }
+
+  Future<GuidanceService> createGuidanceService(
+    Map<String, dynamic> payload,
+  ) async {
+    final res = await _dio.post<Map<String, dynamic>>(
+      '/counselling/services',
+      data: payload,
+    );
+    return GuidanceService.fromJson(_unwrapObject(res));
+  }
+
+  Future<GuidanceService> updateGuidanceService(
+    int id,
+    Map<String, dynamic> payload,
+  ) async {
+    final res = await _dio.post<Map<String, dynamic>>(
+      '/counselling/services/$id/update',
+      data: payload,
+    );
+    return GuidanceService.fromJson(_unwrapObject(res));
+  }
+
+  Future<void> archiveGuidanceService(int id, {bool archived = true}) async {
+    await _dio.post<Map<String, dynamic>>(
+      '/counselling/services/$id/${archived ? 'archive' : 'unarchive'}',
+    );
+  }
+
+  /// Staff survey management — list, detail, publish, archive, responses.
+  /// Requires `counselling.surveys.manage` / `counselling.responses.read`.
+  Future<List<Map<String, dynamic>>> adminGuidanceSurveys({
+    bool archived = false,
+  }) async {
+    final res = await _dio.get<Map<String, dynamic>>(
+      '/counselling/surveys',
+      queryParameters: {if (archived) 'archived': '1'},
+    );
+    return _unwrapList(res).whereType<Map<String, dynamic>>().toList();
+  }
+
+  Future<Map<String, dynamic>> adminGuidanceSurvey(int id) async {
+    final res =
+        await _dio.get<Map<String, dynamic>>('/counselling/surveys/$id');
+    return _unwrapObject(res);
+  }
+
+  Future<Map<String, dynamic>> createGuidanceSurvey(
+    Map<String, dynamic> payload,
+  ) async {
+    final res = await _dio.post<Map<String, dynamic>>(
+      '/counselling/surveys',
+      data: payload,
+    );
+    return _unwrapObject(res);
+  }
+
+  Future<Map<String, dynamic>> updateGuidanceSurvey(
+    int id,
+    Map<String, dynamic> payload,
+  ) async {
+    final res = await _dio.post<Map<String, dynamic>>(
+      '/counselling/surveys/$id/update',
+      data: payload,
+    );
+    return _unwrapObject(res);
+  }
+
+  /// `POST /counselling/surveys/{id}/questions` — replace the draft set.
+  Future<Map<String, dynamic>> setGuidanceSurveyQuestions(
+    int id,
+    List<Map<String, dynamic>> questions,
+  ) async {
+    final res = await _dio.post<Map<String, dynamic>>(
+      '/counselling/surveys/$id/questions',
+      data: {'questions': questions},
+    );
+    return _unwrapObject(res);
+  }
+
+  /// `POST /counselling/surveys/{id}/links` — replace the draft link set.
+  Future<Map<String, dynamic>> setGuidanceSurveyLinks(
+    int id,
+    List<Map<String, dynamic>> links,
+  ) async {
+    final res = await _dio.post<Map<String, dynamic>>(
+      '/counselling/surveys/$id/links',
+      data: {'links': links},
+    );
+    return _unwrapObject(res);
+  }
+
+  Future<Map<String, dynamic>> publishGuidanceSurvey(int id) async {
+    final res = await _dio
+        .post<Map<String, dynamic>>('/counselling/surveys/$id/publish');
+    return _unwrapObject(res);
+  }
+
+  Future<void> archiveGuidanceSurvey(int id, {bool archived = true}) async {
+    await _dio.post<Map<String, dynamic>>(
+      '/counselling/surveys/$id/${archived ? 'archive' : 'unarchive'}',
+    );
+  }
+
+  Future<List<Map<String, dynamic>>> guidanceSurveyResponses(
+    int surveyId, {
+    int? yearLevel,
+  }) async {
+    final res = await _dio.get<Map<String, dynamic>>(
+      '/counselling/surveys/$surveyId/responses',
+      queryParameters: {if (yearLevel != null) 'year_level': yearLevel},
+    );
+    return _unwrapList(res).whereType<Map<String, dynamic>>().toList();
+  }
+
+  Future<Map<String, dynamic>> guidanceSurveyResponse(
+    int surveyId,
+    int responseId,
+  ) async {
+    final res = await _dio.get<Map<String, dynamic>>(
+      '/counselling/surveys/$surveyId/responses/$responseId',
+    );
+    return _unwrapObject(res);
+  }
+
+  /// `GET .../responses/{responseId}/screenshots/{screenshotId}` — proof
+  /// bytes. The read is audited server-side.
+  Future<List<int>> guidanceSurveyScreenshot(
+    int surveyId,
+    int responseId,
+    int screenshotId,
+  ) async {
+    final res = await _dio.get<List<int>>(
+      '/counselling/surveys/$surveyId/responses/$responseId/'
+      'screenshots/$screenshotId',
+      options: Options(responseType: ResponseType.bytes),
+    );
+    return res.data ?? const [];
+  }
 
   /// Open surveys & interviews for the caller (mirrors the web's
   /// `useMySurveys` — required items are the clearance checklist).
@@ -416,7 +747,11 @@ class ApiService {
   // Patients (clinic.patients.read)
   // ---------------------------------------------------------------------
 
-  /// `GET /clinic/students?limit=&cursor=&include_archived=`
+  /// `GET /clinic/students?limit=&cursor=&archived=`
+  ///
+  /// [includeArchived] selects the archived-only scope (`archived=archived`).
+  /// The legacy `include_archived=1` means "active + archived" and cannot
+  /// browse archived records on their own.
   Future<ApiPage<UserProfile>> students({
     int limit = 25,
     String? cursor,
@@ -424,7 +759,7 @@ class ApiService {
   }) async {
     final query = <String, dynamic>{
       'limit': limit,
-      if (includeArchived) 'include_archived': '1',
+      if (includeArchived) 'archived': 'archived',
       if (cursor != null && cursor.isNotEmpty) 'cursor': cursor,
     };
     final res = await _dio.get<Map<String, dynamic>>(
@@ -441,11 +776,17 @@ class ApiService {
     );
   }
 
-  /// `GET /clinic/students/search?q=`
-  Future<List<UserProfile>> studentSearch(String q) async {
+  /// `GET /clinic/students/search?q=&archived=`
+  Future<List<UserProfile>> studentSearch(
+    String q, {
+    bool includeArchived = false,
+  }) async {
     final res = await _dio.get<Map<String, dynamic>>(
       '/clinic/students/search',
-      queryParameters: {'q': q.trim()},
+      queryParameters: {
+        'q': q.trim(),
+        if (includeArchived) 'archived': 'archived',
+      },
     );
     return _unwrapList(res)
         .whereType<Map<String, dynamic>>()
@@ -453,7 +794,7 @@ class ApiService {
         .toList();
   }
 
-  /// `GET /clinic/employees?limit=&cursor=&teaching=`
+  /// `GET /clinic/employees?limit=&cursor=&teaching=&archived=`
   Future<ApiPage<UserProfile>> employees({
     int limit = 25,
     String? cursor,
@@ -462,7 +803,7 @@ class ApiService {
   }) async {
     final query = <String, dynamic>{
       'limit': limit,
-      if (includeArchived) 'include_archived': '1',
+      if (includeArchived) 'archived': 'archived',
       if (teaching != null && teaching != 'all') 'teaching': teaching,
       if (cursor != null && cursor.isNotEmpty) 'cursor': cursor,
     };
@@ -480,11 +821,17 @@ class ApiService {
     );
   }
 
-  /// `GET /clinic/employees/search?q=`
-  Future<List<UserProfile>> employeeSearch(String q) async {
+  /// `GET /clinic/employees/search?q=&archived=`
+  Future<List<UserProfile>> employeeSearch(
+    String q, {
+    bool includeArchived = false,
+  }) async {
     final res = await _dio.get<Map<String, dynamic>>(
       '/clinic/employees/search',
-      queryParameters: {'q': q.trim()},
+      queryParameters: {
+        'q': q.trim(),
+        if (includeArchived) 'archived': 'archived',
+      },
     );
     return _unwrapList(res)
         .whereType<Map<String, dynamic>>()
@@ -496,7 +843,7 @@ class ApiService {
   // Inventory (clinic.inventory.read)
   // ---------------------------------------------------------------------
 
-  /// `GET /clinic/inventory?limit=&cursor=&include_archived=`
+  /// `GET /clinic/inventory?limit=&cursor=&archived=`
   Future<ApiPage<InventoryItem>> inventoryItems({
     int limit = 25,
     String? cursor,
@@ -504,7 +851,8 @@ class ApiService {
   }) async {
     final query = <String, dynamic>{
       'limit': limit,
-      if (includeArchived) 'include_archived': '1',
+      // Clinic/facilities lists take a boolean: 1 = archived only.
+      if (includeArchived) 'archived': '1',
       if (cursor != null && cursor.isNotEmpty) 'cursor': cursor,
     };
     final res = await _dio.get<Map<String, dynamic>>(
@@ -598,7 +946,7 @@ class ApiService {
   // Equipment (clinic.inventory.read) — durable-asset catalog
   // ---------------------------------------------------------------------
 
-  /// `GET /clinic/equipment?limit=&cursor=&q=&include_archived=`
+  /// `GET /clinic/equipment?limit=&cursor=&q=&archived=`
   Future<ApiPage<Equipment>> equipmentItems({
     int limit = 25,
     String? cursor,
@@ -607,7 +955,7 @@ class ApiService {
   }) async {
     final query = <String, dynamic>{
       'limit': limit,
-      if (includeArchived) 'include_archived': '1',
+      if (includeArchived) 'archived': '1',
       if (cursor != null && cursor.isNotEmpty) 'cursor': cursor,
       if (q != null && q.isNotEmpty) 'q': q,
     };
@@ -635,7 +983,7 @@ class ApiService {
   // Medicines (clinic.inventory.read)
   // ---------------------------------------------------------------------
 
-  /// `GET /clinic/medicines?limit=&cursor=&q=`
+  /// `GET /clinic/medicines?limit=&cursor=&q=&archived=`
   Future<ApiPage<Medicine>> medicines({
     int limit = 25,
     String? cursor,
@@ -644,7 +992,7 @@ class ApiService {
   }) async {
     final query = <String, dynamic>{
       'limit': limit,
-      if (includeArchived) 'include_archived': '1',
+      if (includeArchived) 'archived': '1',
       if (q != null && q.isNotEmpty) 'q': q,
       if (cursor != null && cursor.isNotEmpty) 'cursor': cursor,
     };
@@ -684,18 +1032,40 @@ class ApiService {
         .toList();
   }
 
+  /// `GET /clinic/medicines/{id}/forecast` — latest stored forecast, or
+  /// null when none has been computed.
+  Future<Map<String, dynamic>?> medicineForecast(int id) async {
+    final res = await _dio
+        .get<Map<String, dynamic>>('/clinic/medicines/$id/forecast');
+    final data = _unwrapObject(res);
+    final forecast = data['forecast'];
+    return forecast is Map<String, dynamic> ? forecast : null;
+  }
+
+  /// `POST /clinic/medicines/{id}/forecast` — recompute and persist.
+  Future<Map<String, dynamic>> computeMedicineForecast(int id) async {
+    final res = await _dio
+        .post<Map<String, dynamic>>('/clinic/medicines/$id/forecast');
+    return _unwrapObject(res);
+  }
+
   // ---------------------------------------------------------------------
   // Counselling (counselling.records.read)
   // ---------------------------------------------------------------------
 
-  /// `GET /counselling/sessions?limit=&cursor=`
+  /// `GET /counselling/sessions?limit=&cursor=&archived=`
+  ///
+  /// [archived] selects the archived-only scope and requires
+  /// `counselling.records.soft_delete` server-side.
   Future<ApiPage<CounsellingSession>> counsellingSessions({
     int limit = 25,
     String? cursor,
+    bool archived = false,
   }) async {
     final query = <String, dynamic>{
       'limit': limit,
       if (cursor != null && cursor.isNotEmpty) 'cursor': cursor,
+      if (archived) 'archived': '1',
     };
     final res = await _dio.get<Map<String, dynamic>>(
       '/counselling/sessions',
@@ -766,7 +1136,7 @@ class ApiService {
   // Facilities (facilities.units.read)
   // ---------------------------------------------------------------------
 
-  /// `GET /facilities/units?limit=&cursor=&include_archived=`
+  /// `GET /facilities/units?limit=&cursor=&archived=`
   Future<ApiPage<BmgUnit>> facilityUnits({
     int limit = 25,
     String? cursor,
@@ -774,7 +1144,7 @@ class ApiService {
   }) async {
     final query = <String, dynamic>{
       'limit': limit,
-      if (includeArchived) 'include_archived': '1',
+      if (includeArchived) 'archived': '1',
       if (cursor != null && cursor.isNotEmpty) 'cursor': cursor,
     };
     final res = await _dio.get<Map<String, dynamic>>(
@@ -843,6 +1213,103 @@ class ApiService {
     final res = await _dio.get<String>(
       '/reports/export/$module',
       queryParameters: {'start': start, 'end': end},
+      options: Options(responseType: ResponseType.plain),
+    );
+    return res.data ?? '';
+  }
+
+  /// `GET /reports/inventory/forecast?within_days=` — catalog-wide stockout
+  /// projection (trailing 30-day usage model).
+  Future<Map<String, dynamic>> reportInventoryForecast({
+    int withinDays = 90,
+  }) async {
+    final res = await _dio.get<Map<String, dynamic>>(
+      '/reports/inventory/forecast',
+      queryParameters: {'within_days': withinDays},
+    );
+    return _unwrapObject(res);
+  }
+
+  // ---------------------------------------------------------------------
+  // Saved report configurations + generated reports
+  // ---------------------------------------------------------------------
+
+  /// `GET /reports/configs?archived=&page=&limit=&module=`
+  Future<ReportConfigPage> reportConfigs({
+    int page = 1,
+    int limit = 10,
+    bool archived = false,
+    String? module,
+  }) async {
+    final res = await _dio.get<Map<String, dynamic>>(
+      '/reports/configs',
+      queryParameters: {
+        'page': page,
+        'limit': limit,
+        'archived': archived ? '1' : '0',
+        if (module != null && module.isNotEmpty) 'module': module,
+      },
+    );
+    return ReportConfigPage.fromJson(_unwrapObject(res));
+  }
+
+  Future<ReportConfig> createReportConfig(Map<String, dynamic> payload) async {
+    final res = await _dio.post<Map<String, dynamic>>(
+      '/reports/configs',
+      data: payload,
+    );
+    return ReportConfig.fromJson(_unwrapObject(res));
+  }
+
+  Future<ReportConfig> updateReportConfig(
+    int id,
+    Map<String, dynamic> payload,
+  ) async {
+    final res = await _dio.post<Map<String, dynamic>>(
+      '/reports/configs/$id',
+      data: payload,
+    );
+    return ReportConfig.fromJson(_unwrapObject(res));
+  }
+
+  Future<GeneratedReport> runReportConfig(int id) async {
+    final res = await _dio.post<Map<String, dynamic>>(
+      '/reports/configs/$id/run',
+      data: const <String, dynamic>{},
+    );
+    return GeneratedReport.fromJson(_unwrapObject(res));
+  }
+
+  Future<void> archiveReportConfig(int id, {bool archived = true}) async {
+    await _dio.post<Map<String, dynamic>>(
+      '/reports/configs/$id/${archived ? 'archive' : 'unarchive'}',
+      data: const <String, dynamic>{},
+    );
+  }
+
+  /// `GET /reports/generated?page=&limit=&module=&status=`
+  Future<GeneratedReportPage> generatedReports({
+    int page = 1,
+    int limit = 10,
+    String? module,
+    String? status,
+  }) async {
+    final res = await _dio.get<Map<String, dynamic>>(
+      '/reports/generated',
+      queryParameters: {
+        'page': page,
+        'limit': limit,
+        if (module != null && module.isNotEmpty) 'module': module,
+        if (status != null && status.isNotEmpty) 'status': status,
+      },
+    );
+    return GeneratedReportPage.fromJson(_unwrapObject(res));
+  }
+
+  /// `GET /reports/generated/{id}/download` — the generated CSV body.
+  Future<String> downloadGeneratedReportCsv(int id) async {
+    final res = await _dio.get<String>(
+      '/reports/generated/$id/download',
       options: Options(responseType: ResponseType.plain),
     );
     return res.data ?? '';
@@ -996,6 +1463,51 @@ class ApiService {
     );
   }
 
+  /// `GET /rbac/roles` — the code-defined role → permission catalog.
+  /// Requires `rbac.read`.
+  Future<List<Map<String, dynamic>>> adminRoles() async {
+    final res = await _dio.get<Map<String, dynamic>>('/rbac/roles');
+    final data = _unwrapObject(res);
+    return (data['roles'] as List? ?? const [])
+        .whereType<Map<String, dynamic>>()
+        .toList();
+  }
+
+  /// `POST /admin/users/sync-directory` — queue a preview or apply job.
+  /// Returns the job DTO; poll `latestDirectorySyncJob`.
+  Future<Map<String, dynamic>> syncDirectory({
+    String kind = 'all',
+    bool dryRun = true,
+    int? pageSize,
+    int? maxPages,
+  }) async {
+    final res = await _dio.post<Map<String, dynamic>>(
+      '/admin/users/sync-directory',
+      data: {
+        'kind': kind,
+        'dry_run': dryRun,
+        if (pageSize != null) 'page_size': pageSize,
+        if (maxPages != null) 'max_pages': maxPages,
+      },
+    );
+    return _unwrapObject(res);
+  }
+
+  /// `GET /admin/users/sync-directory/jobs/latest` — the newest job, or
+  /// null when none has ever run.
+  Future<Map<String, dynamic>?> latestDirectorySyncJob() async {
+    try {
+      final res = await _dio.get<Map<String, dynamic>>(
+        '/admin/users/sync-directory/jobs/latest',
+      );
+      return _unwrapNullableObject(res);
+    } catch (e) {
+      final mapped = mapDioError(e);
+      if (mapped.statusCode == 404) return null;
+      rethrow;
+    }
+  }
+
   // ---------------------------------------------------------------------
   // Appointments — schedule + transition (clinic.appointments.write)
   // ---------------------------------------------------------------------
@@ -1029,6 +1541,30 @@ class ApiService {
     final res = await _dio.post<Map<String, dynamic>>(
       '/clinic/appointments/$id/transition',
       data: {'status': status},
+    );
+    return Appointment.fromJson(_unwrapObject(res));
+  }
+
+  /// `POST /clinic/appointments/{id}` — edit a scheduled appointment.
+  /// Only the supplied fields are sent; `scheduled_at` is a UTC wall-clock
+  /// `YYYY-MM-DD HH:mm:ss`.
+  Future<Appointment> updateAppointment({
+    required int id,
+    String? patientSchoolId,
+    int? providerUserId,
+    String? scheduledAt,
+    String? reason,
+  }) async {
+    final res = await _dio.post<Map<String, dynamic>>(
+      '/clinic/appointments/$id',
+      data: {
+        if (patientSchoolId != null && patientSchoolId.isNotEmpty)
+          'patient_school_id': patientSchoolId,
+        if (providerUserId != null) 'provider_user_id': providerUserId,
+        if (scheduledAt != null && scheduledAt.isNotEmpty)
+          'scheduled_at': scheduledAt,
+        if (reason != null) 'reason': reason,
+      },
     );
     return Appointment.fromJson(_unwrapObject(res));
   }
@@ -1238,6 +1774,75 @@ class ApiService {
   // ---------------------------------------------------------------------
   // Staff schedules (clinic.schedules.manage / clinic.schedules.read)
   // ---------------------------------------------------------------------
+
+  /// `GET /scheduling/staff/{unit}?q=&cursor=&limit=` — the discovery list
+  /// used by enrollment. Requires the unit's manage permission.
+  Future<SchedulingStaffPage> schedulingStaff(
+    String unit, {
+    String? q,
+    String? cursor,
+    int limit = 25,
+  }) async {
+    final res = await _dio.get<Map<String, dynamic>>(
+      '/scheduling/staff/$unit',
+      queryParameters: {
+        'limit': limit,
+        if (q != null && q.isNotEmpty) 'q': q,
+        if (cursor != null && cursor.isNotEmpty) 'cursor': cursor,
+      },
+    );
+    return SchedulingStaffPage.fromJson(_unwrapObject(res));
+  }
+
+  /// `POST /scheduling/staff/{unit}/enroll` — body `{ user_ids: [...] }`.
+  Future<SchedulingBatchResult> enrollSchedulingStaff(
+    String unit,
+    List<int> userIds,
+  ) async {
+    final res = await _dio.post<Map<String, dynamic>>(
+      '/scheduling/staff/$unit/enroll',
+      data: {'user_ids': userIds},
+    );
+    return SchedulingBatchResult.fromJson(_unwrapObject(res));
+  }
+
+  /// `POST /scheduling/staff/{unit}/assignments/{id}/status` — toggle an
+  /// existing enrollment without deleting its schedule history.
+  Future<void> setSchedulingStaffStatus(
+    String unit,
+    int assignmentId,
+    bool active,
+  ) async {
+    await _dio.post<Map<String, dynamic>>(
+      '/scheduling/staff/$unit/assignments/$assignmentId/status',
+      data: {'active': active},
+    );
+  }
+
+  /// `POST /scheduling/staff/{unit}/template` — create recurring windows for
+  /// already-enrolled staff. Existing user/day rows are skipped server-side.
+  Future<SchedulingBatchResult> applySchedulingTemplate(
+    String unit,
+    Map<String, dynamic> payload,
+  ) async {
+    final res = await _dio.post<Map<String, dynamic>>(
+      '/scheduling/staff/$unit/template',
+      data: payload,
+    );
+    return SchedulingBatchResult.fromJson(_unwrapObject(res));
+  }
+
+  /// `GET /scheduling/staff/{unit}/providers` — eligible, enrolled staff
+  /// only. Schedule writes reject anyone outside this roster with
+  /// `scheduling.staff.ineligible`.
+  Future<List<ProviderRef>> schedulingProviders(String unit) async {
+    final res = await _dio
+        .get<Map<String, dynamic>>('/scheduling/staff/$unit/providers');
+    return _unwrapList(res)
+        .whereType<Map<String, dynamic>>()
+        .map(ProviderRef.fromJson)
+        .toList();
+  }
 
   /// `GET /clinic/staff-schedules` — active staff shifts.
   Future<List<Map<String, dynamic>>> staffSchedules() async {
@@ -1746,6 +2351,17 @@ class ApiService {
         .post<Map<String, dynamic>>('/counselling/sessions/$sessionId/close');
   }
 
+  /// `POST /counselling/sessions/{id}/archive` / `.../unarchive`
+  /// (oversight soft-delete; `counselling.records.soft_delete`).
+  Future<void> archiveCounsellingSession(
+    int sessionId, {
+    bool archived = true,
+  }) async {
+    await _dio.post<Map<String, dynamic>>(
+      '/counselling/sessions/$sessionId/${archived ? 'archive' : 'unarchive'}',
+    );
+  }
+
   // ---------------------------------------------------------------------
   // Counselling scheduling (counselling.schedule.*)
   // ---------------------------------------------------------------------
@@ -1956,7 +2572,7 @@ class ApiService {
       queryParameters: {
         'limit': limit,
         if (cursor != null) 'cursor': cursor,
-        if (includeArchived) 'include_archived': 1,
+        if (includeArchived) 'archived': '1',
       },
     );
     return _bmgPage<BmgDevice>(res.data, BmgDevice.fromJson).items;
@@ -1992,10 +2608,26 @@ class ApiService {
         data: {'status': status});
   }
 
+  /// `POST /archived-records/{resource}/{id}/delete-permanently` — audited,
+  /// archive-first permanent deletion. Retention and reference guards are
+  /// enforced server-side; patients, encounters and counselling sessions are
+  /// always refused.
+  Future<void> deletePermanently(String resource, int id) async {
+    await _dio.post<Map<String, dynamic>>(
+      '/archived-records/$resource/$id/delete-permanently',
+    );
+  }
+
   /// `DELETE /facilities/devices/{id}` — soft-archive. The device stops
   /// reporting and its drum binding is cleared.
   Future<void> archiveFacilityDevice(int id) async {
     await _dio.delete<Map<String, dynamic>>('/facilities/devices/$id');
+  }
+
+  /// `POST /facilities/devices/{id}/unarchive` — restore an archived device.
+  Future<void> unarchiveFacilityDevice(int id) async {
+    await _dio
+        .post<Map<String, dynamic>>('/facilities/devices/$id/unarchive');
   }
 
   /// `POST /facilities/devices/{id}/regenerate-token` — re-key. Returns
@@ -2135,6 +2767,139 @@ class ApiService {
       '/facilities/batches/$batchId/compliance',
     );
     return _unwrapObject(res);
+  }
+
+  // ---------------------------------------------------------------------
+  // BMG automation — unit schedules, monitor aggregate, device commands
+  // ---------------------------------------------------------------------
+
+  /// `GET /facilities/units/{id}/monitor` — device liveness, schedule,
+  /// recent runs, missed slots, void-aware totals and open alerts.
+  Future<BmgUnitMonitor> facilityUnitMonitor(int unitId) async {
+    final res = await _dio
+        .get<Map<String, dynamic>>('/facilities/units/$unitId/monitor');
+    return BmgUnitMonitor.fromJson(_unwrapObject(res));
+  }
+
+  /// `GET /facilities/units/{id}/schedule` — current published schedule,
+  /// next run and version history.
+  Future<BmgUnitSchedule> facilityUnitSchedule(int unitId) async {
+    final res = await _dio
+        .get<Map<String, dynamic>>('/facilities/units/$unitId/schedule');
+    return BmgUnitSchedule.fromJson(_unwrapObject(res));
+  }
+
+  /// `POST /facilities/units/{id}/schedule` — publish a new version. Body:
+  /// `{times: [...], duration_seconds, pwm, enabled}`.
+  Future<BmgSchedule> saveFacilityUnitSchedule(
+    int unitId,
+    Map<String, dynamic> payload,
+  ) async {
+    final res = await _dio.post<Map<String, dynamic>>(
+      '/facilities/units/$unitId/schedule',
+      data: payload,
+    );
+    return BmgSchedule.fromJson(_unwrapObject(res));
+  }
+
+  /// `POST /facilities/devices/{id}/commands` — `start`, `stop`, `run_now`.
+  /// Requires `facilities.bmg.device_command` and a bound, active device.
+  Future<Map<String, dynamic>> sendFacilityDeviceCommand(
+    int deviceId,
+    String command,
+  ) async {
+    final res = await _dio.post<Map<String, dynamic>>(
+      '/facilities/devices/$deviceId/commands',
+      data: {'command': command},
+    );
+    return _unwrapObject(res);
+  }
+
+  /// `GET /facilities/devices/{id}/commands` — recent outbound commands.
+  Future<List<BmgDeviceCommand>> facilityDeviceCommands(int deviceId) async {
+    final res = await _dio
+        .get<Map<String, dynamic>>('/facilities/devices/$deviceId/commands');
+    return _unwrapList(res)
+        .whereType<Map<String, dynamic>>()
+        .map(BmgDeviceCommand.fromJson)
+        .toList();
+  }
+
+  /// `GET /facilities/devices/{id}/assignments` — drum-binding history.
+  Future<List<BmgDeviceAssignment>> facilityDeviceAssignments(
+      int deviceId) async {
+    final res = await _dio
+        .get<Map<String, dynamic>>('/facilities/devices/$deviceId/assignments');
+    return _unwrapList(res)
+        .whereType<Map<String, dynamic>>()
+        .map(BmgDeviceAssignment.fromJson)
+        .toList();
+  }
+
+  // ---------------------------------------------------------------------
+  // Batch materials — manual waste-in / compost-out ledger
+  // ---------------------------------------------------------------------
+
+  Future<List<BmgBatchInput>> facilityBatchInputs(int batchId) async {
+    final res = await _dio
+        .get<Map<String, dynamic>>('/facilities/batches/$batchId/inputs');
+    return _unwrapList(res)
+        .whereType<Map<String, dynamic>>()
+        .map(BmgBatchInput.fromJson)
+        .toList();
+  }
+
+  Future<BmgBatchInput> addFacilityBatchInput(
+    int batchId,
+    Map<String, dynamic> payload,
+  ) async {
+    final res = await _dio.post<Map<String, dynamic>>(
+      '/facilities/batches/$batchId/inputs',
+      data: payload,
+    );
+    return BmgBatchInput.fromJson(_unwrapObject(res));
+  }
+
+  Future<void> voidFacilityBatchInput(
+    int batchId,
+    int inputId,
+    String reason,
+  ) async {
+    await _dio.post<Map<String, dynamic>>(
+      '/facilities/batches/$batchId/inputs/$inputId/void',
+      data: {'reason': reason},
+    );
+  }
+
+  Future<List<BmgBatchOutput>> facilityBatchOutputs(int batchId) async {
+    final res = await _dio
+        .get<Map<String, dynamic>>('/facilities/batches/$batchId/outputs');
+    return _unwrapList(res)
+        .whereType<Map<String, dynamic>>()
+        .map(BmgBatchOutput.fromJson)
+        .toList();
+  }
+
+  Future<BmgBatchOutput> addFacilityBatchOutput(
+    int batchId,
+    Map<String, dynamic> payload,
+  ) async {
+    final res = await _dio.post<Map<String, dynamic>>(
+      '/facilities/batches/$batchId/outputs',
+      data: payload,
+    );
+    return BmgBatchOutput.fromJson(_unwrapObject(res));
+  }
+
+  Future<void> voidFacilityBatchOutput(
+    int batchId,
+    int outputId,
+    String reason,
+  ) async {
+    await _dio.post<Map<String, dynamic>>(
+      '/facilities/batches/$batchId/outputs/$outputId/void',
+      data: {'reason': reason},
+    );
   }
 
   /// `POST /facilities/waste-categories` — create a waste category.

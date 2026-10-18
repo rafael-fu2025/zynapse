@@ -12,7 +12,9 @@ import '../common/auto_polling.dart';
 import '../common/crud_form.dart';
 import '../common/widgets.dart';
 
+import 'automation_sheet.dart';
 import 'drum_detail_sheet.dart';
+import 'materials_sheet.dart';
 import 'turning.dart';
 import 'waste_categories_screen.dart';
 
@@ -780,6 +782,34 @@ class _FacilitiesScreenState extends State<FacilitiesScreen>
     if (ok) _load();
   }
 
+  Future<void> _restoreUnit(BmgUnit u) async {
+    final ok = await runCrudAction(
+      context,
+      () => ApiService.I.unarchiveFacilityUnit(u.id),
+      successMessage: 'Drum restored.',
+    );
+    if (ok) _load();
+  }
+
+  Future<void> _deleteUnitPermanently(BmgUnit u) async {
+    final confirmed = await showCrudConfirm(
+      context,
+      title: 'Delete permanently?',
+      message: 'Permanently delete “${u.displayName}” (#${u.id})? This cannot '
+          'be undone. Records with batch, device or schedule history cannot '
+          'be deleted.',
+      confirmLabel: 'Delete permanently',
+      destructive: true,
+    );
+    if (!confirmed || !mounted) return;
+    final ok = await runCrudAction(
+      context,
+      () => ApiService.I.deletePermanently('drums', u.id),
+      successMessage: 'Drum permanently deleted.',
+    );
+    if (ok) _load();
+  }
+
   /// Batch history — terminal + historical batches across all units.
   Future<void> _showBatchHistory() async {
     List<Map<String, dynamic>> batches = [];
@@ -994,7 +1024,7 @@ class _FacilitiesScreenState extends State<FacilitiesScreen>
               CheckedPopupMenuItem(
                 value: 'archive_toggle',
                 checked: _showArchived,
-                child: const Text('Show archived'),
+                child: const Text('Archived only'),
               ),
               const PopupMenuItem(
                   value: 'batch_history', child: Text('Batch history')),
@@ -1064,6 +1094,10 @@ class _FacilitiesScreenState extends State<FacilitiesScreen>
           onAlerts: _acknowledgeAlerts,
           onEdit: _canManage ? () => _editUnit(_items[i]) : null,
           onArchive: _canManage ? () => _archiveUnit(_items[i]) : null,
+          onRestore: _canManage ? () => _restoreUnit(_items[i]) : null,
+          onDelete: _canManage
+              ? () => _deleteUnitPermanently(_items[i])
+              : null,
           onCompliance: () => _showCompliance(_items[i]),
           onLoss: () => _recordLoss(_items[i]),
         );
@@ -1099,6 +1133,8 @@ class _UnitTile extends StatelessWidget {
     this.onAlerts,
     this.onEdit,
     this.onArchive,
+    this.onRestore,
+    this.onDelete,
     this.onCompliance,
     this.onLoss,
   });
@@ -1122,6 +1158,8 @@ class _UnitTile extends StatelessWidget {
   final VoidCallback? onAlerts;
   final VoidCallback? onEdit;
   final VoidCallback? onArchive;
+  final VoidCallback? onRestore;
+  final VoidCallback? onDelete;
   final VoidCallback? onCompliance;
   final VoidCallback? onLoss;
 
@@ -1245,8 +1283,28 @@ class _UnitTile extends StatelessWidget {
                           onEdit?.call();
                         case 'archive':
                           onArchive?.call();
+                        case 'restore':
+                          onRestore?.call();
+                        case 'delete':
+                          onDelete?.call();
                         case 'loss':
                           onLoss?.call();
+                        case 'automation':
+                          showUnitAutomationSheet(
+                            context,
+                            unitId: unit.id,
+                            unitLabel: unit.displayName,
+                            canManage: canManage,
+                          );
+                        case 'materials':
+                          final batchId = unit.activeBatchId;
+                          if (batchId != null) {
+                            showBatchMaterialsSheet(
+                              context,
+                              batchId: batchId,
+                              canRecord: canTransition,
+                            );
+                          }
                       }
                     },
                     itemBuilder: (_) => [
@@ -1284,11 +1342,27 @@ class _UnitTile extends StatelessWidget {
                       if (canTransition && unit.isActive)
                         const PopupMenuItem(
                             value: 'loss', child: Text('Record loss')),
+                      // Per-unit controller surface — visible even when the
+                      // drum is idle; commands are gated inside the sheet.
+                      const PopupMenuItem(
+                          value: 'automation', child: Text('Automation')),
+                      if (unit.isActive)
+                        const PopupMenuItem(
+                            value: 'materials', child: Text('Materials')),
                       if (canManage) ...[
                         const PopupMenuItem(
                             value: 'edit', child: Text('Edit unit')),
-                        const PopupMenuItem(
-                            value: 'archive', child: Text('Archive')),
+                        if (unit.archivedAt == null)
+                          const PopupMenuItem(
+                              value: 'archive', child: Text('Archive')),
+                        if (unit.archivedAt != null) ...[
+                          const PopupMenuItem(
+                              value: 'restore', child: Text('Restore')),
+                          const PopupMenuItem(
+                            value: 'delete',
+                            child: Text('Delete permanently'),
+                          ),
+                        ],
                       ],
                       // Acknowledge is a WRITE (facilities.bmg.logs.record).
                       if (canTransition)

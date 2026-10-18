@@ -898,7 +898,9 @@ class _EventDetailSheet extends StatefulWidget {
 class _EventDetailSheetState extends State<_EventDetailSheet> {
   AuditEvent? _event;
   bool _loading = true;
+  bool _verifying = false;
   String? _error;
+  AuditVerification? _verification;
 
   @override
   void initState() {
@@ -933,6 +935,23 @@ class _EventDetailSheetState extends State<_EventDetailSheet> {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text('$label copied')),
     );
+  }
+
+  Future<void> _verify() async {
+    setState(() => _verifying = true);
+    try {
+      final result =
+          await ApiService.I.verifyAuditChain(id: widget.eventId);
+      if (!mounted) return;
+      setState(() => _verification = result);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(mapDioError(e).message)),
+      );
+    } finally {
+      if (mounted) setState(() => _verifying = false);
+    }
   }
 
   @override
@@ -983,6 +1002,43 @@ class _EventDetailSheetState extends State<_EventDetailSheet> {
               ),
             ],
           ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              OutlinedButton.icon(
+                onPressed: _verifying ? null : _verify,
+                icon: const Icon(HugeIcons.strokeRoundedShield01, size: 16),
+                label: Text(
+                  _verifying ? 'Verifying…' : 'Verify this event',
+                ),
+              ),
+            ],
+          ),
+          if (_verification != null) ...[
+            const SizedBox(height: 8),
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: _verification!.ok
+                    ? const Color(0xFFE8F5EE)
+                    : const Color(0xFFFDECEA),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Text(
+                _verification!.ok
+                    ? 'Verified: this event and its chain up to #'
+                        '${_verification!.verifiedUpTo ?? widget.eventId} are intact.'
+                    : 'Chain divergence at event #'
+                        '${_verification!.firstDivergence?.id ?? 'unknown'}.',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: _verification!.ok
+                      ? const Color(0xFF1B7A43)
+                      : const Color(0xFFB3261E),
+                ),
+              ),
+            ),
+          ],
           const SizedBox(height: 16),
           _DetailRow(
             label: 'Entity',

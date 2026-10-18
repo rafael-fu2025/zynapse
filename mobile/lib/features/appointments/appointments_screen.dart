@@ -10,19 +10,20 @@ import '../../core/api/api_client.dart';
 import '../../core/api/api_envelope.dart';
 import '../../core/models/appointment.dart';
 import '../../core/models/profile.dart';
-import '../../core/models/session.dart';
 import '../../core/services/api_service.dart';
 import '../../core/services/auth_controller.dart';
 import '../../core/utils/dates.dart';
 import '../common/auto_polling.dart';
 import '../common/crud_form.dart';
+import '../common/slot_booking_sheet.dart';
 import '../common/widgets.dart';
 
 /// Appointments — list + search + status filter, plus student self-booking.
 ///
-/// Mirrors `frontend/src/pages/AppointmentsPage.tsx` (list/search) and
-/// `frontend/src/components/StudentBooking.tsx` (self-service booking via
-/// `/me/student-providers` + `POST /me/student-appointments`).
+/// Mirrors `frontend/src/pages/AppointmentsPage.tsx` (list/search) and its
+/// pooled-slot student booking flow: `/me/appointment-slots` +
+/// `POST /me/appointments`. The backend rejects arbitrary times and decides
+/// provider assignment, so the old provider + free-time sheet is retired.
 class AppointmentsScreen extends StatefulWidget {
   const AppointmentsScreen({super.key});
 
@@ -232,19 +233,17 @@ class _AppointmentsScreenState extends State<AppointmentsScreen>
     );
   }
 
-  /// Student self-booking dialog — mirrors the SPA's `StudentBooking`
-  /// component (provider + date + time + reason -> `POST /me/student-appointments`).
+  /// Student self-booking — pooled slots only. The portal and this tab share
+  /// the same sheet so both clients book through `/me/appointments`.
   Future<void> _openBookingDialog(BuildContext context) async {
-    final session = context.read<AuthController>().session;
-    if (session == null) return;
-
-    await showSynapseSheet<void>(
-      context,
-      builder: (_) => _BookingDialog(session: session),
-    );
-    // Refresh the list after a successful booking (the sheet pops with
-    // the result handled inside; reload regardless for simplicity).
-    _load();
+    final messenger = ScaffoldMessenger.of(context);
+    final booked = await showSlotBookingSheet(context);
+    if (booked && mounted) {
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Appointment booked.')),
+      );
+      _load();
+    }
   }
 
   /// Staff scheduling — mirrors the SPA's `ScheduleDialog`
@@ -257,9 +256,61 @@ class _AppointmentsScreenState extends State<AppointmentsScreen>
     _load();
   }
 
+  Future<void> _editAppointment(Appointment appointment) async {
+    final manila = utcToManila(appointment.scheduledAt) ?? DateTime.now();
+    String two(int value) => value.toString().padLeft(2, '0');
+    final payload = await showCrudForm(
+      context,
+      title: 'Edit appointment #${appointment.id}',
+      fields: [
+        CrudField.date(
+          'date',
+          'Date',
+          initial: toDateInput(manila),
+        ),
+        CrudField.time(
+          'time',
+          'Time',
+          initial: '${two(manila.hour)}:${two(manila.minute)}',
+        ),
+        CrudField.text(
+          'reason',
+          'Reason',
+          required: false,
+          initial: appointment.reason ?? '',
+          maxLength: 255,
+        ),
+      ],
+      submitLabel: 'Save',
+    );
+    if (payload == null || !mounted) return;
+    final dateParts = (payload['date'] as String? ?? '').split('-');
+    final timeParts = (payload['time'] as String? ?? '').split(':');
+    if (dateParts.length != 3 || timeParts.length != 2) {
+      showCrudMessage(context, 'Invalid date or time.', error: true);
+      return;
+    }
+    final local = DateTime(
+      int.parse(dateParts[0]),
+      int.parse(dateParts[1]),
+      int.parse(dateParts[2]),
+      int.parse(timeParts[0]),
+      int.parse(timeParts[1]),
+    );
+    final ok = await runCrudAction(
+      context,
+      () => ApiService.I.updateAppointment(
+        id: appointment.id,
+        scheduledAt: localToUtcSql(local),
+        reason: (payload['reason'] as String? ?? '').trim(),
+      ),
+      successMessage: 'Appointment updated.',
+    );
+    if (ok) _load();
+  }
+
   /// Applies an appointment status transition and refreshes the list.
-  Future<void> _transition(Appointment appointment, String status) async {
-    final messenger = ScaffoldMessenger.of(context);
+  Future<void> _transition(Appointment appointment, String status) async {    final messenger = ScaffoldMessenger.of(context);
     try {
       final updated = await ApiService.I.appointmentTransition(
         id: appointment.id,
@@ -346,6 +397,7 @@ class _AppointmentsScreenState extends State<AppointmentsScreen>
           appointment: _items[i],
           staffMode: _staffMode,
           onTransition: (s) => _transition(_items[i], s),
+          onEdit: _staffMode ? () => _editAppointment(_items[i]) : null,
         );
       },
     );
@@ -357,11 +409,13 @@ class _AppointmentCard extends StatelessWidget {
     required this.appointment,
     this.staffMode = false,
     this.onTransition,
+    this.onEdit,
   });
 
   final Appointment appointment;
   final bool staffMode;
   final ValueChanged<String>? onTransition;
+  final VoidCallback? onEdit;
 
   /// Available status transitions for staff, by current status. Mirrors
   /// `AppointmentActions` in `frontend/src/pages/AppointmentsPage.tsx`:
@@ -434,12 +488,29 @@ class _AppointmentCard extends StatelessWidget {
             ],
           ),
         ),
-        trailing: actions.isEmpty
+        trailing: actions.isEmpty && onEdit == null
             ? null
             : PopupMenuButton<String>(
                 tooltip: 'Appointment actions',
-                onSelected: onTransition,
+                onSelected: (value) {
+                  if (value == 'edit') {
+                    onEdit?.call();
+                  } else {
+                    onTransition?.call(value);
+                  }
+                },
                 itemBuilder: (_) => [
+                  if (onEdit != null && appointment.status == 'scheduled')
+                    const PopupMenuItem(
+                      value: 'edit',
+                      child: Row(
+                        children: [
+                          Icon(HugeIcons.strokeRoundedEdit01, size: 18),
+                          SizedBox(width: 8),
+                          Text('Edit'),
+                        ],
+                      ),
+                    ),
                   for (final (value, label, icon) in actions)
                     PopupMenuItem(
                       value: value,
@@ -507,6 +578,8 @@ class _StaffScheduleDialogState extends State<_StaffScheduleDialog> {
 
   Future<void> _loadProviders() async {
     try {
+      // Appointment providers are active staff, not necessarily enrolled
+      // schedulers — the backend only requires an active staff member.
       final page = await ApiService.I.employees(limit: 100);
       if (!mounted) return;
       setState(() {
@@ -802,260 +875,6 @@ class _StaffScheduleDialogState extends State<_StaffScheduleDialog> {
                           child: CircularProgressIndicator(strokeWidth: 2),
                         )
                       : const Text('Schedule'),
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-/// Student self-booking dialog.
-class _BookingDialog extends StatefulWidget {
-  const _BookingDialog({required this.session});
-
-  final Session session;
-
-  @override
-  State<_BookingDialog> createState() => _BookingDialogState();
-}
-
-class _BookingDialogState extends State<_BookingDialog> {
-  List<ProviderRef>? _providers;
-  String? _providersError;
-  ProviderRef? _selectedProvider;
-  DateTime _date = DateTime.now().add(const Duration(days: 1));
-  TimeOfDay _time = const TimeOfDay(hour: 9, minute: 0);
-  final _reasonController = TextEditingController();
-  bool _submitting = false;
-  String? _submitError;
-  String? _success;
-
-  @override
-  void initState() {
-    super.initState();
-    _loadProviders();
-  }
-
-  @override
-  void dispose() {
-    _reasonController.dispose();
-    super.dispose();
-  }
-
-  Future<void> _loadProviders() async {
-    setState(() {
-      _providersError = null;
-    });
-    try {
-      final providers = await ApiService.I.studentProviders();
-      setState(() {
-        _providers = providers;
-        if (providers.isNotEmpty) _selectedProvider = providers.first;
-      });
-    } catch (e) {
-      setState(() => _providersError = mapDioError(e).message);
-    }
-  }
-
-  Future<void> _pickDate() async {
-    final picked = await showDatePicker(
-      context: context,
-      initialDate: _date,
-      firstDate: DateTime.now(),
-      lastDate: DateTime.now().add(const Duration(days: 90)),
-    );
-    if (picked != null) setState(() => _date = picked);
-  }
-
-  Future<void> _pickTime() async {
-    final picked = await showTwelveHourTimePicker(
-      context: context,
-      initialTime: _time,
-    );
-    if (picked != null) setState(() => _time = picked);
-  }
-
-  Future<void> _submit() async {
-    if (_selectedProvider == null) {
-      setState(() => _submitError = 'Choose a provider.');
-      return;
-    }
-    setState(() {
-      _submitting = true;
-      _submitError = null;
-      _success = null;
-    });
-    try {
-      final local = DateTime(
-        _date.year,
-        _date.month,
-        _date.day,
-        _time.hour,
-        _time.minute,
-      );
-      final appointment = await ApiService.I.bookStudentAppointment(
-        providerUserId: _selectedProvider!.id,
-        scheduledAt: localToUtcSql(local),
-        reason: _reasonController.text.trim(),
-      );
-      setState(() {
-        _success =
-            'Appointment #${appointment.id} booked for ${fmtUtcToApp(appointment.scheduledAt)}.';
-        _submitting = false;
-      });
-      // Pop shortly after showing success.
-      await Future<void>.delayed(const Duration(seconds: 1));
-      if (!mounted) return;
-      Navigator.of(context).pop();
-    } on ApiException catch (e) {
-      setState(() {
-        _submitError = e.message;
-        _submitting = false;
-      });
-    } catch (e) {
-      setState(() {
-        _submitError = mapDioError(e).message;
-        _submitting = false;
-      });
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: EdgeInsets.only(
-        bottom: MediaQuery.of(context).viewInsets.bottom,
-      ),
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.fromLTRB(20, 14, 20, 20),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            const SheetHeader(
-              title: 'Book appointment',
-              subtitle: 'Self-service booking',
-            ),
-            const SizedBox(height: 16),
-            // Provider
-            if (_providers == null && _providersError == null)
-              const Padding(
-                padding: EdgeInsets.all(8),
-                child: Center(
-                  child: SizedBox(
-                    width: 22,
-                    height: 22,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  ),
-                ),
-              )
-            else if (_providersError != null)
-              Text(
-                'Could not load providers: $_providersError',
-                style: TextStyle(
-                  color: Theme.of(context).colorScheme.error,
-                  fontSize: 13,
-                ),
-              )
-            else
-              InputDecorator(
-                decoration: const InputDecoration(
-                  labelText: 'Provider',
-                  border: OutlineInputBorder(),
-                ),
-                child: DropdownButtonHideUnderline(
-                  child: DropdownButton<ProviderRef>(
-                    value: _selectedProvider,
-                    isExpanded: true,
-                    isDense: true,
-                    items: [
-                      for (final p in _providers ?? <ProviderRef>[])
-                        DropdownMenuItem(value: p, child: Text(p.name)),
-                    ],
-                    onChanged: _submitting
-                        ? null
-                        : (v) => setState(() => _selectedProvider = v),
-                  ),
-                ),
-              ),
-            const SizedBox(height: 12),
-            // Date + time
-            Row(
-              children: [
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: _submitting ? null : _pickDate,
-                    icon:
-                        const Icon(HugeIcons.strokeRoundedCalendar01, size: 18),
-                    label: Text(toDateInput(_date)),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: _submitting ? null : _pickTime,
-                    icon: const Icon(HugeIcons.strokeRoundedClock01, size: 18),
-                    // Not `_time.format(context)`: that honours the device's
-                    // 24-hour setting, so the same build reads `09:00` on one
-                    // handset and `9:00 AM` on another. See fmtClockParts.
-                    label: Text(fmtClockParts(_time.hour, _time.minute)),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _reasonController,
-              enabled: !_submitting,
-              maxLength: 500,
-              decoration: const InputDecoration(
-                labelText: 'Reason (optional)',
-                border: OutlineInputBorder(),
-              ),
-            ),
-            if (_submitError != null) ...[
-              const SizedBox(height: 8),
-              Text(
-                _submitError!,
-                style: TextStyle(
-                  color: Theme.of(context).colorScheme.error,
-                  fontSize: 13,
-                ),
-              ),
-            ],
-            if (_success != null) ...[
-              const SizedBox(height: 8),
-              Text(
-                _success!,
-                style: const TextStyle(
-                  color: Color(0xFF1B7A43),
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ],
-            const SizedBox(height: 12),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.end,
-              children: [
-                TextButton(
-                  onPressed:
-                      _submitting ? null : () => Navigator.of(context).pop(),
-                  child: const Text('Cancel'),
-                ),
-                const SizedBox(width: 8),
-                FilledButton(
-                  onPressed: _submitting ? null : _submit,
-                  child: _submitting
-                      ? const SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Text('Book'),
                 ),
               ],
             ),

@@ -27,7 +27,7 @@ Appointment booking and staff scheduling use normal success feedback and close t
 
 ## How it's built
 
-- **Auth mirrors the browser exactly.** Access token in `flutter_secure_storage` (keystore/Keychain, with a one-time migration from legacy plaintext). Refresh token in a persistent `PersistCookieJar`. Single-replay silent refresh on 401, proactive refresh when the JWT `exp` approaches, and one in-flight refresh future to deduplicate concurrent 401s. `AuthController.bootstrap()` restores the session before the first frame — splash screen instead of a login flash.
+- **Auth mirrors the browser exactly.** Access token in `flutter_secure_storage` (keystore/Keychain, with a one-time migration from legacy plaintext). Refresh cookies in a `PersistCookieJar` backed by `SecureCookieStorage` (the same platform secure storage, never plaintext file persistence). Single-replay silent refresh on 401, proactive refresh when the JWT `exp` approaches, and one in-flight refresh future to deduplicate concurrent 401s. `AuthController.bootstrap()` restores the session before the first frame — splash screen instead of a login flash.
 - **State is deliberately boring.** Only `AuthController` is a ChangeNotifier; screens are StatefulWidgets managing their own fetch/loading/error state, with a shared `AutoPolling` mixin (14 screens) gated by tab visibility so hidden tabs skip polls.
 - **Three-layer API stack** — `core/config.dart` (URL resolution) → `core/api/api_client.dart` (Dio + interceptors) → `core/services/api_service.dart` (one method per endpoint) → typed models in `core/models/` mirroring the SPA schemas.
 - **Navigation** — auth gate in `RootGate`, bottom-nav `IndexedStack` shell, imperative pushes for module screens. Permission gating mirrors the SPA sidebar (wildcard `*` for admins, student-vs-staff variants).
@@ -91,6 +91,14 @@ flutter test
 ```
 
 Model JSON-parsing tests (session, appointment, queue, notification), QR-free appointment API/UI and legacy preference cleanup regressions, plus `SessionProgressTracker` unit/widget tests. CI runs this on every push/PR ([`../.github/workflows/ci.yml`](../.github/workflows/ci.yml)).
+
+## Credential storage and migration
+
+- `lib/core/api/secure_cookie_storage.dart` implements cookie_jar's `Storage` contract using the existing `flutter_secure_storage` dependency. Cookie records (including the host index and domain cookies) are JSON-encoded into one versioned secure entry per jar policy (`synapse.cookies.v1.ie0_ps1` for the current jar). Cookie expiry, Secure, HttpOnly, path and domain handling remain cookie_jar's responsibility. Writes are serialized and read back for verification; unrelated secure entries, including the access token, are untouched.
+- On startup, migrate the previous application-support `synapse/ie0_ps1` files and, if present, the accidental default `.cookies/4/ie0_ps1` jar. The support jar wins for duplicate records. Delete only these exact legacy directories, only after a verified secure write. An existing secure entry wins over legacy files; an empty entry is retained on logout to prevent stale files from resurrecting a session. Interrupted cleanup is retried on the next launch.
+- If path lookup, migration, cleanup or secure-store initialization fails, install a **memory-only `CookieJar`**, never a default `PersistCookieJar` or file store. New cookies then last only for that process. Legacy files are retained if the secure copy could not be verified, allowing migration to retry on the next launch rather than silently destroying a valid session. This means pre-existing plaintext may remain until a successful migration; the fallback never writes more plaintext. Runtime secure-storage errors propagate rather than downgrading persistence. No credentials or raw platform/auth errors are logged by these paths.
+- Android backup is disabled, with explicit Android 12+ cloud/device-transfer exclusions for all app-data domains. This covers secure-storage ciphertext, legacy cookie files and preferences: a transferred encrypted blob is not a portable session because Android Keystore keys do not transfer. Existing backups cannot be retroactively removed by this change. After reinstall/device transfer, sign in again. These rules also exclude non-auth app data.
+- Tests use an in-memory secure-store fake plus real temporary legacy cookie jars. They cover serialization, concurrent writes, targeted deletion/logout, cookie round trips, migration/cleanup, stale-file precedence, failed verification and memory-only fallback. Device-level Keystore/Keychain behavior and Android backup enforcement still require platform testing.
 
 ## Platform notes
 
