@@ -48,6 +48,9 @@ dev-fast.ps1
 /backend/writable/debugbar/
 /backend/writable/reports/
 /backend/public/kiosk-thumbnails/
+# Runtime carousel uploads and survey proof screenshots are data, not source.
+/backend/public/uploads/
+/backend/writable/survey-screenshots/
 /backend/writable/log/lint.txt
 /backend/scripts/
 /backend/build/
@@ -82,6 +85,7 @@ workflow
 ANALYSIS.md
 COUNSELLING_AUDIT.md
 SCREEN_AUDIT.md
+/clinic_guidance_analysis.md
 # Local working documentation (drafts, notes) — never committed
 /Documentation/
 # docs/ contains committed runbooks (SETUP.md, CREDENTIALS.md, ...); do not
@@ -89,6 +93,7 @@ SCREEN_AUDIT.md
 # are added later.
 
 # --- AI tool / test runner state at workspace root ---
+.rapa/
 .video_agent/
 .workbuddy-ai/
 .zcodeignore
