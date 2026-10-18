@@ -227,7 +227,7 @@ export function SkippedPatientsTab({ onOpenEncounter }: SkippedPatientsTabProps)
 
   return (
     <div className="space-y-4">
-      <section className="hidden overflow-hidden rounded-xl border bg-card md:block">
+      <section className="hidden overflow-hidden border bg-card md:block">
         <Table ariaLabel="Skipped clinic patients">
           <TableHeader className="bg-muted/50">
             <TableRow>

@@ -32,7 +32,8 @@ final class GuidanceContentController extends ApiController
     public function listAnnouncements(): ResponseInterface
     {
         $this->authorize('counselling.announcements.manage');
-        return $this->ok($this->service->listAnnouncements());
+        $showArchived = $this->request->getGet('archived') === '1';
+        return $this->ok($this->service->listAnnouncements($showArchived));
     }
 
     public function createAnnouncement(): ResponseInterface
@@ -55,12 +56,19 @@ final class GuidanceContentController extends ApiController
         return $this->ok($this->service->archiveAnnouncement($id));
     }
 
+    public function unarchiveAnnouncement(int $id): ResponseInterface
+    {
+        $this->authorize('counselling.announcements.manage');
+        return $this->ok($this->service->unarchiveAnnouncement($id));
+    }
+
     // ---- staff: services -------------------------------------------
 
     public function listServices(): ResponseInterface
     {
         $this->authorize('counselling.services.manage');
-        return $this->ok($this->service->listServices());
+        $showArchived = $this->request->getGet('archived') === '1';
+        return $this->ok($this->service->listServices($showArchived));
     }
 
     public function createService(): ResponseInterface
@@ -81,6 +89,12 @@ final class GuidanceContentController extends ApiController
     {
         $this->authorize('counselling.services.manage');
         return $this->ok($this->service->archiveService($id));
+    }
+
+    public function unarchiveService(int $id): ResponseInterface
+    {
+        $this->authorize('counselling.services.manage');
+        return $this->ok($this->service->unarchiveService($id));
     }
 
     // ---- student feed (/me/guidance/*) ------------------------------

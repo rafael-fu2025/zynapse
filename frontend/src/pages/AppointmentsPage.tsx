@@ -46,7 +46,8 @@ import {
   UserX,
   X,
 } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
+import { useKeysetPagination } from '@/hooks/useKeysetPagination';
 import { Link } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 
@@ -686,8 +687,6 @@ const TAB_PARAMS: Record<string, { scope: AppointmentScope; provider: Appointmen
 };
 
 export default function AppointmentsPage() {
-  const [cursor, setCursor] = useState<string | null>(null);
-  const [history, setHistory] = useState<Array<string | null>>([null]);
   // Filters live in the URL (PRODUCT principle 5): ?tab=, ?status= and
   // the debounced ?q= survive a refresh and can be shared as links.
   const [tab, setTab] = useTabParam('upcoming');
@@ -711,44 +710,34 @@ export default function AppointmentsPage() {
   // composes with the tab's scope; the tab switch itself refetches
   // because each tab is a different server-side slice of the book.
   const { scope, provider } = TAB_PARAMS[tab] ?? TAB_PARAMS.upcoming!;
+  const { cursor, history, nextPage: advancePage, prevPage } = useKeysetPagination(
+    JSON.stringify([tab, statusFilter, debouncedSearch.trim()]),
+  );
   const list = useAppointments(
     cursor,
     25,
     statusFilter === 'all' ? null : (statusFilter as Appointment['status']),
     scope,
     provider,
+    !searching,
   );
   // The needs-action tally that fed the old tab-strip badge retired with
   // the strip (2026-09-27): section navigation is an accordion in the
   // main sidebar now.
-  const searchQuery = useAppointmentSearch(debouncedSearch, statusFilter as Appointment['status'] | 'all');
+  const searchQuery = useAppointmentSearch(
+    debouncedSearch, statusFilter as Appointment['status'] | 'all', cursor, scope, provider,
+  );
+  const activeQuery = searching ? searchQuery : list;
   const transition = useTransitionAppointment();
   const providerName = useProviderNameLookup();
 
-  // Reset pagination whenever the tab (data slice) changes — cursors
-  // are only meaningful within the slice that issued them.
-  useEffect(() => {
-    setCursor(null);
-    setHistory([null]);
-  }, [tab]);
-
   function nextPage() {
-    if (list.data?.next !== null && list.data?.next !== undefined) {
-      const n = list.data.next;
-      setHistory((h) => [...h, n]);
-      setCursor(n);
-    }
-  }
-  function prevPage() {
-    if (history.length < 2) return;
-    const next = history.slice(0, -1);
-    setHistory(next);
-    setCursor(next[next.length - 1] ?? null);
+    if (!activeQuery.isFetching) advancePage(activeQuery.data?.next);
   }
 
   // The rows ARE the active tab's slice — no client-side bucketing.
   const rows = useMemo<Appointment[]>(
-    () => (searching ? (searchQuery.data ?? []) : (list.data?.data ?? [])),
+    () => (searching ? (searchQuery.data?.data ?? []) : (list.data?.data ?? [])),
     [searching, searchQuery.data, list.data],
   );
   // While a search is active the results come from the dedicated search
@@ -812,7 +801,7 @@ export default function AppointmentsPage() {
               <Label id="appt-status-label" className="text-xs">Status</Label>
               <Select
                 value={statusFilter}
-                onValueChange={(v) => { setStatusFilter(v); setCursor(null); setHistory([null]); }}
+                onValueChange={(v) => { setStatusFilter(v); }}
               >
                 <SelectTrigger aria-labelledby="appt-status-label" className="w-44">
                   <SelectValue />
@@ -826,7 +815,7 @@ export default function AppointmentsPage() {
             </div>
           </PageToolbar>
 
-          <section className="hidden overflow-hidden rounded-xl border bg-card md:block md:min-h-0 md:flex-1">
+          <section className="hidden overflow-hidden border bg-card md:block md:min-h-0 md:flex-1">
             <Table
               ariaLabel="Clinic appointments"
               wrapperClassName="h-full overflow-y-auto"
@@ -911,24 +900,22 @@ export default function AppointmentsPage() {
             ))}
           </MobileCardList>
 
-          {!searching && (
             <nav className="flex items-center justify-between md:shrink-0" aria-label="pagination">
               <p className="text-xs text-muted-foreground">Page {history.length} · {rows.length} appointment{rows.length === 1 ? '' : 's'} shown</p>
               <div className="flex gap-2">
-                <Button variant="outline" size="sm" onClick={prevPage} disabled={history.length < 2}>
+                <Button variant="outline" size="sm" onClick={prevPage} disabled={history.length < 2 || activeQuery.isFetching}>
                   <ChevronLeft /> Prev
                 </Button>
                 <Button
                   variant="outline"
                   size="sm"
                   onClick={nextPage}
-                  disabled={list.data?.next === null || list.data?.next === undefined}
+                  disabled={activeQuery.isFetching || activeQuery.data?.next == null}
                 >
                   Next <ChevronRight />
                 </Button>
               </div>
             </nav>
-          )}
         </TabsContent>
       </Tabs>
 

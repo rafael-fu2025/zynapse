@@ -63,7 +63,7 @@ class App extends BaseConfig
     /**
      * Force HTTPS in production (enforced via ForceHTTPS filter/env).
      */
-    public bool $forceGlobalSecureRequests = false;
+    public bool $forceGlobalSecureRequests = ENVIRONMENT === 'production';
 
     /**
      * @var array<string, string>

@@ -23,6 +23,7 @@ import {
   LayoutDashboard,
   Megaphone,
   MessagesSquare,
+  ImageIcon,
   Recycle,
   ScrollText,
   Share2,
@@ -50,6 +51,7 @@ import {
   useSidebar,
 } from '@/components/ui/sidebar';
 import { prefetchRoute } from '@/lib/routeChunks';
+import { DASHBOARD_PERMISSIONS, workstationFor } from '@/lib/workstations';
 import { useDashboardCounters } from '@/hooks/useDashboard';
 import { hasPermission, useAuthStore } from '@/store/auth';
 
@@ -128,10 +130,7 @@ const NAV_SECTIONS: ReadonlyArray<{ title: string; items: ReadonlyArray<NavItem>
   {
     title: 'Overview',
     items: [
-      // Dashboard is a staff/ops launchpad — pure students (no
-      // employee.portal.read) get their portal instead, so the empty
-      // Dashboard nav entry is hidden for them.
-      { label: 'Dashboard', href: '/', icon: LayoutDashboard, permission: 'employee.portal.read' },
+      { label: 'Dashboard', href: '/', icon: LayoutDashboard, permission: DASHBOARD_PERMISSIONS },
       // My portal — both staff and students can open `/me`; the
       // router dispatches to the right surface based on the
       // caller's permissions. Phase 13 extends the sidebar to
@@ -163,6 +162,7 @@ const NAV_SECTIONS: ReadonlyArray<{ title: string; items: ReadonlyArray<NavItem>
   {
     title: 'Clinic',
     items: [
+      { label: 'Dashboard', href: workstationFor('clinic').path, icon: LayoutDashboard, permission: workstationFor('clinic').permission },
       {
         label: 'Encounters',
         href: '/clinic',
@@ -238,6 +238,7 @@ const NAV_SECTIONS: ReadonlyArray<{ title: string; items: ReadonlyArray<NavItem>
   {
     title: 'Guidance Center',
     items: [
+      { label: 'Dashboard', href: workstationFor('guidance').path, icon: LayoutDashboard, permission: workstationFor('guidance').permission },
       {
         label: 'Counselling',
         href: '/counselling',
@@ -311,6 +312,7 @@ const NAV_SECTIONS: ReadonlyArray<{ title: string; items: ReadonlyArray<NavItem>
   {
     title: 'Facilities',
     items: [
+      { label: 'Dashboard', href: workstationFor('facilities').path, icon: LayoutDashboard, permission: workstationFor('facilities').permission },
       {
         label: 'Facilities',
         href: '/facilities',
@@ -354,6 +356,7 @@ const NAV_SECTIONS: ReadonlyArray<{ title: string; items: ReadonlyArray<NavItem>
       { label: 'Audit', href: '/audit', icon: ScrollText, permission: 'audit.read' },
       { label: 'Users', href: '/admin/users', icon: Users, permission: 'rbac.manage' },
       { label: 'Roles', href: '/admin/roles', icon: ShieldCheck, permission: 'rbac.read' },
+      { label: 'Login Carousel', href: '/admin/carousel', icon: ImageIcon, permission: 'rbac.manage' },
     ],
   },
 ];

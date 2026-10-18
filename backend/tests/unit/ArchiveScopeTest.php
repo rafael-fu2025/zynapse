@@ -49,6 +49,17 @@ final class ArchiveScopeTest extends TestCase
         $this->assertSame(ArchiveScope::ACTIVE, ArchiveScope::fromRequest('', null));
     }
 
+    public function testPatternAFlagPreservesOmissionAndParsesExclusiveScopes(): void
+    {
+        $this->assertNull(ArchiveScope::archivedFlag(null));
+        foreach (['1', 'true', 1, true] as $value) {
+            $this->assertTrue(ArchiveScope::archivedFlag($value));
+        }
+        foreach (['0', 'false', 0, false, '', 'invalid', ['1']] as $value) {
+            $this->assertFalse(ArchiveScope::archivedFlag($value));
+        }
+    }
+
     public function testPatientRegistryUsesTheScopeEverywhere(): void
     {
         // Contract: lists, search and facets all take the scope, and search no

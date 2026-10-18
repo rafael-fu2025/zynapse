@@ -21,6 +21,7 @@ class CounsellingSession {
     this.incomingReferralId,
     this.noteCount = 0,
     this.outgoingReferral,
+    this.archivedAt,
   });
 
   factory CounsellingSession.fromJson(Map<String, dynamic> json) =>
@@ -45,6 +46,7 @@ class CounsellingSession {
             ? Referral.fromJson(
                 json['outgoing_referral'] as Map<String, dynamic>)
             : null,
+        archivedAt: json['archived_at'] as String?,
       );
 
   final int id;
@@ -66,8 +68,10 @@ class CounsellingSession {
   final int? incomingReferralId;
   final int noteCount;
   final Referral? outgoingReferral;
+  final String? archivedAt;
 
   bool get isOpen => endedAt == null || endedAt!.isEmpty;
+  bool get archived => archivedAt != null && archivedAt!.isNotEmpty;
 }
 
 class CounsellingNote {

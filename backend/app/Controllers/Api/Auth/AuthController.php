@@ -9,6 +9,7 @@ use App\Auth\CurrentUser;
 use App\Auth\JwtService;
 use App\Auth\LoginThrottleService;
 use App\Auth\RefreshTokenService;
+use App\Auth\RefreshSessionPolicy;
 use App\Controllers\Api\ApiController;
 use App\Exceptions\ApiException;
 use App\Exceptions\FuMisInvalidCredentialsException;
@@ -298,12 +299,11 @@ final class AuthController extends ApiController
         // the client already holds the valid replacement cookie. Issue a
         // fresh access token but do NOT overwrite the cookie.
         if (! empty($result['grace'])) {
-            $state = $this->accountState->forUser($userId);
-            $access = $this->jwt->sign($userId, (int) ($state['token_epoch'] ?? 0));
+            $access = $this->sessionAccessToken($userId, $result['mint']);
             return $this->ok([
                 'access_token' => $access,
                 'token_type'   => 'Bearer',
-                'expires_in'   => (int) (getenv('JWT_ACCESS_TTL_SECONDS') ?: 900),
+                'expires_in'   => max(0, (int) $this->jwt->verify($access)['exp'] - time()),
             ]);
         }
 
@@ -313,8 +313,12 @@ final class AuthController extends ApiController
     public function logout(): ResponseInterface
     {
         $userId = CurrentUser::assert();
-        $this->refreshTokens->revokeAllFor($userId);
-        $this->bumpTokenEpoch($userId);
+        $this->refreshTokens->revokeAllFor($userId, true);
+        $this->response->setCookie([
+            ...$this->refreshCookieAttributes(),
+            'value' => '',
+            'expire' => new \DateTimeImmutable('@' . (time() - 3600)),
+        ]);
 
         $this->audit->enqueue(
             'auth.logout',
@@ -453,10 +457,10 @@ final class AuthController extends ApiController
                 'updated_at'  => date('Y-m-d H:i:s'),
             ]);
 
-        // Kill every other session: refresh tokens die, and the epoch bump
-        // invalidates all outstanding access tokens immediately.
-        $this->bumpTokenEpoch($userId);
-        $this->refreshTokens->revokeAllFor($userId);
+        // Kill every other session atomically: revoke all refresh tokens and
+        // bump the epoch under the same user-row lock so no concurrent refresh
+        // can slip in between and capture a pre-bump epoch.
+        $this->refreshTokens->revokeAllFor($userId, true);
 
         $this->audit->enqueue(
             'auth.password_changed',
@@ -489,27 +493,41 @@ final class AuthController extends ApiController
 
     private function finalizeAuth(int $userId, ?array $preIssued = null): ResponseInterface
     {
-        // Read the epoch fresh so a just-bumped epoch (password change,
-        // replay revocation in the same request) is reflected in this token.
-        $state = $this->accountState->forUser($userId);
-        $access = $this->jwt->sign($userId, (int) ($state['token_epoch'] ?? 0));
         $refresh = $preIssued ?? $this->refreshTokens->issue($userId);
+        $access = $this->sessionAccessToken($userId, $refresh);
 
         $this->response->setCookie([
-            'name'     => (string) (getenv('REFRESH_COOKIE_NAME') ?: 'synapse_rt'),
-            'value'    => $refresh['plain'],
-            'expire'   => time() + (int) (getenv('JWT_REFRESH_TTL_SECONDS') ?: 2592000),
-            'path'     => '/',
-            'secure'   => filter_var(getenv('REFRESH_COOKIE_SECURE') ?: '1', FILTER_VALIDATE_BOOL),
-            'httponly' => true,
-            'samesite' => (string) (getenv('REFRESH_COOKIE_SAMESITE') ?: 'Strict'),
+            ...$this->refreshCookieAttributes(),
+            'value' => $refresh['plain'],
+            'expire' => new \DateTimeImmutable('@' . (new RefreshSessionPolicy())->timestamp($refresh['expires_at'])),
         ]);
 
         return $this->ok([
             'access_token' => $access,
             'token_type'   => 'Bearer',
-            'expires_in'   => (int) (getenv('JWT_ACCESS_TTL_SECONDS') ?: 900),
+            'expires_in'   => max(0, (int) $this->jwt->verify($access)['exp'] - time()),
         ]);
+    }
+
+    private function sessionAccessToken(int $userId, array $refresh): string
+    {
+        $policy = new RefreshSessionPolicy();
+        $deadline = $policy->timestamp($refresh['session_expires_at']);
+        $policy->assertLive($deadline, time());
+        // Preserve the epoch captured under the rotation lock. Reading it again
+        // could bless a pre-logout refresh with the post-logout epoch.
+        return $this->jwt->sign($userId, (int) $refresh['token_epoch'], ['session_exp' => $deadline]);
+    }
+
+    private function refreshCookieAttributes(): array
+    {
+        return [
+            'name' => (string) (getenv('REFRESH_COOKIE_NAME') ?: 'synapse_rt'),
+            'path' => '/',
+            'secure' => filter_var(getenv('REFRESH_COOKIE_SECURE') ?: '1', FILTER_VALIDATE_BOOL),
+            'httponly' => true,
+            'samesite' => (string) (getenv('REFRESH_COOKIE_SAMESITE') ?: 'Strict'),
+        ];
     }
 
     /**

@@ -9,6 +9,7 @@ import '../../core/models/dashboard.dart';
 import '../../core/models/session.dart';
 import '../../core/services/api_service.dart';
 import '../../core/services/auth_controller.dart';
+import '../../core/workstations.dart';
 import '../audit/audit_screen.dart';
 import '../clinic/clinic_screen.dart';
 import '../common/auto_polling.dart';
@@ -17,6 +18,7 @@ import '../counselling/counselling_screen.dart';
 import '../facilities/facilities_screen.dart';
 import '../referrals/referrals_screen.dart';
 import '../reports/reports_screen.dart';
+import 'workstation_dashboard_screen.dart';
 
 /// Dashboard — live counters from `GET /dashboard/counters`.
 ///
@@ -105,6 +107,8 @@ class _DashboardScreenState extends State<DashboardScreen>
             _HeroCard(counters: data ?? DashboardCounters()),
             const SizedBox(height: 18),
             _QuickActions(session: session),
+            const SizedBox(height: 18),
+            _WorkstationsSection(session: session),
             const SizedBox(height: 18),
             if ((data?.facilities?.atRisk ?? 0) > 0) ...[
               _AlertsBanner(atRisk: data!.facilities!.atRisk),
@@ -348,6 +352,81 @@ class _HeroChip extends StatelessWidget {
     );
   }
 }
+
+/// Permission-gated entry points to each operational workstation dashboard.
+class _WorkstationsSection extends StatelessWidget {
+  const _WorkstationsSection({this.session});
+
+  final Session? session;
+
+  @override
+  Widget build(BuildContext context) {
+    final units = permittedWorkstations(session);
+    if (units.isEmpty) return const SizedBox.shrink();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const _SectionHeader(title: 'Workstations'),
+        const SizedBox(height: 10),
+        for (final unit in units)
+          Container(
+            margin: const EdgeInsets.only(bottom: 8),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: const Color(0xFFE7E5E4)),
+            ),
+            child: ListTile(
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) =>
+                      WorkstationDashboardScreen(unit: unit.unit),
+                ),
+              ),
+              leading: CircleAvatar(
+                backgroundColor:
+                    _workstationColor(unit.unit).withValues(alpha: 0.12),
+                child: Icon(
+                  _workstationIcon(unit.unit),
+                  color: _workstationColor(unit.unit),
+                  size: 20,
+                ),
+              ),
+              title: Text(
+                '${unit.label} dashboard',
+                style: const TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              subtitle: Text(
+                unit.welcome,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontSize: 11.5),
+              ),
+              trailing: const Icon(
+                Icons.chevron_right,
+                color: Colors.black38,
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+IconData _workstationIcon(String unit) => switch (unit) {
+      'clinic' => HugeIcons.strokeRoundedStethoscope,
+      'guidance' => HugeIcons.strokeRoundedMessage01,
+      _ => HugeIcons.strokeRoundedFactory01,
+    };
+
+Color _workstationColor(String unit) => switch (unit) {
+      'clinic' => const Color(0xFF0F766E),
+      'guidance' => const Color(0xFF5B4BA6),
+      _ => const Color(0xFFB45309),
+    };
 
 /// Horizontal row of permission-gated shortcuts to the most-used modules
 /// (avoids duplicating the always-visible bottom tabs).

@@ -96,7 +96,7 @@ export function AnalyticsTab() {
         )}
       </div>
 
-      <section className="overflow-hidden rounded-xl border bg-card">
+      <section className="overflow-hidden border bg-card">
         <Table
           ariaLabel="Scheduling analytics by counsellor, day and slot"
           wrapperClassName="max-h-[60vh] overflow-y-auto"

@@ -7,6 +7,7 @@ import 'package:hugeicons/hugeicons.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/api/api_client.dart';
+import '../../core/api/api_envelope.dart';
 import '../../core/models/profile.dart';
 import '../../core/models/referral.dart';
 import '../../core/services/api_service.dart';
@@ -116,6 +117,27 @@ class _ReferralsScreenState extends State<ReferralsScreen>
             s.hasPermission('referrals.create'));
   }
 
+  bool get _canBookCounselling {
+    final s = context.read<AuthController>().session;
+    return s == null
+        ? false
+        : (s.hasPermission('counselling.schedule.manage') ||
+            s.hasPermission('counselling.schedule.team_manage'));
+  }
+
+  Future<void> _bookReferral(Referral referral) async {
+    final booked = await showSynapseSheet<bool>(
+      context,
+      builder: (_) => _BookReferralSheet(referral: referral),
+    );
+    if (booked == true && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Counselling appointment booked.')),
+      );
+      _load();
+    }
+  }
+
   Future<void> _create() async {
     final payload = await showModalBottomSheet<Map<String, dynamic>>(
       context: context,
@@ -149,6 +171,13 @@ class _ReferralsScreenState extends State<ReferralsScreen>
       successMessage: 'Referral ${action}d.',
     );
     if (ok) _load();
+  }
+
+  Future<void> _openDetail(Referral r) async {
+    await showSynapseSheet<void>(
+      context,
+      builder: (_) => _ReferralDetailSheet(referral: r),
+    );
   }
 
   @override
@@ -243,7 +272,10 @@ class _ReferralsScreenState extends State<ReferralsScreen>
         return _ReferralTile(
           referral: _items[i],
           canHandle: _canHandle,
+          canBook: _canBookCounselling,
           onTransition: (a) => _transition(_items[i], a),
+          onBook: () => _bookReferral(_items[i]),
+          onOpen: () => _openDetail(_items[i]),
         );
       },
     );
@@ -258,16 +290,29 @@ Color _referralStatusColor(String status) => switch (status) {
       _ => Colors.grey,
     };
 
+Color _referralPriorityColor(String priority) => switch (priority) {
+      'urgent' => const Color(0xFFB3261E),
+      'high' => const Color(0xFFB45309),
+      'low' => Colors.black45,
+      _ => const Color(0xFF1E6FD9),
+    };
+
 class _ReferralTile extends StatelessWidget {
   const _ReferralTile({
     required this.referral,
     required this.canHandle,
+    this.canBook = false,
     this.onTransition,
+    this.onBook,
+    this.onOpen,
   });
 
   final Referral referral;
   final bool canHandle;
+  final bool canBook;
   final void Function(String action)? onTransition;
+  final VoidCallback? onBook;
+  final VoidCallback? onOpen;
 
   @override
   Widget build(BuildContext context) {
@@ -284,6 +329,7 @@ class _ReferralTile extends StatelessWidget {
         ),
       ),
       child: ListTile(
+        onTap: onOpen,
         title: Row(
           children: [
             Expanded(
@@ -292,6 +338,14 @@ class _ReferralTile extends StatelessWidget {
                 style: const TextStyle(fontWeight: FontWeight.w600),
               ),
             ),
+            if (referral.priority == 'high' || referral.priority == 'urgent')
+              Padding(
+                padding: const EdgeInsets.only(right: 6),
+                child: StatusBadge(
+                  label: titleCaseOption(referral.priority),
+                  color: _referralPriorityColor(referral.priority),
+                ),
+              ),
             StatusBadge(
               label: titleCaseOption(referral.status),
               color: _referralStatusColor(referral.status),
@@ -307,6 +361,13 @@ class _ReferralTile extends StatelessWidget {
                   '${titleCaseOption(referral.sourceModule)} → ${titleCaseOption(referral.targetModule)}'),
               Text(
                   '${titleCaseOption(referral.artifactType)} · ${fmtUtcShort(referral.createdAt)}'),
+              Text(
+                'Priority: ${titleCaseOption(referral.priority)}',
+                style: TextStyle(
+                  color: _referralPriorityColor(referral.priority),
+                  fontSize: 12,
+                ),
+              ),
               if (referral.providerName != null)
                 Text('Provider: ${referral.providerName}'),
             ],
@@ -324,6 +385,8 @@ class _ReferralTile extends StatelessWidget {
                       onTransition?.call('review');
                     case 'close':
                       onTransition?.call('close');
+                    case 'book':
+                      onBook?.call();
                   }
                 },
                 itemBuilder: (_) => [
@@ -335,6 +398,13 @@ class _ReferralTile extends StatelessWidget {
                   if (referral.status == 'acknowledged' ||
                       referral.status == 'under_review')
                     const PopupMenuItem(value: 'close', child: Text('Close')),
+                  if (canBook &&
+                      referral.targetModule == 'counselling' &&
+                      (referral.status == 'acknowledged' ||
+                          referral.status == 'under_review'))
+                    const PopupMenuItem(
+                        value: 'book',
+                        child: Text('Book counselling appointment')),
                 ],
               )
             : null,
@@ -347,6 +417,97 @@ const _moduleLabels = <String, String>{
   'clinic': 'Clinic',
   'counselling': 'Counselling',
 };
+
+class _ReferralDetailSheet extends StatelessWidget {
+  const _ReferralDetailSheet({required this.referral});
+
+  final Referral referral;
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            SheetHeader(
+              title: 'Referral #${referral.id}',
+              subtitle: 'Patient ${referral.patientSchoolId}',
+            ),
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 8,
+              runSpacing: 6,
+              children: [
+                StatusBadge(
+                  label: titleCaseOption(referral.status),
+                  color: _referralStatusColor(referral.status),
+                ),
+                StatusBadge(
+                  label: 'Priority ${titleCaseOption(referral.priority)}',
+                  color: _referralPriorityColor(referral.priority),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            _fact(
+              'Flow',
+              '${titleCaseOption(referral.sourceModule)} → '
+                  '${titleCaseOption(referral.targetModule)}',
+            ),
+            _fact('Artifact', titleCaseOption(referral.artifactType)),
+            _fact(
+              'Reason',
+              referral.reasonCode == null
+                  ? '—'
+                  : titleCaseOption(referral.reasonCode!),
+            ),
+            _fact('Provider', referral.providerName ?? '—'),
+            if (referral.sourceEncounterId != null)
+              _fact('Source encounter', '#${referral.sourceEncounterId}'),
+            if (referral.sourceSessionId != null)
+              _fact('Source session', '#${referral.sourceSessionId}'),
+            if (referral.queueHandoffDestination != null)
+              _fact(
+                'Queue handoff',
+                '${titleCaseOption(referral.queueHandoffDestination!)}'
+                    '${referral.queueHandoffEntryId != null ? ' · entry #${referral.queueHandoffEntryId}' : ''}'
+                    '${referral.queueHandoffAt != null ? ' · ${fmtUtcShort(referral.queueHandoffAt)}' : ''}',
+              ),
+            _fact('Created', fmtUtcShort(referral.createdAt)),
+            _fact('Updated', fmtUtcShort(referral.updatedAt)),
+            const SizedBox(height: 12),
+            OutlinedButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Close'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _fact(String label, String value) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 3),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            SizedBox(
+              width: 120,
+              child: Text(
+                label,
+                style: const TextStyle(fontSize: 12, color: Colors.black45),
+              ),
+            ),
+            Expanded(
+              child: Text(value, style: const TextStyle(fontSize: 12.5)),
+            ),
+          ],
+        ),
+      );
+}
 
 /// Default artifact per source module — mirrors the web
 /// `PRESET_ARTIFACT` map so non-IT users don't have to guess.
@@ -380,6 +541,7 @@ class _ReferralCreateSheetState extends State<_ReferralCreateSheet> {
 
   String? _source = 'clinic';
   String? _target = 'counselling';
+  String _priority = 'normal';
   final _artifactController = TextEditingController();
   bool _customArtifact = false;
   final _reasonController = TextEditingController();
@@ -478,6 +640,7 @@ class _ReferralCreateSheetState extends State<_ReferralCreateSheet> {
       'source_module': source,
       'target_module': target,
       'artifact_type': artifact,
+      'priority': _priority,
       if (reason.isNotEmpty) 'reason_code': reason,
       if (notes.isNotEmpty) 'notes_plaintext': notes,
     };
@@ -619,6 +782,24 @@ class _ReferralCreateSheetState extends State<_ReferralCreateSheet> {
                   ),
                 ),
               ],
+            ),
+            const SizedBox(height: 12),
+            DropdownButtonFormField<String>(
+              initialValue: _priority,
+              decoration: const InputDecoration(
+                labelText: 'Priority',
+                border: OutlineInputBorder(),
+                isDense: true,
+              ),
+              items: const [
+                DropdownMenuItem(value: 'low', child: Text('Low')),
+                DropdownMenuItem(value: 'normal', child: Text('Normal')),
+                DropdownMenuItem(value: 'high', child: Text('High')),
+                DropdownMenuItem(value: 'urgent', child: Text('Urgent')),
+              ],
+              onChanged: _submitting
+                  ? null
+                  : (v) => setState(() => _priority = v ?? 'normal'),
             ),
             const SizedBox(height: 12),
             if (_customArtifact)
@@ -763,5 +944,279 @@ class _ReferralCreateSheetState extends State<_ReferralCreateSheet> {
       _customArtifact = false;
       _artifactController.text = _presetArtifacts[_source ?? 'clinic'] ?? '';
     });
+  }
+}
+
+/// Bridge an accepted clinic→counselling referral into an actual appointment.
+/// Mirrors the SPA `ReferralBookingDialog`; the chosen slot must still fall
+/// inside the counsellor's active availability window.
+class _BookReferralSheet extends StatefulWidget {
+  const _BookReferralSheet({required this.referral});
+
+  final Referral referral;
+
+  @override
+  State<_BookReferralSheet> createState() => _BookReferralSheetState();
+}
+
+class _BookReferralSheetState extends State<_BookReferralSheet> {
+  List<Map<String, dynamic>>? _providers;
+  String? _providersError;
+  int? _counsellorId;
+  DateTime _date = DateTime.now().add(const Duration(days: 1));
+  TimeOfDay _start = const TimeOfDay(hour: 9, minute: 0);
+  TimeOfDay _end = const TimeOfDay(hour: 10, minute: 0);
+  late final _reason = TextEditingController(
+    text: 'Referred from ${widget.referral.sourceModule} — '
+        'referral #${widget.referral.id}',
+  );
+  bool _submitting = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadProviders();
+  }
+
+  @override
+  void dispose() {
+    _reason.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadProviders() async {
+    try {
+      final providers = await ApiService.I.counsellingProviders();
+      if (!mounted) return;
+      int? selected;
+      final preferred = widget.referral.providerUserId;
+      if (preferred != null &&
+          providers.any((p) => (p['id'] as num?)?.toInt() == preferred)) {
+        selected = preferred;
+      } else if (providers.isNotEmpty) {
+        selected = (providers.first['id'] as num).toInt();
+      }
+      setState(() {
+        _providers = providers;
+        _counsellorId = selected;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _providersError = mapDioError(e).message);
+    }
+  }
+
+  String _hhmm(TimeOfDay value) =>
+      '${value.hour.toString().padLeft(2, '0')}:'
+      '${value.minute.toString().padLeft(2, '0')}';
+
+  Future<void> _pickDate() async {
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _date,
+      firstDate: DateTime.now(),
+      lastDate: DateTime.now().add(const Duration(days: 180)),
+    );
+    if (picked != null) setState(() => _date = picked);
+  }
+
+  Future<void> _submit() async {
+    if (_counsellorId == null) {
+      setState(() => _error = 'Select a counsellor.');
+      return;
+    }
+    if (_hhmm(_start).compareTo(_hhmm(_end)) >= 0) {
+      setState(() => _error = 'End time must be after start time.');
+      return;
+    }
+    setState(() {
+      _submitting = true;
+      _error = null;
+    });
+    try {
+      await ApiService.I.bookCounsellingAppointment({
+        'patient_school_id': widget.referral.patientSchoolId,
+        'counsellor_user_id': _counsellorId,
+        'appointment_date': toDateInput(_date),
+        'start_time': _hhmm(_start),
+        'end_time': _hhmm(_end),
+        'type': 'referral_based',
+        if (_reason.text.trim().isNotEmpty) 'reason': _reason.text.trim(),
+      });
+      if (!mounted) return;
+      Navigator.of(context).pop(true);
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = e.message;
+        _submitting = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = mapDioError(e).message;
+        _submitting = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final providers = _providers;
+    return Padding(
+      padding: EdgeInsets.only(
+        bottom: MediaQuery.of(context).viewInsets.bottom,
+      ),
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(20, 14, 20, 20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            SheetHeader(
+              title: 'Book counselling',
+              subtitle:
+                  'Referral #${widget.referral.id} · ${widget.referral.patientSchoolId}',
+            ),
+            const SizedBox(height: 12),
+            if (providers == null && _providersError == null)
+              const Padding(
+                padding: EdgeInsets.all(8),
+                child: Center(
+                  child: SizedBox(
+                    width: 22,
+                    height: 22,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                ),
+              )
+            else if (_providersError != null)
+              Text(
+                'Could not load counsellors: $_providersError',
+                style: TextStyle(
+                  color: Theme.of(context).colorScheme.error,
+                  fontSize: 12,
+                ),
+              )
+            else if (providers!.isEmpty)
+              const Text(
+                'No enrolled counsellors are available. Enroll counsellors '
+                'and add availability windows first.',
+                style: TextStyle(fontSize: 12, color: Colors.black54),
+              )
+            else
+              InputDecorator(
+                decoration: const InputDecoration(
+                  labelText: 'Counsellor',
+                  border: OutlineInputBorder(),
+                  isDense: true,
+                ),
+                child: DropdownButtonHideUnderline(
+                  child: DropdownButton<int>(
+                    value: _counsellorId,
+                    isExpanded: true,
+                    isDense: true,
+                    items: [
+                      for (final provider in providers)
+                        DropdownMenuItem(
+                          value: (provider['id'] as num).toInt(),
+                          child: Text(
+                            (provider['name'] ?? 'Counsellor') as String,
+                          ),
+                        ),
+                    ],
+                    onChanged: _submitting
+                        ? null
+                        : (value) => setState(() => _counsellorId = value),
+                  ),
+                ),
+              ),
+            const SizedBox(height: 10),
+            OutlinedButton.icon(
+              onPressed: _submitting ? null : _pickDate,
+              icon: const Icon(HugeIcons.strokeRoundedCalendar01, size: 17),
+              label: Text(toDateInput(_date)),
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: _submitting
+                        ? null
+                        : () async {
+                            final picked = await showTwelveHourTimePicker(
+                              context: context,
+                              initialTime: _start,
+                            );
+                            if (picked != null) {
+                              setState(() => _start = picked);
+                            }
+                          },
+                    icon: const Icon(HugeIcons.strokeRoundedClock01, size: 17),
+                    label: Text('Start ${_hhmm(_start)}'),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: _submitting
+                        ? null
+                        : () async {
+                            final picked = await showTwelveHourTimePicker(
+                              context: context,
+                              initialTime: _end,
+                            );
+                            if (picked != null) {
+                              setState(() => _end = picked);
+                            }
+                          },
+                    icon: const Icon(HugeIcons.strokeRoundedClock01, size: 17),
+                    label: Text('End ${_hhmm(_end)}'),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            TextField(
+              controller: _reason,
+              maxLength: 255,
+              decoration: const InputDecoration(
+                labelText: 'Reason',
+                border: OutlineInputBorder(),
+                isDense: true,
+              ),
+            ),
+            const Text(
+              'The slot must fall inside the counsellor’s active '
+              'availability window.',
+              style: TextStyle(fontSize: 11, color: Colors.black45),
+            ),
+            if (_error != null) ...[
+              const SizedBox(height: 8),
+              Text(
+                _error!,
+                style: TextStyle(
+                  color: Theme.of(context).colorScheme.error,
+                  fontSize: 12.5,
+                ),
+              ),
+            ],
+            const SizedBox(height: 12),
+            FilledButton(
+              onPressed: _submitting ? null : _submit,
+              child: _submitting
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Text('Book appointment'),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }

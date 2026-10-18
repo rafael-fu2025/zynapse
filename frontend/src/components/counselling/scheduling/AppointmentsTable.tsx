@@ -241,7 +241,7 @@ export function AppointmentsTable({
   return (
     // md+: flexes to the Counselling tab's leftover space — the pager
     // (mt-auto) pins to the card bottom and the table scrolls inside.
-    <article className="flex flex-col overflow-hidden rounded-xl border bg-card md:min-h-0 md:flex-1">
+    <article className="flex flex-col overflow-hidden border bg-card md:min-h-0 md:flex-1">
       <header className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b px-3 py-2">
         <p className="text-sm font-semibold text-foreground">Appointments</p>
         <div className="flex flex-wrap items-center gap-2">

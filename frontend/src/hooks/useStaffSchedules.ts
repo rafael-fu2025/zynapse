@@ -2,7 +2,8 @@
  * Clinic staff schedule hooks (Phase P5b). Admin-managed recurring shift
  * roster — gated server-side by `clinic.schedules.manage`.
  */
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery } from '@tanstack/react-query';
+import { schedulingStaffError, useInvalidateSchedulingStaff } from '@/hooks/useSchedulingStaff';
 import { z } from 'zod';
 import { toast } from 'sonner';
 import { apiClient } from '@/api/client';
@@ -18,12 +19,12 @@ import {
 
 const KEY = ['clinic', 'staff-schedules'] as const;
 
-export function useStaffSchedules(includeArchived = false) {
+export function useStaffSchedules(showArchived = false) {
   return useQuery<StaffSchedule[], ApiEnvelopeError>({
-    queryKey: [...KEY, { includeArchived }],
+    queryKey: [...KEY, { showArchived }],
     queryFn: async () => {
       const res = await apiClient.get<unknown[]>(
-        `/clinic/staff-schedules${includeArchived ? '?include_archived=1' : ''}`,
+        `/clinic/staff-schedules?archived=${showArchived ? '1' : '0'}`,
       );
       return z.array(staffScheduleSchema).parse(res.data);
     },
@@ -36,7 +37,7 @@ export function useStaffSchedules(includeArchived = false) {
  * landed rather than claiming one.
  */
 export function useCreateStaffSchedule() {
-  const qc = useQueryClient();
+  const invalidate = useInvalidateSchedulingStaff();
   return useMutation<{ schedule: StaffSchedule; created: number }, ApiEnvelopeError, CreateStaffScheduleInput>({
     mutationFn: async (input) => {
       const valid = createStaffScheduleSchema.parse(input);
@@ -46,20 +47,20 @@ export function useCreateStaffSchedule() {
       return { schedule: staffScheduleSchema.parse(res.data), created };
     },
     onSuccess: (result) => {
-      void qc.invalidateQueries({ queryKey: KEY });
+      void invalidate();
       toast.success(
         result.created === 1 ? 'Staff schedule added.' : `${result.created} staff schedules added.`,
       );
     },
     onError: (err) => {
-      toast.error(err.errors[0]?.message ?? 'Failed to add schedule.');
+      toast.error(schedulingStaffError(err));
     },
   });
 }
 
 /** Edit an existing shift template (partial update). */
 export function useUpdateStaffSchedule() {
-  const qc = useQueryClient();
+  const invalidate = useInvalidateSchedulingStaff();
   return useMutation<StaffSchedule, ApiEnvelopeError, { id: number; input: UpdateStaffScheduleInput }>({
     mutationFn: async ({ id, input }) => {
       const valid = updateStaffScheduleSchema.parse(input);
@@ -67,45 +68,45 @@ export function useUpdateStaffSchedule() {
       return staffScheduleSchema.parse(res.data);
     },
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: KEY });
+      void invalidate();
       toast.success('Staff schedule updated.');
     },
     onError: (err) => {
-      toast.error(err.errors[0]?.message ?? 'Failed to update schedule.');
+      toast.error(schedulingStaffError(err));
     },
   });
 }
 
 export function useArchiveStaffSchedule() {
-  const qc = useQueryClient();
+  const invalidate = useInvalidateSchedulingStaff();
   return useMutation<void, ApiEnvelopeError, number>({
     mutationFn: async (id) => {
       await apiClient.post(`/clinic/staff-schedules/${id}/archive`, {});
     },
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: KEY });
+      void invalidate();
       toast.success('Staff schedule archived.');
     },
     onError: (err) => {
-      toast.error(err.errors[0]?.message ?? 'Failed to archive.');
+      toast.error(schedulingStaffError(err));
     },
   });
 }
 
 /** Restore an archived shift template back into the roster. */
 export function useUnarchiveStaffSchedule() {
-  const qc = useQueryClient();
+  const invalidate = useInvalidateSchedulingStaff();
   return useMutation<StaffSchedule, ApiEnvelopeError, number>({
     mutationFn: async (id) => {
       const res = await apiClient.post<unknown>(`/clinic/staff-schedules/${id}/unarchive`, {});
       return staffScheduleSchema.parse(res.data);
     },
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: KEY });
+      void invalidate();
       toast.success('Staff schedule restored.');
     },
     onError: (err) => {
-      toast.error(err.errors[0]?.message ?? 'Failed to restore.');
+      toast.error(schedulingStaffError(err));
     },
   });
 }

@@ -10,6 +10,8 @@
  * Add a new entry whenever a route's H1 changes; the route key is
  * the React Router `path` pattern (without `:params`).
  */
+import { WORKSTATIONS } from '@/lib/workstations';
+
 export interface PageMeta {
   /** Short title shown in the topbar; should match the page H1. */
   title: string;
@@ -23,6 +25,7 @@ export interface PageMeta {
 
 export const PAGE_META: Readonly<Record<string, PageMeta>> = {
   '/': { title: 'Dashboard' },
+  ...Object.fromEntries(WORKSTATIONS.map(({ path, label }) => [path, { title: `${label} dashboard` }])),
   '/me': { title: 'My portal' },
   '/clinic': { title: 'Clinic' },
   '/appointments': { title: 'Appointments' },

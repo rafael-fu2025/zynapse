@@ -30,6 +30,7 @@ const announcementListSchema = z.array(
     unpublish_at: z.string().nullable(),
     created_at: z.string(),
     updated_at: z.string(),
+    archived_at: z.string().nullable(),
     status: z.enum(['live', 'scheduled', 'expired']),
   }),
 );
@@ -45,6 +46,7 @@ const serviceListSchema = z.array(
     queue_destination: z.enum(['clinic', 'counselling']).nullable(),
     is_active: z.boolean(),
     created_at: z.string(),
+    archived_at: z.string().nullable(),
   }),
 );
 
@@ -79,14 +81,14 @@ function toServicePayload(input: ServiceInput): Record<string, unknown> {
 
 // ---- staff: announcements -------------------------------------------
 
-export function useGuidanceAnnouncements() {
+export function useGuidanceAnnouncements(showArchived: boolean = false) {
   return useQuery<GuidanceAnnouncement[], ApiEnvelopeError>({
-    queryKey: ['guidance', 'announcements'],
+    queryKey: ['guidance', 'announcements', showArchived],
     queryFn: async () => {
-      const res = await apiClient.get<unknown[]>('/counselling/announcements');
+      const params = showArchived ? '?archived=1' : '?archived=0';
+      const res = await apiClient.get<unknown[]>(`/counselling/announcements${params}`);
       return announcementListSchema.parse(res.data);
     },
-    placeholderData: keepPreviousData,
   });
 }
 
@@ -135,16 +137,31 @@ export function useArchiveGuidanceAnnouncement() {
   });
 }
 
+export function useUnarchiveGuidanceAnnouncement() {
+  const qc = useQueryClient();
+  return useMutation<{ id: number }, ApiEnvelopeError, { id: number; title: string }>({
+    mutationFn: async ({ id }) => {
+      const res = await apiClient.post<{ id: number; archived: boolean }>(`/counselling/announcements/${id}/unarchive`);
+      return { id: res.data.id };
+    },
+    onSuccess: (_r, vars) => {
+      void qc.invalidateQueries({ queryKey: ['guidance', 'announcements'] });
+      toast.success(`Announcement "${vars.title}" restored.`);
+    },
+    onError: (err) => toast.error(err.errors[0]?.message ?? 'Failed to restore the announcement.'),
+  });
+}
+
 // ---- staff: services -------------------------------------------------
 
-export function useGuidanceServices() {
+export function useGuidanceServices(showArchived: boolean = false) {
   return useQuery<GuidanceService[], ApiEnvelopeError>({
-    queryKey: ['guidance', 'services'],
+    queryKey: ['guidance', 'services', showArchived],
     queryFn: async () => {
-      const res = await apiClient.get<unknown[]>('/counselling/services');
+      const params = showArchived ? '?archived=1' : '?archived=0';
+      const res = await apiClient.get<unknown[]>(`/counselling/services${params}`);
       return serviceListSchema.parse(res.data);
     },
-    placeholderData: keepPreviousData,
   });
 }
 
@@ -190,6 +207,21 @@ export function useArchiveGuidanceService() {
       toast.success(`Service "${vars.name}" archived.`);
     },
     onError: (err) => toast.error(err.errors[0]?.message ?? 'Failed to archive the service.'),
+  });
+}
+
+export function useUnarchiveGuidanceService() {
+  const qc = useQueryClient();
+  return useMutation<{ id: number }, ApiEnvelopeError, { id: number; name: string }>({
+    mutationFn: async ({ id }) => {
+      const res = await apiClient.post<{ id: number; archived: boolean }>(`/counselling/services/${id}/unarchive`);
+      return { id: res.data.id };
+    },
+    onSuccess: (_r, vars) => {
+      void qc.invalidateQueries({ queryKey: ['guidance', 'services'] });
+      toast.success(`Service "${vars.name}" restored.`);
+    },
+    onError: (err) => toast.error(err.errors[0]?.message ?? 'Failed to restore the service.'),
   });
 }
 

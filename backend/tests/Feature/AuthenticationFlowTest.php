@@ -139,6 +139,115 @@ final class AuthenticationFlowTest extends FeatureTestCase
         $this->assertTrue($cookie->isHTTPOnly());
     }
 
+    public function testAbsoluteDeadlineBoundsLoginRotationAndGraceAccessTokens(): void
+    {
+        $previous = getenv('JWT_SESSION_MAX_AGE_SECONDS');
+        $grace = getenv('JWT_REFRESH_GRACE_SECONDS');
+        putenv('JWT_SESSION_MAX_AGE_SECONDS=120');
+        putenv('JWT_REFRESH_GRACE_SECONDS=5');
+        try {
+            $before = time();
+            $session = $this->loginFull();
+            $db = db_connect();
+            $original = $db->table('auth_refresh_tokens')->where('user_id', $session['userId'])->get()->getRowArray();
+            $policy = new \App\Auth\RefreshSessionPolicy();
+            $deadline = $policy->timestamp($original['session_expires_at']);
+            $this->assertGreaterThanOrEqual($before + 120, $deadline);
+            $this->assertLessThanOrEqual(time() + 120, $deadline);
+
+            // Changing configuration must not reset an existing family's clock.
+            putenv('JWT_SESSION_MAX_AGE_SECONDS=43200');
+            $rotated = $this->refreshWith($session['refresh']);
+            $rotated->assertStatus(200);
+            $race = $this->refreshWith($session['refresh']);
+            $race->assertStatus(200);
+            $rows = $db->table('auth_refresh_tokens')->where('user_id', $session['userId'])->get()->getResultArray();
+            $this->assertCount(2, $rows, 'Grace must not mint a third refresh token.');
+            foreach ($rows as $row) {
+                $this->assertSame($original['family_id'], $row['family_id']);
+                $this->assertSame($original['session_expires_at'], $row['session_expires_at']);
+                $this->assertLessThanOrEqual($deadline, $policy->timestamp($row['expires_at']));
+            }
+            foreach ([$session['response'], $rotated] as $response) {
+                $cookie = $response->response()->getCookie(self::COOKIE_NAME);
+                $this->assertLessThanOrEqual($deadline, $cookie->getExpiresTimestamp());
+            }
+            foreach ([$session['response'], $rotated, $race] as $response) {
+                $data = $this->envelope($response)['data'];
+                $claims = \Config\Services::jwt()->verify($data['access_token']);
+                $this->assertSame($deadline, $claims['session_exp']);
+                $this->assertLessThanOrEqual($deadline, $claims['exp']);
+                $this->assertLessThanOrEqual(120, $data['expires_in']);
+            }
+        } finally {
+            putenv($previous === false ? 'JWT_SESSION_MAX_AGE_SECONDS' : 'JWT_SESSION_MAX_AGE_SECONDS=' . $previous);
+            putenv($grace === false ? 'JWT_REFRESH_GRACE_SECONDS' : 'JWT_REFRESH_GRACE_SECONDS=' . $grace);
+        }
+    }
+
+    public function testExpiredAbsoluteDeadlineRejectsLiveAndGraceTokens(): void
+    {
+        $session = $this->loginFull();
+        $rotated = $this->refreshWith($session['refresh']);
+        $rotated->assertStatus(200);
+        // Leave expires_at live: rejection must be due to the absolute clock.
+        db_connect()->table('auth_refresh_tokens')->where('user_id', $session['userId'])
+            ->update(['session_expires_at' => gmdate('Y-m-d H:i:s')]);
+        foreach ([$session['refresh'], $this->refreshCookieValue($rotated)] as $plain) {
+            $result = $this->refreshWith($plain);
+            $result->assertStatus(401);
+            $this->assertErrorCode('auth.refresh_invalid_or_replayed', $result);
+        }
+        $this->assertSame(2, db_connect()->table('auth_refresh_tokens')->where('user_id', $session['userId'])->countAllResults());
+    }
+
+    public function testGraceCanBeDisabled(): void
+    {
+        $previous = getenv('JWT_REFRESH_GRACE_SECONDS');
+        putenv('JWT_REFRESH_GRACE_SECONDS=0');
+        try {
+            $session = $this->loginFull();
+            $rotated = $this->refreshWith($session['refresh']);
+            $rotated->assertStatus(200);
+            $this->refreshWith($session['refresh'])->assertStatus(401);
+            $this->refreshWith($this->refreshCookieValue($rotated))->assertStatus(401);
+        } finally {
+            putenv($previous === false ? 'JWT_REFRESH_GRACE_SECONDS' : 'JWT_REFRESH_GRACE_SECONDS=' . $previous);
+        }
+    }
+
+    public function testDelayedRefreshMintKeepsPreLogoutEpoch(): void
+    {
+        $session = $this->loginFull();
+        $result = \Config\Services::refreshTokenService()->rotate($session['refresh']);
+        $this->assertSame('rotated', $result['status']);
+        $this->authed($session['token'], 'post', 'api/v1/auth/logout')->assertStatus(200);
+        $deadline = (new \App\Auth\RefreshSessionPolicy())->timestamp($result['mint']['session_expires_at']);
+        $delayed = \Config\Services::jwt()->sign($session['userId'], $result['mint']['token_epoch'], ['session_exp' => $deadline]);
+        $this->authed($delayed, 'get', 'api/v1/auth/me')->assertStatus(401);
+        $this->refreshWith($result['mint']['plain'])->assertStatus(401);
+    }
+
+    public function testLegacyFamilyWithoutDeadlineCannotRefresh(): void
+    {
+        $session = $this->loginFull();
+        db_connect()->table('auth_refresh_tokens')->where('user_id', $session['userId'])
+            ->update(['session_expires_at' => null]);
+        $this->refreshWith($session['refresh'])->assertStatus(401);
+    }
+
+    public function testLogoutRevokesDescendantsAndOldTokenCannotUseGrace(): void
+    {
+        $session = $this->loginFull();
+        $rotated = $this->refreshWith($session['refresh']);
+        $rotated->assertStatus(200);
+        $this->authed($session['token'], 'post', 'api/v1/auth/logout')->assertStatus(200);
+        $this->refreshWith($session['refresh'])->assertStatus(401);
+        $this->refreshWith($this->refreshCookieValue($rotated))->assertStatus(401);
+        $this->assertSame(0, db_connect()->table('auth_refresh_tokens')->where('user_id', $session['userId'])
+            ->where('revoked_at', null)->countAllResults());
+    }
+
     public function testRefreshWithoutCookieIsRejected(): void
     {
         $result = $this->call('post', 'api/v1/auth/refresh');
@@ -242,6 +351,16 @@ final class AuthenticationFlowTest extends FeatureTestCase
         $logout = $this->authed($session['token'], 'post', 'api/v1/auth/logout');
         $logout->assertStatus(200);
         $this->assertTrue($this->envelope($logout)['data']['logged_out'] ?? false);
+        $loginCookie = $session['response']->response()->getCookie(self::COOKIE_NAME);
+        $logoutCookie = $logout->response()->getCookie(self::COOKIE_NAME);
+        $this->assertInstanceOf(\CodeIgniter\Cookie\Cookie::class, $logoutCookie);
+        $this->assertSame('', $logoutCookie->getValue());
+        $this->assertLessThan(time(), $logoutCookie->getExpiresTimestamp());
+        $this->assertSame($loginCookie->getPath(), $logoutCookie->getPath());
+        $this->assertSame($loginCookie->getDomain(), $logoutCookie->getDomain());
+        $this->assertSame($loginCookie->isSecure(), $logoutCookie->isSecure());
+        $this->assertSame($loginCookie->isHTTPOnly(), $logoutCookie->isHTTPOnly());
+        $this->assertSame($loginCookie->getSameSite(), $logoutCookie->getSameSite());
 
         // The refresh family AND the bearer token both die at the server:
         // logout revokes the family and advances the token epoch, so the
@@ -257,18 +376,21 @@ final class AuthenticationFlowTest extends FeatureTestCase
 
     /**
      * A bearer token issued before the epoch column existed carries no
-     * `epoch` claim; while the user's epoch is still 0 it must keep
-     * working (deployment compatibility — no forced re-login on migrate).
-     *
-     * The claim is overwritten to null, which encodes as JSON null; the
-     * filter's (int) cast reads null as 0, exactly like a missing claim.
+     * `epoch` claim; while the user's epoch is still 0 it can authenticate
+     * if all other claims meet current validation, including issuer/audience.
+     * Re-sign a normal payload with only epoch removed: the public signer
+     * intentionally rejects attempts to override reserved claims.
      */
     public function testLegacyTokenWithoutEpochClaimStillAuthenticatesAtEpochZero(): void
     {
         $session = $this->loginFull();
-        $userId = (int) $session['userId'];
-
-        $legacy = \Config\Services::jwt()->sign($userId, 0, ['epoch' => null]);
+        $payload = \Config\Services::jwt()->verify($session['token']);
+        unset($payload['epoch']);
+        $legacy = \Firebase\JWT\JWT::encode(
+            $payload,
+            (string) getenv('JWT_SECRET'),
+            config('Auth')->jwtAlgorithm,
+        );
 
         $me = $this->authed($legacy, 'get', 'api/v1/auth/me');
         $me->assertStatus(200);

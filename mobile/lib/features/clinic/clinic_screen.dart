@@ -12,6 +12,7 @@ import '../../core/utils/dates.dart';
 import '../common/auto_polling.dart';
 import '../common/crud_form.dart';
 import '../common/widgets.dart';
+import '../scheduling/scheduling_staff_screen.dart';
 import 'clinic_session_workspace.dart';
 
 /// Clinic — encounters anchor clinic actions (mirrors the web `/clinic`
@@ -432,7 +433,8 @@ class _ClinicScreenState extends State<ClinicScreen>
   }
 
   /// Staff schedules — list + add/edit shifts (mirrors the web
-  /// `StaffSchedulesTab`). Uses the employee roster for the user picker.
+  /// `StaffSchedulesTab`). The picker uses the enrollment-based clinic
+  /// roster; schedule writes reject anyone outside it.
   Future<void> _showStaffSchedules() async {
     List<Map<String, dynamic>>? schedules;
     String? error;
@@ -451,17 +453,34 @@ class _ClinicScreenState extends State<ClinicScreen>
     Future<void> upsert([Map<String, dynamic>? existing]) async {
       List<Map<String, dynamic>> staff = [];
       try {
-        final page = await ApiService.I.employees(limit: 100);
-        staff = page.items
+        final providers = await ApiService.I.schedulingProviders('clinic');
+        staff = providers
             .map((p) => {
                   'id': p.id,
-                  'name': p.fullName,
+                  'name': p.name,
                 })
             .toList();
       } catch (e) {
         if (kDebugMode) debugPrint('ClinicScreen.staffSchedules failed: $e');
+        if (mounted) {
+          showCrudMessage(
+            context,
+            mapDioError(e).message,
+            error: true,
+          );
+        }
+        return;
       }
       if (!mounted) return;
+      if (staff.isEmpty) {
+        showCrudMessage(
+          context,
+          'No staff are enrolled for clinic scheduling. Enroll providers '
+          'from the web scheduling panel first.',
+          error: true,
+        );
+        return;
+      }
       final options = staff.map((s) => '${s['id']} · ${s['name']}').toList();
       final payload = await showCrudForm(
         context,
@@ -596,6 +615,20 @@ class _ClinicScreenState extends State<ClinicScreen>
                 icon: const Icon(HugeIcons.strokeRoundedAddCircle),
                 label: const Text('Add staff shift'),
               ),
+              const SizedBox(height: 6),
+              OutlinedButton.icon(
+                onPressed: () {
+                  Navigator.of(context).pop();
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) =>
+                          const SchedulingStaffScreen(unit: 'clinic'),
+                    ),
+                  );
+                },
+                icon: const Icon(HugeIcons.strokeRoundedUserGroup),
+                label: const Text('Manage enrollment'),
+              ),
             ],
           ],
         ),
@@ -613,12 +646,17 @@ class _ClinicScreenState extends State<ClinicScreen>
     'Sunday',
   ];
 
-  static String _dowName(int dow) =>
-      (dow >= 1 && dow <= 7) ? _days[dow - 1] : 'Day $dow';
+  static String _dowName(int dow) {
+    // The backend stores 0=Sun … 6=Sat.
+    if (dow == 0) return 'Sunday';
+    return (dow >= 1 && dow <= 6) ? _days[dow - 1] : 'Day $dow';
+  }
 
   static int _dowIndex(String name) {
+    // The backend stores 0=Sun … 6=Sat; the form lists Monday first.
+    if (name == 'Sunday') return 0;
     final i = _days.indexOf(name);
-    return i >= 0 ? i + 1 : 1;
+    return (i >= 0 && i <= 5) ? i + 1 : 1;
   }
 }
 

@@ -451,6 +451,16 @@ final class AppointmentService extends BaseService
                 ]);
             }
             $now = new DateTimeImmutable('now', new DateTimeZone('UTC'));
+            (new PatientLookupService())->assertPatientUserId($patientUserId);
+            if ($providerUserId !== null) {
+                $provider = $this->db->table('users')->where('tenant_id', CurrentTenant::id())
+                    ->where('id', $providerUserId)->where('archived_at', null)->get()->getRowArray();
+                if ($provider === null || (string) $provider['status'] !== 'active') {
+                    throw ApiException::validationFailure([
+                        ['code' => 'validation.field', 'field' => 'provider_user_id', 'message' => 'Provider is unavailable in this tenant.'],
+                    ]);
+                }
+            }
             if ($when < $now) {
                 throw new ApiException('validation.past', 422, [
                     ['code' => 'validation.field', 'message' => 'Appointment must be in the future.', 'field' => 'scheduled_at'],
@@ -554,15 +564,12 @@ final class AppointmentService extends BaseService
      */
     public function providers(): array
     {
-        $rows = $this->db->table('auth_groups_users gu')
+        $ids = (new \App\Services\SchedulingStaffService())->eligibleIds('clinic');
+        if ($ids === []) return [];
+        $rows = $this->db->table('users u')
             ->select('u.id, u.first_name, u.last_name, u.username')
-            ->join('auth_groups g', 'g.id = gu.group_id')
-            ->join('users u', 'u.id = gu.user_id')
-            // Tenant-scope the staff roster: without this, a student's
-            // booking picker listed providers of every tenant (2026-09 audit).
             ->where('u.tenant_id', CurrentTenant::id())
-            ->where('g.name', 'clinic_staff')
-            ->where('u.archived_at', null)
+            ->whereIn('u.id', $ids)
             ->orderBy('u.last_name', 'ASC')
             ->orderBy('u.first_name', 'ASC')
             ->get()->getResultArray();
@@ -621,6 +628,15 @@ final class AppointmentService extends BaseService
                     ['code' => 'resource.not_found', 'message' => "Appointment #{$appointmentId} not found."],
                 ]);
             }
+            if ($row['patient_user_id'] !== null) {
+                (new PatientLookupService())->assertPatientUserId((int) $row['patient_user_id']);
+            }
+            if ($row['provider_user_id'] !== null && $this->db->table('users')
+                ->where('tenant_id', CurrentTenant::id())->where('id', (int) $row['provider_user_id'])->countAllResults() === 0) {
+                throw ApiException::validationFailure([
+                    ['code' => 'validation.field', 'field' => 'provider_user_id', 'message' => 'Provider is unavailable in this tenant.'],
+                ]);
+            }
             if (! in_array($row['status'], $from, true)) {
                 throw StateMachineException::invalidTransition((string) $row['status'], $nextStatus, 'appointment');
             }
@@ -667,7 +683,7 @@ final class AppointmentService extends BaseService
             // The snapshot above predates the assignment, so read the provider
             // back out of the update — otherwise the newly assigned staff member
             // is the one person not told about the appointment they just took.
-            $providerId = $update['provider_user_id'] ?? $row['provider_user_id'];
+            $providerId = array_key_exists('provider_user_id', $update) ? $update['provider_user_id'] : $row['provider_user_id'];
 
             // Panel revision: checking in creates the day's ENCOUNTER
             // (the anchor for all clinic actions) and queues it — same
@@ -731,6 +747,7 @@ final class AppointmentService extends BaseService
 
         $this->db->table('clinic_encounters')->insert([
             'tenant_id'         => CurrentTenant::id(),
+            'patient_user_id'   => $appt['patient_user_id'] !== null ? (int) $appt['patient_user_id'] : null,
             'patient_school_id' => (string) $appt['patient_school_id'],
             'appointment_id'    => $appointmentId,
             'chief_complaint'   => $reason,
@@ -853,6 +870,18 @@ final class AppointmentService extends BaseService
                 $changed[] = 'reason';
             }
 
+            $patientId = array_key_exists('patient_user_id', $update) ? $update['patient_user_id'] : $row['patient_user_id'];
+            if ($patientId !== null) {
+                (new PatientLookupService())->assertPatientUserId((int) $patientId);
+            }
+            $providerId = array_key_exists('provider_user_id', $update) ? $update['provider_user_id'] : $row['provider_user_id'];
+            if ($providerId !== null && $this->db->table('users')->where('tenant_id', CurrentTenant::id())
+                ->where('id', (int) $providerId)->countAllResults() === 0) {
+                throw ApiException::validationFailure([
+                    ['code' => 'validation.field', 'field' => 'provider_user_id', 'message' => 'Provider is unavailable in this tenant.'],
+                ]);
+            }
+
             if ($update === []) {
                 // Nothing to do — caller asked for an idempotent edit.
                 return AppointmentDto::fromRow($this->decorate([$row])[0]);
@@ -908,7 +937,7 @@ final class AppointmentService extends BaseService
                         ],
                     );
                 }
-                $patientId = (int) ($update['patient_user_id'] ?? $row['patient_user_id'] ?? 0);
+                $patientId = (int) (array_key_exists('patient_user_id', $update) ? ($update['patient_user_id'] ?? 0) : ($row['patient_user_id'] ?? 0));
                 if ($patientId > 0) {
                     $this->notify->enqueue($patientId, 'appointment.rescheduled', ['resource_code'=>'appointment#'.$appointmentId,'appointment_at'=>$slot,'appointment_status'=>'scheduled','destination'=>'clinic']);
                 }

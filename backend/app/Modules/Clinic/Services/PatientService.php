@@ -405,12 +405,14 @@ final class PatientService extends BaseService
         $id = (int) $row['id'];
 
         $allergies = $this->db->table('patient_allergies')
+            ->where('tenant_id', CurrentTenant::id())
             ->select('id, allergen, severity, reaction')
             ->where('user_id', $id)
             ->orderBy('id', 'ASC')
             ->get()->getResultArray();
 
         $contacts = $this->db->table('patient_contacts')
+            ->where('tenant_id', CurrentTenant::id())
             ->select('id, contact_name, relationship, phone, is_primary')
             ->where('user_id', $id)
             ->orderBy('is_primary', 'DESC')
@@ -584,6 +586,7 @@ final class PatientService extends BaseService
             }
 
             $this->db->table('patient_allergies')->insert([
+                'tenant_id'        => CurrentTenant::id(),
                 'user_id'          => $patientId,
                 'allergen'         => (string) $input['allergen'],
                 'severity'         => (string) ($input['severity'] ?? 'mild'),
@@ -626,11 +629,13 @@ final class PatientService extends BaseService
             $isPrimary = (bool) ($input['is_primary'] ?? false);
             if ($isPrimary) {
                 $this->db->table('patient_contacts')
+                    ->where('tenant_id', CurrentTenant::id())
                     ->where('user_id', $patientId)
                     ->update(['is_primary' => 0]);
             }
 
             $this->db->table('patient_contacts')->insert([
+                'tenant_id'    => CurrentTenant::id(),
                 'user_id'      => $patientId,
                 'contact_name' => (string) $input['contact_name'],
                 'relationship' => (string) $input['relationship'],
@@ -662,6 +667,7 @@ final class PatientService extends BaseService
         $userId = CurrentUser::assert();
 
         return $this->txn(function () use ($patientId, $allergyId, $input, $userId): UserDto {
+            $this->lockMedicalPatient($patientId);
             $row = $this->db->table('patient_allergies')
                 ->where('tenant_id', CurrentTenant::id())
                 ->where('id', $allergyId)
@@ -695,6 +701,7 @@ final class PatientService extends BaseService
         $userId = CurrentUser::assert();
 
         return $this->txn(function () use ($patientId, $allergyId, $userId): UserDto {
+            $this->lockMedicalPatient($patientId);
             $row = $this->db->table('patient_allergies')
                 ->where('tenant_id', CurrentTenant::id())
                 ->where('id', $allergyId)
@@ -728,6 +735,7 @@ final class PatientService extends BaseService
         $userId = CurrentUser::assert();
 
         return $this->txn(function () use ($patientId, $contactId, $input, $userId): UserDto {
+            $this->lockMedicalPatient($patientId);
             $row = $this->db->table('patient_contacts')
                 ->where('tenant_id', CurrentTenant::id())
                 ->where('id', $contactId)
@@ -742,6 +750,7 @@ final class PatientService extends BaseService
             $isPrimary = (bool) ($input['is_primary'] ?? false);
             if ($isPrimary) {
                 $this->db->table('patient_contacts')
+                    ->where('tenant_id', CurrentTenant::id())
                     ->where('user_id', $patientId)
                     ->where('id !=', $contactId)
                     ->update(['is_primary' => 0]);
@@ -770,6 +779,7 @@ final class PatientService extends BaseService
         $userId = CurrentUser::assert();
 
         return $this->txn(function () use ($patientId, $contactId, $userId): UserDto {
+            $this->lockMedicalPatient($patientId);
             $row = $this->db->table('patient_contacts')
                 ->where('tenant_id', CurrentTenant::id())
                 ->where('id', $contactId)
@@ -791,11 +801,17 @@ final class PatientService extends BaseService
         });
     }
 
-    /**
-     * The patient DTO with allergies + emergency contacts attached —
-     * shared by the allergy/contact mutations. Resolves students AND
-     * employees (the medical record is a person-level record).
-     */
+    /** Serialize child mutations/demotion on the tenant-valid parent. */
+    private function lockMedicalPatient(int $patientId): void
+    {
+        $row = $this->selectForUpdate('users', ['tenant_id' => CurrentTenant::id(), 'id' => $patientId]);
+        if ($row === null || ! in_array((string) $row['kind'], ['student', 'employee'], true)) {
+            throw new ApiException('resource.not_found', 404, [
+                ['code' => 'resource.not_found', 'message' => "Patient #{$patientId} not found."],
+            ]);
+        }
+    }
+
     private function patientDtoWithMedical(int $userId): UserDto
     {
         $row = $this->db->table('users')
@@ -811,12 +827,14 @@ final class PatientService extends BaseService
         }
 
         $allergies = $this->db->table('patient_allergies')
+            ->where('tenant_id', CurrentTenant::id())
             ->select('id, allergen, severity, reaction')
             ->where('user_id', $userId)
             ->orderBy('id', 'ASC')
             ->get()->getResultArray();
 
         $contacts = $this->db->table('patient_contacts')
+            ->where('tenant_id', CurrentTenant::id())
             ->select('id, contact_name, relationship, phone, is_primary')
             ->where('user_id', $userId)
             ->orderBy('is_primary', 'DESC')
@@ -1243,12 +1261,14 @@ final class PatientService extends BaseService
         // The medical record (allergies + emergency contacts) is a
         // person-level record — employees carry it exactly like students.
         $allergies = $this->db->table('patient_allergies')
+            ->where('tenant_id', CurrentTenant::id())
             ->select('id, allergen, severity, reaction')
             ->where('user_id', (int) $row['id'])
             ->orderBy('id', 'ASC')
             ->get()->getResultArray();
 
         $contacts = $this->db->table('patient_contacts')
+            ->where('tenant_id', CurrentTenant::id())
             ->select('id, contact_name, relationship, phone, is_primary')
             ->where('user_id', (int) $row['id'])
             ->orderBy('is_primary', 'DESC')

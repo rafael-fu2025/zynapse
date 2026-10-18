@@ -31,6 +31,7 @@ class _CounsellingScreenState extends State<CounsellingScreen>
   String? _nextCursor;
   bool _loadingMore = false;
   bool _loadedOnce = false;
+  bool _showArchived = false;
   late final TabController _tabController;
 
   @override
@@ -47,7 +48,7 @@ class _CounsellingScreenState extends State<CounsellingScreen>
   /// sessions appear without a manual refresh. Skipped once the user has
   /// paginated deeper (pull-to-refresh there) so the list never collapses.
   Future<void> _silentRefresh() async {
-    if (_items.length > 25) return;
+    if (_showArchived || _items.length > 25) return;
     try {
       final page = await ApiService.I.counsellingSessions();
       if (!mounted) return;
@@ -73,7 +74,9 @@ class _CounsellingScreenState extends State<CounsellingScreen>
       _error = null;
     });
     try {
-      final page = await ApiService.I.counsellingSessions();
+      final page = await ApiService.I.counsellingSessions(
+        archived: _showArchived,
+      );
       setState(() {
         _items = page.items;
         _nextCursor = page.meta?.nextCursor;
@@ -92,7 +95,10 @@ class _CounsellingScreenState extends State<CounsellingScreen>
     if (_loadingMore || _nextCursor == null) return;
     setState(() => _loadingMore = true);
     try {
-      final page = await ApiService.I.counsellingSessions(cursor: _nextCursor);
+      final page = await ApiService.I.counsellingSessions(
+        cursor: _nextCursor,
+        archived: _showArchived,
+      );
       setState(() {
         _items = [..._items, ...page.items];
         _nextCursor = page.meta?.nextCursor;
@@ -111,6 +117,26 @@ class _CounsellingScreenState extends State<CounsellingScreen>
           .session
           ?.hasPermission('counselling.records.write') ??
       false;
+
+  /// Oversight-only soft-delete/restore.
+  bool get _canSoftDelete =>
+      context
+          .read<AuthController>()
+          .session
+          ?.hasPermission('counselling.records.soft_delete') ??
+      false;
+
+  Future<void> _toggleSessionArchive(CounsellingSession s) async {
+    final ok = await runCrudAction(
+      context,
+      () => ApiService.I.archiveCounsellingSession(
+        s.id,
+        archived: !s.archived,
+      ),
+      successMessage: s.archived ? 'Session restored.' : 'Session archived.',
+    );
+    if (ok) _load();
+  }
 
   Future<void> _open() async {
     final payload = await showCrudForm(
@@ -192,9 +218,15 @@ class _CounsellingScreenState extends State<CounsellingScreen>
   Widget _buildSessions() {
     if (_loading) return AsyncState.loading();
     if (_error != null) return AsyncState.error(_error!, onRetry: _load);
-    if (_items.isEmpty) return AsyncState.empty('No counselling sessions.');
+    if (_items.isEmpty) {
+      return AsyncState.empty(
+        _showArchived
+            ? 'No archived counselling sessions.'
+            : 'No counselling sessions.',
+      );
+    }
 
-    return ListView.separated(
+    final list = ListView.separated(
       padding: const EdgeInsets.all(16),
       itemCount: _items.length + (_nextCursor != null ? 1 : 0),
       separatorBuilder: (_, __) => const SizedBox(height: 8),
@@ -232,16 +264,24 @@ class _CounsellingScreenState extends State<CounsellingScreen>
             ),
           ),
           child: ListTile(
-            onTap: () => _openWorkspace(s),
+            onTap: s.archived ? null : () => _openWorkspace(s),
             leading: CircleAvatar(
-              backgroundColor: s.isOpen
-                  ? const Color(0xFF1B7A43).withValues(alpha: 0.12)
-                  : Colors.grey.withValues(alpha: 0.12),
+              backgroundColor: s.archived
+                  ? Colors.grey.withValues(alpha: 0.12)
+                  : s.isOpen
+                      ? const Color(0xFF1B7A43).withValues(alpha: 0.12)
+                      : Colors.grey.withValues(alpha: 0.12),
               child: Icon(
-                s.isOpen
-                    ? HugeIcons.strokeRoundedCircle
-                    : HugeIcons.strokeRoundedCheckmarkCircle01,
-                color: s.isOpen ? const Color(0xFF1B7A43) : Colors.grey,
+                s.archived
+                    ? HugeIcons.strokeRoundedArchive01
+                    : s.isOpen
+                        ? HugeIcons.strokeRoundedCircle
+                        : HugeIcons.strokeRoundedCheckmarkCircle01,
+                color: s.archived
+                    ? Colors.grey
+                    : s.isOpen
+                        ? const Color(0xFF1B7A43)
+                        : Colors.grey,
                 size: 20,
               ),
             ),
@@ -254,21 +294,38 @@ class _CounsellingScreenState extends State<CounsellingScreen>
             trailing: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                s.isOpen
-                    ? const StatusBadge(label: 'Open', color: Color(0xFF1B7A43))
-                    : const StatusBadge(label: 'Closed', color: Colors.grey),
-                if (_canWrite && s.isOpen) ...[
+                if (s.archived)
+                  const StatusBadge(
+                    label: 'Archived',
+                    color: Colors.black45,
+                  )
+                else
+                  s.isOpen
+                      ? const StatusBadge(
+                          label: 'Open', color: Color(0xFF1B7A43))
+                      : const StatusBadge(label: 'Closed', color: Colors.grey),
+                if ((_canWrite && s.isOpen) || _canSoftDelete) ...[
                   const SizedBox(width: 4),
                   PopupMenuButton<String>(
                     icon: const Icon(HugeIcons.strokeRoundedMore),
                     onSelected: (v) {
                       if (v == 'notes') _writeNotes(s);
                       if (v == 'close') _close(s);
+                      if (v == 'archive') _toggleSessionArchive(s);
                     },
-                    itemBuilder: (_) => const [
-                      PopupMenuItem(value: 'notes', child: Text('Write notes')),
-                      PopupMenuItem(
-                          value: 'close', child: Text('Close session')),
+                    itemBuilder: (_) => [
+                      if (_canWrite && s.isOpen)
+                        const PopupMenuItem(
+                            value: 'notes', child: Text('Write notes')),
+                      if (_canWrite && s.isOpen)
+                        const PopupMenuItem(
+                            value: 'close', child: Text('Close session')),
+                      if (_canSoftDelete && s.archived)
+                        const PopupMenuItem(
+                            value: 'archive', child: Text('Restore')),
+                      if (_canSoftDelete && !s.archived && !s.isOpen)
+                        const PopupMenuItem(
+                            value: 'archive', child: Text('Archive')),
                     ],
                   ),
                 ],
@@ -277,6 +334,28 @@ class _CounsellingScreenState extends State<CounsellingScreen>
           ),
         );
       },
+    );
+
+    if (!_canSoftDelete) return list;
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+          child: Row(
+            children: [
+              FilterChip(
+                label: const Text('Archived'),
+                selected: _showArchived,
+                onSelected: (value) {
+                  setState(() => _showArchived = value);
+                  _load();
+                },
+              ),
+            ],
+          ),
+        ),
+        Expanded(child: list),
+      ],
     );
   }
 }

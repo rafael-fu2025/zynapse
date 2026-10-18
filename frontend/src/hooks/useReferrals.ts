@@ -4,7 +4,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { z } from 'zod';
 import { toast } from 'sonner';
-import { apiClient } from '@/api/client';
+import { apiClient, getNextCursor } from '@/api/client';
 import type { ApiEnvelopeError } from '@/api/envelope';
 import {
   createReferralSchema,
@@ -53,11 +53,11 @@ export function useReferrals(cursor: string | null, status: string | null, limit
       if (cursor !== null) params.set('cursor', cursor);
       if (status !== null) params.set('status', status);
       params.set('limit', String(limit));
-      const res = await apiClient.get<{ data: unknown[]; next: string | null }>(
+      const res = await apiClient.get<unknown[]>(
         `/referrals?${params.toString()}`,
       );
       const data = z.array(referralSchema).parse(res.data);
-      return { data, next: res.data?.next ?? null };
+      return { data, next: getNextCursor(res) };
     },
   });
 }

@@ -31,6 +31,7 @@ use CodeIgniter\Test\TestResponse;
  */
 final class CounsellingAvailabilityUpdateTest extends FeatureTestCase
 {
+    use \Tests\Feature\Support\SchedulingStaffFixture;
     private const ROUTE = 'api/v1/counselling/availability';
 
     /** @var array{token:string, userId:int, email:string} */
@@ -46,6 +47,7 @@ final class CounsellingAvailabilityUpdateTest extends FeatureTestCase
         // desk does when it sets up someone else's week.
         $this->admin        = $this->login(['guidance_admin']);
         $this->counsellorId = $this->createUser(['counsellor'])['id'];
+        $this->enrollSchedulingFixture($this->counsellorId, 'guidance');
     }
 
     // ------------------------------------------------------------ helpers

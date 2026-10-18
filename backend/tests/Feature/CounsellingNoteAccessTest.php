@@ -27,6 +27,7 @@ namespace Tests\Feature;
  */
 final class CounsellingNoteAccessTest extends FeatureTestCase
 {
+    use \Tests\Feature\Support\SchedulingStaffFixture;
     private const KEY = 'f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3';
 
     /** @var array{token:string, userId:int, email:string} */
@@ -52,6 +53,8 @@ final class CounsellingNoteAccessTest extends FeatureTestCase
         $this->counsellorA = $this->login(['counsellor']);
         $this->counsellorB = $this->login(['counsellor']);
         $this->supervisor  = $this->login(['guidance_supervisor']);
+        $this->enrollSchedulingFixture($this->counsellorA['userId'], 'guidance');
+        $this->enrollSchedulingFixture($this->counsellorB['userId'], 'guidance');
     }
 
     protected function tearDown(): void
@@ -233,12 +236,27 @@ final class CounsellingNoteAccessTest extends FeatureTestCase
         $ids = array_column($this->envelope($list)['data'], 'id');
         $this->assertNotContains($session['id'], $ids);
 
+        // Archive discovery is an exclusive oversight-only view, not a way
+        // for ordinary counsellors to bypass the archived-record guard.
+        $active = $this->sessionWithNoteByA();
+        $this->authed($this->counsellorA['token'], 'get', 'api/v1/counselling/sessions?archived=1')->assertStatus(403);
+        $archived = $this->authed($this->supervisor['token'], 'get', 'api/v1/counselling/sessions?archived=1');
+        $archived->assertStatus(200);
+        $archivedRows = array_column($this->envelope($archived)['data'], null, 'id');
+        $this->assertArrayHasKey($session['id'], $archivedRows);
+        $this->assertArrayNotHasKey($active['id'], $archivedRows);
+        $this->assertNotNull($archivedRows[$session['id']]['archived_at']);
+        $this->authed($this->supervisor['token'], 'get', "api/v1/counselling/sessions/{$session['id']}/notes")->assertStatus(404);
+
         // Unarchive: restores it.
         $restore = $this->authed($this->supervisor['token'], 'post', "api/v1/counselling/sessions/{$session['id']}/unarchive");
         $restore->assertStatus(200);
 
         $restoredRow = db_connect()->table('counselling_sessions')->where('id', $session['id'])->get()->getRowArray();
         $this->assertNull($restoredRow['archived_at']);
+        $archived = $this->authed($this->supervisor['token'], 'get', 'api/v1/counselling/sessions?archived=1');
+        $archived->assertStatus(200);
+        $this->assertNotContains($session['id'], array_column($this->envelope($archived)['data'], 'id'));
     }
 
     public function testPurgeCommandRefusesToRunWithoutRetentionPeriod(): void

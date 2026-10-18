@@ -67,13 +67,19 @@ final class SurveyService extends BaseService
     /**
      * @return array<int, array<string, mixed>>
      */
-    public function listSurveys(): array
+    public function listSurveys(bool $showArchived = false): array
     {
-        $rows = $this->db->table('surveys s')
+        $query = $this->db->table('surveys s')
             ->select('s.*')
-            ->where('s.tenant_id', CurrentTenant::id())
-            ->where('s.archived_at', null)
-            ->orderBy('s.created_at', 'DESC')
+            ->where('s.tenant_id', CurrentTenant::id());
+
+        if ($showArchived) {
+            $query->where('s.archived_at IS NOT NULL');
+        } else {
+            $query->where('s.archived_at', null);
+        }
+
+        $rows = $query->orderBy('s.created_at', 'DESC')
             ->get()->getResultArray();
 
         $out = [];
@@ -476,10 +482,13 @@ final class SurveyService extends BaseService
 
         return $this->txn(function () use ($id, $actorId): array {
             $row = $this->selectForUpdate('surveys', [
-                'id' => $id, 'tenant_id' => CurrentTenant::id(), 'archived_at' => null,
+                'id' => $id, 'tenant_id' => CurrentTenant::id(),
             ]);
             if ($row === null) {
                 throw ApiException::notFound('resource.not_found');
+            }
+            if ($row['archived_at'] !== null) {
+                return ['id' => $id, 'archived' => true];
             }
 
             $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
@@ -493,6 +502,35 @@ final class SurveyService extends BaseService
             ]);
 
             return ['id' => $id, 'archived' => true];
+        });
+    }
+
+    public function unarchiveSurvey(int $id): array
+    {
+        $actorId = CurrentUser::assert();
+
+        return $this->txn(function () use ($id, $actorId): array {
+            $row = $this->selectForUpdate('surveys', [
+                'id' => $id, 'tenant_id' => CurrentTenant::id(),
+            ]);
+            if ($row === null) {
+                throw ApiException::notFound('resource.not_found');
+            }
+            if ($row['archived_at'] === null) {
+                return ['id' => $id, 'archived' => false];
+            }
+
+            $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
+            $this->db->table('surveys')
+                ->where('id', $id)
+                ->where('tenant_id', CurrentTenant::id())
+                ->update(['archived_at' => null, 'updated_at' => $now]);
+
+            $this->audit->enqueue('guidance.survey_unarchived', 'surveys', $id, $actorId, [
+                'next_status' => $this->surveyStatus($row),
+            ]);
+
+            return ['id' => $id, 'archived' => false];
         });
     }
 
@@ -1189,6 +1227,7 @@ final class SurveyService extends BaseService
             'publish_at'  => $row['publish_at'] !== null ? (string) $row['publish_at'] : null,
             'close_at'    => $row['close_at'] !== null ? (string) $row['close_at'] : null,
             'created_at'  => (string) $row['created_at'],
+            'archived_at' => $row['archived_at'] !== null ? (string) $row['archived_at'] : null,
             'status'      => $this->surveyStatus($row),
             'version_id'  => $version !== null ? (int) $version['id'] : null,
             'version_no'  => $version !== null ? (int) $version['version_no'] : null,

@@ -63,8 +63,14 @@ class _PatientsScreenState extends State<PatientsScreen> {
     try {
       if (_query.length >= 2) {
         final results = _employee
-            ? await ApiService.I.employeeSearch(_query)
-            : await ApiService.I.studentSearch(_query);
+            ? await ApiService.I.employeeSearch(
+                _query,
+                includeArchived: _showArchived,
+              )
+            : await ApiService.I.studentSearch(
+                _query,
+                includeArchived: _showArchived,
+              );
         setState(() {
           _items = results;
           _nextCursor = null;
@@ -236,8 +242,25 @@ class _PatientsScreenState extends State<PatientsScreen> {
     if (ok) _load();
   }
 
-  Future<void> _archive(UserProfile p) async {
-    final confirmed = await showCrudConfirm(
+  Future<void> _editPerson(UserProfile p) async {
+    final payload = await showCrudForm(
+      context,
+      title: p.isStudent ? 'Edit student' : 'Edit employee',
+      fields: p.isStudent ? _studentFields(p) : _employeeFields(p),
+      submitLabel: 'Save',
+    );
+    if (payload == null || !mounted) return;
+    final ok = await runCrudAction(
+      context,
+      () => p.isStudent
+          ? ApiService.I.updateStudent(p.id, payload)
+          : ApiService.I.updateEmployee(p.id, payload),
+      successMessage: 'Patient record updated.',
+    );
+    if (ok) _load();
+  }
+
+  Future<void> _archive(UserProfile p) async {    final confirmed = await showCrudConfirm(
       context,
       title: p.archived ? 'Restore patient?' : 'Archive patient?',
       message: p.archived
@@ -395,8 +418,8 @@ class _PatientsScreenState extends State<PatientsScreen> {
               _load();
             },
           ),
-          // Employee teaching filter + archived toggle — mirrors the web
-          // All/Teaching/Non-teaching select + "Show archived" button.
+          // Employee teaching filter + archive scope — mirrors the web
+          // All/Teaching/Non-teaching select + Active/Archived toggle.
           // The archived chip applies to both kinds; teaching only to employees.
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
@@ -434,9 +457,9 @@ class _PatientsScreenState extends State<PatientsScreen> {
                   ),
                   const SizedBox(width: 8),
                 ],
-                // Archived toggle — matches the web "Show archived" button.
+                // Archive scope: off = active only, on = archived only.
                 FilterChip(
-                  label: Text(_showArchived ? 'Archived' : 'Show archived'),
+                  label: const Text('Archived'),
                   selected: _showArchived,
                   onSelected: (v) {
                     setState(() => _showArchived = v);
@@ -497,6 +520,7 @@ class _PatientsScreenState extends State<PatientsScreen> {
           canReadGuidance: _canReadGuidance,
           canCreateReferral: _canCreateReferral,
           onView: () => _viewDetail(_items[i]),
+          onEdit: () => _editPerson(_items[i]),
           onArchive: () => _archive(_items[i]),
           onRefer: () => _refer(_items[i]),
           onReferGuidance: () => _referToGuidance(_items[i]),
@@ -530,6 +554,7 @@ class _PatientTile extends StatelessWidget {
     this.canReadGuidance = false,
     this.canCreateReferral = false,
     this.onView,
+    this.onEdit,
     this.onArchive,
     this.onRefer,
     this.onReferGuidance,
@@ -554,6 +579,7 @@ class _PatientTile extends StatelessWidget {
   final bool canCreateReferral;
 
   final VoidCallback? onView;
+  final VoidCallback? onEdit;
   final VoidCallback? onArchive;
   final VoidCallback? onRefer;
   final VoidCallback? onReferGuidance;
@@ -608,6 +634,19 @@ class _PatientTile extends StatelessWidget {
                     onView?.call();
                   },
                 ),
+                if (canWrite && !person.isDirectoryRecord) ...[
+                  _ActionRow(
+                    icon: HugeIcons.strokeRoundedPencilEdit01,
+                    label: 'Edit record',
+                    description: person.isStudent
+                        ? 'Name, course, year, section, blood type'
+                        : 'Name, department, position, employment status',
+                    onTap: () {
+                      Navigator.of(sheetContext).pop();
+                      onEdit?.call();
+                    },
+                  ),
+                ],
                 if (canReadGuidance) ...[
                   _ActionRow(
                     icon: HugeIcons.strokeRoundedNote01,
@@ -728,11 +767,13 @@ class _PatientTile extends StatelessWidget {
             if (person.section?.isNotEmpty ?? false) person.section!,
             if (person.bloodType?.isNotEmpty ?? false)
               'Type ${person.bloodType}',
+            if (person.activeGuidanceReferral) 'Referred to Guidance',
           ].join(' · ')
         : [
             if (person.position?.isNotEmpty ?? false) person.position!,
             if (person.employmentStatus != null)
               titleCaseOption(person.employmentStatus!),
+            if (person.activeGuidanceReferral) 'Referred to Guidance',
           ].join(' · ');
 
     // Type tag — mirrors the web's TeachingBadge (Teaching / Non-teaching /
@@ -1645,6 +1686,16 @@ class _DetailSheetState extends State<_DetailSheet> {
                   ? '${d.studentNumber ?? 'Student'} · ${d.course ?? '—'} · Y${d.yearLevel ?? '?'}'
                   : '${d.employeeNumber ?? 'Employee'} · ${d.department ?? '—'}',
             ),
+            if (d.activeGuidanceReferral) ...[
+              const SizedBox(height: 8),
+              const Align(
+                alignment: Alignment.centerLeft,
+                child: StatusBadge(
+                  label: 'Referred to Guidance',
+                  color: Color(0xFF5B4BA6),
+                ),
+              ),
+            ],
             const SizedBox(height: 8),
             Flexible(
               child: _loading

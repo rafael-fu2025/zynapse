@@ -79,7 +79,7 @@ export default function NotificationsPage() {
         }
       />
 
-      <section className="overflow-hidden rounded-xl border bg-card">
+      <section className="overflow-hidden border bg-card">
         {list.isLoading && (
           <p className="flex items-center justify-center gap-2 px-4 py-12 text-sm text-muted-foreground">
             <Loader2 className="size-4 animate-spin" aria-hidden /> Loading…

@@ -9,11 +9,16 @@ import '../../core/models/notification.dart';
 import '../../core/services/api_service.dart';
 import '../../core/services/auth_controller.dart';
 import '../../core/utils/notifications_copy.dart';
+import '../appointments/appointments_screen.dart';
 import '../common/auto_polling.dart';
 import '../common/widgets.dart';
-import '../portal/portal_screen.dart';
-import '../appointments/appointments_screen.dart';
 import '../counselling/counselling_screen.dart';
+import '../facilities/devices_screen.dart';
+import '../facilities/facilities_screen.dart';
+import '../inventory/purchases_screen.dart';
+import '../portal/portal_screen.dart';
+import '../queue/queue_screen.dart';
+import '../referrals/referrals_screen.dart';
 
 /// Notifications — self-scoped in-app notifications with keyset pagination.
 ///
@@ -128,20 +133,48 @@ class _NotificationsScreenState extends State<NotificationsScreen>
 
   Future<void> _open(AppNotification n) async {
     await _markRead(n);
-    if (!n.templateCode.startsWith('appointment.') || !mounted) return;
-    final session = context.read<AuthController>().session;
-    final Widget page;
-    if (session?.hasPermission('portal.appointments.read') ?? false) {
-      page = const PortalScreen();
-    } else if (n.context?['destination'] == 'counselling' &&
-        (session?.hasPermission('counselling.schedule.read') ?? false)) {
-      page = const CounsellingScreen();
-    } else if (session?.hasPermission('clinic.appointments.read') ?? false) {
-      page = const AppointmentsScreen();
-    } else {
-      return;
-    }
+    if (!mounted) return;
+    final page = _destinationFor(n);
+    if (page == null) return;
     await Navigator.of(context).push(MaterialPageRoute(builder: (_) => page));
+  }
+
+  /// Resolve the module surface a notification belongs to, gated by the
+  /// caller's permissions. Unknown templates mark read and stay put.
+  Widget? _destinationFor(AppNotification n) {
+    final session = context.read<AuthController>().session;
+    bool can(String code) => session?.hasPermission(code) ?? false;
+    final code = n.templateCode;
+
+    if (code.startsWith('appointment.')) {
+      if (can('portal.appointments.read')) return const PortalScreen();
+      if (n.context?['destination'] == 'counselling' &&
+          can('counselling.schedule.read')) {
+        return const CounsellingScreen();
+      }
+      if (can('clinic.appointments.read')) return const AppointmentsScreen();
+      return null;
+    }
+    if (code.startsWith('referral.') && can('referrals.read')) {
+      return const ReferralsScreen();
+    }
+    if (code == 'reorder.created' && can('clinic.reorders.read')) {
+      return const PurchasesScreen();
+    }
+    if (code.startsWith('queue.') && can('clinic.queue.read')) {
+      return const QueueScreen();
+    }
+    if (code.startsWith('bmg.device') && can('facilities.units.read')) {
+      return const DevicesScreen();
+    }
+    if (code.startsWith('bmg.') && can('facilities.units.read')) {
+      return const FacilitiesScreen();
+    }
+    if (code.startsWith('counselling.') &&
+        can('counselling.records.read')) {
+      return const CounsellingScreen();
+    }
+    return null;
   }
 
   Future<void> _markAllRead() async {

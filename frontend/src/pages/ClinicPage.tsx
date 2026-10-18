@@ -38,12 +38,15 @@ import {
   UserX,
 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
+import { useKeysetPagination } from '@/hooks/useKeysetPagination';
+import { useUrlFilter } from '@/hooks/useUrlFilter';
 import { useSearchParams } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { PageHeader } from '@/components/PageHeader';
 import { Button } from '@/components/ui/button';
+import { PermanentDeleteAction } from '@/components/PermanentDeleteAction';
 import { ComboboxField } from '@/components/ComboboxField';
 import type { TaxonomyEntry } from '@/data/taxonomy';
 import { ConfirmDialog, type ConfirmAction } from '@/components/ConfirmDialog';
@@ -108,9 +111,11 @@ import {
   useTreatments,
 } from '@/hooks/useClinic';
 import { useCreateContextualReferral } from '@/hooks/useReferrals';
-import { useEmployees } from '@/hooks/usePatients';
+import { useSchedulingProviders } from '@/hooks/useSchedulingStaff';
+import { DepartmentStaffScheduling } from '@/components/DepartmentStaffScheduling';
+import { SchedulingProviderState } from '@/components/SchedulingProviderState';
 import { hasPermission, useAuthStore } from '@/store/auth';
-import { useMedicines } from '@/hooks/useMedicines';
+import { ClinicCatalogPicker } from '@/components/clinic/ClinicCatalogPicker';
 import { useCallNext, useQueueToday, useQueueTransition } from '@/hooks/useQueue';
 import {
   useArchiveStaffSchedule,
@@ -279,7 +284,6 @@ function CareDialog({ encounter, onClose }: { encounter: Encounter; onClose: () 
   const setAssessment = useSetAssessment();
   const addTreatment = useAddTreatment();
   const treatments = useTreatments(encounter.id);
-  const medicines = useMedicines(null, 100);
   const suggestTriage = useSuggestTriage();
   const decideTriage = useDecideTriage();
 
@@ -446,24 +450,8 @@ function CareDialog({ encounter, onClose }: { encounter: Encounter; onClose: () 
           {tType === 'medication' && (
             <>
               <div className="space-y-1.5">
-                <Label id="care-med-label" className="text-xs">Medicine</Label>
-                <ComboboxField
-                  id="care-medicine"
-                  sourceKey="clinic.treatments.medicine"
-                  value={medId}
-                  onChange={setMedId}
-                  normalize={false}
-                  disabled={medicines.isLoading}
-                  placeholder={medicines.isLoading ? 'Loading medicines…' : 'Search medicine…'}
-                  emptyHintLabel="No matching available medicine."
-                  options={(medicines.data?.data ?? []).map((m) => ({
-                    value: String(m.id),
-                    label: m.brand_name !== null && m.brand_name !== ''
-                      ? `${m.generic_name} (${m.brand_name})`
-                      : m.generic_name,
-                    hint: `${m.quantity_on_hand} ${m.unit} on hand`,
-                  }))}
-                />
+                <Label htmlFor="care-medicine" className="text-xs">Medicine</Label>
+                <ClinicCatalogPicker kind="medicine" id="care-medicine" value={medId} onChange={setMedId} />
               </div>
               <div className="space-y-1.5">
                 <Label htmlFor="care-qty" className="text-xs">Quantity</Label>
@@ -782,7 +770,7 @@ function QueueTab({ onOpenEncounter }: QueueTabProps) {
 
   return (
     <div className="space-y-4">
-      <section className="hidden overflow-hidden rounded-xl border bg-card md:block">
+      <section className="hidden overflow-hidden border bg-card md:block">
         <Table ariaLabel="Today's clinic queue">
           <TableHeader className="bg-muted/50">
             <TableRow>
@@ -1050,6 +1038,8 @@ function StaffSchedulesTab({
   openAddShift: boolean;
   onOpenAddShiftChange: (open: boolean) => void;
 }) {
+  const auth = useAuthStore();
+  const canManage = hasPermission(auth, 'clinic.schedules.manage');
   const schedules = useStaffSchedules(showArchived);
   const schedulesRows = schedules.data ?? [];
   const update = useUpdateStaffSchedule();
@@ -1061,7 +1051,8 @@ function StaffSchedulesTab({
 
   return (
     <div className="space-y-4">
-      <section className="hidden overflow-hidden rounded-xl border bg-card md:block">
+      <DepartmentStaffScheduling unit="clinic" />
+      <section className="hidden overflow-hidden border bg-card md:block">
         <Table ariaLabel="Clinic staff schedules">
           <TableHeader className="bg-muted/50">
             <TableRow>
@@ -1085,7 +1076,7 @@ function StaffSchedulesTab({
               empty={{
                 title: showArchived ? 'No staff shifts match this filter.' : 'No staff shifts yet.',
                 description: showArchived
-                  ? 'Archived shifts are included — clear the filter to see active ones.'
+                  ? 'Only archived shifts are shown — clear the filter to see active ones.'
                   : 'Add a shift to publish clinic cover for the week.',
               }}
             />
@@ -1113,7 +1104,7 @@ function StaffSchedulesTab({
                   )}
                 </TableCell>
                 <TableCell className="px-3 text-right">
-                  <div className="flex justify-end gap-1">
+                  {canManage && <div className="flex justify-end gap-1">
                     {s.is_active ? (
                       <>
                         <Button
@@ -1141,17 +1132,20 @@ function StaffSchedulesTab({
                         </Button>
                       </>
                     ) : (
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        aria-label={`Restore shift #${s.id}`}
-                        disabled={unarchive.isPending}
-                        onClick={() => unarchive.mutate(s.id)}
-                      >
-                        <ArchiveRestore /> Restore
-                      </Button>
+                      <>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          aria-label={`Restore shift #${s.id}`}
+                          disabled={unarchive.isPending}
+                          onClick={() => unarchive.mutate(s.id)}
+                        >
+                          <ArchiveRestore /> Restore
+                        </Button>
+                        <PermanentDeleteAction resource="staff-schedules" id={s.id} label={s.user_name ?? `Shift #${s.id}`} />
+                      </>
                     )}
-                  </div>
+                  </div>}
                 </TableCell>
               </TableRow>
             ))}
@@ -1194,7 +1188,7 @@ function StaffSchedulesTab({
                 </span>
               </MobileCardField>
             )}
-            <MobileCardActions>
+            {canManage && <MobileCardActions>
               {s.is_active ? (
                 <>
                   <Button size="sm" variant="outline" aria-label={`Edit shift #${s.id}`} disabled={update.isPending} onClick={() => setEditing(s)}>
@@ -1211,12 +1205,15 @@ function StaffSchedulesTab({
                   </Button>
                 </>
               ) : (
-                <Button size="sm" variant="outline" aria-label={`Restore shift #${s.id}`} disabled={unarchive.isPending}
-                  onClick={() => unarchive.mutate(s.id)}>
-                  <ArchiveRestore /> Restore
-                </Button>
+                <>
+                  <Button size="sm" variant="outline" aria-label={`Restore shift #${s.id}`} disabled={unarchive.isPending}
+                    onClick={() => unarchive.mutate(s.id)}>
+                    <ArchiveRestore /> Restore
+                  </Button>
+                  <PermanentDeleteAction resource="staff-schedules" id={s.id} label={s.user_name ?? `Shift #${s.id}`} />
+                </>
               )}
-            </MobileCardActions>
+            </MobileCardActions>}
           </MobileCard>
         ))}
       </MobileCardList>
@@ -1224,12 +1221,12 @@ function StaffSchedulesTab({
       {/* Add-shift dialog — the create form lives in a modal; the
           "Add shift" trigger sits in the tab bar. */}
       <Dialog open={openAddShift} onOpenChange={onOpenAddShiftChange}>
-        {openAddShift && <AddShiftDialog onClose={() => onOpenAddShiftChange(false)} />}
+        {canManage && openAddShift && <AddShiftDialog onClose={() => onOpenAddShiftChange(false)} />}
       </Dialog>
 
       {/* Edit shift dialog — full CRUD is now reachable from the UI. */}
       <Dialog open={editing !== null} onOpenChange={(o) => !o && setEditing(null)}>
-        {editing !== null && <EditShiftDialog schedule={editing} onClose={() => setEditing(null)} />}
+        {canManage && editing !== null && <EditShiftDialog schedule={editing} onClose={() => setEditing(null)} />}
       </Dialog>
 
       <ConfirmDialog
@@ -1251,17 +1248,14 @@ function StaffSchedulesTab({
 /** Create a shift template (modal) — mirrors the former inline form. */
 function AddShiftDialog({ onClose }: { onClose: () => void }) {
   const create = useCreateStaffSchedule();
-  // Staff picker — the backend resolves user ids, but no operator knows
-  // a user id; offer the employee registry by name instead. The
-  // keyset endpoint rejects limit > ~200, and staff lists are small.
-  const staff = useEmployees(null, 100);
-  const staffOptions: ReadonlyArray<TaxonomyEntry> = (staff.data?.data ?? []).map((e) => {
-    const hint = [e.employee_number, e.department]
+  const staff = useSchedulingProviders('clinic');
+  const staffOptions: ReadonlyArray<TaxonomyEntry> = (staff.data ?? []).map((e) => {
+    const hint = [e.employee_number, e.position]
       .filter((x): x is string => x !== null && x !== '')
       .join(' · ');
     return {
       value: String(e.id),
-      label: `${e.first_name} ${e.last_name}`,
+      label: e.name,
       ...(hint !== '' ? { hint } : {}),
     };
   });
@@ -1274,6 +1268,11 @@ function AddShiftDialog({ onClose }: { onClose: () => void }) {
   const [effTo, setEffTo] = useState('');
 
   function submit() {
+    if (create.isPending || staff.isFetching || staff.isError) return;
+    if (!staff.data?.some((person) => String(person.id) === userId)) {
+      toast.error('Select an eligible enrolled staff member.');
+      return;
+    }
     const parsed = createStaffScheduleSchema.safeParse({
       user_id: userId,
       days_of_week: days,
@@ -1309,10 +1308,13 @@ function AddShiftDialog({ onClose }: { onClose: () => void }) {
             id="ss-user"
             value={userId}
             onChange={setUserId}
-            sourceKey="clinic-staff"
+            sourceKey="clinic-enrolled-staff"
             options={staffOptions}
-            placeholder="Search staff by name or number…"
+            disabled={create.isPending || staff.isFetching || staff.isError || staffOptions.length === 0}
+            placeholder="Search eligible enrolled staff…"
           />
+          <SchedulingProviderState query={staff} />
+          <p className="text-xs text-muted-foreground">Clinic duty roster only, not patient appointment-provider assignment. Manage enrollment in Department staff scheduling.</p>
         </div>
         <div className="space-y-1.5 sm:col-span-2">
           <Label id="ss-dow-label" className="text-xs">Days</Label>
@@ -1352,7 +1354,7 @@ function AddShiftDialog({ onClose }: { onClose: () => void }) {
       </div>
       <DialogFooter>
         <Button variant="outline" onClick={onClose} disabled={create.isPending}>Cancel</Button>
-        <Button onClick={submit} disabled={create.isPending}>
+        <Button onClick={submit} disabled={create.isPending || staff.isFetching || staff.isError || !staff.data?.some((person) => String(person.id) === userId)}>
           {create.isPending && <Loader2 className="animate-spin" />} Add shift
         </Button>
       </DialogFooter>
@@ -1437,8 +1439,6 @@ function EditShiftDialog({ schedule, onClose }: { schedule: StaffSchedule; onClo
 }
 
 export default function ClinicPage() {
-  const [cursor, setCursor] = useState<string | null>(null);
-  const [history, setHistory] = useState<Array<string | null>>([null]);
   // Default landing surface is the live Queue (panel revision, August
   // 2026): appointments auto-check-in and auto-queue for the day, and
   // staff action buttons (Care / Vitals / Close / Mark no-show) live
@@ -1455,8 +1455,11 @@ export default function ClinicPage() {
   const [openView, setOpenView] = useState<Encounter | null>(null);
   // Staff schedules: the "Add shift" + "Show archived" controls live in
   // the tab bar (right-aligned), so their state must be lifted here.
+  const auth = useAuthStore();
+  const canManageStaff = hasPermission(auth, 'clinic.schedules.manage');
   const [openAddShift, setOpenAddShift] = useState(false);
-  const [showArchived, setShowArchived] = useState(false);
+  const [staffArchived, setStaffArchived] = useUrlFilter('staff_archived');
+  const showArchived = staffArchived === '1';
   // Archive / restore confirmations for the Closed and Archived tabs —
   // the Queue tab owns its own instance for the per-row button.
   const [archiveConfirm, setArchiveConfirm] = useState<ConfirmAction | null>(null);
@@ -1467,6 +1470,7 @@ export default function ClinicPage() {
   // misleading and could hide rows on later pages). The Queue tab
   // drives its data from the queue feed, not this list.
   const status = tab === 'closed' ? 'closed' : tab === 'archived' ? 'archived' : null;
+  const { cursor, history, nextPage: advancePage, prevPage, reset: resetPagination } = useKeysetPagination(tab);
   const list = useEncounters(cursor, 25, status);
   // The page-level queue/counters instances that fed the old tab-strip
   // badges retired with the strip (2026-09-27): section navigation is an
@@ -1488,8 +1492,7 @@ export default function ClinicPage() {
     else params.set('tab', next);
     if (next !== 'queue') params.delete('encounter');
     setSearchParams(params, { replace: true });
-    setCursor(null);
-    setHistory([null]);
+    resetPagination();
   }
 
   function selectEncounter(encounterId: number | null) {
@@ -1501,17 +1504,7 @@ export default function ClinicPage() {
   }
 
   function nextPage() {
-    if (list.data?.next !== null && list.data?.next !== undefined) {
-      const n = list.data.next;
-      setHistory((h) => [...h, n]);
-      setCursor(n);
-    }
-  }
-  function prevPage() {
-    if (history.length < 2) return;
-    const next = history.slice(0, -1);
-    setHistory(next);
-    setCursor(next[next.length - 1] ?? null);
+    if (!list.isFetching) advancePage(list.data?.next);
   }
 
   const rows: Encounter[] = list.data?.data ?? [];
@@ -1538,14 +1531,14 @@ export default function ClinicPage() {
               {tab === 'skipped' && <SkippedPatientsSummary />}
               {tab === 'staff' && (
                 <div className="flex items-center gap-2">
-                  <Button size="sm" onClick={() => setOpenAddShift(true)}>
+                  {canManageStaff && <Button size="sm" onClick={() => setOpenAddShift(true)}>
                     <Plus /> Add shift
-                  </Button>
+                  </Button>}
                   <Button
                     size="sm"
                     variant={showArchived ? 'secondary' : 'outline'}
                     aria-pressed={showArchived}
-                    onClick={() => setShowArchived((v) => !v)}
+                    onClick={() => setStaffArchived(showArchived ? '' : '1')}
                   >
                     <Archive /> {showArchived ? 'Hide archived' : 'Show archived'}
                   </Button>
@@ -1583,7 +1576,7 @@ export default function ClinicPage() {
             onPrev={prevPage}
             onNext={nextPage}
             canPrev={history.length > 1}
-            canNext={list.data?.next !== null && list.data?.next !== undefined}
+            canNext={!list.isFetching && list.data?.next != null}
             actions={(e) => (
               <div className="flex justify-end gap-1">
                 <Button className="min-h-11 md:min-h-0" size="sm" variant="outline" onClick={() => setOpenView(e)}>
@@ -1626,7 +1619,7 @@ export default function ClinicPage() {
             onPrev={prevPage}
             onNext={nextPage}
             canPrev={history.length > 1}
-            canNext={list.data?.next !== null && list.data?.next !== undefined}
+            canNext={!list.isFetching && list.data?.next != null}
             ariaLabel="Archived clinic encounters"
             empty={{
               title: 'No archived encounters.',
@@ -1663,6 +1656,9 @@ export default function ClinicPage() {
                 >
                   <ArchiveRestore /> Restore
                 </Button>
+                {e.archived_at != null && (
+                  <PermanentDeleteAction resource="encounters" id={e.id} label={`Encounter #${e.id}`} />
+                )}
               </div>
             )}
           />
@@ -1761,7 +1757,7 @@ function EncounterTable(props: EncounterTableProps) {
   };
   return (
     <>
-      <section className="hidden overflow-hidden rounded-xl border bg-card md:block md:min-h-0 md:flex-1">
+      <section className="hidden overflow-hidden border bg-card md:block md:min-h-0 md:flex-1">
         <Table
           ariaLabel={ariaLabel}
           wrapperClassName="h-full overflow-y-auto"

@@ -10,12 +10,13 @@
  * `facilities.categories.manage` — the add/edit/delete affordances are
  * hidden from operators (the backend re-checks everything).
  */
-import { Archive, ArchiveRestore, ArrowLeft, Boxes, Check, ChevronDown, LineChart, Loader2, Pencil, Plus, Save, Trash2 as TrashIcon, X } from 'lucide-react';
+import { Archive, ArchiveRestore, ArrowLeft, Check, ChevronDown, LineChart, Loader2, Pencil, Plus, Save, X } from 'lucide-react';
 import { useEffect, useId, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Badge } from '@/components/ui/badge';
 import { PageHeader } from '@/components/PageHeader';
 import { Button } from '@/components/ui/button';
+import { PermanentDeleteAction } from '@/components/PermanentDeleteAction';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import {
   Dialog,
@@ -29,7 +30,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuSeparator,
+
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { Input } from '@/components/ui/input';
@@ -47,7 +48,7 @@ import { MobileCardList, MobileCard, MobileCardActions, MobileCardListState } fr
 import {
   useArchiveWasteCategory,
   useCreateWasteCategory,
-  useDeleteWasteCategory,
+
   useUnarchiveWasteCategory,
   useUpdateWasteCategory,
   useWasteCategories,
@@ -226,9 +227,9 @@ function useCategoryRowState(cat: WasteCategory) {
   const update = useUpdateWasteCategory();
   const archive = useArchiveWasteCategory();
   const unarchive = useUnarchiveWasteCategory();
-  const del = useDeleteWasteCategory();
+
   const [editing, setEditing] = useState(false);
-  const [confirming, setConfirming] = useState<null | 'archive' | 'delete'>(null);
+  const [confirming, setConfirming] = useState<null | 'archive'>(null);
   const [name, setName] = useState(cat.name);
   const [yieldPct, setYieldPct] = useState(
     cat.expected_yield_pct !== null ? String(cat.expected_yield_pct) : '',
@@ -263,11 +264,21 @@ function useCategoryRowState(cat: WasteCategory) {
     );
   }
 
-  return { update, archive, unarchive, del, editing, setEditing, confirming, setConfirming, save, fields: { name, setName, yieldPct, setYieldPct, refDays, setRefDays, isActive, setIsActive } };
+  return { update, archive, unarchive, editing, setEditing, confirming, setConfirming, save, fields: { name, setName, yieldPct, setYieldPct, refDays, setRefDays, isActive, setIsActive } };
 }
 
 function CategoryActions({ cat, state }: { cat: WasteCategory; state: ReturnType<typeof useCategoryRowState> }) {
-  const { archive, unarchive, del, setConfirming } = state;
+  const { archive, unarchive, setConfirming } = state;
+  if (!cat.is_active) {
+    return (
+      <>
+        <Button size="sm" variant="outline" className="min-h-11 md:min-h-0" disabled={unarchive.isPending} onClick={() => unarchive.mutate({ categoryId: cat.id })}>
+          {unarchive.isPending ? <Loader2 className="animate-spin" /> : <ArchiveRestore />} Restore category
+        </Button>
+        <PermanentDeleteAction resource="waste-categories" id={cat.id} label={cat.name} />
+      </>
+    );
+  }
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -279,54 +290,37 @@ function CategoryActions({ cat, state }: { cat: WasteCategory; state: ReturnType
         <DropdownMenuItem className="min-h-11" onSelect={() => state.setEditing(true)}>
           <Pencil /> Edit category
         </DropdownMenuItem>
-        {cat.is_active ? (
-          <DropdownMenuItem className="min-h-11" disabled={archive.isPending} onSelect={() => setConfirming('archive')}>
-            <Archive /> Archive category
-          </DropdownMenuItem>
-        ) : (
-          <DropdownMenuItem className="min-h-11" disabled={unarchive.isPending} onSelect={() => unarchive.mutate({ categoryId: cat.id })}>
-            <ArchiveRestore /> Restore category
-          </DropdownMenuItem>
-        )}
-        <DropdownMenuSeparator />
-        <DropdownMenuItem
-          className="min-h-11 text-destructive focus:text-destructive"
-          disabled={del.isPending}
-          onSelect={() => setConfirming('delete')}
-        >
-          <TrashIcon /> Delete permanently
+        <DropdownMenuItem className="min-h-11" disabled={archive.isPending} onSelect={() => setConfirming('archive')}>
+          <Archive /> Archive category
         </DropdownMenuItem>
+
       </DropdownMenuContent>
     </DropdownMenu>
   );
 }
 
 function InlineConfirm({ cat, state }: { cat: WasteCategory; state: ReturnType<typeof useCategoryRowState> }) {
-  const { archive, del, confirming, setConfirming } = state;
+  const { archive, confirming, setConfirming } = state;
   if (confirming === null) return null;
   return (
     <span className="inline-flex items-center gap-1.5">
-      <span className={confirming === 'delete' ? 'text-xs text-destructive' : 'text-xs text-muted-foreground'}>
-        {confirming === 'archive' ? 'Archive?' : 'Delete forever?'}
-      </span>
+      <span className="text-xs text-muted-foreground">Archive?</span>
       <Button size="sm" variant="ghost" onClick={() => setConfirming(null)} aria-label="Cancel">
         <X className="size-3.5" />
       </Button>
       <Button
         size="sm"
-        variant={confirming === 'delete' ? 'destructive' : 'default'}
+        variant="default"
         onClick={() =>
-          (confirming === 'archive' ? archive : del).mutate(
+          archive.mutate(
             { categoryId: cat.id },
             { onSuccess: () => setConfirming(null) },
           )
         }
-        disabled={confirming === 'archive' ? archive.isPending : del.isPending}
+        disabled={archive.isPending}
       >
-        {confirming === 'archive'
-          ? (archive.isPending ? <Loader2 className="animate-spin" /> : <Check className="size-3.5" />)
-          : (del.isPending ? <Loader2 className="animate-spin" /> : <TrashIcon className="size-3.5" />)}
-        {confirming === 'archive' ? 'Yes' : 'Delete'}
+        {archive.isPending ? <Loader2 className="animate-spin" /> : <Check className="size-3.5" />}
+        Yes
       </Button>
     </span>
   );
@@ -404,15 +398,12 @@ function WasteCategoryTableRow({ cat, canManage }: { cat: WasteCategory; canMana
 }
 
 export default function WasteCategoriesPage() {
-  // Archived categories (`is_active = 0`) are hidden by default — the
-  // toggle refetches with the server-side `?active=1` filter dropped,
-  // mirroring the "Show archived" affordance on the Facilities table.
-  // It lives in the URL so the archived view is linkable and survives a
-  // reload.
+  // Explicit server-side scopes keep active and archived lists separate.
+  // URL state makes the archived view linkable and reloadable.
   const [archivedParam, setArchivedParam] = useUrlFilter('archived');
   const showArchived = archivedParam === '1';
   const [adding, setAdding] = useState(false);
-  const cats = useWasteCategories(!showArchived);
+  const cats = useWasteCategories(showArchived ? 'archived' : 'active');
   const auth = useAuthStore();
   const canManage = hasPermission(auth, 'facilities.categories.manage');
 
@@ -421,11 +412,7 @@ export default function WasteCategoriesPage() {
   return (
     <main className="space-y-4 p-6">
       <PageHeader
-        title={
-          <span className="flex items-center gap-2">
-            <Boxes className="size-5 text-primary" /> Waste categories
-          </span>
-        }
+        title="Waste categories"
         description="Manage the waste types accepted by BMG drums — expected yield and reference decomposition duration drive batch ETAs and progress."
         actions={
           <>
@@ -451,7 +438,7 @@ export default function WasteCategoriesPage() {
       />
 
       {/* Desktop table */}
-      <section className="hidden overflow-hidden rounded-xl border bg-card md:block">
+      <section className="hidden overflow-hidden border bg-card md:block">
         <Table
           ariaLabel="BMG waste categories"
           wrapperClassName="max-h-[65vh] overflow-y-auto"
@@ -478,10 +465,12 @@ export default function WasteCategoriesPage() {
               errorMessage="Failed to load waste categories."
               loadingLabel="Loading waste categories"
               empty={{
-                title: showArchived ? 'No categories yet.' : 'No active categories.',
-                description: canManage
-                  ? 'Add one with the button above.'
-                  : 'Ask a BMG administrator to add one.',
+                title: showArchived ? 'No archived categories.' : 'No active categories.',
+                description: showArchived
+                  ? 'Archived categories will appear here. Switch to active categories to manage accepted waste.'
+                  : canManage
+                    ? 'Add one with the button above.'
+                    : 'Ask a BMG administrator to add one.',
               }}
             />
             {rows.map((c) => (
@@ -502,10 +491,12 @@ export default function WasteCategoriesPage() {
           errorMessage="Failed to load waste categories."
           loadingLabel="Loading waste categories"
           empty={{
-            title: showArchived ? 'No categories yet.' : 'No active categories.',
-            description: canManage
-              ? 'Add one with the button above.'
-              : 'Ask a BMG administrator to add one.',
+            title: showArchived ? 'No archived categories.' : 'No active categories.',
+            description: showArchived
+              ? 'Archived categories will appear here. Switch to active categories to manage accepted waste.'
+              : canManage
+                ? 'Add one with the button above.'
+                : 'Ask a BMG administrator to add one.',
           }}
         />
         {rows.map((c) => (

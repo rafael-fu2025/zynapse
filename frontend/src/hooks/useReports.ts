@@ -413,13 +413,12 @@ export function useReportPdfExport() {
   });
 }
 
-export function useReportConfigs(page: number, includeArchived = false, module?: ReportModule) {
+export function useReportConfigs(page: number, showArchived = false, module?: ReportModule) {
   return useQuery<ReportConfigPage, ApiEnvelopeError>({
-    queryKey: ['reports', 'configs', { page, includeArchived, module }],
-    placeholderData: keepPreviousData,
+    queryKey: ['reports', 'configs', { page, showArchived, module }],
     queryFn: async () => {
       const params = new URLSearchParams({ page: String(page), limit: '10' });
-      if (includeArchived) params.set('include_archived', '1');
+      params.set('archived', showArchived ? '1' : '0');
       if (module !== undefined) params.set('module', module);
       const res = await apiClient.get<unknown>(queryPath('/reports/configs', params));
       return reportConfigPageSchema.parse(res.data);

@@ -19,8 +19,8 @@ use CodeIgniter\Database\BaseBuilder;
  * row. The boolean is still accepted on the wire (the mobile client sends
  * it): `true` maps to `all`, `false` to `active`.
  *
- * Archive is soft — `archived_at IS NOT NULL` — and records are never
- * deleted.
+ * Archive is soft — `archived_at IS NOT NULL`. Permanent deletion is
+ * a separate, explicitly guarded operation.
  */
 final class ArchiveScope
 {
@@ -57,6 +57,12 @@ final class ArchiveScope
         }
         $legacy = strtolower(trim((string) $includeArchived));
         return self::from($legacy === '1' || $legacy === 'true');
+    }
+
+    /** Pattern A: an omitted flag preserves the caller's legacy list behavior. */
+    public static function archivedFlag(mixed $value): ?bool
+    {
+        return $value === null ? null : in_array($value, ['1', 'true', 1, true], true);
     }
 
     /** Constrain a builder to the scope. `all` adds nothing. */

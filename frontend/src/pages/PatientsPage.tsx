@@ -52,6 +52,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { PageHeader, PageToolbar } from '@/components/PageHeader';
 import { Button } from '@/components/ui/button';
+import { PermanentDeleteAction } from '@/components/PermanentDeleteAction';
 import { Checkbox } from '@/components/ui/checkbox';
 import { ConfirmDialog, type ConfirmAction } from '@/components/ConfirmDialog';
 import { TableStateRows } from '@/components/TableStates';
@@ -103,7 +104,7 @@ import {
   useEmployeeEncounters,
   useEmployeeFacets,
   useEmployeeSearch,
-  parseArchiveStatus,
+
   useEmployees,
   useSetEmployeeArchived,
   useSetStudentArchived,
@@ -1282,16 +1283,8 @@ function EmployeeDetailDialog({
   );
 }
 
-/**
- * ArchiveStatusSelect — which records a registry tab shows: Active (the
- * default), Archived (ONLY archived records) or All records.
- *
- * It replaced a "Show archived" toggle that ADDED archived rows to the live
- * ones, so an archived record sat somewhere in a list of mostly-live rows
- * and finding it to restore meant scanning for the grey badge. A registry
- * is searched by state as often as by name, so state is its own view.
- */
-function ArchiveStatusSelect({
+/** Registry tables isolate active and archived records; they never mix both. */
+function ArchiveStatusToggle({
   id,
   value,
   onChange,
@@ -1301,19 +1294,14 @@ function ArchiveStatusSelect({
   onChange: (next: ArchiveStatus) => void;
 }) {
   return (
-    <div className="space-y-1">
-      <Label id={`${id}-label`} className="text-xs">Status</Label>
-      <Select value={value} onValueChange={(v) => onChange(parseArchiveStatus(v))}>
-        <SelectTrigger aria-labelledby={`${id}-label`} className="w-40">
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value="active">Active</SelectItem>
-          <SelectItem value="archived">Archived</SelectItem>
-          <SelectItem value="all">All records</SelectItem>
-        </SelectContent>
-      </Select>
-    </div>
+    <Button
+      id={id}
+      variant={value === 'archived' ? 'secondary' : 'outline'}
+      aria-pressed={value === 'archived'}
+      onClick={() => onChange(value === 'archived' ? 'active' : 'archived')}
+    >
+      <Archive /> {value === 'archived' ? 'Hide archived' : 'Show archived'}
+    </Button>
   );
 }
 
@@ -1387,8 +1375,8 @@ export default function PatientsPage() {
   // are coerced, so anything unknown is just `active`.
   const [stuStatusRaw, setStuStatusRaw] = useUrlFilter('stu_status', { default: 'active' });
   const [empStatusRaw, setEmpStatusRaw] = useUrlFilter('emp_status', { default: 'active' });
-  const stuStatus = parseArchiveStatus(stuStatusRaw);
-  const empStatus = parseArchiveStatus(empStatusRaw);
+  const stuStatus = stuStatusRaw === 'archived' ? 'archived' : 'active';
+  const empStatus = empStatusRaw === 'archived' ? 'archived' : 'active';
   // Students tab facets. Department, Course (MIS `program`) and Year Level
   // (MIS `level`) are the three categorical fields the MIS student endpoint
   // itself filters on, and the only ones our synced rows carry. There is
@@ -1547,7 +1535,7 @@ export default function PatientsPage() {
         {/* Guidance-side action (2026-09-27): the guidance record surface
             refers a student to the clinic. Clinic-only actions (medical
             edits, archiving) are gated on the clinic side + write. */}
-        {guidanceRefer && (
+        {guidanceRefer && !student.archived && (
           <DropdownMenuItem
             className="min-h-11"
             onSelect={() => setReferPatient({
@@ -1558,7 +1546,7 @@ export default function PatientsPage() {
             <Share2 /> Refer to clinic
           </DropdownMenuItem>
         )}
-        {clinicWrite && !student.is_directory_record && (
+        {clinicWrite && !student.archived && !student.is_directory_record && (
           <DropdownMenuItem className="min-h-11" onSelect={() => setManage({ kind: 'student', id: student.id <= 0 && student.student_number ? student.student_number : student.id })}>
             <HeartPulse /> Manage medical record
           </DropdownMenuItem>
@@ -1566,7 +1554,7 @@ export default function PatientsPage() {
         {/* Clinic-side referral to the Guidance Center (2026-10): raises a
             clinic → counselling referral. Only reason / notes / priority
             travel to Guidance — the clinic record stays untouched. */}
-        {side === 'clinic' && canRefer && (
+        {side === 'clinic' && canRefer && !student.archived && (
           <DropdownMenuItem
             className="min-h-11"
             onSelect={() => setReferGuidance({
@@ -1604,6 +1592,9 @@ export default function PatientsPage() {
               {student.archived ? <ArchiveRestore /> : <Archive />}
               {student.archived ? 'Restore record' : 'Archive record'}
             </DropdownMenuItem>
+            {student.archived && (
+              <PermanentDeleteAction resource="students" id={student.id} label={`${student.last_name}, ${student.first_name}`} presentation="menuitem" />
+            )}
           </>
         )}
       </DropdownMenuContent>
@@ -1638,7 +1629,7 @@ export default function PatientsPage() {
         )}
         {/* Guidance refers an employee to the clinic exactly as it does a
             student; editing and archiving the registry row are clinic-side. */}
-        {guidanceRefer && (
+        {guidanceRefer && !employee.archived && (
           <DropdownMenuItem
             className="min-h-11"
             onSelect={() => setReferPatient({
@@ -1654,12 +1645,12 @@ export default function PatientsPage() {
             Directory-only MIS rows (negative synthetic ids) have no local
             person to attach allergies/contacts to, so the medical action is
             withheld for them — same gate as edit/archive. */}
-        {clinicWrite && !employee.is_directory_record && (
+        {clinicWrite && !employee.archived && !employee.is_directory_record && (
           <DropdownMenuItem className="min-h-11" onSelect={() => setManage({ kind: 'employee', id: employee.id <= 0 && employee.employee_number ? employee.employee_number : employee.id })}>
             <HeartPulse /> Manage medical record
           </DropdownMenuItem>
         )}
-        {side === 'clinic' && canRefer && (
+        {side === 'clinic' && canRefer && !employee.archived && (
           <DropdownMenuItem
             className="min-h-11"
             onSelect={() => setReferGuidance({
@@ -1697,6 +1688,9 @@ export default function PatientsPage() {
               {employee.archived ? <ArchiveRestore /> : <Archive />}
               {employee.archived ? 'Restore record' : 'Archive record'}
             </DropdownMenuItem>
+            {employee.archived && (
+              <PermanentDeleteAction resource="employees" id={employee.id} label={`${employee.last_name}, ${employee.first_name}`} presentation="menuitem" />
+            )}
           </>
         )}
       </DropdownMenuContent>
@@ -1826,10 +1820,10 @@ export default function PatientsPage() {
                 </SelectContent>
               </Select>
             </div>
-            <ArchiveStatusSelect id="stu-status" value={stuStatus} onChange={changeStuStatus} />
+            <ArchiveStatusToggle id="stu-status" value={stuStatus} onChange={changeStuStatus} />
           </PageToolbar>
 
-          <section className="hidden overflow-hidden rounded-xl border bg-card md:block md:min-h-0 md:flex-1">
+          <section className="hidden overflow-hidden border bg-card md:block md:min-h-0 md:flex-1">
             {/* The table flexes to the real leftover space (no estimated
                 constants): the section is a flex-1 child of the viewport-
                 tall page column, and the wrapper below is its h-full
@@ -2043,10 +2037,10 @@ export default function PatientsPage() {
                 </SelectContent>
               </Select>
             </div>
-            <ArchiveStatusSelect id="emp-status" value={empStatus} onChange={changeEmpStatus} />
+            <ArchiveStatusToggle id="emp-status" value={empStatus} onChange={changeEmpStatus} />
           </PageToolbar>
 
-          <section className="hidden overflow-hidden rounded-xl border bg-card md:block md:min-h-0 md:flex-1">
+          <section className="hidden overflow-hidden border bg-card md:block md:min-h-0 md:flex-1">
             {/* Same flex-to-fit recipe as the students table (see the
                 comment there). */}
             <Table

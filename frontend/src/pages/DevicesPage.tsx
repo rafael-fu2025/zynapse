@@ -14,11 +14,12 @@
  */
 import { useId, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { ArrowLeft, Archive, ChevronDown, ChevronLeft, ChevronRight, Cpu, History, Loader2, Pencil, Play, Plus, Power, PowerOff, RotateCcw, Square } from 'lucide-react';
+import { ArrowLeft, Archive, ChevronDown, ChevronLeft, ChevronRight, ArchiveRestore, History, Loader2, Pencil, Play, Plus, Power, PowerOff, RotateCcw, Square } from 'lucide-react';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { PageHeader } from '@/components/PageHeader';
 import { Button } from '@/components/ui/button';
+import { PermanentDeleteAction } from '@/components/PermanentDeleteAction';
 import { ConfirmDialog, type ConfirmAction } from '@/components/ConfirmDialog';
 import { describeHeartbeatAge, parseUtcSql } from '@/lib/bmgFormat';
 import { CopyButton } from '@/components/CopyButton';
@@ -66,6 +67,7 @@ import {
   useSendDeviceCommand,
   useSetBmgDeviceStatus,
   useUpdateBmgDevice,
+  useUnarchiveBmgDevice,
 } from '@/hooks/useFacilities';
 import { useKeysetPagination } from '@/hooks/useKeysetPagination';
 import { useUrlFilter } from '@/hooks/useUrlFilter';
@@ -368,10 +370,11 @@ export default function DevicesPage() {
   const [archivedParam, setArchivedParam] = useUrlFilter('archived');
   const showArchived = archivedParam === '1';
   const { cursor, history, nextPage: nextCursor, prevPage } = useKeysetPagination(archivedParam);
-  const devices = useBmgDevices(cursor, 25, showArchived);
+  const devices = useBmgDevices(cursor, 25, showArchived ? 'archived' : 'active');
   const setStatus = useSetBmgDeviceStatus();
   const regenerate = useRegenerateBmgDeviceToken();
   const archive = useArchiveBmgDevice();
+  const restore = useUnarchiveBmgDevice();
   const sendCommand = useSendDeviceCommand();
   const auth = useAuthStore();
   const canManage = hasPermission(auth, 'facilities.units.manage');
@@ -383,6 +386,7 @@ export default function DevicesPage() {
   const [historyFor, setHistoryFor] = useState<BmgDevice | null>(null);
 
   const rows = devices.data?.data ?? [];
+  const mutationPending = archive.isPending || restore.isPending || regenerate.isPending || setStatus.isPending || sendCommand.isPending;
 
   /**
    * Heartbeat-derived online state. The list endpoint doesn't ship the
@@ -407,11 +411,32 @@ export default function DevicesPage() {
   const deviceActions = (d: BmgDevice) => (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button className="min-h-11 md:min-h-0" size="sm" variant="outline" aria-label={`Actions for ${d.code}`}>
+        <Button className="min-h-11 md:min-h-0" size="sm" variant="outline" disabled={mutationPending} aria-label={`Actions for ${d.code}`}>
           Actions <ChevronDown className="size-3.5" aria-hidden />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-56">
+        {d.archived_at != null ? (
+          <>
+            <DropdownMenuItem
+              className="min-h-11"
+              disabled={restore.isPending}
+              onSelect={() => setConfirm({
+                title: `Restore ${d.code}?`,
+                description: 'The device will be restored disabled and unbound. Its old token will no longer work. Regenerate a token explicitly, bind a drum and enable the device before using it again.',
+                confirmLabel: 'Restore device',
+                run: () => restore.mutate({ deviceId: d.id }),
+              })}
+            >
+              <ArchiveRestore /> Restore device
+            </DropdownMenuItem>
+            <PermanentDeleteAction resource="devices" id={d.id} label={d.code} presentation="menuitem" />
+            <DropdownMenuItem className="min-h-11" onSelect={() => setHistoryFor(d)}>
+              <History /> Assignment history
+            </DropdownMenuItem>
+          </>
+        ) : (
+          <>
         <DropdownMenuItem className="min-h-11" onSelect={() => setEditing(d)}>
           <Pencil /> Edit device
         </DropdownMenuItem>
@@ -502,6 +527,8 @@ export default function DevicesPage() {
         >
           <Archive /> Archive device
         </DropdownMenuItem>
+          </>
+        )}
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -509,11 +536,7 @@ export default function DevicesPage() {
   return (
     <main className="space-y-4 p-6">
       <PageHeader
-        title={
-          <span className="flex items-center gap-2">
-            <Cpu className="size-5 text-primary" /> Devices
-          </span>
-        }
+        title="Devices"
         description="Automated tumblers that mechanize drum rotation and report turning sessions to the process log. Tokens are shown once, at mint time."
         actions={
           <>
@@ -539,7 +562,7 @@ export default function DevicesPage() {
       />
 
       {/* Desktop table */}
-      <section className="hidden overflow-hidden rounded-xl border bg-card md:block">
+      <section className="hidden overflow-hidden border bg-card md:block">
         <Table
           ariaLabel="Registered BMG devices"
           wrapperClassName="max-h-[65vh] overflow-y-auto"
@@ -567,10 +590,12 @@ export default function DevicesPage() {
               errorMessage="Failed to load devices."
               loadingLabel="Loading devices"
               empty={{
-                title: 'No devices registered yet.',
-                description: canManage
-                  ? 'Register the tumbler to start reporting turning sessions.'
-                  : 'Ask a BMG administrator to register the tumbler.',
+                title: showArchived ? 'No archived devices.' : 'No active devices.',
+                description: showArchived
+                  ? 'Archived devices will appear here. Switch to active devices to manage the fleet.'
+                  : canManage
+                    ? 'Register the tumbler to start reporting turning sessions.'
+                    : 'Ask a BMG administrator to register the tumbler.',
               }}
             />
             {rows.map((d) => (
@@ -637,10 +662,12 @@ export default function DevicesPage() {
           errorMessage="Failed to load devices."
           loadingLabel="Loading devices"
           empty={{
-            title: 'No devices registered yet.',
-            description: canManage
-              ? 'Register the tumbler to start reporting turning sessions.'
-              : 'Ask a BMG administrator to register the tumbler.',
+            title: showArchived ? 'No archived devices.' : 'No active devices.',
+            description: showArchived
+              ? 'Archived devices will appear here. Switch to active devices to manage the fleet.'
+              : canManage
+                ? 'Register the tumbler to start reporting turning sessions.'
+                : 'Ask a BMG administrator to register the tumbler.',
           }}
         />
         {rows.map((d) => (
@@ -696,7 +723,7 @@ export default function DevicesPage() {
         title={confirm?.title ?? ''}
         description={confirm?.description}
         confirmLabel={confirm?.confirmLabel}
-        pending={regenerate.isPending || setStatus.isPending || sendCommand.isPending}
+        pending={mutationPending}
         onConfirm={() => {
           confirm?.run();
           setConfirm(null);

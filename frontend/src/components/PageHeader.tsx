@@ -33,7 +33,7 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip';
 
-const TOOLBAR_CARD_CLASSES = 'rounded-xl border bg-card p-3';
+const TOOLBAR_CARD_CLASSES = 'border bg-card p-3';
 const TOOLBAR_FLEX_CLASSES = 'flex flex-wrap items-end justify-between gap-3';
 
 interface PageHeaderProps {

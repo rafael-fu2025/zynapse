@@ -6,6 +6,7 @@ namespace Modules\Facilities\Controllers;
 
 use App\Controllers\Api\ApiController;
 use App\Exceptions\ApiException;
+use App\Modules\Shared\ArchiveScope;
 use CodeIgniter\HTTP\ResponseInterface;
 use Config\Services;
 use Modules\Facilities\Policies\BmgPolicy;
@@ -38,6 +39,7 @@ final class BmgController extends ApiController
             $cursor !== '' ? $cursor : null,
             $limit,
             $archived === '1' || $archived === 'true',
+            ArchiveScope::archivedFlag($this->request->getGet('archived')),
         );
 
         return $this->ok(
@@ -267,6 +269,7 @@ final class BmgController extends ApiController
             $cursor !== '' ? $cursor : null,
             $limit,
             $archived === '1' || $archived === 'true',
+            ArchiveScope::archivedFlag($this->request->getGet('archived')),
         );
 
         return $this->ok(
@@ -344,6 +347,11 @@ final class BmgController extends ApiController
         return $this->ok($this->service->archiveDevice($deviceId));
     }
 
+    public function unarchiveDevice(int $deviceId): ResponseInterface
+    {
+        return $this->ok($this->service->unarchiveDevice($deviceId));
+    }
+
     public function regenerateDeviceToken(int $deviceId): ResponseInterface
     {
         // 201 carries the new plaintext token — shown once in the UI.
@@ -396,7 +404,10 @@ final class BmgController extends ApiController
     public function listWasteCategories(): ResponseInterface
     {
         $activeOnly = (string) ($this->request->getGet('active') ?? '') === '1';
-        return $this->ok($this->service->listWasteCategories($activeOnly));
+        return $this->ok($this->service->listWasteCategories(
+            $activeOnly,
+            ArchiveScope::archivedFlag($this->request->getGet('archived')),
+        ));
     }
 
     public function createWasteCategory(): ResponseInterface

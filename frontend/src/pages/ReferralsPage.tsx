@@ -8,6 +8,7 @@
 import { zodResolver } from '@hookform/resolvers/zod';
 import { CalendarPlus, ChevronDown, ChevronLeft, ChevronRight, CircleAlert, Loader2, Plus, UserRound, X } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
+import { useKeysetPagination } from '@/hooks/useKeysetPagination';
 import { useForm } from 'react-hook-form';
 
 import { Badge } from '@/components/ui/badge';
@@ -445,8 +446,6 @@ export default function ReferralsPage() {
   // Referrers (employee group) are scoped server-side to their own
   // referrals; handlers (clinic/counselling staff, admin) see all.
   const isReferrerScoped = me.data?.person_kind === 'employee';
-  const [cursor, setCursor] = useState<string | null>(null);
-  const [history, setHistory] = useState<Array<string | null>>([null]);
   // ?status= survives a refresh and can be shared (PRODUCT principle 5).
   const [statusFilter, setStatusFilter] = useUrlFilter('status', { default: 'all' });
   const [openCreate, setOpenCreate] = useState(false);
@@ -455,6 +454,7 @@ export default function ReferralsPage() {
   // a counselling appointment right from this page.
   const [bookingFor, setBookingFor] = useState<Referral | null>(null);
 
+  const { cursor, history, nextPage: advancePage, prevPage, reset: resetPagination } = useKeysetPagination(statusFilter);
   const list = useReferrals(cursor, statusFilter === 'all' ? null : statusFilter, 25);
   // Status counts come from the same dashboard counters the sidebar
   // badge uses, so the dropdown breaks the module number down by the
@@ -470,17 +470,7 @@ export default function ReferralsPage() {
   const handoff = useQueueHandoff();
 
   function nextPage() {
-    if (list.data?.next !== null && list.data?.next !== undefined) {
-      const n = list.data.next;
-      setHistory((h) => [...h, n]);
-      setCursor(n);
-    }
-  }
-  function prevPage() {
-    if (history.length < 2) return;
-    const next = history.slice(0, -1);
-    setHistory(next);
-    setCursor(next[next.length - 1] ?? null);
+    if (!list.isFetching) advancePage(list.data?.next);
   }
 
   const rows = useMemo(() => list.data?.data ?? [], [list.data]);
@@ -489,7 +479,7 @@ export default function ReferralsPage() {
     // md+: one-viewport flex column (topbar h-14 excluded) — the referral
     // table flexes to the leftover space and the pager stays in view.
     <main className="space-y-4 p-6 md:flex md:h-[calc(100dvh-3.5rem)] md:flex-col md:overflow-hidden">
-      <div className="md:shrink-0">
+      <div className="space-y-4 md:shrink-0">
       <PageHeader
         title="Referrals"
         description="Referrals hand off care between Clinic and Counselling — each side keeps its own records."
@@ -506,7 +496,7 @@ export default function ReferralsPage() {
               </Badge>
             )}
             <Label htmlFor="status">Status</Label>
-            <Select value={statusFilter} onValueChange={(v) => { setStatusFilter(v); setCursor(null); setHistory([null]); }}>
+            <Select value={statusFilter} onValueChange={(v) => { setStatusFilter(v); resetPagination(); }}>
               <SelectTrigger id="status" className="w-48" aria-label="Filter by status"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">{labelWithCount('All', totalCount)}</SelectItem>
@@ -521,7 +511,7 @@ export default function ReferralsPage() {
       />
       </div>
 
-      <section className="overflow-hidden rounded-xl border bg-card md:min-h-0 md:flex-1">
+      <section className="overflow-hidden border bg-card md:min-h-0 md:flex-1">
         <Table
           ariaLabel="Referrals between Clinic and Guidance"
           wrapperClassName="h-full overflow-y-auto"
@@ -564,8 +554,7 @@ export default function ReferralsPage() {
                     size="sm"
                     onClick={() => {
                       setStatusFilter('all');
-                      setCursor(null);
-                      setHistory([null]);
+                      resetPagination();
                     }}
                   >
                     Clear filter
@@ -661,7 +650,7 @@ export default function ReferralsPage() {
           <Button variant="outline" size="sm" onClick={prevPage} disabled={history.length < 2}>
             <ChevronLeft /> Prev
           </Button>
-          <Button variant="outline" size="sm" onClick={nextPage} disabled={list.data?.next === null || list.data?.next === undefined}>
+          <Button variant="outline" size="sm" onClick={nextPage} disabled={list.isFetching || list.data?.next == null}>
             Next <ChevronRight />
           </Button>
         </div>

@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import '../../core/api/api_client.dart';
 import '../../core/models/appointment_portal.dart';
 import '../../core/services/api_service.dart';
-import '../../core/utils/dates.dart';
+import '../common/slot_booking_sheet.dart';
 import '../common/widgets.dart';
 
 class PortalAppointmentsSection extends StatefulWidget {
@@ -36,106 +36,13 @@ class _State extends State<PortalAppointmentsSection> {
   }
 
   Future<void> _book() async {
-    String department = 'clinic';
-    DateTime date = DateTime.now().add(const Duration(days: 1));
-    List<PortalAppointmentSlot> slots = const [];
-    PortalAppointmentSlot? selected;
-    final ok = await showDialog<bool>(
-        context: context,
-        builder: (ctx) => StatefulBuilder(
-            builder: (ctx, setLocal) => AlertDialog(
-                    title: const Text('Book appointment'),
-                    content: SizedBox(
-                        width: 420,
-                        child:
-                            Column(mainAxisSize: MainAxisSize.min, children: [
-                          DropdownButtonFormField<String>(
-                              initialValue: department,
-                              decoration: const InputDecoration(
-                                  labelText: 'Department'),
-                              items: const [
-                                DropdownMenuItem(
-                                    value: 'clinic', child: Text('Clinic')),
-                                DropdownMenuItem(
-                                    value: 'counselling',
-                                    child: Text('Guidance'))
-                              ],
-                              onChanged: (v) => setLocal(() {
-                                    department = v!;
-                                    slots = const [];
-                                    selected = null;
-                                  })),
-                          ListTile(
-                              contentPadding: EdgeInsets.zero,
-                              title: const Text('Date'),
-                              subtitle: Text(
-                                  '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}'),
-                              trailing: const Icon(Icons.calendar_month),
-                              onTap: () async {
-                                final d = await showDatePicker(
-                                    context: ctx,
-                                    firstDate: DateTime.now(),
-                                    lastDate: DateTime.now()
-                                        .add(const Duration(days: 90)),
-                                    initialDate: date);
-                                if (d != null) setLocal(() => date = d);
-                              }),
-                          FilledButton(
-                              onPressed: () async {
-                                try {
-                                  final ds =
-                                      '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
-                                  final r = await ApiService.I
-                                      .portalAppointmentSlots(department, ds);
-                                  setLocal(() {
-                                    slots = r;
-                                    selected = null;
-                                  });
-                                } catch (e) {
-                                  if (ctx.mounted)
-                                    ScaffoldMessenger.of(ctx).showSnackBar(
-                                        SnackBar(
-                                            content:
-                                                Text(mapDioError(e).message)));
-                                }
-                              },
-                              child: const Text('Find available slots')),
-                          if (slots.isNotEmpty)
-                            DropdownButtonFormField<PortalAppointmentSlot>(
-                                decoration: const InputDecoration(
-                                    labelText: 'Available slot'),
-                                items: slots
-                                    .map((s) => DropdownMenuItem(
-                                        value: s,
-                                        child: Text(s.remaining > 1
-                                            ? '${fmtClock(s.startsAt.toLocal())} · ${s.remaining} available'
-                                            : fmtClock(s.startsAt.toLocal()))))
-                                    .toList(),
-                                onChanged: (v) => setLocal(() => selected = v))
-                        ])),
-                    actions: [
-                      TextButton(
-                          onPressed: () => Navigator.pop(ctx, false),
-                          child: const Text('Cancel')),
-                      FilledButton(
-                          onPressed: selected == null
-                              ? null
-                              : () => Navigator.pop(ctx, true),
-                          child: const Text('Book'))
-                    ])));
-    if (ok == true && selected != null) {
-      try {
-        await ApiService.I.bookPortalAppointment(selected!);
-        await _load();
-        if (mounted)
-          ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('Appointment booked.')));
-      } catch (e) {
-        if (mounted)
-          ScaffoldMessenger.of(context)
-              .showSnackBar(SnackBar(content: Text(mapDioError(e).message)));
-      }
-    }
+    final booked = await showSlotBookingSheet(context);
+    if (!booked || !mounted) return;
+    await _load();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Appointment booked.')),
+    );
   }
 
   Future<void> _cancel(PortalAppointment a) async {

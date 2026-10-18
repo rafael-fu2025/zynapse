@@ -18,8 +18,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { useInventoryItems } from '@/hooks/useInventory';
-import { useMedicines } from '@/hooks/useMedicines';
+import { ClinicCatalogPicker } from '@/components/clinic/ClinicCatalogPicker';
+import { useState } from 'react';
+import type { ClinicCatalogRow } from '@/hooks/useClinicCatalog';
 import { useCreateReorder } from '@/hooks/useReorders';
 import {
   createReorderSchema,
@@ -28,8 +29,7 @@ import {
 
 export function CreateReorderDialog({ onClose }: { onClose: () => void }) {
   const create = useCreateReorder();
-  const medicines = useMedicines(null, 25);
-  const supplies = useInventoryItems(null, 100);
+  const [selected, setSelected] = useState<ClinicCatalogRow | null>(null);
   const { register, handleSubmit, formState: { errors }, reset, setValue, watch } =
     useForm<CreateReorderInput>({
       resolver: zodResolver(createReorderSchema),
@@ -46,7 +46,7 @@ export function CreateReorderDialog({ onClose }: { onClose: () => void }) {
   // `2 × threshold` fallback until they are edited.
   useEffect(() => {
     if (itemType === 'medicine' && medicineId !== undefined) {
-      const m = medicines.data?.data?.find((x) => x.id === medicineId);
+      const m = selected !== null && 'generic_name' in selected && selected.id === medicineId ? selected : undefined;
       if (m !== undefined) {
         const suggested = Math.max(1, (m.target_stock ?? 2 * m.reorder_threshold) - m.quantity_on_hand);
         setValue('quantity', suggested, { shouldValidate: true, shouldDirty: true });
@@ -54,24 +54,24 @@ export function CreateReorderDialog({ onClose }: { onClose: () => void }) {
       return;
     }
     if (itemType === 'supply' && supplyItemId !== undefined) {
-      const it = supplies.data?.data?.find((x) => x.id === supplyItemId);
+      const it = selected !== null && 'sku' in selected && selected.id === supplyItemId ? selected : undefined;
       if (it !== undefined) {
         const suggested = Math.max(1, (it.target_stock ?? 2 * it.reorder_level) - it.quantity_on_hand);
         setValue('quantity', suggested, { shouldValidate: true, shouldDirty: true });
       }
     }
-  }, [itemType, medicineId, supplyItemId, medicines.data, supplies.data, setValue]);
+  }, [itemType, medicineId, supplyItemId, selected, setValue]);
 
   // Build the hint caption from the currently-selected item so the
   // operator can see the math at a glance.
   let qtyHint: string | null = null;
   if (itemType === 'medicine' && medicineId !== undefined) {
-    const m = medicines.data?.data?.find((x) => x.id === medicineId);
+    const m = selected !== null && 'generic_name' in selected && selected.id === medicineId ? selected : undefined;
     if (m !== undefined) {
       qtyHint = `On hand ${m.quantity_on_hand} · threshold ${m.reorder_threshold} · target ${m.target_stock ?? 'legacy'} · suggested ${Math.max(1, (m.target_stock ?? 2 * m.reorder_threshold) - m.quantity_on_hand)}`;
     }
   } else if (itemType === 'supply' && supplyItemId !== undefined) {
-    const it = supplies.data?.data?.find((x) => x.id === supplyItemId);
+    const it = selected !== null && 'sku' in selected && selected.id === supplyItemId ? selected : undefined;
     if (it !== undefined) {
       qtyHint = `On hand ${it.quantity_on_hand} · reorder level ${it.reorder_level} · target ${it.target_stock ?? 'legacy'} · suggested ${Math.max(1, (it.target_stock ?? 2 * it.reorder_level) - it.quantity_on_hand)}`;
     }
@@ -101,6 +101,7 @@ export function CreateReorderDialog({ onClose }: { onClose: () => void }) {
               // Switching type invalidates the previous pick.
               setValue('medicine_id', undefined);
               setValue('supply_item_id', undefined);
+              setSelected(null);
             }}
           >
             <SelectTrigger aria-labelledby="reorder-type-label"><SelectValue /></SelectTrigger>
@@ -111,40 +112,15 @@ export function CreateReorderDialog({ onClose }: { onClose: () => void }) {
           </Select>
         </div>
         <div className="space-y-1.5">
-          <Label id="reorder-item-label">{itemType === 'supply' ? 'Supply item' : 'Medicine'}</Label>
-          {itemType === 'supply' ? (
-            <Select
-              value={supplyItemId !== undefined ? String(supplyItemId) : ''}
-              onValueChange={(v) => setValue('supply_item_id', Number(v), { shouldValidate: true })}
-            >
-              <SelectTrigger aria-labelledby="reorder-item-label">
-                <SelectValue placeholder="Select…" />
-              </SelectTrigger>
-              <SelectContent>
-                {(supplies.data?.data ?? []).map((it) => (
-                  <SelectItem key={it.id} value={String(it.id)}>
-                    {it.name} ({it.sku}) — {it.quantity_on_hand} {it.unit} on hand
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          ) : (
-            <Select
-              value={medicineId !== undefined ? String(medicineId) : ''}
-              onValueChange={(v) => setValue('medicine_id', Number(v), { shouldValidate: true })}
-            >
-              <SelectTrigger aria-labelledby="reorder-item-label">
-                <SelectValue placeholder="Select…" />
-              </SelectTrigger>
-              <SelectContent>
-                {(medicines.data?.data ?? []).map((m) => (
-                  <SelectItem key={m.id} value={String(m.id)}>
-                    {m.generic_name} — {m.quantity_on_hand} {m.unit} on hand
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          )}
+          <Label htmlFor="reorder-item">{itemType === 'supply' ? 'Supply item' : 'Medicine'}</Label>
+          <ClinicCatalogPicker
+            key={itemType} kind={itemType === 'supply' ? 'supply' : 'medicine'} id="reorder-item"
+            value={String((itemType === 'supply' ? supplyItemId : medicineId) ?? '')}
+            onChange={(next, row) => {
+              setSelected(row ?? null);
+              setValue(itemType === 'supply' ? 'supply_item_id' : 'medicine_id', next === '' ? undefined : Number(next), { shouldValidate: true });
+            }}
+          />
           {errors.medicine_id !== undefined && (
             <p role="alert" className="text-xs text-destructive">{errors.medicine_id.message}</p>
           )}

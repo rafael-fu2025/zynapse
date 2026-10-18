@@ -18,6 +18,8 @@ declare(strict_types=1);
 namespace Modules\Clinic\Services;
 
 use Config\Services;
+use App\Services\CurrentTenant;
+use App\Exceptions\ApiException;
 
 final class PatientLookupService
 {
@@ -32,8 +34,25 @@ final class PatientLookupService
      */
     public function findByIdentifier(string $identifier): array
     {
+        if (trim($identifier) === '') {
+            return [null, null];
+        }
         $row = $this->resolveFromUsersByIdentifier($identifier);
-        if ($row === null && trim($identifier) !== '') {
+        // A known foreign identity is not an invitation to provision/associate
+        // it in this tenant. Unknown identifiers retain the existing fallback.
+        if ($row === null) {
+            $foreign = Services::database()->table('users u')
+                ->where('u.tenant_id !=', CurrentTenant::id())
+                ->whereIn('u.kind', ['student', 'employee'])
+                ->groupStart()->where('u.student_number', $identifier)->orWhere('u.employee_number', $identifier)->groupEnd()
+                ->countAllResults();
+            if ($foreign > 0) {
+                throw ApiException::validationFailure([
+                    ['code' => 'validation.field', 'field' => 'patient_school_id', 'message' => 'Patient identity is unavailable in this tenant.'],
+                ]);
+            }
+        }
+        if ($row === null) {
             try {
                 $fuMis = Services::fuMisAuthService();
                 $userId = $fuMis->ensureStudentProvisioned($identifier);
@@ -50,6 +69,19 @@ final class PatientLookupService
         return $row !== null ? [$row['kind'], $row] : [null, null];
     }
 
+    /** Validate a canonical patient FK without changing identity or access policy. */
+    public function assertPatientUserId(int $userId): void
+    {
+        $row = Services::database()->table('users')
+            ->where('tenant_id', CurrentTenant::id())->where('id', $userId)
+            ->whereIn('kind', ['student', 'employee'])->get()->getRowArray();
+        if ($row === null) {
+            throw ApiException::validationFailure([
+                ['code' => 'validation.field', 'field' => 'patient_user_id', 'message' => 'Patient record is unavailable in this tenant.'],
+            ]);
+        }
+    }
+
     /**
      * Resolve a user by identifier (student_number OR employee_number).
      * Prefers the first non-archived student/employee match.
@@ -61,6 +93,7 @@ final class PatientLookupService
         $db = Services::database();
         $row = $db->table('users u')
             ->select(self::USER_COLS)
+            ->where('u.tenant_id', CurrentTenant::id())
             ->whereIn('u.kind', ['student', 'employee'])
             ->where('u.archived_at IS NULL', null, false)
             ->groupStart()

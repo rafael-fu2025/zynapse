@@ -40,6 +40,13 @@ class _MedicinesScreenState extends State<MedicinesScreen>
           ?.hasPermission('clinic.inventory.write') ??
       false;
 
+  bool get _canForecast =>
+      context
+          .read<AuthController>()
+          .session
+          ?.hasPermission('clinic.inventory.forecast') ??
+      false;
+
   @override
   void initState() {
     super.initState();
@@ -270,10 +277,33 @@ class _MedicinesScreenState extends State<MedicinesScreen>
     if (ok) _load();
   }
 
+  Future<void> _showForecast(Medicine medicine) async {
+    await showSynapseSheet<void>(
+      context,
+      builder: (_) => _ForecastSheet(medicine: medicine),
+    );
+  }
+
+  Future<void> _showInsights() async {
+    await showSynapseSheet<void>(
+      context,
+      builder: (_) => const _MedicineInsightsSheet(),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Medicines')),
+      appBar: AppBar(
+        title: const Text('Medicines'),
+        actions: [
+          IconButton(
+            onPressed: _showInsights,
+            tooltip: 'Low stock and expiring',
+            icon: const Icon(HugeIcons.strokeRoundedAlert01),
+          ),
+        ],
+      ),
       body: RefreshIndicator(onRefresh: _load, child: _buildBody()),
       floatingActionButton: _canWrite
           ? FloatingActionButton.extended(
@@ -321,6 +351,7 @@ class _MedicinesScreenState extends State<MedicinesScreen>
         return _MedicineTile(
           medicine: _items[i],
           canWrite: _canWrite,
+          canForecast: _canForecast,
           onEdit: () => _edit(_items[i]),
           onAddBatch: () => _addBatch(_items[i]),
           onDispense: () => _dispense(_items[i]),
@@ -328,6 +359,7 @@ class _MedicinesScreenState extends State<MedicinesScreen>
           onExpire: () => _writeOffBatch(_items[i], 'expire'),
           onRecall: () => _writeOffBatch(_items[i], 'recall'),
           onTransactions: () => _transactions(_items[i]),
+          onForecast: () => _showForecast(_items[i]),
         );
       },
     );
@@ -338,6 +370,7 @@ class _MedicineTile extends StatelessWidget {
   const _MedicineTile({
     required this.medicine,
     required this.canWrite,
+    this.canForecast = false,
     this.onEdit,
     this.onAddBatch,
     this.onDispense,
@@ -345,10 +378,12 @@ class _MedicineTile extends StatelessWidget {
     this.onExpire,
     this.onRecall,
     this.onTransactions,
+    this.onForecast,
   });
 
   final Medicine medicine;
   final bool canWrite;
+  final bool canForecast;
   final VoidCallback? onEdit;
   final VoidCallback? onAddBatch;
   final VoidCallback? onDispense;
@@ -356,6 +391,7 @@ class _MedicineTile extends StatelessWidget {
   final VoidCallback? onExpire;
   final VoidCallback? onRecall;
   final VoidCallback? onTransactions;
+  final VoidCallback? onForecast;
 
   @override
   Widget build(BuildContext context) {
@@ -428,11 +464,16 @@ class _MedicineTile extends StatelessWidget {
                 onRecall?.call();
               case 'archive':
                 onArchive?.call();
+              case 'forecast':
+                onForecast?.call();
             }
           },
           itemBuilder: (_) => [
             const PopupMenuItem(
                 value: 'transactions', child: Text('Transactions')),
+            if (canForecast)
+              const PopupMenuItem(
+                  value: 'forecast', child: Text('Demand forecast')),
             if (canWrite) ...[
               const PopupMenuItem(
                   value: 'edit', child: Text('Edit stock levels')),
@@ -592,4 +633,309 @@ class _DispenseSheetState extends State<_DispenseSheet> {
       ),
     );
   }
+}
+
+class _MedicineInsightsSheet extends StatefulWidget {
+  const _MedicineInsightsSheet();
+
+  @override
+  State<_MedicineInsightsSheet> createState() =>
+      _MedicineInsightsSheetState();
+}
+
+class _MedicineInsightsSheetState extends State<_MedicineInsightsSheet> {
+  List<Medicine> _lowStock = const [];
+  List<Medicine> _expiring = const [];
+  bool _loading = true;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final results = await Future.wait([
+        ApiService.I.medicinesLowStock(),
+        ApiService.I.medicinesExpiring(days: 90),
+      ]);
+      if (!mounted) return;
+      setState(() {
+        _lowStock = results[0];
+        _expiring = results[1];
+        _loading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = mapDioError(e).message;
+        _loading = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const SheetHeader(
+              title: 'Medicine insights',
+              subtitle: 'Low stock and batches expiring within 90 days',
+            ),
+            const SizedBox(height: 8),
+            if (_loading)
+              SizedBox(height: 220, child: AsyncState.loading())
+            else if (_error != null)
+              SizedBox(
+                height: 220,
+                child: AsyncState.error(_error!, onRetry: _load),
+              )
+            else
+              Flexible(
+                child: ListView(
+                  shrinkWrap: true,
+                  children: [
+                    _section(
+                      'Low stock',
+                      _lowStock,
+                      empty: 'No medicines below their reorder threshold.',
+                      trailing: (m) => StatusBadge(
+                        label: 'On hand ${m.quantityOnHand}',
+                        color: const Color(0xFFB3261E),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    _section(
+                      'Expiring within 90 days',
+                      _expiring,
+                      empty: 'No batches expiring in the next 90 days.',
+                      trailing: (m) => StatusBadge(
+                        label: m.earliestExpiry == null
+                            ? 'Expiry unknown'
+                            : 'Expiry ${m.earliestExpiry!.substring(0, 10)}',
+                        color: const Color(0xFFB45309),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _section(
+    String title,
+    List<Medicine> items, {
+    required String empty,
+    required Widget Function(Medicine) trailing,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(title,
+            style:
+                const TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
+        const SizedBox(height: 4),
+        if (items.isEmpty)
+          Text(
+            empty,
+            style: const TextStyle(fontSize: 12, color: Colors.black45),
+          )
+        else
+          for (final medicine in items)
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              dense: true,
+              title: Text(
+                medicine.displayName,
+                style: const TextStyle(
+                    fontSize: 12.5, fontWeight: FontWeight.w600),
+              ),
+              subtitle: Text(
+                [
+                  if (medicine.brandName != null) medicine.brandName!,
+                  medicine.unit,
+                ].join(' · '),
+                style: const TextStyle(fontSize: 11),
+              ),
+              trailing: trailing(medicine),
+            ),
+      ],
+    );
+  }
+}
+
+class _ForecastSheet extends StatefulWidget {
+  const _ForecastSheet({required this.medicine});
+
+  final Medicine medicine;
+
+  @override
+  State<_ForecastSheet> createState() => _ForecastSheetState();
+}
+
+class _ForecastSheetState extends State<_ForecastSheet> {
+  Map<String, dynamic>? _forecast;
+  bool _loading = true;
+  bool _computing = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final forecast =
+          await ApiService.I.medicineForecast(widget.medicine.id);
+      if (!mounted) return;
+      setState(() {
+        _forecast = forecast;
+        _loading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = mapDioError(e).message;
+        _loading = false;
+      });
+    }
+  }
+
+  Future<void> _compute() async {
+    setState(() {
+      _computing = true;
+      _error = null;
+    });
+    try {
+      final forecast =
+          await ApiService.I.computeMedicineForecast(widget.medicine.id);
+      if (!mounted) return;
+      setState(() {
+        _forecast = forecast;
+        _computing = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = mapDioError(e).message;
+        _computing = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final forecast = _forecast;
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            SheetHeader(
+              title: 'Demand forecast',
+              subtitle: widget.medicine.displayName,
+            ),
+            const SizedBox(height: 10),
+            if (_loading)
+              SizedBox(height: 180, child: AsyncState.loading())
+            else if (_error != null)
+              SizedBox(
+                height: 180,
+                child: AsyncState.error(_error!, onRetry: _load),
+              )
+            else if (forecast == null)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 18),
+                child: Text(
+                  'No forecast has been computed for this medicine yet.',
+                  style: TextStyle(fontSize: 12.5, color: Colors.black45),
+                ),
+              )
+            else ...[
+              _fact(
+                'Predicted daily usage',
+                '${forecast['predicted_daily_usage'] ?? '—'}',
+              ),
+              _fact(
+                'Predicted stockout',
+                '${forecast['predicted_stockout_date'] ?? 'n/a'}',
+              ),
+              _fact(
+                'Predicted reorder',
+                '${forecast['predicted_reorder_date'] ?? 'n/a'}',
+              ),
+              _fact('Current stock', '${forecast['current_stock'] ?? '—'}'),
+              _fact(
+                'Reorder threshold',
+                '${forecast['reorder_threshold'] ?? '—'}',
+              ),
+              _fact('Model', '${forecast['model_type'] ?? '—'}'),
+              if (forecast['seasonality_factor'] != null)
+                _fact(
+                  'Seasonality factor',
+                  '${forecast['seasonality_factor']}',
+                ),
+              _fact(
+                'Forecast date',
+                '${forecast['forecast_date'] ?? '—'}',
+              ),
+            ],
+            const SizedBox(height: 12),
+            FilledButton.icon(
+              onPressed: _computing || _loading ? null : _compute,
+              icon: _computing
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(HugeIcons.strokeRoundedChart01, size: 17),
+              label: Text(_computing ? 'Computing…' : 'Recompute forecast'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _fact(String label, String value) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 3),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            SizedBox(
+              width: 150,
+              child: Text(
+                label,
+                style: const TextStyle(fontSize: 12, color: Colors.black45),
+              ),
+            ),
+            Expanded(
+              child: Text(value, style: const TextStyle(fontSize: 12.5)),
+            ),
+          ],
+        ),
+      );
 }

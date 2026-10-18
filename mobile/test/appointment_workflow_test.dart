@@ -59,14 +59,31 @@ void main() {
         };
       } else if (path == '/auth/logout') {
         data = <String, dynamic>{};
-      } else if (path == '/me/student-providers') {
+      } else if (path == '/scheduling/staff/clinic/providers') {
         data = [
-          {'id': 54, 'name': 'Test Provider'},
+          {
+            'id': 54,
+            'name': 'Test Provider',
+            'position': 'Nurse',
+            'employee_number': 'E-54',
+          },
         ];
       } else if (path == '/clinic/employees') {
         data = [
           {'id': 54, 'first_name': 'Test', 'last_name': 'Provider'},
         ];
+      } else if (path == '/me/appointment-slots') {
+        data = {
+          'slots': [
+            {
+              'department': 'clinic',
+              'starts_at': '2026-10-05T01:00:00Z',
+              'ends_at': '2026-10-05T02:00:00Z',
+              'duration_minutes': 60,
+              'remaining': 1,
+            },
+          ],
+        };
       } else if (path == '/clinic/patients/lookup') {
         data = [
           {
@@ -79,6 +96,8 @@ void main() {
       } else if (path == '/clinic/appointments/57/transition') {
         status = (options.data as Map)['status'] as String;
         data = appointmentRow(status: status);
+      } else if (path == '/me/appointments') {
+        data = <String, dynamic>{};
       } else if (path == '/clinic/appointments' ||
           path == '/me/student-appointments') {
         final row = appointmentRow(status: status);
@@ -167,17 +186,24 @@ void main() {
       returnLegacyFields = legacy;
       expect((await ApiService.I.appointments()).items.single.id, 57);
       expect((await ApiService.I.myStudentAppointments()).single.id, 57);
-      final booking = await ApiService.I.bookStudentAppointment(
-        providerUserId: 54,
-        scheduledAt: '2026-10-05 01:00:00',
+      final slots = await ApiService.I.portalAppointmentSlots(
+        'clinic',
+        '2026-10-05',
+      );
+      expect(slots.single.remaining, 1);
+      await ApiService.I.bookPortalAppointment(
+        slots.single,
         reason: 'Check-up',
       );
-      expect(booking.status, 'scheduled');
+      expect(requests.last.path, '/me/appointments');
       expect(requests.last.data, {
-        'provider_user_id': 54,
-        'scheduled_at': '2026-10-05 01:00:00',
+        'department': 'clinic',
+        'starts_at': '2026-10-05T01:00:00.000Z',
+        'type': 'initial',
         'reason': 'Check-up',
       });
+      final providers = await ApiService.I.schedulingProviders('clinic');
+      expect(providers.single.name, 'Test Provider');
       final scheduled = await ApiService.I.scheduleAppointment(
         patientSchoolId: '20261970',
         providerUserId: 54,
@@ -225,24 +251,30 @@ void main() {
     await unmountScreen(tester);
   });
 
-  testWidgets('student booking shows success, closes and reloads without QR',
+  testWidgets('student booking uses pooled slots and reloads without QR',
       (tester) async {
     await mountScreen(tester, asStudent: true);
     expectNoAppointmentQr();
     expect(find.byTooltip('Appointment actions'), findsNothing);
     await tester.tap(find.widgetWithText(FloatingActionButton, 'Book'));
     await tester.pumpAndSettle();
-    await tester.tap(find.widgetWithText(FilledButton, 'Book'));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 100));
-    expect(find.textContaining('Appointment #57 booked for'), findsOneWidget);
-    expectNoAppointmentQr();
-    await tester.pump(const Duration(seconds: 1));
+    expect(find.text('Book appointment'), findsOneWidget);
+    await tester.tap(
+      find.widgetWithText(FilledButton, 'Find available slots'),
+    );
     await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, 'Book'));
+    await tester.pumpAndSettle();
+    expect(find.text('Appointment booked.'), findsOneWidget);
     expect(find.text('Book appointment'), findsNothing);
+    expectNoAppointmentQr();
     expect(
         requests.where(
-            (r) => r.path == '/me/student-appointments' && r.method == 'POST'),
+            (r) => r.path == '/me/appointment-slots' && r.method == 'GET'),
+        hasLength(1));
+    expect(
+        requests.where(
+            (r) => r.path == '/me/appointments' && r.method == 'POST'),
         hasLength(1));
     expect(
         requests.where(

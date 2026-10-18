@@ -216,10 +216,13 @@ final class BmgUnitProfileTest extends FeatureTestCase
     {
         $c1   = $this->createCategory('Food Scraps');
         $unit = $this->createUnit(['category_ids' => [$c1['id']]]);
+        // An archived category with a retained designation still cannot be erased.
+        db_connect()->table('facilities_waste_categories')->where('tenant_id', 1)
+            ->where('id', $c1['id'])->update(['is_active' => 0]);
 
         $res = $this->authed($this->token(), 'delete', 'api/v1/facilities/waste-categories/' . $c1['id']);
         $res->assertStatus(409);
-        $this->assertErrorCode('resource.conflict', $res);
+        $this->assertErrorCode('archive.references_protected', $res);
 
         // Clearing the drum's designation unlocks the delete.
         $this->postJson('api/v1/facilities/units/' . $unit['data']['id'], ['category_ids' => []]);

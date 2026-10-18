@@ -6,6 +6,7 @@ namespace Modules\Clinic\Controllers;
 
 use App\Controllers\Api\ApiController;
 use App\Exceptions\ApiException;
+use App\Modules\Shared\ArchiveScope;
 use CodeIgniter\HTTP\ResponseInterface;
 use Config\Services;
 use Modules\Clinic\Policies\ClinicPolicy;
@@ -36,6 +37,7 @@ final class EquipmentController extends ApiController
             $limit,
             $q !== '' ? $q : null,
             $archived === '1' || $archived === 'true',
+            ArchiveScope::archivedFlag($this->request->getGet('archived')),
         );
 
         return $this->ok(

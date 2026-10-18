@@ -4,6 +4,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { apiClient } from '@/api/client';
 import type { ApiEnvelopeError } from '@/api/envelope';
+import { useAuthStore } from '@/store/auth';
 
 export interface DashboardCounters {
   clinic?: { open_encounters: number; closed_encounters: number };
@@ -19,8 +20,10 @@ export interface DashboardCounters {
 }
 
 export function useDashboardCounters() {
+  const { userId, accessToken, permissions } = useAuthStore();
   return useQuery<DashboardCounters, ApiEnvelopeError>({
-    queryKey: ['dashboard', 'counters'],
+    queryKey: ['dashboard', 'counters', userId, [...permissions].sort()],
+    enabled: userId !== null && accessToken !== null,
     queryFn: async () => {
       const res = await apiClient.get<DashboardCounters>('/dashboard/counters');
       return res.data;

@@ -1,292 +1,129 @@
-/**
- * DashboardPage — Phase 4 widgets.
- *
- * - Permission-aware quick links to each module (shadcn Cards).
- * - Live counters from the new /dashboard/counters endpoint.
- * - Sign-out.
- */
-import { subMonths } from 'date-fns';
 import { formatInTimeZone } from 'date-fns-tz';
-import {
-  Boxes,
-  CalendarClock,
-  ContactRound,
-  Factory,
-  HeartPulse,
-  MessagesSquare,
-  ScrollText,
-  Share2,
-  Users,
-  type LucideIcon,
-} from 'lucide-react';
-import { useMemo, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
-
-import {
-  Card,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from '@/components/ui/card';
 import { PageHeader } from '@/components/PageHeader';
-import { ClinicAnalyticsView } from '@/components/reports/ClinicAnalyticsView';
-import { useMe } from '@/hooks/useAuth';
+import { BreakdownBarChart, StatusDoughnutChart, TrendLineChart } from '@/components/reports/charts';
+import { Button } from '@/components/ui/button';
+import { Skeleton } from '@/components/ui/skeleton';
 import { useDashboardCounters } from '@/hooks/useDashboard';
-import { useClinicReport } from '@/hooks/useReports';
+import { useWorkstationDashboard } from '@/hooks/useWorkstationDashboard';
+import { WORKSTATIONS, workstationFor } from '@/lib/workstations';
+import WorkstationDashboardPage from '@/pages/WorkstationDashboardPage';
+import type { WorkstationUnit } from '@/schemas/workstationDashboard';
 import { hasPermission, useAuthStore } from '@/store/auth';
+import { parseUtc } from '@/utils/date';
 
-interface Module {
-  /** Permission code gating the module — surfaced via title, not copy. */
-  code: string;
-  label: string;
-  /** Plain-language line for the card (what you'll find inside). */
-  blurb: string;
-  href: string;
-  icon: LucideIcon;
-  /**
-   * Second card line — live counters or the module's term list. Segments
-   * are pipe-divided and each starts capitalized; numbers render bold via
-   * <Count>.
-   */
-  summary: (c: ReturnType<typeof useDashboardCounters>['data']) => ReactNode;
-}
-
-/** One numeric counter inside a module summary line. */
-function Count({ children }: { children: ReactNode }) {
-  return <b className="font-semibold">{children}</b>;
-}
-
-const MODULES: ReadonlyArray<Module> = [
-  {
-    code: 'clinic.encounters.read',
-    label: 'Clinic',
-    blurb: 'Encounters, vitals and treatments',
-    href: '/clinic',
-    icon: HeartPulse,
-    summary: (c) => {
-      const o = c?.clinic?.open_encounters ?? 0;
-      const k = c?.clinic?.closed_encounters ?? 0;
-      return (
-        <>
-          <Count>{o}</Count> Open | <Count>{k}</Count> Closed
-        </>
-      );
-    },
-  },
-  {
-    code: 'counselling.records.read',
-    label: 'Counselling',
-    blurb: 'Guidance sessions and encrypted notes',
-    href: '/counselling',
-    icon: MessagesSquare,
-    summary: (c) => {
-      const o = c?.counselling?.open_sessions ?? 0;
-      const k = c?.counselling?.closed_sessions ?? 0;
-      return (
-        <>
-          <Count>{o}</Count> Open | <Count>{k}</Count> Closed
-        </>
-      );
-    },
-  },
-  {
-    code: 'facilities.units.read',
-    label: 'Facilities',
-    blurb: 'Composting drums and batch tracking',
-    href: '/facilities',
-    icon: Factory,
-    summary: (c) => {
-      const f = c?.facilities;
-      const risk = f?.at_risk ?? 0;
-      return (
-        <>
-          <Count>{f?.units_idle ?? 0}</Count> Idle | <Count>{f?.units_processing ?? 0}</Count> Processing |{' '}
-          <Count>{f?.units_awaiting ?? 0}</Count> Awaiting
-          {risk > 0 && (
-            <> | ⚠ <Count>{risk}</Count> At risk</>
-          )}
-        </>
-      );
-    },
-  },
-  {
-    code: 'clinic.patients.read',
-    label: 'Records',
-    blurb: 'Student and employee registry',
-    href: '/patients',
-    icon: ContactRound,
-    summary: () => 'Students | Employees | Allergies',
-  },
-  {
-    code: 'clinic.inventory.read',
-    label: 'Inventory',
-    blurb: 'Supplies, medicines and stock levels',
-    href: '/inventory',
-    icon: Boxes,
-    summary: () => 'Clinic supplies | Stock transactions',
-  },
-  {
-    code: 'clinic.appointments.read',
-    label: 'Appointments',
-    blurb: 'Scheduling, check-in and visit history',
-    href: '/appointments',
-    icon: CalendarClock,
-    summary: () => 'Scheduling | Check-in | Lifecycle',
-  },
-  {
-    code: 'referrals.read',
-    label: 'Referrals',
-    blurb: 'Clinic ↔ counselling handoffs',
-    href: '/referrals',
-    icon: Share2,
-    summary: (c) => {
-      const r = c?.referrals;
-      return (
-        <>
-          <Count>{r?.submitted ?? 0}</Count> Submitted | <Count>{r?.under_review ?? 0}</Count> In review
-        </>
-      );
-    },
-  },
-  {
-    code: 'audit.read',
-    label: 'Audit',
-    blurb: 'Tamper-evident activity record',
-    href: '/audit',
-    icon: ScrollText,
-    summary: (c) => (
-      <>
-        <Count>{c?.audit?.events_last_24h ?? 0}</Count> Events in 24h
-      </>
-    ),
-  },
-  {
-    code: 'rbac.manage',
-    label: 'Users',
-    blurb: 'Accounts, roles and password resets',
-    href: '/admin/users',
-    icon: Users,
-    summary: () => 'Accounts | Groups | Password resets',
-  },
+const SHORTCUTS = [
+  ...WORKSTATIONS.map(({ label, path, permission }) => ({ label: `${label} workstation`, href: path, permission })),
+  { label: 'Records', href: '/patients', permission: 'clinic.patients.read' },
+  { label: 'Inventory', href: '/inventory', permission: 'clinic.inventory.read' },
+  { label: 'Appointments', href: '/appointments', permission: 'clinic.appointments.read' },
+  { label: 'Referrals', href: '/referrals', permission: 'referrals.read' },
+  { label: 'Audit evidence', href: '/audit', permission: 'audit.read' },
+  { label: 'Users', href: '/admin/users', permission: 'rbac.manage' },
 ];
 
-/**
- * Clinic-role dashboard body: the analytics data visualization replaces
- * the Modules grid so clinic staff see it immediately on login. Uses a
- * trailing ~5-month window so the monthly bar chart is meaningful
- * (matches the clinic-statistics poster's five-month summary).
- */
-function ClinicRoleDashboard() {
-  const range = useMemo(() => {
-    const now = new Date();
-    return {
-      start: formatInTimeZone(subMonths(now, 5), 'Asia/Manila', 'yyyy-MM-dd'),
-      end: formatInTimeZone(now, 'Asia/Manila', 'yyyy-MM-dd'),
-    };
-  }, []);
-  const clinic = useClinicReport(range.start, range.end);
+export default function DashboardPage() {
+  const state = useAuthStore();
+  const accessible = WORKSTATIONS.filter(({ permission }) => hasPermission(state, permission));
+  const workstation = accessible.length === 1 ? accessible[0] : undefined;
+  if (workstation && !hasPermission(state, '*') && !hasPermission(state, 'rbac.manage') && !hasPermission(state, 'rbac.read')) {
+    return <WorkstationDashboardPage unit={workstation.unit} />;
+  }
+  return <DashboardOverview />;
+}
+
+function DashboardOverview() {
+  const state = useAuthStore();
+  const counters = useDashboardCounters();
+  const clinic = useWorkstationDashboard('clinic');
+  const guidance = useWorkstationDashboard('guidance');
+  const facilities = useWorkstationDashboard('facilities');
+  const queries = { clinic, guidance, facilities };
+  const accessible = WORKSTATIONS.filter(({ permission }) => hasPermission(state, permission));
+  const enabledQueries = accessible.map(({ unit }) => queries[unit]).filter((query) => query.enabled);
+  const fetching = counters.isFetching || enabledQueries.some((query) => query.isFetching);
+  const refresh = () => {
+    void counters.refetch();
+    enabledQueries.forEach((query) => { void query.refetch(); });
+  };
+  const c = counters.data;
+  const ownGuidance = !hasPermission(state, 'counselling.records.read_any');
+  const metrics = [
+    { permission: 'clinic.encounters.read', label: 'Open clinic encounters', value: c?.clinic?.open_encounters, description: 'Nonarchived encounters currently open.' },
+    { permission: 'counselling.records.read', label: ownGuidance ? 'Your open guidance sessions' : 'Open guidance sessions', value: c?.counselling?.open_sessions, description: ownGuidance ? 'Only sessions assigned to you.' : 'Nonarchived sessions not yet ended.' },
+    { permission: 'facilities.units.read', label: 'Processing drums', value: c?.facilities?.units_processing, description: 'Drums with a recorded processing lifecycle state.' },
+    { permission: 'facilities.units.read', label: 'At-risk batches', value: c?.facilities?.at_risk, description: 'Active batches with unacknowledged alerts; each batch counted once.' },
+    { permission: 'referrals.read', label: 'Pending referrals', value: c?.referrals ? c.referrals.submitted + c.referrals.acknowledged + c.referrals.under_review : undefined, description: 'Submitted, acknowledged or under review.' },
+    { permission: 'audit.read', label: 'Audit events · 24h', value: c?.audit?.events_last_24h, description: 'Recorded system activity over the last rolling 24 hours.' },
+  ].filter(({ permission }) => hasPermission(state, permission));
 
   return (
-    <ClinicAnalyticsView
-      report={clinic.data}
-      isLoading={clinic.isLoading}
-      isError={clinic.isError}
-      isFetching={clinic.isFetching}
-      onRetry={() => void clinic.refetch()}
-    />
+    <main className="min-w-0 space-y-6 p-4 md:p-6">
+      <PageHeader title="Dashboard" description="System overview · Clinic, Guidance and Facilities" actions={
+        <Button variant="outline" disabled={fetching} onClick={refresh}>{fetching ? 'Refreshing…' : 'Refresh overview'}</Button>
+      } />
+      <section className="border-l-4 border-primary bg-card p-5" aria-labelledby="overview-title">
+        <h2 id="overview-title" className="text-lg font-semibold">University operations at a glance</h2>
+        <p className="mt-1 text-sm text-muted-foreground">Live operational counts and seven-day activity across your accessible subsystems. Dates use Asia/Manila; data refreshes every minute.</p>
+      </section>
+      {counters.isError && <div role="alert" className="flex flex-wrap items-center justify-between gap-3 border border-destructive/40 bg-card p-4 text-sm">
+        <p>{c ? 'Counter refresh failed. Previously loaded counts are still shown.' : 'System counters are unavailable. Missing counts are not shown as zero.'}</p>
+        <Button size="sm" variant="outline" disabled={counters.isFetching} onClick={() => void counters.refetch()}>Retry counters</Button>
+      </div>}
+      <section aria-label="System key metrics" className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
+        {metrics.map((metric) => <article key={metric.label} className="min-w-0 border border-t-2 border-t-primary bg-card p-4 shadow-sm">
+          <h2 className="text-sm font-medium text-muted-foreground">{metric.label}</h2>
+          {counters.isPending ? <Skeleton className="my-2 h-9 w-20" /> : <p className="mt-2 text-3xl font-semibold tabular-nums">{metric.value === undefined ? '—' : metric.value.toLocaleString()}</p>}
+          <p className="mt-2 text-xs leading-relaxed text-muted-foreground">{metric.description}</p>
+        </article>)}
+      </section>
+      {accessible.length > 0 && <section aria-labelledby="activity-title" className="space-y-3">
+        <div>
+          <h2 id="activity-title" className="text-lg font-semibold">Subsystem activity</h2>
+          <p className="text-sm text-muted-foreground">Last seven Manila calendar days, including today. Each subsystem uses its own activity measure.</p>
+        </div>
+        <div className="grid min-w-0 grid-cols-1 items-start gap-4 xl:grid-cols-3">
+          {accessible.map(({ unit }) => <SubsystemOverview key={unit} unit={unit} query={queries[unit]} />)}
+        </div>
+      </section>}
+      {hasPermission(state, 'referrals.read') && <section aria-label="Referral workload">
+        {c?.referrals ? <BreakdownBarChart title="Referral workflow" subtitle="Nonarchived referrals by current status; all-time records in your tenant." horizontal height={240} unit="referrals" items={[
+          { label: 'Submitted', value: c.referrals.submitted },
+          { label: 'Acknowledged', value: c.referrals.acknowledged },
+          { label: 'Under review', value: c.referrals.under_review },
+          { label: 'Closed', value: c.referrals.closed },
+        ]} /> : counters.isPending ? <Skeleton className="h-72 w-full" /> : <p className="border bg-card p-4 text-sm text-muted-foreground">Referral visualization unavailable.</p>}
+      </section>}
+      {accessible.length === 0 && metrics.length === 0 && <p className="border bg-card p-4 text-sm text-muted-foreground">No system metrics are available for your current permissions.</p>}
+      <details className="border bg-card p-4">
+        <summary className="cursor-pointer text-sm font-semibold">Module shortcuts</summary>
+        <nav aria-label="Module shortcuts" className="mt-3 flex flex-wrap gap-2">
+          {SHORTCUTS.filter(({ permission }) => hasPermission(state, permission)).map(({ href, label }) => <Button key={href} asChild size="sm" variant="outline"><Link to={href}>{label}</Link></Button>)}
+        </nav>
+      </details>
+    </main>
   );
 }
 
-export default function DashboardPage() {
-  const { data, isLoading } = useMe();
-  const counters = useDashboardCounters();
-  const perms = useAuthStore((s) => s.permissions);
-
-  if (isLoading) {
-    return <p className="p-6 text-sm text-muted-foreground">Loading session…</p>;
-  }
-
-  // Clinic role (has clinic.encounters.read but NOT the admin wildcard)
-  // gets the analytics dashboard directly — the Modules grid is hidden.
-  const isClinicRole = hasPermission({ permissions: perms } as never, 'clinic.encounters.read')
-    && !hasPermission({ permissions: perms } as never, '*');
-
-  if (isClinicRole) {
-    return (
-      <main className="space-y-6 p-4 md:p-6">
-        <PageHeader
-          title="Dashboard"
-          description={
-            <>
-              Signed in as {data?.email ?? 'unknown'} — Asia/Manila
-            </>
-          }
-        />
-        <ClinicRoleDashboard />
-      </main>
-    );
-  }
-
-  const visible = MODULES.filter((m) => hasPermission({ permissions: perms } as never, m.code));
-
-  return (
-    <main className="space-y-6 p-4 md:p-6">
-      <PageHeader
-        title="Dashboard"
-        description={
-          <>
-            Signed in as {data?.email ?? 'unknown'} — Asia/Manila
-          </>
-        }
-      />
-
-      {/* Identity coverage removed (2026-08-05): it tracked the legacy
-          manual user↔patient linking rollout, which is gone after the
-          identity-consolidation work. The Modules grid below is now the
-          dashboard's only body. */}
-
-      <section aria-labelledby="modules-title">
-        <h2 id="modules-title" className="text-lg font-semibold text-foreground">
-          Modules
-        </h2>
-        <ul className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {visible.map((m) => (
-            <li key={m.code}>
-              {/* Client-side navigation — an <a href> full reload would
-                  drop the in-memory access token (never in localStorage). */}
-              <Link to={m.href} className="group block touch-manipulation rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-                <Card className="relative overflow-hidden transition-colors hover:border-primary/50 group-active:border-primary/50">
-                  {/* Upper-right sheen — theme-aware (black/white), hover-only. */}
-                  <span
-                    aria-hidden
-                    className="pointer-events-none absolute inset-0 bg-radial-[circle_at_top_right] from-foreground/10 via-transparent via-40% to-transparent opacity-0 transition-opacity duration-200 group-hover:opacity-100"
-                  />
-                  <CardHeader className="p-4">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0 space-y-1">
-                        <CardTitle className="text-sm">{m.label}</CardTitle>
-                        <CardDescription className="text-xs">{m.summary(counters.data)}</CardDescription>
-                        <p className="pt-1 text-xs text-muted-foreground" title={m.code}>
-                          {m.blurb}
-                        </p>
-                      </div>
-                      <m.icon
-                        className="size-5 shrink-0 text-foreground transition-transform duration-200 group-hover:-rotate-12"
-                        aria-hidden
-                      />
-                    </div>
-                  </CardHeader>
-                </Card>
-              </Link>
-            </li>
-          ))}
-        </ul>
-        {counters.isError && (
-          <p role="alert" className="mt-2 text-xs text-destructive">
-            Counters unavailable. Page functionality is unaffected.
-          </p>
-        )}
-      </section>
-    </main>
-  );
+function SubsystemOverview({ unit, query }: { unit: WorkstationUnit; query: ReturnType<typeof useWorkstationDashboard> }) {
+  const definition = workstationFor(unit);
+  const data = query.enabled ? query.data : undefined;
+  const loading = query.enabled && query.isPending;
+  const own = data?.scope === 'own';
+  const total = data?.breakdown.items.reduce((sum, item) => sum + item.value, 0) ?? 0;
+  return <article className="min-w-0 space-y-3" aria-label={`${definition.label} analytics`}>
+    <div className="flex flex-wrap items-center justify-between gap-2">
+      <h3 className="font-semibold">{definition.label}</h3>
+      <Link to={definition.path} className="text-xs text-primary underline-offset-4 hover:underline">Open workstation</Link>
+    </div>
+    {data && <p className="text-xs text-muted-foreground">Snapshot: {formatInTimeZone(parseUtc(data.generated_at), 'Asia/Manila', 'MMM d, h:mm a')} · Manila{own ? ' · Your sessions only' : ''}</p>}
+    {query.isError && <div role="alert" className="space-y-2 border border-destructive/40 bg-card p-4 text-sm">
+      <p>{data ? `${definition.label} refresh failed; the previous snapshot is shown.` : `${definition.label} analytics could not be loaded.`}</p>
+      <Button size="sm" variant="outline" disabled={query.isFetching} onClick={() => void query.refetch()}>Retry {definition.label.toLowerCase()}</Button>
+    </div>}
+    {(loading || data) && <>
+      <TrendLineChart title={`${definition.label} · ${data?.trend.title ?? 'activity'}`} subtitle={`${own ? 'Your sessions only. ' : ''}${data?.trend.description ?? 'Loading seven-day activity…'}`} unit={definition.activityUnit} points={data?.trend.points ?? []} loading={loading} area height={240} />
+      <StatusDoughnutChart title={`${definition.label} · ${data?.breakdown.title ?? 'breakdown'}`} subtitle={`${own ? 'Your sessions only. ' : ''}${data?.breakdown.description ?? 'Loading recorded states…'}`} items={data?.breakdown.items ?? []} centerValue={data ? total.toLocaleString() : '—'} centerLabel="Recorded" loading={loading} height={260} />
+    </>}
+  </article>;
 }

@@ -4,10 +4,10 @@
  * returns an opaque `next` cursor per page; walking forward pushes it
  * onto a history stack so Prev can pop back to the previous cursor.
  *
- * The hook owns the reset-on-search behavior: whenever `query` (the
- * debounced search text) changes, pagination snaps back to page 1.
- * Call `reset()` when some OTHER filter changes (archived toggle,
- * status filter, low-stock chip) for the same snap-back.
+ * Whenever `query` (a stable primitive search/filter key) changes,
+ * pagination snaps back to page 1 before any old cursor can be sent.
+ * Combine active URL filters in this key, e.g. JSON.stringify([q, archived]).
+ * `reset()` also supports explicit action-driven resets.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 
@@ -22,7 +22,10 @@ export function useKeysetPagination(query: string): {
   const [history, setHistory] = useState<Array<string | null>>([null]);
 
   // Reset to the first page whenever the debounced search changes.
-  const lastQueryRef = useRef<string>('');
+  const lastQueryRef = useRef(query);
+  // Do not send a cursor from the old slice during the render before the
+  // reset effect runs (including URL Back/Forward navigation).
+  const filtersChanged = query !== lastQueryRef.current;
   useEffect(() => {
     if (query !== lastQueryRef.current) {
       lastQueryRef.current = query;
@@ -51,5 +54,9 @@ export function useKeysetPagination(query: string): {
     setHistory([null]);
   }, []);
 
-  return { cursor, history, nextPage, prevPage, reset };
+  return {
+    cursor: filtersChanged ? null : cursor,
+    history: filtersChanged ? [null] : history,
+    nextPage, prevPage, reset,
+  };
 }

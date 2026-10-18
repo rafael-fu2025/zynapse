@@ -1,8 +1,12 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:hugeicons/hugeicons.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/api/api_envelope.dart';
+import '../../core/models/carousel_slide.dart';
+import '../../core/services/api_service.dart';
 import '../../core/services/auth_controller.dart';
 
 /// Login screen — mirrors `frontend/src/pages/LoginPage.tsx`.
@@ -22,11 +26,46 @@ class _LoginScreenState extends State<LoginScreen> {
   final _formKey = GlobalKey<FormState>();
   final _identifierController = TextEditingController();
   final _passwordController = TextEditingController();
+  final _pageController = PageController();
+  List<CarouselSlide> _slides = const [];
+  int _slideIndex = 0;
+  Timer? _carouselTimer;
   bool _obscure = true;
   String? _error;
 
   @override
+  void initState() {
+    super.initState();
+    _loadSlides();
+  }
+
+  /// Public, unauthenticated slides. Any failure keeps the static login
+  /// art — the login form must never depend on this request.
+  Future<void> _loadSlides() async {
+    try {
+      final slides = await ApiService.I.carouselSlides();
+      if (!mounted || slides.isEmpty) return;
+      setState(() => _slides = slides);
+      if (slides.length > 1) {
+        _carouselTimer = Timer.periodic(const Duration(seconds: 5), (_) {
+          if (!mounted || !_pageController.hasClients) return;
+          final next = (_slideIndex + 1) % _slides.length;
+          _pageController.animateToPage(
+            next,
+            duration: const Duration(milliseconds: 350),
+            curve: Curves.easeOut,
+          );
+        });
+      }
+    } catch (_) {
+      // Static logo fallback.
+    }
+  }
+
+  @override
   void dispose() {
+    _carouselTimer?.cancel();
+    _pageController.dispose();
     _identifierController.dispose();
     _passwordController.dispose();
     super.dispose();
@@ -37,6 +76,7 @@ class _LoginScreenState extends State<LoginScreen> {
     if (!_formKey.currentState!.validate()) return;
 
     final auth = context.read<AuthController>();
+    auth.clearSessionNotice();
     try {
       await auth.login(_identifierController.text, _passwordController.text);
       // RootGate rebuilds on AuthController notify -> navigates to HomeShell.
@@ -89,6 +129,46 @@ class _LoginScreenState extends State<LoginScreen> {
                   textAlign: TextAlign.center,
                   style: TextStyle(color: Colors.black54, fontSize: 14),
                 ),
+                if (_slides.isNotEmpty) ...[
+                  const SizedBox(height: 20),
+                  _LoginCarousel(
+                    slides: _slides,
+                    controller: _pageController,
+                    index: _slideIndex,
+                    onChanged: (index) =>
+                        setState(() => _slideIndex = index),
+                  ),
+                ],
+                if (auth.sessionNotice != null) ...[
+                  const SizedBox(height: 20),
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFFF4E5),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: const Color(0xFFF0D9B5)),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(
+                          Icons.info_outline,
+                          size: 18,
+                          color: Color(0xFF8A5A00),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            auth.sessionNotice!,
+                            style: const TextStyle(
+                              color: Color(0xFF8A5A00),
+                              fontSize: 13,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
                 const SizedBox(height: 40),
                 Form(
                   key: _formKey,
@@ -193,6 +273,149 @@ class _LoginScreenState extends State<LoginScreen> {
               ],
             ),
           ),
+        ),
+      ),
+    );
+  }
+}
+
+class _LoginCarousel extends StatelessWidget {
+  const _LoginCarousel({
+    required this.slides,
+    required this.controller,
+    required this.index,
+    required this.onChanged,
+  });
+
+  final List<CarouselSlide> slides;
+  final PageController controller;
+  final int index;
+  final ValueChanged<int> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        SizedBox(
+          height: 150,
+          child: PageView.builder(
+            controller: controller,
+            itemCount: slides.length,
+            onPageChanged: onChanged,
+            itemBuilder: (context, i) {
+              final slide = slides[i];
+              return ClipRRect(
+                borderRadius: BorderRadius.circular(16),
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    if (slide.fitMode == 'contain_blur') ...[
+                      Image.network(
+                        slide.imageUrl,
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, __, ___) => _fallbackArt(),
+                      ),
+                      const ColoredBox(color: Colors.black45),
+                      Center(
+                        child: Image.network(
+                          slide.imageUrl,
+                          fit: BoxFit.contain,
+                          errorBuilder: (_, __, ___) => _fallbackArt(),
+                        ),
+                      ),
+                    ] else
+                      Image.network(
+                        slide.imageUrl,
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, __, ___) => _fallbackArt(),
+                      ),
+                    const DecoratedBox(
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.topCenter,
+                          end: Alignment.bottomCenter,
+                          colors: [Colors.transparent, Colors.black54],
+                        ),
+                      ),
+                    ),
+                    if ((slide.title ?? '').isNotEmpty ||
+                        (slide.subtitle ?? '').isNotEmpty)
+                      Positioned(
+                        left: 14,
+                        right: 14,
+                        bottom: 12,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            if ((slide.title ?? '').isNotEmpty)
+                              Text(
+                                slide.title!,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                            if ((slide.subtitle ?? '').isNotEmpty)
+                              Text(
+                                slide.subtitle!,
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  color: Colors.white70,
+                                  fontSize: 11.5,
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                  ],
+                ),
+              );
+            },
+          ),
+        ),
+        if (slides.length > 1) ...[
+          const SizedBox(height: 8),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              for (var i = 0; i < slides.length; i++)
+                Container(
+                  width: i == index ? 16 : 6,
+                  height: 6,
+                  margin: const EdgeInsets.symmetric(horizontal: 2),
+                  decoration: BoxDecoration(
+                    color: i == index
+                        ? const Color(0xFF800000)
+                        : const Color(0xFFD6D3D1),
+                    borderRadius: BorderRadius.circular(3),
+                  ),
+                ),
+            ],
+          ),
+        ],
+      ],
+    );
+  }
+
+  Widget _fallbackArt() {
+    return Container(
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [Color(0xFFAC1E37), Color(0xFF751020)],
+        ),
+      ),
+      child: const Center(
+        child: Icon(
+          Icons.local_hospital_outlined,
+          color: Colors.white54,
+          size: 34,
         ),
       ),
     );

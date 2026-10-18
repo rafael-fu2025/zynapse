@@ -15,6 +15,7 @@ import { MobileCardList, MobileCard, MobileCardField, MobileCardActions } from '
 import { TableStateRows } from '@/components/TableStates';
 import { SearchBox, highlightMatch } from '@/components/ui/SearchBox';
 import { Button } from '@/components/ui/button';
+import { PermanentDeleteAction } from '@/components/PermanentDeleteAction';
 import { Dialog } from '@/components/ui/dialog';
 import {
   DropdownMenu,
@@ -58,7 +59,7 @@ export function EquipmentTab() {
   const [q, setQ, qDraft] = useUrlFilter('q', { debounceMs: 300 });
   const [showArchivedRaw, setShowArchived] = useUrlFilter('archived', { default: '' });
   const showArchived = showArchivedRaw === '1';
-  const { cursor, history, nextPage, prevPage, reset } = useKeysetPagination(q);
+  const { cursor, history, nextPage, prevPage, reset } = useKeysetPagination(JSON.stringify([q, showArchived]));
   const list = useEquipmentItems(cursor, 25, q === '' ? null : q, showArchived);
   const archive = useArchiveEquipment();
   const unarchive = useUnarchiveEquipment();
@@ -82,12 +83,15 @@ export function EquipmentTab() {
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-44">
         {it.archived ? (
-          <DropdownMenuItem
-            disabled={unarchive.isPending}
-            onSelect={() => unarchive.mutate(it.id)}
-          >
-            <ArchiveRestore /> {unarchive.isPending ? 'Restoring…' : 'Restore'}
-          </DropdownMenuItem>
+          <>
+            <DropdownMenuItem
+              disabled={unarchive.isPending}
+              onSelect={() => unarchive.mutate(it.id)}
+            >
+              <ArchiveRestore /> {unarchive.isPending ? 'Restoring…' : 'Restore'}
+            </DropdownMenuItem>
+            <PermanentDeleteAction resource="equipment" id={it.id} label={it.name} presentation="menuitem" />
+          </>
         ) : (
           <>
             <DropdownMenuItem onSelect={() => setUnitsItem(it)}>
@@ -152,7 +156,7 @@ export function EquipmentTab() {
         </div>
       </section>
 
-      <section className="hidden overflow-hidden rounded-xl border bg-card md:block md:min-h-0 md:flex-1">
+      <section className="hidden overflow-hidden border bg-card md:block md:min-h-0 md:flex-1">
         <Table
           ariaLabel="Equipment items with location and unit counts"
           wrapperClassName="h-full overflow-y-auto"
@@ -253,14 +257,14 @@ export function EquipmentTab() {
       <nav className="flex items-center justify-between md:shrink-0" aria-label="pagination">
         <p className="text-xs text-muted-foreground">Page {history.length} · {rows.length} unit{rows.length === 1 ? '' : 's'} shown</p>
         <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={prevPage} disabled={history.length < 2}>
+          <Button variant="outline" size="sm" onClick={prevPage} disabled={list.isFetching || history.length < 2}>
             <ChevronLeft /> Prev
           </Button>
           <Button
             variant="outline"
             size="sm"
             onClick={() => nextPage(list.data?.next)}
-            disabled={list.data?.next === null || list.data?.next === undefined}
+            disabled={list.isFetching || list.isPlaceholderData || list.data?.next == null}
           >
             Next <ChevronRight />
           </Button>

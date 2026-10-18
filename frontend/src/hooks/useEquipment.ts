@@ -1,10 +1,10 @@
 /**
  * Equipment hooks — catalog list/detail + unit status changes.
  */
-import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { z } from 'zod';
 import { toast } from 'sonner';
-import { apiClient } from '@/api/client';
+import { apiClient, getNextCursor } from '@/api/client';
 import type { ApiEnvelopeError } from '@/api/envelope';
 import {
   addEquipmentUnitsSchema,
@@ -30,10 +30,10 @@ export function useEquipmentItems(
   cursor: string | null,
   limit = 25,
   q: string | null = null,
-  includeArchived = false,
+  showArchived = false,
 ) {
   return useQuery<EquipmentPage, ApiEnvelopeError>({
-    queryKey: ['equipment', 'items', { cursor, limit, q, includeArchived }],
+    queryKey: ['equipment', 'items', { cursor, limit, q, showArchived }],
     // Status counts are current state — poll so the chips stay honest
     // without a manual refresh (mirrors the supplies list).
     refetchInterval: 60_000,
@@ -42,14 +42,13 @@ export function useEquipmentItems(
       if (cursor !== null) params.set('cursor', cursor);
       params.set('limit', String(limit));
       if (q !== null && q.trim() !== '') params.set('q', q.trim());
-      if (includeArchived) params.set('include_archived', '1');
-      const res = await apiClient.get<{ data: unknown[]; next: string | null }>(
+      params.set('archived', showArchived ? '1' : '0');
+      const res = await apiClient.get<unknown[]>(
         `/clinic/equipment?${params.toString()}`,
       );
       const data = z.array(equipmentItemSchema).parse(res.data);
-      return { data, next: res.data?.next ?? null };
+      return { data, next: getNextCursor(res) };
     },
-    placeholderData: keepPreviousData,
   });
 }
 

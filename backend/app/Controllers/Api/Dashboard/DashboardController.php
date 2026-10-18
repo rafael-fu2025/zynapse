@@ -18,6 +18,28 @@ use Config\Services;
  */
 final class DashboardController extends ApiController
 {
+    public function clinic(): ResponseInterface
+    {
+        return $this->workstation('clinic');
+    }
+
+    public function guidance(): ResponseInterface
+    {
+        return $this->workstation('guidance');
+    }
+
+    public function facilities(): ResponseInterface
+    {
+        return $this->workstation('facilities');
+    }
+
+    private function workstation(string $unit): ResponseInterface
+    {
+        $data = (new \App\Services\WorkstationDashboardService(Services::database(), $this->permissions))
+            ->dashboard($unit, \App\Auth\CurrentUser::assert());
+        return $this->ok($data)->setHeader('Cache-Control', 'private, no-store');
+    }
+
     public function counters(): ResponseInterface
     {
         $user = \App\Auth\CurrentUser::assert();
@@ -28,15 +50,6 @@ final class DashboardController extends ApiController
         $facilitiesPerm  = $this->permissions->userHas($user, 'facilities.units.read');
         $referralsPerm   = $this->permissions->userHas($user, 'referrals.read');
         $auditPerm       = $this->permissions->userHas($user, 'audit.read');
-
-        $permSignature = ((int) $clinicPerm) . ':' . ((int) $counsellingPerm) . ':' . ((int) $facilitiesPerm) . ':' . ((int) $referralsPerm) . ':' . ((int) $auditPerm);
-        $cacheKey      = 'dashboard_counters_t' . $tenantId . '_' . md5($permSignature);
-
-        $cache = Services::cache();
-        $cached = $cache->get($cacheKey);
-        if (is_array($cached)) {
-            return $this->ok($cached);
-        }
 
         $out = [];
         $db = Services::database();
@@ -49,21 +62,31 @@ final class DashboardController extends ApiController
         }
 
         if ($counsellingPerm) {
+            $sessionQuery = static function () use ($db, $tenantId, $user): \CodeIgniter\Database\BaseBuilder {
+                $q = $db->table('counselling_sessions')->where('tenant_id', $tenantId)->where('archived_at', null);
+                if (! Services::permissionService()->userHas($user, 'counselling.records.read_any')) {
+                    $q->where('counsellor_user_id', $user);
+                }
+                return $q;
+            };
             $out['counselling'] = [
-                'open_sessions'   => (int) $db->table('counselling_sessions')->where('tenant_id', $tenantId)->where('ended_at', null)->where('archived_at', null)->countAllResults(),
-                'closed_sessions' => (int) $db->table('counselling_sessions')->where('tenant_id', $tenantId)->where('ended_at !=', null)->where('archived_at', null)->countAllResults(),
+                'open_sessions'   => (int) $sessionQuery()->where('ended_at', null)->countAllResults(),
+                'closed_sessions' => (int) $sessionQuery()->where('ended_at !=', null)->countAllResults(),
             ];
         }
 
         if ($facilitiesPerm) {
             $out['facilities'] = [
-                'units_idle'      => (int) $db->table('facilities_bmg_units')->where('status', 'idle')->where('archived_at', null)->countAllResults(),
-                'units_processing'=> (int) $db->table('facilities_bmg_units')->where('status', 'processing')->where('archived_at', null)->countAllResults(),
-                'units_awaiting'  => (int) $db->table('facilities_bmg_units')->where('status', 'awaiting_output')->where('archived_at', null)->countAllResults(),
-                // Audit #3: global at-risk count — unacknowledged alerts on
-                // live batches (dashboard "at-risk batches" widget).
+                'units_idle'      => (int) $db->table('facilities_bmg_units')->where('tenant_id', $tenantId)->where('status', 'idle')->where('archived_at', null)->countAllResults(),
+                'units_processing'=> (int) $db->table('facilities_bmg_units')->where('tenant_id', $tenantId)->where('status', 'processing')->where('archived_at', null)->countAllResults(),
+                'units_awaiting'  => (int) $db->table('facilities_bmg_units')->where('tenant_id', $tenantId)->where('status', 'awaiting_output')->where('archived_at', null)->countAllResults(),
+                // Count distinct live batches, not the number of outstanding alerts.
                 'at_risk'         => (int) $db->table('facilities_bmg_alerts AS a')
-                    ->join('facilities_bmg_batches AS b', 'b.id = a.batch_id')
+                    ->join('facilities_bmg_batches AS b', 'b.id = a.batch_id AND b.tenant_id = a.tenant_id')
+                    ->join('facilities_bmg_units AS u', 'u.id = b.unit_id AND u.tenant_id = b.tenant_id')
+                    ->select('b.id')->distinct()
+                    ->where('b.tenant_id', $tenantId)->where('b.archived_at', null)
+                    ->where('u.tenant_id', $tenantId)->where('u.archived_at', null)
                     ->where('a.tenant_id', $tenantId)
                     ->where('a.acknowledged_at', null)
                     ->whereIn('b.status', ['processing', 'awaiting_output'])
@@ -89,9 +112,7 @@ final class DashboardController extends ApiController
             ];
         }
 
-        $cache->save($cacheKey, $out, 30);
-
-        return $this->ok($out);
+        return $this->ok($out)->setHeader('Cache-Control', 'private, no-store');
     }
 
     /** For callers that prefer a single permission probe. */

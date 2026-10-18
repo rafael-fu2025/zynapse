@@ -25,6 +25,8 @@ import {
   type UpdateSlotInput,
 } from '@/schemas/schedule';
 import { fmtHumanDate } from '@/utils/date';
+import { schedulingStaffError, useInvalidateSchedulingStaff } from '@/hooks/useSchedulingStaff';
+import { schedulingProviderSchema } from '@/schemas/schedulingStaff';
 
 /**
  * Availability windows. `enabled` lets the Counselling page hold the request
@@ -43,7 +45,7 @@ export function useAvailability({ enabled = true }: { enabled?: boolean } = {}) 
 }
 
 export function useCounsellors() {
-  return useQuery({ queryKey: ['schedule','counsellors'], queryFn: async () => z.array(z.object({ id:z.number(),name:z.string() })).parse((await apiClient.get('/counselling/counsellors')).data) });
+  return useQuery({ queryKey: ['schedule','counsellors'], queryFn: async () => z.array(schedulingProviderSchema).parse((await apiClient.get('/counselling/counsellors')).data) });
 }
 
 /**
@@ -52,7 +54,7 @@ export function useCounsellors() {
  * rather than claiming a single window.
  */
 export function useAddSlot() {
-  const qc = useQueryClient();
+  const invalidate = useInvalidateSchedulingStaff();
   return useMutation<{ id: number; ids: number[] }, ApiEnvelopeError, AddSlotInput>({
     mutationFn: async (input) => {
       const valid = addSlotSchema.parse(input);
@@ -63,12 +65,12 @@ export function useAddSlot() {
       return { id: parsed.id, ids: parsed.ids ?? [parsed.id] };
     },
     onSuccess: (result) => {
-      void qc.invalidateQueries({ queryKey: ['schedule', 'availability'] });
+      void invalidate();
       const n = result.ids.length;
       toast.success(n === 1 ? 'Availability window added.' : `${n} availability windows added.`);
     },
     onError: (err) => {
-      toast.error(err.errors[0]?.message ?? 'Failed to add window.');
+      toast.error(schedulingStaffError(err));
     },
   });
 }
@@ -86,7 +88,7 @@ export function useAddSlot() {
  * rather than leave the desk looking at rows that already changed.
  */
 export function useUpdateSlot() {
-  const qc = useQueryClient();
+  const invalidate = useInvalidateSchedulingStaff();
   return useMutation<Availability[], ApiEnvelopeError, { ids: number[]; input: UpdateSlotInput }>({
     mutationFn: async ({ ids, input }) => {
       const valid = updateSlotSchema.parse(input);
@@ -105,26 +107,24 @@ export function useUpdateSlot() {
       );
     },
     onError: (err) => {
-      toast.error(err.errors[0]?.message ?? 'Failed to update window.');
+      toast.error(schedulingStaffError(err));
     },
-    onSettled: () => {
-      void qc.invalidateQueries({ queryKey: ['schedule', 'availability'] });
-    },
+    onSettled: invalidate,
   });
 }
 
 export function useRemoveSlot() {
-  const qc = useQueryClient();
+  const invalidate = useInvalidateSchedulingStaff();
   return useMutation<void, ApiEnvelopeError, number>({
     mutationFn: async (id) => {
       await apiClient.post(`/counselling/availability/${id}/remove`, {});
     },
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ['schedule', 'availability'] });
+      void invalidate();
       toast.success('Availability window removed.');
     },
     onError: (err) => {
-      toast.error(err.errors[0]?.message ?? 'Failed to remove window.');
+      toast.error(schedulingStaffError(err));
     },
   });
 }

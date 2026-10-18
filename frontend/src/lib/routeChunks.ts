@@ -16,6 +16,7 @@
  *     both the sidebar and the command palette consume.
  */
 import { lazyWithRetry } from '@/lib/lazy';
+import { WORKSTATIONS } from '@/lib/workstations';
 
 type LazyComponent = ReturnType<typeof lazyWithRetry>;
 type ChunkLoader = () => Promise<{ default: unknown }>;
@@ -39,6 +40,7 @@ function route(path: string, importer: ChunkLoader): RouteEntry {
 
 export const ROUTE_CHUNKS: ReadonlyArray<RouteEntry> = [
   route('/', () => import('@/pages/DashboardPage')),
+  ...WORKSTATIONS.map(({ path }) => route(path, () => import('@/pages/WorkstationDashboardPage'))),
   route('/change-password', () => import('@/pages/ChangePasswordPage')),
   route('/me', () => import('@/pages/EmployeePortalPage')),
   route('/clinic', () => import('@/pages/ClinicPage')),

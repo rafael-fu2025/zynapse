@@ -26,11 +26,23 @@ class AuthController extends ChangeNotifier {
   Session? _session;
   bool _booting = true;
   bool _busy = false;
+  String? _sessionNotice;
 
   Session? get session => _session;
   bool get isLoggedIn => _session != null;
   bool get isBooting => _booting;
   bool get isBusy => _busy;
+
+  /// A one-line message shown on the login screen after the server-side
+  /// session ended (12h absolute lifetime, password change, or a deploy
+  /// that revoked pre-existing refresh tokens).
+  String? get sessionNotice => _sessionNotice;
+
+  void clearSessionNotice() {
+    if (_sessionNotice == null) return;
+    _sessionNotice = null;
+    notifyListeners();
+  }
 
   /// Restores a persisted session at app start.
   Future<Session?> bootstrap() async {
@@ -58,6 +70,8 @@ class AuthController extends ChangeNotifier {
         final refreshed = await ApiClient.I.refreshAccessToken();
         if (!refreshed) {
           _session = null;
+          _sessionNotice =
+              'Your session expired. Please sign in again.';
           return null;
         }
       }
@@ -66,11 +80,13 @@ class AuthController extends ChangeNotifier {
         final data = res.data?['data'];
         if (data is Map<String, dynamic>) {
           _session = Session.fromJson(data);
+          _sessionNotice = null;
         }
       } catch (e) {
         // Token expired and refresh failed -> stay logged out.
         if (kDebugMode) debugPrint('AuthController.bootstrap failed: $e');
         _session = null;
+        _sessionNotice = 'Your session expired. Please sign in again.';
       }
       return _session;
     } finally {
@@ -128,6 +144,7 @@ class AuthController extends ChangeNotifier {
         ]);
       }
       _session = Session.fromJson(meData);
+      _sessionNotice = null;
       return _session!;
     } finally {
       _busy = false;
@@ -147,6 +164,7 @@ class AuthController extends ChangeNotifier {
     await ApiClient.I.setAccessToken(null);
     await ApiClient.I.clearRefreshCookie();
     _session = null;
+    _sessionNotice = null;
     notifyListeners();
   }
 
@@ -182,6 +200,7 @@ class AuthController extends ChangeNotifier {
   void _expireSession() {
     if (_session != null) {
       _session = null;
+      _sessionNotice = 'Your session expired. Please sign in again.';
       notifyListeners();
     }
   }

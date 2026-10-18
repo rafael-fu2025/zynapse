@@ -32,6 +32,7 @@ export const announcementSchema = z.object({
   unpublish_at: z.string().nullable(),
   created_at: z.string(),
   updated_at: z.string(),
+  archived_at: z.string().nullable(),
   status: announcementStatusSchema,
 });
 export type GuidanceAnnouncement = z.infer<typeof announcementSchema>;
@@ -45,6 +46,7 @@ export const guidanceServiceSchema = z.object({
   sort_order: z.number().int().nonnegative(),
   queue_destination: z.enum(['clinic', 'counselling']).nullable(),
   is_active: z.boolean(),
+  archived_at: z.string().nullable(),
   created_at: z.string(),
 });
 export type GuidanceService = z.infer<typeof guidanceServiceSchema>;

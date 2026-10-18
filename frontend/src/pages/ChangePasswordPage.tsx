@@ -9,7 +9,7 @@
  * form is replaced by a pointer to the university helpdesk.
  */
 import { zodResolver } from '@hookform/resolvers/zod';
-import { KeyRound, Loader2, TriangleAlert } from 'lucide-react';
+import { Loader2, TriangleAlert } from 'lucide-react';
 import { useForm } from 'react-hook-form';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { PageHeader } from '@/components/PageHeader';
@@ -35,11 +35,7 @@ export default function ChangePasswordPage() {
     return (
       <main className="mx-auto max-w-md space-y-4 p-6">
         <PageHeader
-          title={
-            <span className="flex items-center gap-2">
-              <KeyRound className="size-5" /> Change password
-            </span>
-          }
+          title="Change password"
         />
         <Card>
           <CardContent className="space-y-2 pt-6 text-sm text-muted-foreground">
@@ -57,11 +53,7 @@ export default function ChangePasswordPage() {
   return (
     <main className="mx-auto max-w-md space-y-4 p-6">
       <PageHeader
-        title={
-          <span className="flex items-center gap-2">
-            <KeyRound className="size-5" /> Change password
-          </span>
-        }
+        title="Change password"
         description={me.data?.force_reset === true ? undefined : 'Changing your password signs out every other session.'}
       />
 

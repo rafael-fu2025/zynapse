@@ -1,10 +1,10 @@
 /**
  * Inventory hooks — items list + create + stock movements.
  */
-import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { z } from 'zod';
 import { toast } from 'sonner';
-import { apiClient } from '@/api/client';
+import { apiClient, getNextCursor } from '@/api/client';
 import type { ApiEnvelopeError } from '@/api/envelope';
 import {
   createItemSchema,
@@ -28,11 +28,11 @@ export function useInventoryItems(
   cursor: string | null,
   limit = 25,
   q: string | null = null,
-  includeArchived = false,
+  showArchived = false,
   lowStockOnly = false,
 ) {
   return useQuery<ItemPage, ApiEnvelopeError>({
-    queryKey: ['inventory', 'items', { cursor, limit, q, includeArchived, lowStockOnly }],
+    queryKey: ['inventory', 'items', { cursor, limit, q, showArchived, lowStockOnly }],
     // Stock moves from reorder receipts handled in other sessions; poll
     // so balances stay current without a manual refresh.
     refetchInterval: 60_000,
@@ -41,18 +41,15 @@ export function useInventoryItems(
       if (cursor !== null) params.set('cursor', cursor);
       params.set('limit', String(limit));
       if (q !== null && q.trim() !== '') params.set('q', q.trim());
-      if (includeArchived) params.set('include_archived', '1');
+      params.set('archived', showArchived ? '1' : '0');
       if (lowStockOnly) params.set('low_stock', '1');
-      const res = await apiClient.get<{ data: unknown[]; next: string | null }>(
+      const res = await apiClient.get<unknown[]>(
         `/clinic/inventory?${params.toString()}`,
       );
       const data = z.array(inventoryItemSchema).parse(res.data);
-      return { data, next: res.data?.next ?? null };
+      return { data, next: getNextCursor(res) };
     },
-    // Keep the previous page visible while the next one is in-flight so
-    // typing in the search box doesn't flash an empty state between
-    // keystrokes.
-    placeholderData: keepPreviousData,
+
   });
 }
 

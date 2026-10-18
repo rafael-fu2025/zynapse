@@ -45,18 +45,21 @@ final class GuidanceContentService extends BaseService
     // -----------------------------------------------------------------
 
     /**
-     * Staff list — everything non-archived, with the derived publish
-     * status so the UI can show draft / scheduled / live / expired.
-     *
      * @return array<int, array<string, mixed>>
      */
-    public function listAnnouncements(): array
+    public function listAnnouncements(bool $showArchived = false): array
     {
-        $rows = $this->db->table('guidance_announcements a')
+        $query = $this->db->table('guidance_announcements a')
             ->select('a.*')
-            ->where('a.tenant_id', CurrentTenant::id())
-            ->where('a.archived_at', null)
-            ->orderBy('a.created_at', 'DESC')
+            ->where('a.tenant_id', CurrentTenant::id());
+
+        if ($showArchived) {
+            $query->where('a.archived_at IS NOT NULL');
+        } else {
+            $query->where('a.archived_at', null);
+        }
+
+        $rows = $query->orderBy('a.created_at', 'DESC')
             ->get()->getResultArray();
 
         return array_map(fn (array $r): array => $this->hydrateAnnouncement($r), $rows);
@@ -129,10 +132,13 @@ final class GuidanceContentService extends BaseService
 
         return $this->txn(function () use ($id, $actorId): array {
             $row = $this->selectForUpdate('guidance_announcements', [
-                'id' => $id, 'tenant_id' => CurrentTenant::id(), 'archived_at' => null,
+                'id' => $id, 'tenant_id' => CurrentTenant::id(),
             ]);
             if ($row === null) {
                 throw ApiException::notFound('resource.not_found');
+            }
+            if ($row['archived_at'] !== null) {
+                return ['id' => $id, 'archived' => true];
             }
 
             $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
@@ -150,15 +156,53 @@ final class GuidanceContentService extends BaseService
     }
 
     /**
+     * Restore an archived announcement.
+     */
+    public function unarchiveAnnouncement(int $id): array
+    {
+        $actorId = CurrentUser::assert();
+
+        return $this->txn(function () use ($id, $actorId): array {
+            $row = $this->selectForUpdate('guidance_announcements', [
+                'id' => $id, 'tenant_id' => CurrentTenant::id(),
+            ]);
+            if ($row === null) {
+                throw ApiException::notFound('resource.not_found');
+            }
+            if ($row['archived_at'] === null) {
+                return ['id' => $id, 'archived' => false];
+            }
+
+            $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
+            $this->db->table('guidance_announcements')
+                ->where('id', $id)
+                ->where('tenant_id', CurrentTenant::id())
+                ->update(['archived_at' => null, 'updated_at' => $now]);
+
+            $this->audit->enqueue('guidance.announcement_restored', 'guidance_announcements', $id, $actorId, [
+                'previous_status' => (string) $row['audience'],
+            ]);
+
+            return ['id' => $id, 'archived' => false];
+        });
+    }
+
+    /**
      * @return array<int, array<string, mixed>>
      */
-    public function listServices(): array
+    public function listServices(bool $showArchived = false): array
     {
-        $rows = $this->db->table('guidance_services s')
+        $query = $this->db->table('guidance_services s')
             ->select('s.*')
-            ->where('s.tenant_id', CurrentTenant::id())
-            ->where('s.archived_at', null)
-            ->orderBy('s.sort_order', 'ASC')
+            ->where('s.tenant_id', CurrentTenant::id());
+
+        if ($showArchived) {
+            $query->where('s.archived_at IS NOT NULL');
+        } else {
+            $query->where('s.archived_at', null);
+        }
+
+        $rows = $query->orderBy('s.sort_order', 'ASC')
             ->get()->getResultArray();
 
         return array_map(fn (array $r): array => $this->hydrateService($r), $rows);
@@ -177,7 +221,6 @@ final class GuidanceContentService extends BaseService
             $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
             $conflict = $this->db->table('guidance_services')
                 ->where(['tenant_id' => CurrentTenant::id(), 'code' => $fields['code']])
-                ->where('archived_at', null)
                 ->countAllResults();
             if ($conflict > 0) {
                 throw ApiException::conflict('resource.conflict', "A service with code '{$fields['code']}' already exists.");
@@ -236,10 +279,13 @@ final class GuidanceContentService extends BaseService
 
         return $this->txn(function () use ($id, $actorId): array {
             $row = $this->selectForUpdate('guidance_services', [
-                'id' => $id, 'tenant_id' => CurrentTenant::id(), 'archived_at' => null,
+                'id' => $id, 'tenant_id' => CurrentTenant::id(),
             ]);
             if ($row === null) {
                 throw ApiException::notFound('resource.not_found');
+            }
+            if ($row['archived_at'] !== null) {
+                return ['id' => $id, 'archived' => true];
             }
 
             $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
@@ -253,6 +299,38 @@ final class GuidanceContentService extends BaseService
             ]);
 
             return ['id' => $id, 'archived' => true];
+        });
+    }
+
+    /**
+     * Restore an archived service.
+     */
+    public function unarchiveService(int $id): array
+    {
+        $actorId = CurrentUser::assert();
+
+        return $this->txn(function () use ($id, $actorId): array {
+            $row = $this->selectForUpdate('guidance_services', [
+                'id' => $id, 'tenant_id' => CurrentTenant::id(),
+            ]);
+            if ($row === null) {
+                throw ApiException::notFound('resource.not_found');
+            }
+            if ($row['archived_at'] === null) {
+                return ['id' => $id, 'archived' => false];
+            }
+
+            $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
+            $this->db->table('guidance_services')
+                ->where('id', $id)
+                ->where('tenant_id', CurrentTenant::id())
+                ->update(['archived_at' => null, 'updated_at' => $now]);
+
+            $this->audit->enqueue('guidance.service_restored', 'guidance_services', $id, $actorId, [
+                'resource_code' => 'code#' . (string) $row['code'],
+            ]);
+
+            return ['id' => $id, 'archived' => false];
         });
     }
 
@@ -456,6 +534,7 @@ final class GuidanceContentService extends BaseService
             'unpublish_at' => $r['unpublish_at'] !== null ? (string) $r['unpublish_at'] : null,
             'created_at'   => (string) $r['created_at'],
             'updated_at'   => (string) $r['updated_at'],
+            'archived_at'  => $r['archived_at'] !== null ? (string) $r['archived_at'] : null,
             // Derived publish state — windows are the single source of truth.
             'status'       => $this->publishStatus($r),
         ];
@@ -477,6 +556,7 @@ final class GuidanceContentService extends BaseService
             'queue_destination' => $r['queue_destination'] !== null ? (string) $r['queue_destination'] : null,
             'is_active'        => (bool) $r['is_active'],
             'created_at'       => (string) $r['created_at'],
+            'archived_at'      => $r['archived_at'] !== null ? (string) $r['archived_at'] : null,
         ];
     }
 

@@ -72,7 +72,7 @@ export function RowSessionPanel({
 
   return (
     <section aria-label="Session and notes" className="border-t bg-muted/20 p-3">
-      <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border bg-card p-4">
+      <div className="flex flex-wrap items-center justify-between gap-3 border bg-card p-4">
         <div>
           <p className="text-sm font-medium text-foreground">{emptyTitle}</p>
           {emptyHint !== undefined && (

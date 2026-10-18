@@ -85,7 +85,7 @@ export function SessionWorkspace({ sessionId, onCloseWorkspace }: SessionWorkspa
   ];
 
   return (
-    <article className="flex flex-col overflow-hidden rounded-xl border bg-card">
+    <article className="flex flex-col overflow-hidden border bg-card">
       <header className="flex items-center justify-between border-b px-4 py-3">
         <div className="flex items-center gap-2">
           <p className="font-semibold text-foreground">Session #{selected.id}</p>

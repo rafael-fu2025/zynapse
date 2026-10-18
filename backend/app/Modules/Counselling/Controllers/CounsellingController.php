@@ -84,7 +84,8 @@ final class CounsellingController extends ApiController
             $patientSchoolId = (string) $rawPatient;
         }
 
-        $page = $this->service->listSessions($cursor !== '' ? $cursor : null, $limit, $appointmentId, $patientSchoolId);
+        $archived = $this->request->getGet('archived') === '1';
+        $page = $this->service->listSessions($cursor !== '' ? $cursor : null, $limit, $appointmentId, $patientSchoolId, $archived);
         return $this->ok(
             $page['data'],
             \App\Http\ApiResponse::paginationMeta($page['count'], $page['next'], null),

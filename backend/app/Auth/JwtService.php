@@ -4,8 +4,7 @@ declare(strict_types=1);
 
 namespace App\Auth;
 
-use CodeIgniter\Config\BaseConfig;
-use Config\Services;
+
 use Firebase\JWT\JWT;
 use Firebase\JWT\Key;
 use UnexpectedValueException;
@@ -37,14 +36,30 @@ final class JwtService
         $cfg = config('Config\\Auth');
         $now = time();
 
-        $payload = array_merge([
-            'iss'   => config('Config\\App')->baseURL,
+        if ($userId < 1 || $epoch < 0 || $cfg->jwtAccessTtl < 1) {
+            throw new \InvalidArgumentException('Invalid access-token identity or lifetime.');
+        }
+        foreach (['iss', 'aud', 'sub', 'iat', 'exp', 'jti', 'epoch'] as $reserved) {
+            if (array_key_exists($reserved, $extraClaims)) {
+                throw new \InvalidArgumentException('Reserved access-token claims cannot be overridden.');
+            }
+        }
+        $expiresAt = $now + $cfg->jwtAccessTtl;
+        if (array_key_exists('session_exp', $extraClaims)) {
+            if (! is_int($extraClaims['session_exp']) || $extraClaims['session_exp'] <= $now) {
+                throw new \InvalidArgumentException('Authentication session has expired.');
+            }
+            $expiresAt = min($expiresAt, $extraClaims['session_exp']);
+        }
+        $payload = array_merge($extraClaims, [
+            'iss'   => $this->issuer(),
+            'aud'   => $cfg->jwtAudience,
             'sub'   => (string) $userId,
             'iat'   => $now,
-            'exp'   => $now + (int) $cfg->jwtAccessTtl,
+            'exp'   => $expiresAt,
             'jti'   => bin2hex(random_bytes(16)),
             'epoch' => $epoch,
-        ], $extraClaims);
+        ]);
 
         return JWT::encode($payload, $this->secret(), $cfg->jwtAlgorithm);
     }
@@ -58,9 +73,24 @@ final class JwtService
     public function verify(string $token): array
     {
         $cfg = config('Config\\Auth');
-        $decoded = JWT::decode($token, new Key($this->secret(), $cfg->jwtAlgorithm));
-
-        return (array) $decoded;
+        $payload = (array) JWT::decode($token, new Key($this->secret(), $cfg->jwtAlgorithm));
+        $audience = $payload['aud'] ?? null;
+        $validAudience = $audience === $cfg->jwtAudience
+            || (is_array($audience) && in_array($cfg->jwtAudience, $audience, true));
+        if (($payload['iss'] ?? null) !== $this->issuer() || ! $validAudience
+            || ! is_int($payload['iat'] ?? null) || ! is_int($payload['exp'] ?? null)
+            || $payload['iat'] > time() || $payload['exp'] <= time()
+            || $payload['exp'] <= $payload['iat']
+            || ! is_string($payload['sub'] ?? null)
+            || preg_match('/^[1-9][0-9]*$/D', $payload['sub']) !== 1
+            || filter_var($payload['sub'], FILTER_VALIDATE_INT) === false
+            || ! is_string($payload['jti'] ?? null) || $payload['jti'] === ''
+            || (isset($payload['epoch']) && (! is_int($payload['epoch']) || $payload['epoch'] < 0))
+            || (array_key_exists('session_exp', $payload)
+                && (! is_int($payload['session_exp']) || $payload['exp'] > $payload['session_exp']))) {
+            throw new UnexpectedValueException('Invalid access-token claims.');
+        }
+        return $payload;
     }
 
     /**
@@ -84,9 +114,21 @@ final class JwtService
     private function secret(): string
     {
         $secret = (string) (getenv('JWT_SECRET') ?: '');
-        if ($secret === '') {
-            throw new \RuntimeException('JWT_SECRET is not configured.');
+        $algorithm = config('Config\\Auth')->jwtAlgorithm;
+        $minimum = ['HS256' => 32, 'HS384' => 48, 'HS512' => 64][$algorithm] ?? null;
+        if ($minimum === null || strlen($secret) < $minimum) {
+            throw new \RuntimeException('JWT_SECRET must meet the configured HMAC algorithm key length.');
         }
         return $secret;
+    }
+
+    private function issuer(): string
+    {
+        $cfg = config('Config\\Auth');
+        $issuer = $cfg->jwtIssuer !== '' ? $cfg->jwtIssuer : config('Config\\App')->baseURL;
+        if ($issuer === '' || $cfg->jwtAudience === '') {
+            throw new \RuntimeException('JWT issuer and audience must be configured.');
+        }
+        return $issuer;
     }
 }

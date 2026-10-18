@@ -6,6 +6,7 @@ namespace Modules\Clinic\Controllers;
 
 use App\Controllers\Api\ApiController;
 use App\Exceptions\ApiException;
+use App\Modules\Shared\ArchiveScope;
 use CodeIgniter\HTTP\ResponseInterface;
 use Config\Services;
 use Modules\Clinic\Policies\ClinicPolicy;
@@ -37,6 +38,7 @@ final class InventoryController extends ApiController
             $q !== '' ? $q : null,
             $archived === '1' || $archived === 'true',
             $lowStock === '1' || $lowStock === 'true',
+            ArchiveScope::archivedFlag($this->request->getGet('archived')),
         );
 
         return $this->ok(

@@ -4,12 +4,13 @@
  * descriptions, toggle activity, and mark services as bookable (a
  * queue_destination exposes "Book appointment" on the student portal).
  */
-import { BookOpen, Pencil, Plus } from 'lucide-react';
+import { ArchiveRestore, BookOpen, Pencil, Plus } from 'lucide-react';
 import { useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { PermanentDeleteAction } from '@/components/PermanentDeleteAction';
 import { Checkbox } from '@/components/ui/checkbox';
 import { ConfirmDialog, type ConfirmAction } from '@/components/ConfirmDialog';
 import { TableStateBlock } from '@/components/TableStates';
@@ -36,6 +37,7 @@ import {
   useArchiveGuidanceService,
   useCreateGuidanceService,
   useGuidanceServices,
+  useUnarchiveGuidanceService,
   useUpdateGuidanceService,
 } from '@/hooks/useGuidanceContent';
 import type { GuidanceService } from '@/schemas/guidanceContent';
@@ -166,11 +168,22 @@ function ServiceDialog({
   );
 }
 
-export function ServicesTab() {
-  const services = useGuidanceServices();
+export function ServicesTab({
+  dialogOpen,
+  setDialogOpen,
+  editing,
+  setEditing,
+  showArchived,
+}: {
+  dialogOpen: boolean;
+  setDialogOpen: (open: boolean) => void;
+  editing: GuidanceService | null;
+  setEditing: (s: GuidanceService | null) => void;
+  showArchived: boolean;
+}) {
+  const services = useGuidanceServices(showArchived);
   const archive = useArchiveGuidanceService();
-  const [dialogOpen, setDialogOpen] = useState(false);
-  const [editing, setEditing] = useState<GuidanceService | null>(null);
+  const unarchive = useUnarchiveGuidanceService();
   const [confirm, setConfirm] = useState<ConfirmAction | null>(null);
   const rows = services.data ?? [];
 
@@ -183,14 +196,12 @@ export function ServicesTab() {
     });
   }
 
+  function requestUnarchive(s: GuidanceService) {
+    unarchive.mutate({ id: s.id, name: s.name });
+  }
+
   return (
     <div className="space-y-4">
-      <div className="flex justify-end">
-        <Button onClick={() => { setEditing(null); setDialogOpen(true); }}>
-          <Plus aria-hidden /> New service
-        </Button>
-      </div>
-
       <TableStateBlock
         isLoading={services.isLoading}
         isError={services.isError}
@@ -200,9 +211,9 @@ export function ServicesTab() {
         errorMessage="Failed to load the service catalogue."
         loadingLabel="Loading services"
         empty={{
-          title: 'No services in the catalogue.',
-          description: 'Services define what a patient can book and where the queue handoff goes.',
-          action: (
+          title: showArchived ? 'No archived services.' : 'No services in the catalogue.',
+          description: showArchived ? 'Switch back to the active view to see current services.' : 'Services define what a patient can book and where the queue handoff goes.',
+          action: showArchived ? undefined : (
             <Button
               variant="outline"
               size="sm"
@@ -218,7 +229,7 @@ export function ServicesTab() {
       />
 
       {!services.isLoading && !services.isError && rows.length > 0 && (
-        <section aria-labelledby="svc-list-heading" className="overflow-hidden rounded-xl border bg-card">
+        <section aria-labelledby="svc-list-heading" className="overflow-hidden border bg-card">
           <h2 id="svc-list-heading" className="sr-only">Service catalogue</h2>
           {/* The Table's own wrapper is the scroll container — an extra
               overflow-x-auto div here would defeat the sticky header. */}
@@ -252,10 +263,26 @@ export function ServicesTab() {
                     </TableCell>
                     <TableCell className="px-3 text-right">
                       <div className="flex justify-end gap-2">
-                        <Button size="sm" variant="outline" onClick={() => { setEditing(s); setDialogOpen(true); }}>
-                          <Pencil aria-hidden /> Edit
-                        </Button>
-                        <Button size="sm" variant="destructive" onClick={() => requestArchive(s)}>Archive</Button>
+                        {s.archived_at !== null ? (
+                          <>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => requestUnarchive(s)}
+                              disabled={unarchive.isPending}
+                            >
+                              <ArchiveRestore aria-hidden /> Restore
+                            </Button>
+                            <PermanentDeleteAction resource="services" id={s.id} label={s.name} />
+                          </>
+                        ) : (
+                          <>
+                            <Button size="sm" variant="outline" onClick={() => { setEditing(s); setDialogOpen(true); }}>
+                              <Pencil aria-hidden /> Edit
+                            </Button>
+                            <Button size="sm" variant="destructive" onClick={() => requestArchive(s)}>Archive</Button>
+                          </>
+                        )}
                       </div>
                     </TableCell>
                   </TableRow>

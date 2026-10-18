@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'dart:io';
 import 'dart:math';
 
 import 'package:cookie_jar/cookie_jar.dart';
@@ -7,11 +6,51 @@ import 'package:dio/dio.dart';
 import 'package:dio_cookie_manager/dio_cookie_manager.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../config.dart';
 import 'api_envelope.dart';
+import 'secure_cookie_storage.dart';
+
+/// Human-readable messages for backend error codes that surfaced with the
+/// 2026-10 archive/scheduling/BMG changes. The server message is usually
+/// accurate but terse; these keep the mobile UI actionable.
+const Map<String, String> _friendlyErrorMessages = {
+  'statemachine.schedule.slot_full':
+      'That time is no longer available. Choose another slot.',
+  'statemachine.counselling.session_closed':
+      'Only an active Guidance session can be used here.',
+  'statemachine.counselling.session_not_active':
+      'This Guidance session is no longer active.',
+  'scheduling.staff.ineligible':
+      'That staff member is not enrolled for scheduling in this unit.',
+  'scheduling.owner_changed':
+      'The schedule was changed by someone else. Refresh and try again.',
+  'counselling.schedule.no_show_limit':
+      'The no-show limit for this appointment has been reached.',
+  'archive.required': 'Archive this record before deleting it permanently.',
+  'archive.references_protected':
+      'This record is still referenced by other records and cannot be deleted.',
+  'archive.retention_protected':
+      'Retention policy prevents permanent deletion of this record.',
+  'referral.active_duplicate':
+      'An active referral already exists for this patient.',
+  'device.not_bound': 'Bind a drum to this device first.',
+  'device.disabled': 'This device is disabled.',
+  'mis.sync_active': 'A directory sync is already running. Wait for it to finish.',
+};
+
+ApiException _friendlyApiException(ApiException error) {
+  if (error.errors.isEmpty) return error;
+  var changed = false;
+  final errors = error.errors.map((e) {
+    final friendly = _friendlyErrorMessages[e.code];
+    if (friendly == null) return e;
+    changed = true;
+    return ApiError(code: e.code, message: friendly, field: e.field);
+  }).toList();
+  return changed ? ApiException(error.statusCode, errors) : error;
+}
 
 /// Thin, dependency-light shim so callers can map a raw [DioException]
 /// back to an [ApiException] (the response interceptor attaches the
@@ -19,10 +58,10 @@ import 'api_envelope.dart';
 ///
 /// Mirrors the axios normalizer in `frontend/src/api/client.ts`.
 ApiException mapDioError(Object error, {int fallbackStatus = 0}) {
-  if (error is ApiException) return error;
+  if (error is ApiException) return _friendlyApiException(error);
   if (error is DioException) {
     final inner = error.error;
-    if (inner is ApiException) return inner;
+    if (inner is ApiException) return _friendlyApiException(inner);
     return ApiException(
       error.response?.statusCode ?? fallbackStatus,
       [
@@ -129,7 +168,7 @@ class ApiClient {
                     requestOptions: error.requestOptions,
                     response: error.response,
                     type: error.type,
-                    error: ApiException(status, errors),
+                    error: _friendlyApiException(ApiException(status, errors)),
                   ),
                 );
                 return;
@@ -150,10 +189,8 @@ class ApiClient {
   Future<bool>? _inFlightRefresh;
   VoidCallback? _onSessionExpired;
 
-  /// The persistent cookie jar backing the Dio `CookieManager`. Created
-  /// asynchronously by [initPersistentCookieJar] because it needs a
-  /// path_provider directory; null until then.
-  PersistCookieJar? _cookieJar;
+  /// Secure persistent jar, or a memory-only jar if initialization fails.
+  CookieJar? _cookieJar;
   Future<void>? _cookieJarInit;
 
   /// The configured Dio instance (base URL already includes `/api/v1`).
@@ -226,47 +263,23 @@ class ApiClient {
       final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
       return exp <= now + 30;
     } catch (e) {
-      if (kDebugMode) debugPrint('ApiClient.isTokenExpired failed: $e');
+      if (kDebugMode) debugPrint('ApiClient.isTokenExpired failed');
       return false;
     }
   }
 
-  /// Builds the persistent cookie jar backing the Dio `CookieManager`.
-  ///
-  /// The backend sets the HttpOnly `synapse_rt` refresh cookie at login
-  /// (30-day expiry) and it is the ONLY way to mint a fresh access token
-  /// after the 900s access-token TTL. A plain in-memory `CookieJar()`
-  /// (the previous behaviour) discarded the cookie on app relaunch, so
-  /// once the token expired every request 401'd and silent refresh was
-  /// impossible — the session was lost exactly like the Phase-14
-  /// "Verify chain could not be completed" failure. This jar persists to
-  /// app storage (path_provider) so the refresh cookie survives relaunch,
-  /// mirroring the browser's cookie store. Idempotent; safe to call on
-  /// every bootstrap.
+  /// Builds a secure-storage-backed refresh cookie jar, migrating legacy
+  /// plaintext files before installing the interceptor. Startup failures use
+  /// memory only (no persistence across relaunch). Idempotent on bootstrap.
   Future<void> initPersistentCookieJar() {
     return _cookieJarInit ??= _doInitPersistentCookieJar();
   }
 
   Future<void> _doInitPersistentCookieJar() async {
-    try {
-      final dir = await getApplicationSupportDirectory();
-      final jar = PersistCookieJar(
-        persistSession: true, // persist the 30-day refresh cookie.
-        storage: FileStorage('${dir.path}${Platform.pathSeparator}synapse'),
-      );
-      _cookieJar = jar;
-      // CookieManager must be the FIRST interceptor so the refresh cookie
-      // is attached before the auth/Bearer wrapper runs (same ordering as
-      // the original in-memory jar, which sat at index 0).
-      _dio.interceptors.insert(0, CookieManager(jar));
-    } catch (e) {
-      // path_provider failure — fall back to a best-effort in-memory jar
-      // so the app still works within a single run (same as before).
-      if (kDebugMode) debugPrint('ApiClient.initCookieJar failed: $e');
-      final jar = PersistCookieJar(persistSession: true);
-      _cookieJar = jar;
-      _dio.interceptors.insert(0, CookieManager(jar));
-    }
+    final jar = await createSecureCookieJar();
+    _cookieJar = jar;
+    // Cookies must be attached before the auth/Bearer wrapper runs.
+    _dio.interceptors.insert(0, CookieManager(jar));
   }
 
   /// Clears any cached refresh cookie (logout / session expiry).
@@ -277,7 +290,7 @@ class ApiClient {
       await jar.deleteAll();
     } catch (e) {
       // best effort
-      if (kDebugMode) debugPrint('ApiClient.clearRefreshCookie failed: $e');
+      if (kDebugMode) debugPrint('ApiClient.clearRefreshCookie failed');
     }
   }
 
@@ -309,7 +322,7 @@ class ApiClient {
       }
       return false;
     } catch (e) {
-      if (kDebugMode) debugPrint('ApiClient.refreshAccessToken failed: $e');
+      if (kDebugMode) debugPrint('ApiClient.refreshAccessToken failed');
       return false;
     }
   }

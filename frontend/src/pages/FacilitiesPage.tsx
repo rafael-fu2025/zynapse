@@ -17,6 +17,7 @@ import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
 import { PageHeader } from '@/components/PageHeader';
 import { Button } from '@/components/ui/button';
+import { PermanentDeleteAction } from '@/components/PermanentDeleteAction';
 import { ConfirmDialog, type ConfirmAction } from '@/components/ConfirmDialog';
 import { CopyButton } from '@/components/CopyButton';
 import { MobileCardList, MobileCard, MobileCardField, MobileCardActions, MobileCardListState } from '@/components/MobileCardList';
@@ -1396,7 +1397,7 @@ export default function FacilitiesPage() {
   const [archivedParam, setArchivedParam] = useUrlFilter('archived');
   const showArchived = archivedParam === '1';
   const { cursor, history, nextPage: nextCursor, prevPage } = useKeysetPagination(archivedParam);
-  const units = useBmgUnits(cursor, 50, showArchived);
+  const units = useBmgUnits(cursor, 50, showArchived ? 'archived' : 'active');
   const unitRows = units.data?.data ?? [];
   // Powers the Processing Drums grid. Lifted out of the card component
   // so the page owns the query and the widget stays presentational.
@@ -1452,6 +1453,18 @@ export default function FacilitiesPage() {
             than most viewports. Bound it and let it scroll instead of
             cropping at the screen edge. */}
         <DropdownMenuContent align="end" className="max-h-[min(24rem,60vh)] w-52 overflow-y-auto">
+          {archived ? (
+            <>
+              <DropdownMenuItem className="min-h-11" disabled={!can.restore} onSelect={() => unarchiveUnit.mutate({ unitId: u.id })}>
+                <ArchiveRestore /> Restore
+              </DropdownMenuItem>
+              <PermanentDeleteAction resource="drums" id={u.id} label={u.code} presentation="menuitem" />
+              <DropdownMenuItem className="min-h-11" onSelect={() => setOpenHistory(u.id)}>
+                <History /> Batch history
+              </DropdownMenuItem>
+            </>
+          ) : (
+            <>
           <DropdownMenuItem className="min-h-11" onSelect={() => setOpenEdit(u)}>
             <Pencil /> Edit drum
           </DropdownMenuItem>
@@ -1465,15 +1478,9 @@ export default function FacilitiesPage() {
               <Cpu /> Open drum page
             </Link>
           </DropdownMenuItem>
-        {archived ? (
-          <DropdownMenuItem className="min-h-11" disabled={!can.restore} onSelect={() => unarchiveUnit.mutate({ unitId: u.id })}>
-            <ArchiveRestore /> Restore
-          </DropdownMenuItem>
-        ) : (
           <DropdownMenuItem className="min-h-11" disabled={!can.archive} onSelect={() => setOpenArchive(u)}>
             <Archive /> Archive
           </DropdownMenuItem>
-        )}
           <DropdownMenuSeparator />
           <DropdownMenuItem className="min-h-11" disabled={!can.start} onSelect={() => setOpenStart(u)}>
             <Play /> Start batch
@@ -1526,6 +1533,8 @@ export default function FacilitiesPage() {
         >
             <Ban /> Cancel batch
           </DropdownMenuItem>
+            </>
+          )}
         </DropdownMenuContent>
       </DropdownMenu>
     );
@@ -1583,7 +1592,7 @@ export default function FacilitiesPage() {
         onRetry={() => void activeBatches.refetch()}
       />
 
-      <section className="hidden rounded-xl border bg-card md:block">
+      <section className="hidden border bg-card md:block">
         <Table
           ariaLabel="Composting drums with status and utilization"
           wrapperClassName="max-h-[65vh] overflow-y-auto"
@@ -1613,8 +1622,10 @@ export default function FacilitiesPage() {
               errorMessage="Failed to load drums."
               loadingLabel="Loading drums"
               empty={{
-                title: 'No drums yet.',
-                description: 'Create one to start composting.',
+                title: showArchived ? 'No archived drums.' : 'No active drums.',
+                description: showArchived
+                  ? 'Archived drums will appear here. Switch to active drums to manage composting.'
+                  : 'Create one to start composting.',
               }}
             />
             {units.data?.data.map((u) => {
@@ -1701,9 +1712,9 @@ export default function FacilitiesPage() {
           errorMessage="Failed to load drums."
           loadingLabel="Loading drums"
           empty={{
-            title: 'No drums yet.',
+            title: showArchived ? 'No archived drums.' : 'No active drums.',
             description: showArchived
-              ? 'No drums have been registered yet.'
+              ? 'Archived drums will appear here. Switch to active drums to manage composting.'
               : 'Create one to start composting.',
           }}
         />

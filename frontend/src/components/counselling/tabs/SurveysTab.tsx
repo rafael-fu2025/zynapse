@@ -11,6 +11,7 @@ import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { DateTimeField } from '@/components/DateTimeField';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { PermanentDeleteAction } from '@/components/PermanentDeleteAction';
 import { Checkbox } from '@/components/ui/checkbox';
 import { ConfirmDialog, type ConfirmAction } from '@/components/ConfirmDialog';
 import { TableStateBlock } from '@/components/TableStates';
@@ -46,6 +47,7 @@ import {
   useSurveyResponseDetail,
   useSurveyResponses,
   useSurveys,
+  useUnarchiveSurvey,
   useUpdateSurvey,
 } from '@/hooks/useSurveys';
 import { apiClient } from '@/api/client';
@@ -1089,12 +1091,23 @@ function ResponsesDialog({ survey, onClose }: { survey: Survey; onClose: () => v
   );
 }
 
-export function SurveysTab() {
-  const surveys = useSurveys();
+export function SurveysTab({
+  builderOpen,
+  setBuilderOpen,
+  editingId,
+  setEditingId,
+  showArchived,
+}: {
+  builderOpen: boolean;
+  setBuilderOpen: (open: boolean) => void;
+  editingId: number | null;
+  setEditingId: (id: number | null) => void;
+  showArchived: boolean;
+}) {
+  const surveys = useSurveys(showArchived);
   const publish = usePublishSurvey();
   const archive = useArchiveSurvey();
-  const [builderOpen, setBuilderOpen] = useState(false);
-  const [editingId, setEditingId] = useState<number | null>(null);
+  const unarchive = useUnarchiveSurvey();
   const [responsesFor, setResponsesFor] = useState<Survey | null>(null);
   const [confirm, setConfirm] = useState<ConfirmAction | null>(null);
   const rows = surveys.data ?? [];
@@ -1119,12 +1132,6 @@ export function SurveysTab() {
 
   return (
     <div className="space-y-4">
-      <div className="flex justify-end">
-        <Button onClick={() => { setEditingId(null); setBuilderOpen(true); }}>
-          <Plus aria-hidden /> New survey
-        </Button>
-      </div>
-
       <TableStateBlock
         isLoading={surveys.isLoading}
         isError={surveys.isError}
@@ -1134,9 +1141,11 @@ export function SurveysTab() {
         errorMessage="Failed to load surveys."
         loadingLabel="Loading surveys"
         empty={{
-          title: 'No surveys yet',
-          description: "Build the first evaluation or needs assessment — it replaces the office's Google Forms.",
-          action: (
+          title: showArchived ? 'No archived surveys.' : 'No surveys yet',
+          description: showArchived
+            ? 'Archived surveys are removed from the catalogue — clear the filter to see active ones.'
+            : "Build the first evaluation or needs assessment — it replaces the office's Google Forms.",
+          action: showArchived ? undefined : (
             <Button
               variant="outline"
               size="sm"
@@ -1152,7 +1161,7 @@ export function SurveysTab() {
       />
 
       {!surveys.isLoading && !surveys.isError && rows.length > 0 && (
-        <section aria-labelledby="survey-list-heading" className="overflow-hidden rounded-xl border bg-card">
+        <section aria-labelledby="survey-list-heading" className="overflow-hidden border bg-card">
           <h2 id="survey-list-heading" className="sr-only">Surveys</h2>
           {/* The Table's own wrapper is the scroll container — an extra
               overflow-x-auto div here would defeat the sticky header. */}
@@ -1195,21 +1204,32 @@ export function SurveysTab() {
                     <TableCell className="px-3"><Badge variant={STATUS_VARIANTS[s.status]}>{titleCase(s.status)}</Badge></TableCell>
                     <TableCell className="px-3 text-right">
                       <div className="flex justify-end gap-2">
-                        {s.status === 'draft' ? (
+                        {s.archived_at !== null ? (
                           <>
-                            <Button size="sm" variant="outline" onClick={() => { setEditingId(s.id); setBuilderOpen(true); }}>
-                              <Pencil aria-hidden /> Edit
+                            <Button size="sm" variant="outline" disabled={unarchive.isPending} onClick={() => unarchive.mutate(s.id)}>
+                              Restore
                             </Button>
-                            <Button size="sm" onClick={() => requestPublish(s)}>
-                              <Send aria-hidden /> Publish
-                            </Button>
+                            <PermanentDeleteAction resource="surveys" id={s.id} label={s.title} />
                           </>
                         ) : (
-                          <Button size="sm" variant="outline" onClick={() => setResponsesFor(s)}>
-                            <Eye aria-hidden /> Responses
-                          </Button>
+                          <>
+                            {s.status === 'draft' ? (
+                              <>
+                                <Button size="sm" variant="outline" onClick={() => { setEditingId(s.id); setBuilderOpen(true); }}>
+                                  <Pencil aria-hidden /> Edit
+                                </Button>
+                                <Button size="sm" onClick={() => requestPublish(s)}>
+                                  <Send aria-hidden /> Publish
+                                </Button>
+                              </>
+                            ) : (
+                              <Button size="sm" variant="outline" onClick={() => setResponsesFor(s)}>
+                                <Eye aria-hidden /> Responses
+                              </Button>
+                            )}
+                            <Button size="sm" variant="destructive" onClick={() => requestArchive(s)}>Archive</Button>
+                          </>
                         )}
-                        <Button size="sm" variant="destructive" onClick={() => requestArchive(s)}>Archive</Button>
                       </div>
                     </TableCell>
                   </TableRow>
@@ -1226,7 +1246,7 @@ export function SurveysTab() {
         title={confirm?.title ?? ''}
         description={confirm?.description}
         confirmLabel={confirm?.confirmLabel}
-        pending={publish.isPending || archive.isPending}
+        pending={publish.isPending || archive.isPending || unarchive.isPending}
         onConfirm={() => confirm?.run()}
         onCancel={() => setConfirm(null)}
       />

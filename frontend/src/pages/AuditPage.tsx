@@ -264,14 +264,9 @@ export default function AuditPage() {
     // stream flexes to the leftover space and the pager stays in view
     // even with the advanced filters expanded.
     <main className="space-y-4 p-6 md:flex md:h-[calc(100dvh-3.5rem)] md:flex-col md:overflow-hidden">
-      <div className="md:shrink-0">
+      <div className="space-y-4 md:shrink-0">
       <PageHeader
-        title={
-          <span className="flex items-center gap-2">
-            <ShieldCheck className="size-5 text-primary" aria-hidden />
-            Audit evidence
-          </span>
-        }
+        title="Audit evidence"
         description="Inspect immutable, hash-chained administrative events. Detail payloads are redacted before display."
         actions={
           <>

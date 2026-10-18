@@ -111,8 +111,23 @@ function refetchUnlessForbidden(query: { state: { error: unknown } }): boolean {
   return !(err instanceof ApiEnvelopeError && err.httpStatus === 403);
 }
 
-function unitsQueryKey(cursor: string | null, limit: number, includeArchived = false) {
-  return [...UNITS_KEY, { cursor, limit, includeArchived }] as const;
+type ArchiveScope = 'active' | 'archived' | 'all';
+
+// Boolean callers retain the legacy include_archived contract.
+function archiveParams(scope: ArchiveScope | boolean): URLSearchParams {
+  const params = new URLSearchParams();
+  if (typeof scope === 'boolean') {
+    if (scope) params.set('include_archived', '1');
+  } else if (scope === 'all') {
+    params.set('include_archived', '1');
+  } else {
+    params.set('archived', scope === 'archived' ? '1' : '0');
+  }
+  return params;
+}
+
+function unitsQueryKey(cursor: string | null, limit: number, scope: ArchiveScope | boolean = false) {
+  return [...UNITS_KEY, { cursor, limit, scope }] as const;
 }
 
 /**
@@ -165,14 +180,13 @@ function snapshotUnits(
   });
 }
 
-export function useBmgUnits(cursor: string | null, limit = 25, includeArchived = false) {
+export function useBmgUnits(cursor: string | null, limit = 25, scope: ArchiveScope | boolean = false) {
   return useQuery<{ data: BmgUnit[]; next: string | null }, ApiEnvelopeError>({
-    queryKey: unitsQueryKey(cursor, limit, includeArchived),
+    queryKey: unitsQueryKey(cursor, limit, scope),
     queryFn: async () => {
-      const params = new URLSearchParams();
+      const params = archiveParams(scope);
       if (cursor !== null) params.set('cursor', cursor);
       params.set('limit', String(limit));
-      if (includeArchived) params.set('include_archived', '1');
       const res = await apiClient.get<{ data: BmgUnit[]; next: string | null }>(
         `/facilities/units?${params.toString()}`,
       );
@@ -419,11 +433,16 @@ export function useAddProcessLog() {
 
 // ------------------------------------------------------ Phase P4
 
-export function useWasteCategories(activeOnly = false) {
+export function useWasteCategories(scope: ArchiveScope | boolean = false) {
   return useQuery<WasteCategory[], ApiEnvelopeError>({
-    queryKey: ['facilities', 'waste-categories', { activeOnly }],
+    queryKey: ['facilities', 'waste-categories', { scope }],
     queryFn: async () => {
-      const res = await apiClient.get<unknown[]>(`/facilities/waste-categories${activeOnly ? '?active=1' : ''}`);
+      // Legacy false means mixed; true retains the active-only picker filter.
+      const params = typeof scope === 'boolean'
+        ? new URLSearchParams(scope ? { active: '1' } : {})
+        : archiveParams(scope);
+      const query = params.toString();
+      const res = await apiClient.get<unknown[]>(`/facilities/waste-categories${query ? `?${query}` : ''}`);
       return z.array(wasteCategorySchema).parse(res.data);
     },
   });
@@ -627,17 +646,9 @@ export function useCreateUnit() {
       }
       toast.error(err.errors[0]?.message ?? 'Failed to create drum.');
     },
-    onSuccess: (created) => {
-      // Optimistically insert the new drum into every cached page so it
-      // appears instantly, then reconcile with the server.
-      qc.setQueriesData<{ data: BmgUnit[]; next: string | null }>(
-        { queryKey: UNITS_KEY },
-        (old) => {
-          if (old === undefined) return old;
-          if (old.data.some((u) => u.id === created.id)) return old;
-          return { ...old, data: [created, ...old.data] };
-        },
-      );
+    onSuccess: () => {
+      // Refetch scoped pages instead of inserting an active drum into
+      // archived lists or disrupting keyset pagination.
       invalidateFacilities(qc);
       toast.success('Drum created.');
     },
@@ -1000,14 +1011,13 @@ export function useWasteCategoryDeviation() {
 // ------------------------------------------------------ BMG devices
 
 /** Registered automated tumblers, newest first (keyset-paginated). */
-export function useBmgDevices(cursor: string | null, limit = 25, includeArchived = false) {
+export function useBmgDevices(cursor: string | null, limit = 25, scope: ArchiveScope | boolean = false) {
   return useQuery<{ data: BmgDevice[]; next: string | null }, ApiEnvelopeError>({
-    queryKey: [DEVICES_KEY, { cursor, limit, includeArchived }] as const,
+    queryKey: [...DEVICES_KEY, { cursor, limit, scope }] as const,
     queryFn: async () => {
-      const params = new URLSearchParams();
+      const params = archiveParams(scope);
       if (cursor !== null) params.set('cursor', cursor);
       params.set('limit', String(limit));
-      if (includeArchived) params.set('include_archived', '1');
       const res = await apiClient.get<{ data: BmgDevice[]; next: string | null }>(
         `/facilities/devices?${params.toString()}`,
       );
@@ -1084,6 +1094,25 @@ export function useArchiveBmgDevice() {
   });
 }
 
+/** Restore without minting credentials or re-establishing a drum binding. */
+export function useUnarchiveBmgDevice() {
+  const qc = useQueryClient();
+  return useMutation<BmgDevice, ApiEnvelopeError, { deviceId: number }>({
+    mutationFn: async ({ deviceId }) => {
+      const res = await apiClient.post<BmgDevice>(`/facilities/devices/${deviceId}/unarchive`);
+      return bmgDeviceSchema.parse(res.data);
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: DEVICES_KEY });
+      void qc.invalidateQueries({ queryKey: UNITS_KEY });
+      toast.success('Device restored disabled and unbound. Regenerate its token before use.');
+    },
+    onError: (err) => {
+      toast.error(err.errors[0]?.message ?? 'Failed to restore device.');
+    },
+  });
+}
+
 /**
  * Register a device. Resolves the { device, token } envelope ONCE — the
  * plaintext token is never retrievable again, so the caller MUST show
@@ -1131,6 +1160,9 @@ export function useRegenerateBmgDeviceToken() {
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: DEVICES_KEY });
     },
+    onError: (err) => {
+      toast.error(err.errors[0]?.message ?? 'Failed to regenerate device token.');
+    },
   });
 }
 
@@ -1151,10 +1183,11 @@ export function useSetBmgDeviceStatus() {
       );
       return previous;
     },
-    onError: (_err, _vars, ctx) => {
+    onError: (err, _vars, ctx) => {
       for (const [key, snap] of ctx ?? []) {
         qc.setQueryData(key, snap);
       }
+      toast.error(err.errors[0]?.message ?? 'Failed to change device status.');
     },
     onSettled: () => {
       void qc.invalidateQueries({ queryKey: DEVICES_KEY });
