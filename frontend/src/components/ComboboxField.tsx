@@ -82,6 +82,10 @@ export interface ComboboxFieldProps {
   value: string;
   /** RHF-style setter. Receives the raw chosen value. */
   onChange: (next: string) => void;
+  /** Optional external paged lookup. Existing static/async callers are unchanged. */
+  onSearchChange?: (query: string) => void;
+  /** Optional paged lookup controls, inside the modal menu for keyboard/pointer access. */
+  lookupFooter?: React.ReactNode;
   /** Stable identifier for the source list (used by the extras cache). */
   sourceKey: string;
   /** Curated starter values, in display order. */
@@ -329,6 +333,7 @@ export function ComboboxField(props: ComboboxFieldProps): JSX.Element {
 
   function clear(): void {
     onChange('');
+    props.onSearchChange?.('');
     setQuery('');
     inputRef.current?.focus();
   }
@@ -388,6 +393,7 @@ export function ComboboxField(props: ComboboxFieldProps): JSX.Element {
   function onInputChange(e: ChangeEvent<HTMLInputElement>): void {
     const next = e.target.value;
     setQuery(next);
+    props.onSearchChange?.(next);
     if (!open && next !== '') setOpen(true);
   }
 
@@ -440,6 +446,7 @@ export function ComboboxField(props: ComboboxFieldProps): JSX.Element {
                 // operator can type to search (avoids deleting the
                 // label to start typing).
                 setQuery('');
+                props.onSearchChange?.('');
               }
               setOpen(true);
             }}
@@ -664,6 +671,7 @@ export function ComboboxField(props: ComboboxFieldProps): JSX.Element {
                 ) : null}
               </ul>
             )}
+            {props.lookupFooter !== undefined && <div className="border-t p-2">{props.lookupFooter}</div>}
           </PopoverContent>
       ) : null}
     </Popover>

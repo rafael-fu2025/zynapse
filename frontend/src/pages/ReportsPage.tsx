@@ -136,7 +136,7 @@ function Metric({
 /** Per-tab KPI tile for metrics that are NOT already in the overview strip. */
 function KpiCard({ label, value, detail }: { label: string; value: string; detail?: string }) {
   return (
-    <div className="min-w-0 rounded-xl border bg-card px-4 py-3">
+    <div className="min-w-0 border bg-card px-4 py-3">
       <dt className="text-xs font-medium text-muted-foreground">{label}</dt>
       <dd className="mt-1 text-xl font-semibold tabular-nums text-foreground">{value}</dd>
       {detail !== undefined && <p className="mt-0.5 text-xs text-muted-foreground">{detail}</p>}
@@ -349,7 +349,7 @@ export default function ReportsPage() {
         }
       />
 
-      <section aria-labelledby="overview-heading" className="overflow-hidden rounded-xl border bg-card">
+      <section aria-labelledby="overview-heading" className="overflow-hidden border bg-card">
         <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3 border-b px-4 py-3">
           <div className="min-w-0">
             <h2 id="overview-heading" className="text-sm font-semibold">Institution Overview</h2>

@@ -8,7 +8,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { z } from 'zod';
 import { toast } from 'sonner';
-import { apiClient } from '@/api/client';
+import { apiClient, getNextCursor } from '@/api/client';
 import type { ApiEnvelopeError } from '@/api/envelope';
 import {
   addTreatmentSchema,
@@ -70,11 +70,11 @@ export function useEncounters(
       if (cursor !== null) params.set('cursor', cursor);
       params.set('limit', String(limit));
       if (status !== null) params.set('status', status);
-      const res = await apiClient.get<{ data: unknown[]; next: string | null }>(
+      const res = await apiClient.get<unknown[]>(
         `/clinic/encounters?${params.toString()}`,
       );
       const data = z.array(encounterSchema).parse(res.data);
-      return { data, next: res.data?.next ?? null };
+      return { data, next: getNextCursor(res) };
     },
   });
 }

@@ -18,7 +18,7 @@ import {
   useWrittenOffMedicines,
 } from '@/hooks/useMedicines';
 import { useReorders } from '@/hooks/useReorders';
-import { useEquipmentItems } from '@/hooks/useEquipment';
+import { useClinicCatalog } from '@/hooks/useClinicCatalog';
 import { fmtUtcToApp } from '@/utils/date';
 import { ExpiryChip, StockBadge } from './badges';
 import { BATCH_STATUS_VARIANT } from './constants';
@@ -40,9 +40,8 @@ export function InsightsTab({ onJumpToTab }: { onJumpToTab: (tab: 'medicines' | 
   // only need the number, not the rows (the Reorders tab has the full
   // list with ETAs + actions from Gap 9).
   const reorders = useReorders(null, null, 50);
-  // Equipment: one page of the catalog carries the per-status counts —
-  // enough for the attention tile and the replacement panel.
-  const equipment = useEquipmentItems(null, 100);
+  // Accumulate explicitly requested pages; label totals as partial until the final cursor.
+  const equipment = useClinicCatalog('equipment');
 
   const lowStockCount  = lowStock.data?.length ?? 0;
   const expiringCount  = expiring.data?.length ?? 0;
@@ -52,7 +51,8 @@ export function InsightsTab({ onJumpToTab }: { onJumpToTab: (tab: 'medicines' | 
     r.status === 'pending' || r.status === 'approved' || r.status === 'ordered',
   ).length;
 
-  const equipmentRows = equipment.data?.data ?? [];
+  const equipmentRows = [...new Map((equipment.data?.pages ?? []).flatMap((page) => page.data)
+    .filter((row) => 'total_units' in row).map((row) => [row.id, row])).values()];
   const equipmentAttentionCount = equipmentRows.reduce(
     (sum, it) => sum + it.for_repair + it.for_replacement, 0,
   );
@@ -105,7 +105,7 @@ export function InsightsTab({ onJumpToTab }: { onJumpToTab: (tab: 'medicines' | 
         <StatTile
           icon={<Wrench className="size-4" />}
           label="Equipment attention"
-          value={equipmentAttentionCount}
+          value={equipment.isError ? 'Unavailable' : equipment.hasNextPage ? `${equipmentAttentionCount}+ (partial)` : equipmentAttentionCount}
           tone={equipmentAttentionCount === 0 ? 'success' : equipmentAttentionCount <= 2 ? 'warning' : 'destructive'}
           loading={equipment.isLoading}
           onClick={() => onJumpToTab('equipment')}
@@ -250,7 +250,15 @@ export function InsightsTab({ onJumpToTab }: { onJumpToTab: (tab: 'medicines' | 
         </CardHeader>
         <CardContent>
           {equipment.isLoading && <Loader2 className="mx-auto size-4 animate-spin text-muted-foreground" />}
-          {!equipment.isLoading && equipmentReplacementTop.length === 0 && (
+          {equipment.isError && <p role="alert" className="text-sm text-destructive">Equipment pages could not be loaded.</p>}
+          {(equipment.hasNextPage || equipment.isError) && <div className="mb-3 flex flex-wrap items-center gap-2">
+            <p role="status" className="text-xs text-muted-foreground">{equipmentRows.length} equipment items loaded; totals are incomplete.</p>
+            <Button variant="outline" size="sm" disabled={equipment.isFetching}
+              onClick={() => void (equipment.isError && !equipment.isFetchNextPageError ? equipment.refetch() : equipment.fetchNextPage())}>
+              {equipment.isError ? 'Retry equipment' : 'Load more equipment'}
+            </Button>
+          </div>}
+          {!equipment.isLoading && !equipment.isError && !equipment.hasNextPage && equipmentReplacementTop.length === 0 && (
             <p className="text-sm text-muted-foreground">No equipment is flagged for replacement.</p>
           )}
           {!equipment.isLoading && equipmentReplacementTop.length > 0 && (
@@ -308,7 +316,7 @@ function StatTile({
       type={Tag === 'button' ? 'button' : undefined}
       onClick={onClick}
       className={cn(
-        'rounded-xl border bg-card p-4 text-left shadow-sm transition-colors',
+        'border bg-card p-4 text-left shadow-sm transition-colors',
         onClick !== undefined && 'hover:bg-accent/40 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
       )}
     >

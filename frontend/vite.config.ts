@@ -94,6 +94,23 @@ export default defineConfig({
         secure: false,
         rewrite: (requestPath) => apiProxyPrefix + requestPath,
       },
+      // Carousel assets (brand images + admin uploads) live in the
+      // backend's `public/` dir. In prod the same backend serves them
+      // directly; in dev we proxy `/assets` and `/uploads` so the
+      // /assets/img/brand/... and /uploads/carousel/... URLs the SPA
+      // builds from DB rows resolve the same way.
+      '/assets': {
+        target: apiProxyTarget,
+        changeOrigin: false,
+        secure: false,
+        rewrite: (requestPath) => apiProxyPrefix + requestPath,
+      },
+      '/uploads': {
+        target: apiProxyTarget,
+        changeOrigin: false,
+        secure: false,
+        rewrite: (requestPath) => apiProxyPrefix + requestPath,
+      },
     },
   },
   build: {

@@ -1,10 +1,10 @@
 /**
  * Medicine hooks — batch-tracked inventory with FEFO dispensing (Phase 12).
  */
-import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { z } from 'zod';
 import { toast } from 'sonner';
-import { apiClient } from '@/api/client';
+import { apiClient, getNextCursor } from '@/api/client';
 import type { ApiEnvelopeError } from '@/api/envelope';
 import {
   addBatchSchema,
@@ -35,9 +35,9 @@ interface MedicinePage {
   next: string | null;
 }
 
-export function useMedicines(cursor: string | null, limit = 25, q: string | null = null, includeArchived = false) {
+export function useMedicines(cursor: string | null, limit = 25, q: string | null = null, showArchived = false) {
   return useQuery<MedicinePage, ApiEnvelopeError>({
-    queryKey: ['medicines', 'list', { cursor, limit, q, includeArchived }],
+    queryKey: ['medicines', 'list', { cursor, limit, q, showArchived }],
     // Stock is consumed by clinic dispensing in other sessions; poll so
     // the pharmacy sees current balances without a manual refresh.
     refetchInterval: 30_000,
@@ -46,17 +46,14 @@ export function useMedicines(cursor: string | null, limit = 25, q: string | null
       if (cursor !== null) params.set('cursor', cursor);
       params.set('limit', String(limit));
       if (q !== null && q.trim() !== '') params.set('q', q.trim());
-      if (includeArchived) params.set('include_archived', '1');
-      const res = await apiClient.get<{ data: unknown[]; next: string | null }>(
+      params.set('archived', showArchived ? '1' : '0');
+      const res = await apiClient.get<unknown[]>(
         `/clinic/medicines?${params.toString()}`,
       );
       const data = z.array(medicineSchema).parse(res.data);
-      return { data, next: res.data?.next ?? null };
+      return { data, next: getNextCursor(res) };
     },
-    // Keep the previous page visible while the next one is in-flight so
-    // typing in the search box doesn't flash an empty state between
-    // keystrokes.
-    placeholderData: keepPreviousData,
+
   });
 }
 

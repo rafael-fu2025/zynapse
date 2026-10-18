@@ -19,6 +19,7 @@ import { MobileCardList, MobileCard, MobileCardField, MobileCardActions } from '
 import { TableStateRows } from '@/components/TableStates';
 import { SearchBox, highlightMatch } from '@/components/ui/SearchBox';
 import { Button } from '@/components/ui/button';
+import { PermanentDeleteAction } from '@/components/PermanentDeleteAction';
 import { Dialog } from '@/components/ui/dialog';
 import {
   DropdownMenu,
@@ -74,7 +75,7 @@ export function MedicinesTab() {
   const [q, setQ, qDraft] = useUrlFilter('q', { debounceMs: 300 });
   const [showArchivedRaw, setShowArchived] = useUrlFilter('archived', { default: '' });
   const showArchived = showArchivedRaw === '1';
-  const { cursor, history, nextPage, prevPage, reset } = useKeysetPagination(q);
+  const { cursor, history, nextPage, prevPage, reset } = useKeysetPagination(JSON.stringify([q, showArchived]));
   const list = useMedicines(cursor, 25, q === '' ? null : q, showArchived);
   const archive = useArchiveMedicine();
   const unarchive = useUnarchiveMedicine();
@@ -121,6 +122,7 @@ export function MedicinesTab() {
             >
               <ArchiveRestore /> {unarchive.isPending ? 'Restoring…' : 'Restore'}
             </DropdownMenuItem>
+            <PermanentDeleteAction resource="medicines" id={m.id} label={m.generic_name} presentation="menuitem" />
           </>
         ) : (
           <>
@@ -178,7 +180,7 @@ export function MedicinesTab() {
 
   return (
     <div className="space-y-4 md:min-h-0 md:flex-1 md:flex md:flex-col">
-      <section className="flex flex-wrap items-end justify-between gap-3 rounded-xl border bg-card p-3 md:shrink-0">
+      <section className="flex flex-wrap items-end justify-between gap-3 border bg-card p-3 md:shrink-0">
         <SearchBox
           value={qDraft}
           onValueChange={setQ}
@@ -206,7 +208,7 @@ export function MedicinesTab() {
         </div>
       </section>
 
-      <section className="hidden overflow-hidden rounded-xl border bg-card md:block md:min-h-0 md:flex-1">
+      <section className="hidden overflow-hidden border bg-card md:block md:min-h-0 md:flex-1">
         <Table
           ariaLabel="Medicines catalog with stock and expiry"
           wrapperClassName="h-full overflow-y-auto"
@@ -374,14 +376,14 @@ export function MedicinesTab() {
       <nav className="flex items-center justify-between md:shrink-0" aria-label="pagination">
         <p className="text-xs text-muted-foreground">Page {history.length} · {rows.length} medicine{rows.length === 1 ? '' : 's'} shown</p>
         <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={prevPage} disabled={history.length < 2}>
+          <Button variant="outline" size="sm" onClick={prevPage} disabled={list.isFetching || history.length < 2}>
             <ChevronLeft /> Prev
           </Button>
           <Button
             variant="outline"
             size="sm"
             onClick={() => nextPage(list.data?.next)}
-            disabled={list.data?.next === null || list.data?.next === undefined}
+            disabled={list.isFetching || list.isPlaceholderData || list.data?.next == null}
           >
             Next <ChevronRight />
           </Button>

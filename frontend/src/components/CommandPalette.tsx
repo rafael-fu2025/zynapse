@@ -47,6 +47,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { prefetchRoute } from '@/lib/routeChunks';
+import { WORKSTATIONS } from '@/lib/workstations';
 import { cn } from '@/lib/utils';
 
 type CommandCategory = 'Navigate' | 'Account';
@@ -89,6 +90,16 @@ interface CommandHelpers {
 // the rendered order is predictable and grep-friendly.
 const COMMANDS: ReadonlyArray<CommandDef> = [
   // -------- Navigate --------
+  ...WORKSTATIONS.map(({ unit, label, path, permission }): CommandDef => ({
+    id: `go-${unit}-dashboard`,
+    label: `${label} dashboard`,
+    category: 'Navigate',
+    keywords: [unit, 'workstation', 'overview'],
+    icon: <LayoutDashboard className="size-4" />,
+    permission,
+    prefetch: path,
+    run: ({ navigate }) => void navigate(path),
+  })),
   {
     id: 'go-appointments',
     label: 'Appointments',

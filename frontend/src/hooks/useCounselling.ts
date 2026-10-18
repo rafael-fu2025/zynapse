@@ -78,15 +78,18 @@ export function useSession(sessionId: number | null) {
  * record" behind the guidance-side registry detail. Gated server-side by
  * `counselling.records.read`; notes are NOT part of this payload.
  */
-export function usePatientSessions(patientSchoolId: string | null, enabled: boolean) {
-  return useQuery<Session[], ApiEnvelopeError>({
-    queryKey: ['counselling', 'sessions', 'patient', patientSchoolId],
+// Keep archive metadata on this history payload without widening workspace schemas.
+const patientSessionSchema = sessionSchema.extend({ archived_at: z.string().nullable() });
+
+export function usePatientSessions(patientSchoolId: string | null, enabled: boolean, archived = false) {
+  return useQuery<z.infer<typeof patientSessionSchema>[], ApiEnvelopeError>({
+    queryKey: ['counselling', 'sessions', 'patient', patientSchoolId, { archived }],
     enabled: enabled && patientSchoolId !== null && patientSchoolId !== '',
     queryFn: async () => {
       const res = await apiClient.get<unknown[]>(
-        `/counselling/sessions?patient_school_id=${encodeURIComponent(patientSchoolId ?? '')}`,
+        `/counselling/sessions?patient_school_id=${encodeURIComponent(patientSchoolId ?? '')}${archived ? '&archived=1' : ''}`,
       );
-      return z.array(sessionSchema).parse(res.data);
+      return z.array(patientSessionSchema).parse(res.data);
     },
   });
 }

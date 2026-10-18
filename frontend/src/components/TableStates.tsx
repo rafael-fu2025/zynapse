@@ -232,7 +232,7 @@ export function TableStateBlock({
 
   if (kind === 'empty') {
     return (
-      <section className="rounded-xl border bg-card p-8 text-center">
+      <section className="border bg-card p-8 text-center">
         <EmptyCopy copy={resolveEmpty(emptyProps)} />
       </section>
     );

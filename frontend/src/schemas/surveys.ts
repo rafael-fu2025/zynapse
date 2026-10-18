@@ -78,6 +78,7 @@ export const surveySchema = z.object({
   publish_at: z.string().nullable(),
   close_at: z.string().nullable(),
   created_at: z.string(),
+  archived_at: z.string().nullable(),
   status: surveyStatusSchema,
   version_id: z.number().int().positive().nullable(),
   version_no: z.number().int().positive().nullable(),

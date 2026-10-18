@@ -18,6 +18,7 @@ import {
 } from '@/components/ui/select';
 import { TimePicker } from '@/components/ui/time-picker';
 import { WeekdayCheckboxes } from '@/components/WeekdayCheckboxes';
+import { SchedulingProviderState } from '@/components/SchedulingProviderState';
 import { useAddSlot, useCounsellors } from '@/hooks/useSchedule';
 import { hasPermission, useAuthStore } from '@/store/auth';
 import { addSlotSchema, type AddSlotInput } from '@/schemas/schedule';
@@ -36,6 +37,7 @@ export function AddSlotDialog({ onClose }: { onClose: () => void }) {
     });
 
   const onSubmit = handleSubmit((values) => {
+    if (add.isPending || (team && (counsellors.isFetching || counsellors.isError || !counsellors.data?.some((person) => person.id === values.counsellor_user_id)))) return;
     add.mutate(values, {
       onSuccess: () => {
         reset();
@@ -54,6 +56,7 @@ export function AddSlotDialog({ onClose }: { onClose: () => void }) {
           <div className="space-y-1.5">
             <Label>Counsellor</Label>
             <Select
+              disabled={add.isPending || counsellors.isFetching || counsellors.isError || !counsellors.data?.length}
               value={watch('counsellor_user_id') ? String(watch('counsellor_user_id')) : ''}
               onValueChange={(v) => setValue('counsellor_user_id', Number(v), { shouldValidate: true })}
             >
@@ -64,6 +67,8 @@ export function AddSlotDialog({ onClose }: { onClose: () => void }) {
                 ))}
               </SelectContent>
             </Select>
+            <SchedulingProviderState query={counsellors} />
+            {errors.counsellor_user_id && <p role="alert" className="text-xs text-destructive">{errors.counsellor_user_id.message}</p>}
           </div>
         )}
         <div className="space-y-1.5">
@@ -110,7 +115,7 @@ export function AddSlotDialog({ onClose }: { onClose: () => void }) {
         </div>
         <DialogFooter>
           <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
-          <Button type="submit" disabled={add.isPending}>
+          <Button type="submit" disabled={add.isPending || (team && (counsellors.isFetching || counsellors.isError || !counsellors.data?.some((person) => person.id === watch('counsellor_user_id'))))}>
             {add.isPending && <Loader2 className="animate-spin" />} Add window
           </Button>
         </DialogFooter>

@@ -69,14 +69,15 @@ function linksPayload(links: BuilderLink[]): Array<Record<string, unknown>> {
 
 // ---- staff: builder + publish ---------------------------------------
 
-export function useSurveys() {
+export function useSurveys(showArchived: boolean = false) {
   return useQuery<Survey[], ApiEnvelopeError>({
-    queryKey: ['guidance', 'surveys'],
+    queryKey: ['guidance', 'surveys', showArchived ? 'archived' : 'active'],
     queryFn: async () => {
-      const res = await apiClient.get<unknown[]>('/counselling/surveys');
+      const res = await apiClient.get<unknown[]>('/counselling/surveys', {
+        params: { archived: showArchived ? '1' : '0' },
+      });
       return surveyListSchema.parse(res.data);
     },
-    placeholderData: keepPreviousData,
   });
 }
 
@@ -164,6 +165,21 @@ export function useArchiveSurvey() {
       toast.success(`Survey "${vars.title}" archived.`);
     },
     onError: (err) => toast.error(err.errors[0]?.message ?? 'Failed to archive the survey.'),
+  });
+}
+
+export function useUnarchiveSurvey() {
+  const qc = useQueryClient();
+  return useMutation<{ id: number }, ApiEnvelopeError, number>({
+    mutationFn: async (id) => {
+      const res = await apiClient.post<{ id: number; archived: boolean }>(`/counselling/surveys/${id}/unarchive`);
+      return { id: res.data.id };
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['guidance', 'surveys'] });
+      toast.success('Survey restored.');
+    },
+    onError: (err) => toast.error(err.errors[0]?.message ?? 'Failed to restore the survey.'),
   });
 }
 

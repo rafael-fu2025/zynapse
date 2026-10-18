@@ -24,15 +24,20 @@ const h = vi.hoisted(() => {
     isLoading: false,
     isError: false,
   };
-  return { canView: true, sessions };
+  return { canView: true, canRestore: false, archived: '', sessions, patientSessions: vi.fn(), restore: vi.fn(), setArchived: vi.fn() };
 });
 
 vi.mock('@/hooks/useCan', () => ({
-  useCan: () => h.canView,
+  useCan: (code: string) => code === 'counselling.records.read' ? h.canView : h.canRestore,
 }));
 
 vi.mock('@/hooks/useCounselling', () => ({
-  usePatientSessions: () => h.sessions,
+  usePatientSessions: (...args: unknown[]) => { h.patientSessions(...args); return h.sessions; },
+    useUnarchiveSession: () => ({ mutate: h.restore, isPending: false }),
+}));
+
+vi.mock('@/hooks/useUrlFilter', () => ({
+  useUrlFilter: () => [h.archived, h.setArchived, h.archived],
 }));
 
 function renderSection(patientSchoolId: string | null | undefined): string {
@@ -40,6 +45,33 @@ function renderSection(patientSchoolId: string | null | undefined): string {
 }
 
 describe('GuidanceRecordSection', () => {
+  it('defaults to active and hides archive controls without oversight', () => {
+    h.archived = '1';
+    h.canRestore = false;
+    h.sessions = { data: [], isLoading: false, isError: false };
+    const html = renderSection('2021-0001');
+    expect(h.patientSessions).toHaveBeenLastCalledWith('2021-0001', true, false);
+    expect(html).not.toContain('Show archived');
+    expect(html).not.toContain('Restore');
+    h.archived = '';
+  });
+
+  it('shows archived history read-only with Restore for oversight', () => {
+    h.archived = '1';
+    h.canRestore = true;
+    h.sessions = { data: [{ id: 12, started_at: '2026-10-01 01:30:00', ended_at: null,
+      counsellor_name: 'Dr. Reyes', archived_at: '2026-10-02 01:30:00' }], isLoading: false, isError: false };
+    const html = renderSection('2021-0001');
+    expect(h.patientSessions).toHaveBeenLastCalledWith('2021-0001', true, true);
+    expect(html).toContain('Archived');
+    expect(html).toContain('read-only');
+    expect(html).toContain('Restore session #12');
+    expect(html).not.toContain('Open');
+    expect(html).not.toContain('Edit');
+    expect(html).not.toContain('href=');
+    h.archived = '';
+    h.canRestore = false;
+  });
   it('renders nothing for a viewer without counselling.records.read', () => {
     h.canView = false;
     h.sessions = { data: [], isLoading: false, isError: false };

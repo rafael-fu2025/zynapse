@@ -162,6 +162,15 @@
   body {
     @apply bg-background font-sans text-foreground antialiased;
   }
+
+  /* Base-layer striping also covers raw tables; row-state utilities win. */
+  :where(table > tbody > tr) {
+    --table-row-background: transparent;
+    background-color: var(--table-row-background);
+  }
+  :where(table > tbody > tr:nth-child(even)) {
+    --table-row-background: color-mix(in oklab, var(--muted) 40%, transparent);
+  }
 }
 
 /*
@@ -242,8 +251,8 @@ input:-internal-autofill-selected {
  * without `!important`. Keyboard/selected states are unaffected.
  */
 @media (pointer: coarse) {
-  tr[class*='hover:bg-muted']:hover {
-    background-color: transparent;
+  tr[class*='hover:bg-muted']:not([data-state='selected']):not([class^='bg-']):not([class*=' bg-']):hover {
+    background-color: var(--table-row-background, transparent);
   }
 }
 
@@ -339,6 +348,164 @@ input:-internal-autofill-selected {
   }
   [data-sidebar='content']::-webkit-scrollbar-thumb:active {
     background-color: oklch(1 0 0 / 55%);
+  }
+
+  /*
+   * Login carousel — cross-fade between slides on a timer.
+   *
+   * The slides are stacked absolutely; opacity is animated between 0
+   * and 1 to cross-fade. No `display:none` is used: that would skip
+   * the transition entirely. `pointer-events-none` on the inactive
+   * slide prevents it from intercepting indicator clicks.
+   *
+   * The blur backdrop in `contain_blur` mode scales 1.08x so the blur
+   * edges never reveal a 1-px hard seam around the contained logo.
+   */
+  .login-carousel {
+    /* The caption and the indicators share a baseline so the copy never
+       crowds the dots and never floats off a dead gap. These are the
+       only places the spacing lives; everything else references them.
+
+       `container-type: inline-size` makes the `cqi` clamps below resolve
+       against THIS pane's width, so the caption type and gutter shrink
+       on a narrow column and grow on a wide one. It must not be set on
+       an ancestor of the text being measured or every clamp collides. */
+    container-type: inline-size;
+    --carousel-caption-gutter: clamp(1.25rem, 4cqi, 2.5rem);
+    --carousel-caption-bottom: 3.5rem;
+    --carousel-indicator-bottom: 1.5rem;
+    /* Vertical strip reserved at the bottom of the pane for the caption
+       text plus the indicator dots. `contain_blur` artwork is centred in
+       the space that remains, so a logo never ends up sitting under the
+       gradient. Derived from caption-bottom rather than a bare magic
+       number so the two can never drift apart. */
+    --carousel-caption-zone: calc(var(--carousel-caption-bottom) + 4rem);
+  }
+  .login-carousel-stage {
+    overflow: hidden;
+  }
+  .login-carousel-slide {
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 900ms ease-in-out;
+  }
+  .login-carousel-slide.is-active {
+    opacity: 1;
+    pointer-events: auto;
+  }
+  .login-carousel-bg {
+    transform: scale(1.08);
+    filter: blur(22px) brightness(0.78);
+  }
+  .dark .login-carousel-bg {
+    filter: blur(22px) brightness(0.95);
+  }
+  .login-carousel-fg {
+    /* contain_blur foreground — full width, centered vertically and
+       horizontally.
+
+       The box is pinned to all four edges (top/bottom/left/right) to
+       define the available space (full width, height minus caption zone).
+       Setting width and height to 100% fills that box completely.
+       `object-fit: contain` scales the image to fit while maintaining
+       aspect ratio, and `object-position: center` centers it both
+       horizontally and vertically within the box. */
+    position: absolute;
+    top: 0;
+    bottom: var(--carousel-caption-zone);
+    left: 0;
+    right: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    object-position: center;
+  }
+
+  /* Caption bar — bottom gradient + readable white type. */
+  .login-carousel-caption {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    padding: 3rem var(--carousel-caption-gutter) var(--carousel-caption-bottom);
+    background: linear-gradient(to top, rgba(0, 0, 0, 0.78), rgba(0, 0, 0, 0.35) 55%, transparent);
+    z-index: 5;
+    pointer-events: none;
+  }
+  .login-carousel-caption-inner {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+    /* Keep the measure readable on wide panes instead of letting a long
+       subtitle stretch the full 3fr column width. */
+    max-width: 34rem;
+  }
+  .login-carousel-title {
+    font-size: clamp(1rem, 1.6cqi + 0.7rem, 1.35rem);
+    font-weight: 700;
+    line-height: 1.2;
+    color: #ffffff;
+    letter-spacing: 0.01em;
+    text-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
+    text-wrap: balance;
+  }
+  .login-carousel-sub {
+    font-size: clamp(0.75rem, 0.6cqi + 0.62rem, 0.9rem);
+    font-weight: 500;
+    line-height: 1.4;
+    color: rgba(255, 255, 255, 0.88);
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+    text-wrap: pretty;
+  }
+
+  /* Pill indicators — grow the active dot. Real <button>s so they
+     inherit :focus-visible and the active state survives keyboard
+     navigation. */
+  .login-carousel-indicators {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: var(--carousel-indicator-bottom);
+    z-index: 10;
+    display: flex;
+    justify-content: center;
+    gap: 8px;
+    /* Keeps the dots off the rounded corner on very short panes. */
+    padding: 0 var(--carousel-caption-gutter);
+  }
+  .login-carousel-dot {
+    width: 26px;
+    height: 6px;
+    padding: 0;
+    border: 0;
+    border-radius: 3px;
+    background-color: rgba(255, 255, 255, 0.5);
+    cursor: pointer;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+    transition:
+      width 280ms ease,
+      background-color 280ms ease;
+  }
+  .login-carousel-dot:hover {
+    background-color: rgba(255, 255, 255, 0.75);
+  }
+  .login-carousel-dot.is-active {
+    width: 44px;
+    background-color: #ffffff;
+  }
+  .login-carousel-dot:focus-visible {
+    outline: 2px solid #ffffff;
+    outline-offset: 2px;
+  }
+
+  /* Reduced motion — drop the fade, no width tween on indicators. */
+  @media (prefers-reduced-motion: reduce) {
+    .login-carousel-slide {
+      transition: none;
+    }
+    .login-carousel-dot {
+      transition: none;
+    }
   }
 }
 

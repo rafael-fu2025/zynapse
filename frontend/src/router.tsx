@@ -6,7 +6,7 @@
  * to be transformed/downloaded (critical on the single-threaded PHP
  * dev server, and smaller chunks in production builds).
  */
-import { Suspense } from 'react';
+import { lazy, Suspense } from 'react';
 import {
   createBrowserRouter,
   isRouteErrorResponse,
@@ -21,9 +21,11 @@ import { ProtectedRoute } from '@/components/ProtectedRoute';
 import { useBootstrapSession } from '@/hooks/useBootstrapSession';
 import { lazyWithRetry } from '@/lib/lazy';
 import { hasPermission, useAuthStore } from '@/store/auth';
+import { WORKSTATIONS } from '@/lib/workstations';
 
 const AuditPage = lazyWithRetry(() => import('@/pages/AuditPage'));
 const AdminUsersPage = lazyWithRetry(() => import('@/pages/AdminUsersPage'));
+const AdminCarouselPage = lazyWithRetry(() => import('@/pages/AdminCarouselPage'));
 const AdminRolesPage = lazyWithRetry(() => import('@/pages/AdminRolesPage'));
 const AnalyticsPage = lazyWithRetry(() => import('@/pages/AnalyticsPage'));
 const AnnouncementsPage = lazyWithRetry(() => import('@/pages/AnnouncementsPage'));
@@ -34,6 +36,15 @@ const StudentPortalPage = lazyWithRetry(() => import('@/pages/StudentPortalPage'
 const ClinicPage = lazyWithRetry(() => import('@/pages/ClinicPage'));
 const CounsellingPage = lazyWithRetry(() => import('@/pages/CounsellingPage'));
 const DashboardPage = lazyWithRetry(() => import('@/pages/DashboardPage'));
+const WorkstationDashboardPage = lazy(() => import('@/pages/WorkstationDashboardPage'));
+function ClinicDashboard() { return <WorkstationDashboardPage unit="clinic" />; }
+function GuidanceDashboard() { return <WorkstationDashboardPage unit="guidance" />; }
+function FacilitiesDashboard() { return <WorkstationDashboardPage unit="facilities" />; }
+const WORKSTATION_ELEMENTS: Record<string, JSX.Element> = {
+  clinic: <ClinicDashboard />,
+  guidance: <GuidanceDashboard />,
+  facilities: <FacilitiesDashboard />,
+};
 const FacilitiesPage = lazyWithRetry(() => import('@/pages/FacilitiesPage'));
 const WasteCategoriesPage = lazyWithRetry(() => import('@/pages/WasteCategoriesPage'));
 const DevicesPage = lazyWithRetry(() => import('@/pages/DevicesPage'));
@@ -182,6 +193,14 @@ const router = createBrowserRouter([
     ),
     children: [
       { path: '/', element: <HomeDispatcher /> },
+      ...WORKSTATIONS.map(({ unit, path, permission }) => ({
+        path,
+        element: (
+          <ProtectedRoute anyOf={[permission]}>
+            {WORKSTATION_ELEMENTS[unit]}
+          </ProtectedRoute>
+        ),
+      })),
       { path: '/change-password', element: <ChangePasswordPage /> },
       // 403 keeps the shell so the user can navigate somewhere they
       // ARE allowed to be, instead of dead-ending chromeless.
@@ -354,6 +373,14 @@ const router = createBrowserRouter([
         element: (
           <ProtectedRoute anyOf={['rbac.manage']}>
             <AdminUsersPage />
+          </ProtectedRoute>
+        ),
+      },
+      {
+        path: '/admin/carousel',
+        element: (
+          <ProtectedRoute anyOf={['rbac.manage']}>
+            <AdminCarouselPage />
           </ProtectedRoute>
         ),
       },

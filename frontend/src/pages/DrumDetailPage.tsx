@@ -79,7 +79,6 @@ function BatchView({ batch }: { batch: ActiveBatch }) {
       <PageHeader
         title={
           <span className="flex items-center gap-2">
-            <Cylinder className="size-5 text-primary" />
             <span className="tabular-nums">{batch.unit_code}</span>
             <Badge variant={phase.tone === 'info' ? 'info' : 'warning'} className="uppercase">
               {phase.label}
@@ -144,7 +143,6 @@ function IdleDrum({ unitId, loadFailed }: { unitId: number; loadFailed: boolean 
       <PageHeader
         title={
           <span className="flex items-center gap-2">
-            <Cylinder className="size-5 text-primary" />
             <span className="tabular-nums">{unit?.code ?? 'Drum'}</span>
             {unit !== undefined && (
               <Badge variant="secondary" className="uppercase">

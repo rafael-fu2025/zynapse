@@ -3,11 +3,12 @@
  * Phase A): targeted, windowed, audience-matched. Replaces the kiosk's
  * static list and its duplicate "Survey Links" tab.
  */
-import { Megaphone, Pencil, Plus } from 'lucide-react';
+import { ArchiveRestore, Megaphone, Pencil, Plus } from 'lucide-react';
 import { useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { DateTimeField } from '@/components/DateTimeField';
+import { PermanentDeleteAction } from '@/components/PermanentDeleteAction';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -36,6 +37,7 @@ import {
   useArchiveGuidanceAnnouncement,
   useCreateGuidanceAnnouncement,
   useGuidanceAnnouncements,
+  useUnarchiveGuidanceAnnouncement,
   useUpdateGuidanceAnnouncement,
 } from '@/hooks/useGuidanceContent';
 import type { GuidanceAnnouncement } from '@/schemas/guidanceContent';
@@ -211,11 +213,22 @@ function AnnouncementDialog({
   );
 }
 
-export function AnnouncementsTab() {
-  const announcements = useGuidanceAnnouncements();
+export function AnnouncementsTab({
+  dialogOpen,
+  setDialogOpen,
+  editing,
+  setEditing,
+  showArchived,
+}: {
+  dialogOpen: boolean;
+  setDialogOpen: (open: boolean) => void;
+  editing: GuidanceAnnouncement | null;
+  setEditing: (a: GuidanceAnnouncement | null) => void;
+  showArchived: boolean;
+}) {
+  const announcements = useGuidanceAnnouncements(showArchived);
   const archive = useArchiveGuidanceAnnouncement();
-  const [dialogOpen, setDialogOpen] = useState(false);
-  const [editing, setEditing] = useState<GuidanceAnnouncement | null>(null);
+  const unarchive = useUnarchiveGuidanceAnnouncement();
   const [confirm, setConfirm] = useState<ConfirmAction | null>(null);
   const rows = announcements.data ?? [];
 
@@ -228,14 +241,12 @@ export function AnnouncementsTab() {
     });
   }
 
+  function requestUnarchive(a: GuidanceAnnouncement) {
+    unarchive.mutate({ id: a.id, title: a.title });
+  }
+
   return (
     <div className="space-y-4">
-      <div className="flex justify-end">
-        <Button onClick={() => { setEditing(null); setDialogOpen(true); }}>
-          <Plus aria-hidden /> New announcement
-        </Button>
-      </div>
-
       <TableStateBlock
         isLoading={announcements.isLoading}
         isError={announcements.isError}
@@ -245,9 +256,9 @@ export function AnnouncementsTab() {
         errorMessage="Failed to load announcements."
         loadingLabel="Loading announcements"
         empty={{
-          title: 'No announcements yet',
-          description: 'Create the first post — it replaces the hand-maintained kiosk list.',
-          action: (
+          title: showArchived ? 'No archived announcements.' : 'No announcements yet',
+          description: showArchived ? 'Switch back to the active view to see current announcements.' : 'Create the first post — it replaces the hand-maintained kiosk list.',
+          action: showArchived ? undefined : (
             <Button
               variant="outline"
               size="sm"
@@ -263,7 +274,7 @@ export function AnnouncementsTab() {
       />
 
       {!announcements.isLoading && !announcements.isError && rows.length > 0 && (
-        <section aria-labelledby="ann-list-heading" className="overflow-hidden rounded-xl border bg-card">
+        <section aria-labelledby="ann-list-heading" className="overflow-hidden border bg-card">
           <h2 id="ann-list-heading" className="sr-only">Announcements</h2>
           {/* The Table's own wrapper is the scroll container — an extra
               overflow-x-auto div here would defeat the sticky header. */}
@@ -301,10 +312,26 @@ export function AnnouncementsTab() {
                     <TableCell className="px-3"><Badge variant={STATUS_VARIANTS[a.status]}>{titleCase(a.status)}</Badge></TableCell>
                     <TableCell className="px-3 text-right">
                       <div className="flex justify-end gap-2">
-                        <Button size="sm" variant="outline" onClick={() => { setEditing(a); setDialogOpen(true); }}>
-                          <Pencil aria-hidden /> Edit
-                        </Button>
-                        <Button size="sm" variant="destructive" onClick={() => requestArchive(a)}>Archive</Button>
+                        {a.archived_at !== null ? (
+                          <>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => requestUnarchive(a)}
+                              disabled={unarchive.isPending}
+                            >
+                              <ArchiveRestore aria-hidden /> Restore
+                            </Button>
+                            <PermanentDeleteAction resource="announcements" id={a.id} label={a.title} />
+                          </>
+                        ) : (
+                          <>
+                            <Button size="sm" variant="outline" onClick={() => { setEditing(a); setDialogOpen(true); }}>
+                              <Pencil aria-hidden /> Edit
+                            </Button>
+                            <Button size="sm" variant="destructive" onClick={() => requestArchive(a)}>Archive</Button>
+                          </>
+                        )}
                       </div>
                     </TableCell>
                   </TableRow>

@@ -539,7 +539,7 @@ export function GuidanceQueueTab({
 
   return (
     <div className="space-y-4">
-      <section className="rounded-xl border bg-card p-4">
+      <section className="border bg-card p-4">
         <h2 className="font-semibold text-foreground">Guidance sessions</h2>
         <p className="text-sm text-muted-foreground">
           Your day in three buckets — what is booked ahead, what is happening today, and what is already
@@ -557,7 +557,7 @@ export function GuidanceQueueTab({
       {selectedSessionId !== null && !deepLinkMatched && (
         <section
           aria-label="Session and notes (linked session)"
-          className="overflow-hidden rounded-xl border bg-card"
+          className="overflow-hidden border bg-card"
         >
           <RowSessionPanel sessionId={selectedSessionId} onClose={() => onCloseSession?.()} />
         </section>
@@ -566,7 +566,7 @@ export function GuidanceQueueTab({
       {/* ------------------------------------------------ today (live) */}
       <section
         aria-labelledby="guidance-today-heading"
-        className="overflow-hidden rounded-xl border bg-card"
+        className="overflow-hidden border bg-card"
       >
         <header className="flex flex-wrap items-center justify-between gap-2 border-b px-3 py-2">
           <div className="flex items-center gap-2">
@@ -896,7 +896,7 @@ export function GuidanceQueueTab({
       {/* ------------------------------------------------------ upcoming */}
       <section
         aria-labelledby="guidance-upcoming-heading"
-        className="overflow-hidden rounded-xl border bg-card"
+        className="overflow-hidden border bg-card"
       >
         <header className="flex flex-wrap items-center justify-between gap-2 border-b px-3 py-2">
           <div className="flex items-center gap-2">
@@ -925,7 +925,7 @@ export function GuidanceQueueTab({
       {/* ------------------------------------------------------ archived */}
       <section
         aria-labelledby="guidance-archived-heading"
-        className="overflow-hidden rounded-xl border bg-card"
+        className="overflow-hidden border bg-card"
       >
         <header className="flex flex-wrap items-center justify-between gap-2 border-b px-3 py-2">
           <div className="flex items-center gap-2">

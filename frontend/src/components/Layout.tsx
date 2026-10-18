@@ -14,6 +14,7 @@ import { Search } from 'lucide-react';
 import { AppSidebar } from '@/components/AppSidebar';
 import { CommandPalette } from '@/components/CommandPalette';
 import { NotificationBell } from '@/components/NotificationBell';
+import { PermanentDeleteProvider } from '@/components/PermanentDeleteAction';
 import { UserMenu } from '@/components/UserMenu';
 import { SidebarInset, SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar';
 import { Toaster } from '@/components/ui/sonner';
@@ -120,6 +121,7 @@ export default function Layout() {
           {/* Nested boundary: if a lazy page ever suspends outside a
               transition, only the content area falls back — the shell
               (sidebar, topbar) stays mounted. */}
+          <PermanentDeleteProvider>
           <Suspense
             fallback={
               <p className="grid min-h-40 place-items-center text-sm text-muted-foreground" role="status">
@@ -129,6 +131,7 @@ export default function Layout() {
           >
             <Outlet />
           </Suspense>
+          </PermanentDeleteProvider>
         </main>
       </SidebarInset>
 

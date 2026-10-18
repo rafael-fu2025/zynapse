@@ -45,7 +45,7 @@ export function ChartCard({
   className?: string;
 }) {
   return (
-    <section className={'min-w-0 rounded-xl border bg-card p-4 ' + (className ?? '')}>
+    <section className={'min-w-0 border bg-card p-4 ' + (className ?? '')}>
       <div className="mb-3">
         <h3 className="text-sm font-semibold text-foreground">{title}</h3>
         {subtitle !== undefined && <p className="mt-0.5 text-xs text-muted-foreground">{subtitle}</p>}

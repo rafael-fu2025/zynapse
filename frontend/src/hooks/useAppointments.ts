@@ -40,6 +40,7 @@ export function useAppointments(
   status: Appointment['status'] | null = null,
   scope: AppointmentScope = 'all',
   provider: AppointmentProviderFilter = 'any',
+  enabled = true,
 ) {
   return useQuery<AppointmentPage, ApiEnvelopeError>({
     // The status filter is part of the cache key so toggling it
@@ -48,6 +49,7 @@ export function useAppointments(
     // provider participate too: each tab owns its own slice of the
     // book.
     queryKey: ['appointments', { cursor, limit, status, scope, provider }],
+    enabled,
     // Appointments change server-side all day (staff transitions, the
     // kiosk station), so poll to keep statuses current without a
     // manual refresh.
@@ -96,23 +98,29 @@ export function useNeedsActionAppointments(status: Appointment['status'] | null 
  * Live free-text search over appointments — mirrors the Patients
  * page's `useStudentSearch`: a SEPARATE query from the paged list,
  * enabled only once the debounced term is >= 2 chars, returning a
- * flat (first-page) array. Case-insensitivity comes from the DB
+ * keyset page within the selected scope/provider. Case-insensitivity comes from the DB
  * collation; the backend also matches formatted month/date/time
  * (e.g. `aug`, `August`, `08/05`, `2:00 pm`).
  */
-export function useAppointmentSearch(q: string, status: Appointment['status'] | 'all' = 'all') {
-  return useQuery<Appointment[], ApiEnvelopeError>({
-    queryKey: ['appointments', 'search', { q, status }],
-    enabled: q.trim().length >= 2,
+export function useAppointmentSearch(
+  q: string,
+  status: Appointment['status'] | 'all' = 'all',
+  cursor: string | null = null,
+  scope: AppointmentScope = 'all',
+  provider: AppointmentProviderFilter = 'any',
+  limit = 25,
+) {
+  const search = q.trim();
+  return useQuery<AppointmentPage, ApiEnvelopeError>({
+    queryKey: ['appointments', 'search', { q: search, status, cursor, scope, provider, limit }],
+    enabled: search.length >= 2,
+    refetchInterval: 30_000,
     queryFn: async () => {
-      const params = new URLSearchParams();
-      params.set('limit', '25');
+      const params = new URLSearchParams({ limit: String(limit), q: search, scope, provider });
+      if (cursor !== null) params.set('cursor', cursor);
       if (status !== 'all') params.set('status', status);
-      params.set('q', q.trim());
-      const res = await apiClient.get<{ data: unknown[]; next: string | null }>(
-        `/clinic/appointments?${params.toString()}`,
-      );
-      return z.array(appointmentSchema).parse(res.data);
+      const res = await apiClient.get<unknown[]>(`/clinic/appointments?${params.toString()}`);
+      return { data: z.array(appointmentSchema).parse(res.data), next: getNextCursor(res) };
     },
   });
 }

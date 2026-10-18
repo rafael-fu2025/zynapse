@@ -47,7 +47,7 @@ export function MobileCard({
 }: React.LiHTMLAttributes<HTMLLIElement>) {
   return (
     <li
-      className={cn('rounded-xl border bg-card p-3 text-card-foreground shadow-sm', className)}
+      className={cn('border bg-card p-3 text-card-foreground shadow-sm', className)}
       {...props}
     />
   );

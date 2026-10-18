@@ -19,6 +19,7 @@ import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { ConfirmDialog, type ConfirmAction } from '@/components/ConfirmDialog';
 import { CopyButton } from '@/components/CopyButton';
+import { DirectorySyncDialog } from '@/components/DirectorySyncDialog';
 import { QueryErrorState } from '@/components/QueryErrorState';
 import { TableStateBlock } from '@/components/TableStates';
 import { SearchBox, highlightMatch } from '@/components/ui/SearchBox';
@@ -625,11 +626,13 @@ export default function AdminUsersPage() {
     // table flexes to the leftover space and the pager stays in view —
     // this page's desktop table breakpoint is lg, not md.
     <main className="space-y-4 p-6 lg:flex lg:h-[calc(100dvh-3.5rem)] lg:flex-col lg:overflow-hidden">
-      <div className="lg:shrink-0">
+      <div className="space-y-4 lg:shrink-0">
       <PageHeader
         title="Users"
         description="Manage account access, roles, and credential recovery. Accounts are disabled rather than deleted."
         actions={
+          <div className="flex flex-wrap gap-2">
+          <DirectorySyncDialog />
           <Dialog open={openCreate} onOpenChange={setOpenCreate}>
             <Button onClick={() => setOpenCreate(true)} disabled={roles.isLoading || roles.isError}>
               <UserPlus aria-hidden /> New user
@@ -638,6 +641,7 @@ export default function AdminUsersPage() {
               <CreateUserDialog roles={roles.data} onClose={() => setOpenCreate(false)} onCreated={setTempCredential} />
             )}
           </Dialog>
+          </div>
         }
         toolbar={
           <section aria-labelledby="user-filters-heading" className="w-full space-y-3">
@@ -710,7 +714,7 @@ export default function AdminUsersPage() {
         <QueryErrorState message="Failed to load the authoritative role list." onRetry={() => void roles.refetch()} pending={roles.isFetching} />
       )}
 
-      <section aria-labelledby="users-list-heading" className="overflow-hidden rounded-xl border bg-card lg:flex-1 lg:min-h-0 lg:flex lg:flex-col">
+      <section aria-labelledby="users-list-heading" className="overflow-hidden border bg-card lg:flex-1 lg:min-h-0 lg:flex lg:flex-col">
         <h2 id="users-list-heading" className="sr-only">User accounts</h2>
         <TableStateBlock
           isLoading={list.isLoading}

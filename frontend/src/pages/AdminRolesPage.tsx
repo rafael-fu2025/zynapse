@@ -66,7 +66,7 @@ function MatrixSection({
 }) {
   if (codes.length === 0) return null;
   return (
-    <section aria-labelledby={`matrix-${label}`} className="overflow-hidden rounded-xl border bg-card">
+    <section aria-labelledby={`matrix-${label}`} className="overflow-hidden border bg-card">
       <div className="flex items-center justify-between gap-3 border-b bg-muted/50 px-4 py-3">
         <h2 id={`matrix-${label}`} className="text-sm font-semibold">{label}</h2>
         <p className="text-xs text-muted-foreground">{codes.length} permission{codes.length === 1 ? '' : 's'}</p>
@@ -143,7 +143,7 @@ export default function AdminRolesPage() {
 
       {!roles.isLoading && !roles.isError && roleRows.length > 0 && grouped !== null && (
         <>
-          <section aria-labelledby="roles-summary-heading" className="overflow-hidden rounded-xl border bg-card">
+          <section aria-labelledby="roles-summary-heading" className="overflow-hidden border bg-card">
             <h2 id="roles-summary-heading" className="sr-only">Role summary</h2>
             <div className="overflow-x-auto">
               <Table ariaLabel="Role summary with permission counts">

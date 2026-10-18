@@ -2,6 +2,11 @@ import { describe, expect, it } from 'vitest';
 
 import {
   adminUserListParams,
+  directorySyncBody,
+  directorySyncJobSchema,
+  directorySyncActive,
+  directorySyncCommitted,
+  directorySyncPollInterval,
   personKindLabel,
   UNLINKED_KIND,
   type AdminUsersFilters,
@@ -77,5 +82,55 @@ describe('personKindLabel', () => {
 
   it('falls back to the raw value for an unknown kind', () => {
     expect(personKindLabel('wizard')).toBe('wizard');
+  });
+});
+
+describe('directorySyncBody', () => {
+  it('sends kind and dry_run, omitting unset paging options', () => {
+    expect(directorySyncBody({ kind: 'student', dryRun: true })).toEqual({ kind: 'student', dry_run: true });
+  });
+
+  it('maps camelCase paging options to the snake_case API fields', () => {
+    expect(directorySyncBody({ kind: 'all', dryRun: false, pageSize: 100, maxPages: 50 })).toEqual({
+      kind: 'all',
+      dry_run: false,
+      page_size: 100,
+      max_pages: 50,
+    });
+  });
+});
+
+describe('queued directory sync contract', () => {
+  const counts = { pages: 1, fetched: 2, created: 1, updated: 0, unchanged: 0, skipped: 1, duplicates: 0 };
+  const queued = {
+    id: 5, tenant_id: 1, kind: 'all', dry_run: false, status: 'queued', kinds: {},
+    current_kind: null, current_page: 0, total_pages: null,
+    created_at: '2026-10-13 00:00:00', started_at: null, finished_at: null, error: null,
+  };
+
+  it('accepts queued empty-object counts, unknown totals and extra fields', () => {
+    expect(directorySyncJobSchema.parse({ ...queued, extra: true })).toMatchObject({ kinds: {}, extra: true });
+    expect(directorySyncJobSchema.safeParse({ ...queued, kinds: [] }).success).toBe(false);
+  });
+
+  it('accepts nullable per-kind totals and rejects synchronous summaries', () => {
+    expect(directorySyncJobSchema.parse({ ...queued, kinds: { student: { ...counts, total_pages: null } } }).kinds.student?.total_pages).toBeNull();
+    expect(directorySyncJobSchema.safeParse({ success: true, dry_run: true, kinds: {} }).success).toBe(false);
+  });
+
+  it.each(['queued', 'running', 'completed', 'failed', 'interrupted'] as const)('polls and invalidates honestly for %s', (status) => {
+    const job = directorySyncJobSchema.parse({ ...queued, status, kinds: { student: counts } });
+    const active = status === 'queued' || status === 'running';
+    expect(directorySyncActive(job)).toBe(active);
+    expect(directorySyncPollInterval(job, false)).toBe(active ? 3000 : false);
+    expect(directorySyncCommitted(job)).toBe(!active);
+    expect(directorySyncCommitted({ ...job, dry_run: true })).toBe(false);
+    expect(directorySyncCommitted({ ...job, kinds: {} })).toBe(false);
+  });
+
+  it('retries unknown transport status even for terminal or absent cached data', () => {
+    expect(directorySyncPollInterval(null, true)).toBe(3000);
+    expect(directorySyncPollInterval(directorySyncJobSchema.parse({ ...queued, status: 'completed' }), true)).toBe(3000);
+    expect(directorySyncPollInterval(null, false)).toBe(false);
   });
 });

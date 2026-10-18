@@ -32,7 +32,7 @@ function monthLabel(month: string): string {
 /** Clinic KPI tile — poster-style summary number. */
 function ClinicKpi({ label, value, detail }: { label: string; value: string; detail: string }) {
   return (
-    <div className="rounded-xl border bg-card px-4 py-3">
+    <div className="border bg-card px-4 py-3">
       <dt className="text-xs font-medium text-muted-foreground">{label}</dt>
       <dd className="mt-1 text-xl font-semibold tabular-nums text-foreground">{value}</dd>
       <p className="mt-0.5 text-xs text-muted-foreground">{detail}</p>
@@ -138,7 +138,7 @@ export function ClinicAnalyticsView({
       </dl>
 
       {isEmpty && (
-        <p className="rounded-xl border bg-card px-4 py-3 text-center text-sm text-muted-foreground">
+        <p className="border bg-card px-4 py-3 text-center text-sm text-muted-foreground">
           No encounters in this range.
         </p>
       )}
@@ -158,7 +158,7 @@ export function ClinicAnalyticsView({
 
       {/* Tables: most-used meds + monthly + existing breakdowns. */}
       <div className="grid min-w-0 gap-4 md:grid-cols-2">
-        <section className="min-w-0 rounded-xl border bg-card p-4">
+        <section className="min-w-0 border bg-card p-4">
           <h3 className="text-sm font-semibold text-foreground">Most Used Medications</h3>
           <p className="mt-0.5 text-xs text-muted-foreground">Top 10 by units dispensed</p>
           <div className="mt-3">

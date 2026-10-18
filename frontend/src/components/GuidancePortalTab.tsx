@@ -99,7 +99,7 @@ export function GuidancePortalTab() {
           )}
           {services.data !== undefined && (
             <ul className="grid gap-3 sm:grid-cols-2">
-              {services.data.map((s) => (
+              {(services.data ?? []).map((s) => (
                 <li key={s.id} className="rounded-lg border bg-background p-4">
                   <p className="text-sm font-medium text-foreground">{s.name}</p>
                   {s.description !== null && <p className="mt-1 text-xs text-muted-foreground">{s.description}</p>}

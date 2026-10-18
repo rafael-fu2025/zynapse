@@ -17,6 +17,7 @@ import { useAvailability, useCounsellors, useRemoveSlot, useUpdateSlot } from '@
 import { hasPermission, useAuthStore } from '@/store/auth';
 import { DAY_NAMES } from '@/schemas/schedule';
 import { StaffAvatarStack } from '@/components/StaffAvatarStack';
+import { DepartmentStaffScheduling } from '@/components/DepartmentStaffScheduling';
 import { AddSlotDialog, EditSlotDialog } from '../dialogs';
 import { AvailabilityCalendar } from './AvailabilityCalendar';
 import { groupAvailability, staffNameLookup, type AvailabilitySlot } from './availabilitySlots';
@@ -69,7 +70,9 @@ export function AvailabilityView({ view, onViewChange }: AvailabilityViewProps) 
   }
 
   return (
-    <article className="overflow-hidden rounded-xl border bg-card">
+    <div className="space-y-4">
+    <DepartmentStaffScheduling unit="guidance" />
+    <article className="overflow-hidden border bg-card">
       <header className="flex items-center justify-between border-b px-3 py-2">
         <p className="text-sm font-semibold text-foreground">Availability windows</p>
         <div className="flex items-center gap-2">
@@ -223,5 +226,6 @@ export function AvailabilityView({ view, onViewChange }: AvailabilityViewProps) 
         onCancel={() => setConfirm(null)}
       />
     </article>
+    </div>
   );
 }

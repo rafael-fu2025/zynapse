@@ -67,7 +67,7 @@ function FollowUpAppointments() {
   return (
     <section
       aria-labelledby="followup-appointments-heading"
-      className="overflow-hidden rounded-xl border bg-card"
+      className="overflow-hidden border bg-card"
     >
       <header className="flex flex-wrap items-center justify-between gap-2 border-b px-3 py-2">
         <div className="flex items-center gap-2">
@@ -285,7 +285,7 @@ export function FollowupsTab() {
       />
 
       {!followups.isLoading && !followups.isError && rows.length > 0 && (
-        <section aria-labelledby="followup-list-heading" className="overflow-hidden rounded-xl border bg-card">
+        <section aria-labelledby="followup-list-heading" className="overflow-hidden border bg-card">
           <h2 id="followup-list-heading" className="sr-only">Follow-up caseload</h2>
           {/* The Table's own wrapper is the scroll container (vertical cap +
               horizontal overflow) — an extra overflow-x-auto div here would

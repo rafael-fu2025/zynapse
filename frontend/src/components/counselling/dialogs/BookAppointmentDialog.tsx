@@ -21,6 +21,7 @@ import {
 } from '@/components/ui/select';
 import { TimePicker } from '@/components/ui/time-picker';
 import { CounsellingPatientPicker } from '@/components/CounsellingPatientPicker';
+import { SchedulingProviderState } from '@/components/SchedulingProviderState';
 import { useAvailability, useBookAppointment, useCounsellors } from '@/hooks/useSchedule';
 import {
   APPOINTMENT_TYPES,
@@ -56,9 +57,12 @@ export function BookAppointmentDialog({ onClose, onBooked }: BookAppointmentDial
   const counsellorId = watch('counsellor_user_id');
 
   const counsellorIds = [...new Set((availability.data ?? []).map((w) => w.counsellor_user_id))]
+    .filter((id) => counsellors.data?.some((person) => person.id === id))
     .sort((a, b) => a - b);
 
+  const providerUnavailable = counsellors.isFetching || counsellors.isError || availability.isFetching || availability.isError;
   const onSubmit = handleSubmit((values) => {
+    if (book.isPending || providerUnavailable || !counsellorIds.includes(values.counsellor_user_id)) return;
     book.mutate(values, {
       onSuccess: (appointment) => {
         reset();
@@ -95,6 +99,7 @@ export function BookAppointmentDialog({ onClose, onBooked }: BookAppointmentDial
         <div className="space-y-1.5">
           <Label id="appt-counsellor-label">Counsellor</Label>
           <Select
+            disabled={book.isPending || providerUnavailable || counsellorIds.length === 0}
             value={counsellorId !== undefined ? String(counsellorId) : ''}
             onValueChange={(v) => setValue('counsellor_user_id', Number(v), { shouldValidate: true, shouldDirty: true })}
           >
@@ -107,6 +112,10 @@ export function BookAppointmentDialog({ onClose, onBooked }: BookAppointmentDial
               ))}
             </SelectContent>
           </Select>
+          <SchedulingProviderState query={counsellors} />
+          {availability.isLoading && <p role="status" className="text-xs text-muted-foreground">Loading availability…</p>}
+          {availability.isError && <div role="alert" className="text-xs text-destructive">Could not load availability. <Button type="button" size="sm" variant="outline" disabled={availability.isFetching} onClick={() => void availability.refetch()}>Retry availability</Button></div>}
+          {!providerUnavailable && counsellors.data && counsellors.data.length > 0 && counsellorIds.length === 0 && <p role="status" className="text-xs text-muted-foreground">No eligible enrolled counsellors have availability windows. Review availability before booking.</p>}
           {errors.counsellor_user_id !== undefined && (
             <p role="alert" className="text-xs text-destructive">{errors.counsellor_user_id.message}</p>
           )}
@@ -157,7 +166,7 @@ export function BookAppointmentDialog({ onClose, onBooked }: BookAppointmentDial
         </div>
         <DialogFooter>
           <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
-          <Button type="submit" disabled={book.isPending}>
+          <Button type="submit" disabled={book.isPending || providerUnavailable || counsellorId === undefined || !counsellorIds.includes(counsellorId)}>
             {book.isPending && <Loader2 className="animate-spin" />}
             <CalendarPlus className="size-4" /> Book
           </Button>

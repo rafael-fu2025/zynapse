@@ -39,7 +39,7 @@ export function ReportDataTable({
   const headingId = useId();
 
   return (
-    <section className="min-w-0 overflow-hidden rounded-xl border bg-card" aria-labelledby={headingId}>
+    <section className="min-w-0 overflow-hidden border bg-card" aria-labelledby={headingId}>
       <div className="border-b px-4 py-3">
         <h3 id={headingId} className="text-sm font-semibold text-foreground">{title}</h3>
       </div>

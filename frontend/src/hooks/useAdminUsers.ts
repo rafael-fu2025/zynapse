@@ -3,6 +3,7 @@
  * read straight from `users` (no person_id link).
  */
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useEffect, useRef } from 'react';
 import { z } from 'zod';
 import { toast } from 'sonner';
 import { apiClient, getNextCursor } from '@/api/client';
@@ -234,6 +235,121 @@ export interface ProvisionDirectoryUserInput {
    * defaults must never be treated as the authoritative role set.
    */
   groups?: string[];
+}
+
+const directoryKindCountsSchema = z.object({
+  pages: z.number().int(),
+  fetched: z.number().int(),
+  created: z.number().int(),
+  updated: z.number().int(),
+  unchanged: z.number().int(),
+  skipped: z.number().int(),
+  duplicates: z.number().int(),
+  total_pages: z.number().int().nullable().optional(),
+}).passthrough();
+
+export const directorySyncJobSchema = z.object({
+  id: z.number().int(),
+  tenant_id: z.number().int(),
+  kind: z.enum(['all', 'student', 'employee']),
+  dry_run: z.boolean(),
+  status: z.enum(['queued', 'running', 'completed', 'failed', 'interrupted']),
+  kinds: z.record(z.string(), directoryKindCountsSchema),
+  current_kind: z.enum(['student', 'employee']).nullable(),
+  current_page: z.number().int(),
+  total_pages: z.number().int().nullable(),
+  created_at: z.string(),
+  started_at: z.string().nullable(),
+  finished_at: z.string().nullable(),
+  error: z.object({ code: z.string(), message: z.string() }).passthrough().nullable(),
+}).passthrough();
+export type DirectorySyncJob = z.infer<typeof directorySyncJobSchema>;
+
+export function directorySyncActive(job: DirectorySyncJob | null | undefined): boolean {
+  return job?.status === 'queued' || job?.status === 'running';
+}
+
+export function directorySyncCommitted(job: DirectorySyncJob): boolean {
+  return !job.dry_run && !directorySyncActive(job)
+    && Object.values(job.kinds).some((counts) => counts.created > 0 || counts.updated > 0);
+}
+
+export interface SyncDirectoryInput {
+  kind: 'all' | 'student' | 'employee';
+  dryRun: boolean;
+  pageSize?: number;
+  maxPages?: number;
+}
+
+/** Queue a preview or apply; paging options are optional, never UI caps. */
+export function directorySyncBody(input: SyncDirectoryInput): Record<string, unknown> {
+  const body: Record<string, unknown> = { kind: input.kind, dry_run: input.dryRun };
+  if (input.pageSize !== undefined) body.page_size = input.pageSize;
+  if (input.maxPages !== undefined) body.max_pages = input.maxPages;
+  return body;
+}
+
+const directoryJobsKey = ['directory-sync-jobs'] as const;
+
+export function useSyncDirectory() {
+  const qc = useQueryClient();
+  return useMutation<DirectorySyncJob, Error, SyncDirectoryInput>({
+    retry: false,
+    mutationFn: async (input) => {
+      const res = await apiClient.post<unknown>('/admin/users/sync-directory', directorySyncBody(input));
+      return directorySyncJobSchema.parse(res.data);
+    },
+    onSuccess: (job) => {
+      qc.setQueryData([...directoryJobsKey, 'latest'], job);
+      qc.setQueryData([...directoryJobsKey, job.id], job);
+    },
+    // An uncertain POST must be reconciled, not blindly submitted again.
+    onError: () => { void qc.invalidateQueries({ queryKey: [...directoryJobsKey, 'latest'] }); },
+  });
+}
+
+export function directorySyncPollInterval(job: DirectorySyncJob | null | undefined, failed: boolean): number | false {
+  return failed || directorySyncActive(job) ? 3_000 : false;
+}
+
+/** Mounted outside the dialog: closing it never cancels monitoring or a job. */
+export function useDirectorySyncLatest() {
+  return useQuery<DirectorySyncJob | null, Error>({
+    queryKey: [...directoryJobsKey, 'latest'],
+    queryFn: async () => {
+      const res = await apiClient.get<unknown>('/admin/users/sync-directory/jobs/latest');
+      return directorySyncJobSchema.nullable().parse(res.data);
+    },
+    staleTime: 0,
+    retry: false,
+    refetchInterval: (query) => directorySyncPollInterval(query.state.data, query.state.status === 'error'),
+  });
+}
+
+export function useDirectorySyncJob(id: number | undefined) {
+  const qc = useQueryClient();
+  const invalidated = useRef<string | null>(null);
+  const query = useQuery<DirectorySyncJob, Error>({
+    queryKey: [...directoryJobsKey, id],
+    enabled: id !== undefined,
+    queryFn: async () => {
+      const res = await apiClient.get<unknown>(`/admin/users/sync-directory/jobs/${id}`);
+      return directorySyncJobSchema.parse(res.data);
+    },
+    retry: false,
+    refetchInterval: (state) => directorySyncPollInterval(state.state.data, state.state.status === 'error'),
+  });
+  useEffect(() => {
+    const job = query.data;
+    if (!job || !directorySyncCommitted(job)) return;
+    const key = `${job.id}:${job.status}`;
+    if (invalidated.current === key) return;
+    invalidated.current = key;
+    void qc.invalidateQueries({ queryKey: ['admin', 'users'] });
+    void qc.invalidateQueries({ queryKey: ['patients'] });
+    void qc.invalidateQueries({ queryKey: ['kiosk-lookup'] });
+  }, [qc, query.data]);
+  return query;
 }
 
 /**

@@ -115,7 +115,7 @@ export function ReordersTab() {
 
   return (
     <div className="space-y-4 md:min-h-0 md:flex-1 md:flex md:flex-col">
-      <section className="flex flex-wrap items-end justify-between gap-3 rounded-xl border bg-card p-3 md:shrink-0">
+      <section className="flex flex-wrap items-end justify-between gap-3 border bg-card p-3 md:shrink-0">
         <div className="flex flex-1 flex-wrap items-end gap-3">
           <SearchBox
             value={q}
@@ -165,7 +165,7 @@ export function ReordersTab() {
         </div>
       </section>
 
-      <section className="hidden overflow-hidden rounded-xl border bg-card md:block md:min-h-0 md:flex-1">
+      <section className="hidden overflow-hidden border bg-card md:block md:min-h-0 md:flex-1">
         <Table
           ariaLabel="Purchase requests with urgency and status"
           wrapperClassName="h-full overflow-y-auto"

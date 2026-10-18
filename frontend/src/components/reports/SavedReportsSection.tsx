@@ -13,10 +13,12 @@ import {
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
+import { useUrlFilter } from '@/hooks/useUrlFilter';
 import { ConfirmDialog, type ConfirmAction } from '@/components/ConfirmDialog';
 import { QueryErrorState } from '@/components/QueryErrorState';
 import { Badge, type BadgeProps } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { PermanentDeleteAction } from '@/components/PermanentDeleteAction';
 import { DateRangePicker } from '@/components/ui/date-range-picker';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -100,7 +102,8 @@ function statusVariant(status: GeneratedReport['status']): BadgeProps['variant']
 
 export function SavedReportsSection({ start, end, canConfigure, canExport, modules }: Props) {
   const defaultModule: ReportModule = modules[0] ?? 'clinic';
-  const [showArchived, setShowArchived] = useState(false);
+  const [archivedParam, setArchivedParam] = useUrlFilter('configs_archived');
+  const showArchived = archivedParam === '1';
   const [configPage, setConfigPage] = useState(1);
   const [generatedPage, setGeneratedPage] = useState(1);
   const [configModule, setConfigModule] = useState<ReportModule | 'all'>('all');
@@ -185,7 +188,7 @@ export function SavedReportsSection({ start, end, canConfigure, canExport, modul
       </div>
 
       <div className="grid min-w-0 gap-4 xl:grid-cols-2">
-        <section className="min-w-0 overflow-hidden rounded-xl border bg-card" aria-labelledby="configurations-heading">
+        <section className="min-w-0 overflow-hidden border bg-card" aria-labelledby="configurations-heading">
           <div className="flex flex-wrap items-center justify-between gap-2 border-b px-4 py-3">
             <h3 id="configurations-heading" className="text-sm font-semibold">Configurations</h3>
             <div className="flex flex-wrap items-center justify-end gap-2">
@@ -205,7 +208,7 @@ export function SavedReportsSection({ start, end, canConfigure, canExport, modul
                 variant={showArchived ? 'secondary' : 'outline'}
                 aria-pressed={showArchived}
                 onClick={() => {
-                  setShowArchived((value) => !value);
+                  setArchivedParam(showArchived ? '' : '1');
                   setConfigPage(1);
                 }}
               >
@@ -282,7 +285,7 @@ export function SavedReportsSection({ start, end, canConfigure, canExport, modul
             </div>
           ) : configItems.length === 0 ? (
             <p className="px-4 py-10 text-center text-sm text-muted-foreground">
-              {canConfigure ? 'Save the current view to create the first reusable report.' : 'No saved configurations are available.'}
+              {showArchived ? 'No archived configurations.' : canConfigure ? 'Save the current view to create the first reusable report.' : 'No saved configurations are available.'}
             </p>
           ) : (
             <ul className="divide-y">
@@ -325,9 +328,12 @@ export function SavedReportsSection({ start, end, canConfigure, canExport, modul
                           </>
                         )}
                         {canConfigure && !config.is_active && (
-                          <Button size="sm" variant="outline" disabled={restorePending} onClick={() => unarchive.mutate(config.id)}>
-                            {restorePending ? <Loader2 className="animate-spin" /> : <ArchiveRestore />} Restore
-                          </Button>
+                          <>
+                            <Button size="sm" variant="outline" disabled={restorePending} onClick={() => unarchive.mutate(config.id)}>
+                              {restorePending ? <Loader2 className="animate-spin" /> : <ArchiveRestore />} Restore
+                            </Button>
+                            <PermanentDeleteAction resource="report-configs" id={config.id} label={config.name} />
+                          </>
                         )}
                       </div>
                     </div>
@@ -347,7 +353,7 @@ export function SavedReportsSection({ start, end, canConfigure, canExport, modul
           )}
         </section>
 
-        <section className="min-w-0 overflow-hidden rounded-xl border bg-card" aria-labelledby="generated-heading">
+        <section className="min-w-0 overflow-hidden border bg-card" aria-labelledby="generated-heading">
           <div className="flex flex-wrap items-center justify-between gap-2 border-b px-4 py-3">
             <h3 id="generated-heading" className="text-sm font-semibold">Generated History</h3>
             <div className="flex flex-wrap items-center justify-end gap-2">

@@ -43,7 +43,7 @@ export default function InventoryPage() {
     <TooltipProvider delayDuration={150} skipDelayDuration={300}>
     {/* md+: one-viewport flex column (topbar h-14 excluded) — each stock
         table flexes to the leftover space and its pager stays in view. */}
-    <main className="space-y-4 p-6 md:flex md:h-[calc(100dvh-3.5rem)] md:flex-col md:overflow-hidden">
+    <main className="space-y-4 p-6 md:flex md:h-[calc(100dvh-3.5rem)] md:flex-col md:overflow-auto">
       <div className="md:shrink-0">
       <InventoryStockAlertBanner onJumpToTab={setTab} />
       </div>

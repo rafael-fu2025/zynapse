@@ -9,17 +9,51 @@
  * autofill nudging — is unchanged; only the geometry moved.
  */
 import { zodResolver } from '@hookform/resolvers/zod';
-import { AlertCircle, Eye, EyeOff, Loader2 } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { AlertCircle, Eye, EyeOff, Loader2, Moon, Sun } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { ApiEnvelopeError } from '@/api/envelope';
 import { humanizeCode } from '@/api/errorCodes';
+import { LoginCarousel } from '@/components/LoginCarousel';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { useLogin } from '@/hooks/useAuth';
+import { useCarouselSlides } from '@/hooks/useCarouselSlides';
+import { useTheme } from '@/hooks/useTheme';
 import { loginSchema, type LoginInput } from '@/schemas/auth';
+import { toLoginSlides, type LoginSlide } from '@/schemas/carousel';
+
+/**
+ * Carousel fallback — used while the public query is in flight and
+ * whenever the endpoint returns no rows. Lives in the LoginPage rather
+ * than LoginCarousel so the component stays purely presentational and
+ * the wiring (API + fallback) is visible in one place.
+ */
+const FALLBACK_SLIDES: LoginSlide[] = [
+  {
+    lightSrc: '/assets/img/brand/fuel-bg.jpg',
+    darkSrc: '/assets/img/brand/FoundationU-Dark.png',
+    title: 'Foundation University',
+    subtitle: 'Health & Guidance Services Portal',
+    fitMode: 'cover',
+  },
+  {
+    lightSrc: '/assets/img/brand/guidance-center.png',
+    darkSrc: '/assets/img/brand/guidance-center.png',
+    title: 'Guidance & Counseling Center',
+    subtitle: 'Confidential Support & Mental Wellness Services',
+    fitMode: 'contain_blur',
+  },
+  {
+    lightSrc: '/assets/img/brand/health-services.png',
+    darkSrc: '/assets/img/brand/health-services.png',
+    title: 'University Health Services',
+    subtitle: 'Accessible Campus Medical & Wellness Care',
+    fitMode: 'contain_blur',
+  },
+];
 
 /**
  * The offices this portal fronts, as circular seals linking to their
@@ -53,9 +87,17 @@ export default function LoginPage() {
     formState: { errors, isSubmitting },
   } = useForm<LoginInput>({ resolver: zodResolver(loginSchema) });
   const login = useLogin();
+  const { theme, toggleTheme } = useTheme();
   const [showPassword, setShowPassword] = useState(false);
   const [loginError, setLoginError] = useState<string | null>(null);
   const loginErrorRef = useRef<HTMLDivElement>(null);
+  const carousel = useCarouselSlides();
+  const slides = useMemo<LoginSlide[]>(() => {
+    if (carousel.data !== undefined && carousel.data.length > 0) {
+      return toLoginSlides(carousel.data);
+    }
+    return FALLBACK_SLIDES;
+  }, [carousel.data]);
 
   useEffect(() => {
     if (loginError !== null) loginErrorRef.current?.focus();
@@ -119,36 +161,30 @@ export default function LoginPage() {
     // columns can never overflow the grid by a rounding pixel.
     <main className="grid min-h-dvh bg-background lg:grid-cols-[3fr_2fr]">
       {/*
-        Welcome pane — the campus garden photo over the moove theme's
-        maroon underlay, inset from the page edge inside a rounded
-        container. No overlay panel: the photo speaks for itself.
+        Welcome pane — auto-advancing 3-slide photo carousel sitting
+        over the moove theme's maroon underlay, inset from the page
+        edge inside a rounded container. The underlay shows only as a
+        brief flash before the first slide's image paints (cover-mode
+        slides fill the frame; contain_blur slides fill it with their
+        blurred backdrop, so the maroon never bleeds through).
         `hidden lg:block` mirrors the reference's d-none d-lg-flex: on
         phones the form pane takes the whole screen.
       */}
       <aside className="relative hidden p-2 lg:block">
         <div className="relative h-full w-full overflow-hidden rounded-xl bg-[#ac1e37]">
-          {/* Day photo on the light theme, night photo in dark mode — same
-              garden, so the swap reads as a lighting change, not a new
-              page. */}
-          <img
-            src="/fuel-bg.jpg"
-            alt=""
-            draggable={false}
-            onDragStart={swallow}
+          <LoginCarousel slides={slides} />
+          {/* Shield over the carousel — blocks long-press context menu,
+              image drag handles, and right-click from reaching the
+              <img> elements inside. `pointer-events-none` so clicks
+              pass through to the indicator dots below; the
+              contextmenu/dragstart handlers still fire on the shield
+              itself when it sits on top. */}
+          <div
+            aria-hidden
             onContextMenu={swallow}
-            className="no-copy pointer-events-none absolute inset-0 size-full select-none object-cover dark:hidden"
-          />
-          <img
-            src="/FoundationU-Dark.png"
-            alt=""
-            draggable={false}
             onDragStart={swallow}
-            onContextMenu={swallow}
-            className="no-copy pointer-events-none absolute inset-0 hidden size-full select-none object-cover dark:block"
+            className="no-copy pointer-events-none absolute inset-0 z-20 select-none"
           />
-          {/* Shield over the photo — blocks long-press context menu, image
-              drag handles, and right-click from reaching the <img>. */}
-          <div aria-hidden onContextMenu={swallow} onDragStart={swallow} className="no-copy absolute inset-0 select-none" />
         </div>
       </aside>
 
@@ -158,7 +194,20 @@ export default function LoginPage() {
         instead of overlapping. Every accessible name the form had is
         unchanged.
       */}
-      <section className="flex flex-col items-center p-6 sm:p-10">
+      <section className="relative flex flex-col items-center p-6 sm:p-10">
+        {/* Theme toggle — positioned in the upper right corner */}
+        <button
+          type="button"
+          onClick={toggleTheme}
+          aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+          className="absolute right-6 top-6 grid size-9 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background sm:right-10 sm:top-10"
+        >
+          {theme === 'dark' ? (
+            <Sun aria-hidden className="size-5" />
+          ) : (
+            <Moon aria-hidden className="size-5" />
+          )}
+        </button>
         <div className="flex w-full max-w-sm flex-1 flex-col items-center justify-center">
           <div className="mb-8 flex flex-col items-center gap-3 text-center">
             {/* Maroon mark on the light surface, white mark in dark mode. */}
@@ -183,7 +232,7 @@ export default function LoginPage() {
                 Welcome back
               </h1>
               <p className="text-sm text-muted-foreground">
-                Log in to the university health &amp; guidance portal.
+                Access university health, guidance, and composting services.
               </p>
             </div>
           </div>
