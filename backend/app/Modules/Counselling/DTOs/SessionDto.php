@@ -23,6 +23,7 @@ final class SessionDto extends BaseDTO
             'counsellor_user_id'  => (int)    $this->row['counsellor_user_id'],
             'counsellor_name'     => ($this->row['counsellor_name'] ?? null) !== null ? (string) $this->row['counsellor_name'] : null,
             'started_at'          => (string) $this->row['started_at'],
+            'archived_at'         => $this->row['archived_at'] ?? null,
             'ended_at'            => $this->row['ended_at'] !== null ? (string) $this->row['ended_at'] : null,
         ];
     }

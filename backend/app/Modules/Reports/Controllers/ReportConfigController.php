@@ -6,6 +6,7 @@ namespace Modules\Reports\Controllers;
 
 use App\Controllers\Api\ApiController;
 use App\Exceptions\ApiException;
+use App\Modules\Shared\ArchiveScope;
 use CodeIgniter\HTTP\ResponseInterface;
 use Config\Services;
 use Modules\Reports\Services\ReportConfigService;
@@ -38,6 +39,7 @@ final class ReportConfigController extends ApiController
             max(1, (int) ($this->request->getGet('limit') ?? ReportConfigService::DEFAULT_PAGE_SIZE)),
             $this->queryFilter('module'),
             $this->visibleModules(),
+            ArchiveScope::archivedFlag($this->request->getGet('archived')),
         ));
     }
 

@@ -78,6 +78,7 @@ final class TenantScopeFitnessTest extends TestCase
         'referral_referrals',
         'report_configurations',
         'report_summaries',
+        'scheduling_staff_assignments',
         'users',
     ];
 

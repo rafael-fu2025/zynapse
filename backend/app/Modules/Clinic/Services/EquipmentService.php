@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Modules\Clinic\Services;
 
 use App\Exceptions\ApiException;
+use App\Modules\Shared\ArchiveScope;
 use App\Modules\Shared\BaseService;
 use App\Modules\Shared\ManilaDay;
 use App\Pagination\KeysetPaginator;
@@ -47,7 +48,7 @@ final class EquipmentService extends BaseService
     /**
      * @return array{data: array<int, array<string, mixed>>, next: ?string, count: int}
      */
-    public function listItems(?string $cursor, int $limit, ?string $q = null, bool $includeArchived = false): array
+    public function listItems(?string $cursor, int $limit, ?string $q = null, bool $includeArchived = false, ?bool $archived = null): array
     {
         $this->policy->check('equipmentRead');
 
@@ -57,9 +58,7 @@ final class EquipmentService extends BaseService
             ->orderBy('created_at', 'DESC')
             ->orderBy('id', 'DESC');
 
-        if (! $includeArchived) {
-            $builder->where('archived_at', null);
-        }
+        ArchiveScope::apply($builder, $archived === null ? $includeArchived : ($archived ? ArchiveScope::ARCHIVED : ArchiveScope::ACTIVE));
 
         $qTrim = $q !== null ? trim($q) : '';
         if ($qTrim !== '') {

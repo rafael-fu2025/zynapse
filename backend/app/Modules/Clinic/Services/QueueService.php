@@ -193,6 +193,7 @@ final class QueueService extends BaseService
         $userId = \App\Auth\CurrentUser::assert();
 
         return $this->txn(function () use ($patientUserId, $patientSchoolId, $referralId, $userId): array {
+            (new PatientLookupService())->assertPatientUserId($patientUserId);
             $existingReferral = $this->db->table('clinic_queue_entries')
                 ->select('id')
                 ->where('clinic_queue_entries.tenant_id', CurrentTenant::id())

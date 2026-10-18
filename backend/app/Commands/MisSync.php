@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace App\Commands;
 
-use App\Services\FuMis\FuMisDirectorySyncService;
 use CodeIgniter\CLI\BaseCommand;
 use CodeIgniter\CLI\CLI;
 
@@ -43,9 +42,16 @@ final class MisSync extends BaseCommand
             return 1;
         }
         try {
-            $summary = (new FuMisDirectorySyncService())->run($kind, ! $apply, $pageSize, $maxPages);
+            $jobs = new \App\Services\FuMis\MisSyncJobService();
+            $job = $jobs->enqueue($kind, ! $apply, $pageSize, $maxPages, 'cli');
+            $claim = $jobs->claim($job['id']);
+            if ($claim === null) {
+                CLI::error('Equivalent sync already running; inspect job ' . $job['id'] . '.');
+                return 1;
+            }
+            $summary = $jobs->execute($claim);
             CLI::write(json_encode($summary, JSON_PRETTY_PRINT | JSON_THROW_ON_ERROR));
-            if (! $summary['success']) {
+            if ($summary['status'] !== 'completed') {
                 CLI::error('MIS sync did not complete. No deletions or role removals were performed.');
                 return 1;
             }

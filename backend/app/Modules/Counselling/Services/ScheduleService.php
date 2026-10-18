@@ -82,11 +82,7 @@ final class ScheduleService extends BaseService
     public function counsellors(): array
     {
         $this->policy->check('scheduleRead');
-        $rows = $this->db->table('users u')->select('u.id,u.first_name,u.last_name,u.username')
-            ->where('u.tenant_id', CurrentTenant::id())
-            ->join('auth_groups_users gu','gu.user_id=u.id')->join('auth_groups g','g.id=gu.group_id')
-            ->where('g.name','counsellor')->where('u.archived_at',null)->orderBy('u.last_name','ASC')->get()->getResultArray();
-        return array_map(static fn(array $r):array=>['id'=>(int)$r['id'],'name'=>trim($r['first_name'].' '.$r['last_name'])?:$r['username']],$rows);
+        return (new \App\Services\SchedulingStaffService())->providers('guidance');
     }
 
     /**
@@ -154,6 +150,7 @@ final class ScheduleService extends BaseService
         $days = $this->normaliseDaysOfWeek($input);
 
         return $this->txn(function () use ($input, $userId, $counsellorId, $days): array {
+            (new \App\Services\SchedulingStaffService())->assertAssignable('guidance', $counsellorId);
             $start        = (string) $input['start_time'];
             $end          = (string) $input['end_time'];
             if ($start >= $end) {
@@ -258,8 +255,11 @@ final class ScheduleService extends BaseService
         $userId = \App\Auth\CurrentUser::assert();
 
         return $this->txn(function () use ($id, $input, $userId): array {
-            $existing = $this->selectForUpdate('counselling_availability', ['tenant_id' => CurrentTenant::id(), 'id' => $id, 'is_active' => 1]);
-            if ($existing === null) {
+            $existing = (new \App\Services\SchedulingStaffService())->lockResource(
+                'guidance', 'counselling_availability', $id, 'counsellor_user_id',
+                isset($input['counsellor_user_id']) ? [(int) $input['counsellor_user_id']] : [],
+            );
+            if ($existing === null || (int) $existing['is_active'] !== 1) {
                 throw new ApiException('resource.not_found', 404, [
                     ['code' => 'resource.not_found', 'message' => "Availability slot #{$id} not found."],
                 ]);
@@ -269,6 +269,8 @@ final class ScheduleService extends BaseService
             $counsellorId = isset($input['counsellor_user_id']) && $input['counsellor_user_id'] !== ''
                 ? (int) $input['counsellor_user_id']
                 : (int) $existing['counsellor_user_id'];
+            $this->assertScheduleMutation($counsellorId);
+            (new \App\Services\SchedulingStaffService())->assertAssignable('guidance', $counsellorId);
             $day   = isset($input['day_of_week']) && $input['day_of_week'] !== '' ? (int) $input['day_of_week'] : (int) $existing['day_of_week'];
             $start = isset($input['start_time'])  && $input['start_time'] !== ''  ? (string) $input['start_time'] : (string) $existing['start_time'];
             $end   = isset($input['end_time'])    && $input['end_time'] !== ''    ? (string) $input['end_time']   : (string) $existing['end_time'];
@@ -316,8 +318,8 @@ final class ScheduleService extends BaseService
         $userId = \App\Auth\CurrentUser::assert();
 
         $this->txn(function () use ($id, $userId): void {
-            $row = $this->selectForUpdate('counselling_availability', ['tenant_id' => CurrentTenant::id(), 'id' => $id, 'is_active' => 1]);
-            if ($row === null) {
+            $row = (new \App\Services\SchedulingStaffService())->lockResource('guidance', 'counselling_availability', $id, 'counsellor_user_id');
+            if ($row === null || (int) $row['is_active'] !== 1) {
                 throw new ApiException('resource.not_found', 404, [
                     ['code' => 'resource.not_found', 'message' => "Availability slot #{$id} not found."],
                 ]);
@@ -358,7 +360,7 @@ final class ScheduleService extends BaseService
         if ($excludeId !== null) {
             $builder->where('id !=', $excludeId);
         }
-        if ($builder->countAllResults() > 0) {
+        if ($this->db->query($builder->select('id')->getCompiledSelect() . ' FOR UPDATE')->getRowArray() !== null) {
             throw new ApiException('resource.conflict', 409, [
                 [
                     'code'    => 'resource.conflict',
@@ -521,6 +523,7 @@ final class ScheduleService extends BaseService
         $this->assertScheduleMutation($counsellorId);
 
         return $this->txn(function () use ($input, $userId, $counsellorId): array {
+            (new \App\Services\SchedulingStaffService())->assertAssignable('guidance', $counsellorId);
             $date         = (string) $input['appointment_date'];
             $start        = (string) $input['start_time'];
             $end          = (string) $input['end_time'];
@@ -641,7 +644,9 @@ final class ScheduleService extends BaseService
         }
 
         return $this->txn(function () use ($id, $action, $cancellationReason, $userId): array {
-            $row = $this->selectForUpdate('counselling_appointments', ['tenant_id' => CurrentTenant::id(), 'id' => $id]);
+            $row = (new \App\Services\SchedulingStaffService())->lockResource(
+                            'guidance', 'counselling_appointments', $id, 'counsellor_user_id', $action === 'confirm' ? [$userId] : [],
+                        );
             if ($row === null) {
                 throw new ApiException('resource.not_found', 404, [
                     ['code' => 'resource.not_found', 'message' => "Appointment #{$id} not found."],
@@ -649,6 +654,9 @@ final class ScheduleService extends BaseService
             }
             $this->assertScheduleMutation($row['counsellor_user_id'] !== null ? (int) $row['counsellor_user_id'] : null);
 
+            if ($action === 'confirm') {
+                (new \App\Services\SchedulingStaffService())->assertAssignable('guidance', $row['counsellor_user_id'] !== null ? (int) $row['counsellor_user_id'] : $userId);
+            }
             $current = (string) $row['status'];
             if (! in_array($current, self::TRANSITIONS[$action], true)) {
                 throw StateMachineException::invalidTransition($current, self::RESULT[$action], 'schedule');

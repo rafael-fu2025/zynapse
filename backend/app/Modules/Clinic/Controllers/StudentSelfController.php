@@ -80,7 +80,7 @@ final class StudentSelfController extends ApiController
         $payload = $this->request->getJSON(true) ?? [];
 
         $rules = [
-            'provider_user_id' => 'required|is_natural_no_zero',
+            'provider_user_id' => 'permit_empty|is_natural_no_zero',
             'scheduled_at'     => 'required|max_length[19]',
             'reason'           => 'permit_empty|max_length[500]',
         ];
@@ -88,10 +88,13 @@ final class StudentSelfController extends ApiController
             throw ApiException::validationFailure($this->collectErrors());
         }
 
-        $dto = Services::appointmentService()->bookSelf(
+        $portal = new \Modules\Clinic\Services\PortalAppointmentService(
+            Services::appointmentService(), Services::queueService(), Services::notificationOutbox(),
+        );
+        $dto = $portal->bookLegacyClinic(
             CurrentUser::assert(),
-            (int) $payload['provider_user_id'],
             (string) $payload['scheduled_at'],
+            ! empty($payload['provider_user_id']) ? (int) $payload['provider_user_id'] : null,
             isset($payload['reason']) && $payload['reason'] !== '' ? (string) $payload['reason'] : null,
         );
 

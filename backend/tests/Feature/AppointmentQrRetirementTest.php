@@ -11,6 +11,7 @@ use DateTimeZone;
 /** Booking and manual attendance work with both retired HMAC keys absent. */
 final class AppointmentQrRetirementTest extends FeatureTestCase
 {
+    use \Tests\Feature\Support\SchedulingStaffFixture;
     private array $retiredEnvironment = [];
 
     protected function setUp(): void
@@ -125,16 +126,24 @@ final class AppointmentQrRetirementTest extends FeatureTestCase
     {
         $staff = $this->login(['clinic_admin']);
         $patient = $this->patient();
-        $slot = gmdate('Y-m-d H:i:s', strtotime('+60 days'));
+        $this->enrollSchedulingFixture($staff['userId'], 'clinic');
+        $local = new DateTimeImmutable('+60 days 09:00', new DateTimeZone('Asia/Manila'));
+        $slot = $local->setTimezone(new DateTimeZone('UTC'))->format('Y-m-d H:i:s');
+        db_connect()->table('clinic_staff_schedules')->insert([
+            'tenant_id' => 1, 'user_id' => $staff['userId'], 'schedule_type' => 'regular',
+            'day_of_week' => (int) $local->format('w'), 'shift_start' => '09:00', 'shift_end' => '10:00',
+            'effective_from' => $local->format('Y-m-d'), 'effective_to' => $local->format('Y-m-d'), 'is_active' => 1,
+            'created_at' => gmdate('Y-m-d H:i:s'), 'updated_at' => gmdate('Y-m-d H:i:s'),
+        ]);
         $booking = $this->postData($patient['token'], 'api/v1/me/student-appointments', [
             'provider_user_id' => $staff['userId'], 'scheduled_at' => $slot, 'reason' => 'Self booking',
         ], 201);
         $this->assertNoQr($booking);
         $this->assertSame('scheduled', $booking['status']);
-        $this->assertSame($staff['userId'], $booking['provider_user_id']);
+        $this->assertNull($booking['provider_user_id']);
         $this->assertSame($patient['schoolId'], $booking['patient_school_id']);
         $this->assertSame('Self booking', $booking['reason']);
-        $this->assertBookingNotifications((int) $booking['id'], $patient['userId'], $staff['userId']);
+        $this->assertBookingNotifications((int) $booking['id'], $patient['userId'], null);
         $this->authed($patient['token'], 'post', 'api/v1/me/student-appointments', [
             'provider_user_id' => $staff['userId'], 'scheduled_at' => $slot,
         ])->assertStatus(409);
@@ -143,6 +152,7 @@ final class AppointmentQrRetirementTest extends FeatureTestCase
     public function testPortalBookSelfWithoutQrAndManualProviderAssignment(): void
     {
         $staff = $this->login(['clinic_admin']);
+        $this->enrollSchedulingFixture($staff['userId'], 'clinic');
         $patient = $this->patient();
         $day = (new DateTimeImmutable('+75 days', new DateTimeZone('Asia/Manila')))->format('Y-m-d');
         db_connect()->table('clinic_staff_schedules')->insert([

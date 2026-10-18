@@ -39,15 +39,15 @@ final class CategoryService extends BaseService
     /**
      * @return array<int, array<string, mixed>>
      */
-    public function listWasteCategories(bool $activeOnly = false): array
+    public function listWasteCategories(bool $activeOnly = false, ?bool $archived = null): array
     {
         $this->policy->check('list');
         $builder = $this->db->table('facilities_waste_categories')
             ->select('id, code, name, description, expected_yield_pct, reference_duration_days, is_active')
             ->where('tenant_id', CurrentTenant::id())
             ->orderBy('name', 'ASC');
-        if ($activeOnly) {
-            $builder->where('is_active', 1);
+        if ($archived !== null || $activeOnly) {
+            $builder->where('is_active', $archived === true ? 0 : 1);
         }
         $rows  = $builder->get()->getResultArray();
         // Expected days = the ASSIGNED reference duration (what the operator
@@ -314,63 +314,10 @@ final class CategoryService extends BaseService
         });
     }
 
-    /**
-     * Hard-delete a waste category. Refuses if any batch or unit still
-     * references it — the operator should archive instead, which keeps
-     * the category out of pickers but preserves history. Mirrors the
-     * legacy `WasteCategoryController::delete()` guard.
-     */
+    /** The legacy DELETE route must not bypass the shared retention guard. */
     public function deleteWasteCategory(int $categoryId): void
     {
         $this->policy->check('categories_manage');
-        $userId = \App\Auth\CurrentUser::assert();
-
-        $this->txn(function () use ($categoryId, $userId): void {
-            $cat = $this->selectForUpdate('facilities_waste_categories', ['id' => $categoryId, 'tenant_id' => CurrentTenant::id()]);
-            if ($cat === null) {
-                throw new ApiException('resource.not_found', 404, [
-                    ['code' => 'resource.not_found', 'message' => "Waste category #{$categoryId} not found."],
-                ]);
-            }
-
-            $batchRefs = $this->db->table('facilities_bmg_batches')
-                ->where('facilities_bmg_batches.tenant_id', CurrentTenant::id())
-                ->where('category_id', $categoryId)
-                ->countAllResults();
-            if ($batchRefs > 0) {
-                throw new ApiException('resource.conflict', 409, [
-                    ['code' => 'resource.conflict', 'message' => "Cannot delete: {$batchRefs} batch(es) reference this category. Archive it instead."],
-                ]);
-            }
-            $unitRefs = $this->db->table('facilities_bmg_units')
-                ->where('facilities_bmg_units.tenant_id', CurrentTenant::id())
-                ->where('default_category_id', $categoryId)
-                ->countAllResults();
-            if ($unitRefs > 0) {
-                throw new ApiException('resource.conflict', 409, [
-                    ['code' => 'resource.conflict', 'message' => "Cannot delete: {$unitRefs} unit(s) reference this category as their default. Clear those first."],
-                ]);
-            }
-            // Drums designate their waste mix through the pivot (set at
-            // drum setup); a category still profiled onto any drum cannot
-            // be hard-deleted.
-            $designatedRefs = $this->db->table('facilities_bmg_unit_categories')
-                ->where('facilities_bmg_unit_categories.tenant_id', CurrentTenant::id())
-                ->where('category_id', $categoryId)
-                ->countAllResults();
-            if ($designatedRefs > 0) {
-                throw new ApiException('resource.conflict', 409, [
-                    ['code' => 'resource.conflict', 'message' => "Cannot delete: {$designatedRefs} drum(s) designate this category in their waste mix. Remove it from those drums first."],
-                ]);
-            }
-
-            $this->db->table('facilities_waste_categories')
-                ->where('facilities_waste_categories.tenant_id', CurrentTenant::id())
-                ->where('id', $categoryId)->delete();
-
-            $this->audit->enqueue('bmg.waste_category_deleted', 'facilities_waste_categories', $categoryId, $userId, [
-                'resource_code' => (string) $cat['code'],
-            ]);
-        });
+        (new \App\Services\Archive\PermanentDeletionService())->delete('waste-categories', $categoryId);
     }
 }

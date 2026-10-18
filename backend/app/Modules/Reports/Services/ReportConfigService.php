@@ -39,6 +39,7 @@ final class ReportConfigService extends BaseService
         int $limit = self::DEFAULT_PAGE_SIZE,
         ?string $module = null,
         array $moduleScope = [],
+        ?bool $archived = null,
     ): array
     {
         [$page, $limit] = $this->normalizePage($page, $limit);
@@ -51,9 +52,9 @@ final class ReportConfigService extends BaseService
             ->where('report_configurations.tenant_id', CurrentTenant::id())
             ->select('id, name, module, report_type, parameters, is_active, created_at, updated_at')
             ->orderBy('created_at', 'DESC')->orderBy('id', 'DESC');
-        if (! $includeArchived) {
-            $countBuilder->where('is_active', 1);
-            $builder->where('is_active', 1);
+        if ($archived !== null || ! $includeArchived) {
+            $countBuilder->where('is_active', $archived === true ? 0 : 1);
+            $builder->where('is_active', $archived === true ? 0 : 1);
         }
         // Unit scope (ReportService::MODULE_EXTRA_PERMISSIONS): callers
         // without a module's read code never see its configurations.

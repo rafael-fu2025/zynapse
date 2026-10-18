@@ -69,6 +69,7 @@ final class Routes implements BaseRoutes
             $r->post('devices',                       'BmgController::createDevice');
             $r->post('devices/(:num)',                'BmgController::updateDevice/$1');
             $r->delete('devices/(:num)',              'BmgController::archiveDevice/$1');
+            $r->post('devices/(:num)/unarchive',      'BmgController::unarchiveDevice/$1');
             $r->post('devices/(:num)/status',         'BmgController::setDeviceStatus/$1');
             $r->post('devices/(:num)/regenerate-token','BmgController::regenerateDeviceToken/$1');
             $r->post('devices/(:num)/commands',        'BmgController::sendDeviceCommand/$1');

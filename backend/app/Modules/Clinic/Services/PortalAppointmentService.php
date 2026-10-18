@@ -109,15 +109,33 @@ final class PortalAppointmentService extends BaseService
             ]]);
         }
         if ($department === 'clinic') {
-            return $this->txn(function () use ($userId, $startUtc, $input): array {
-                $this->assertClinicPlace($startUtc);
-                $dto = $this->clinicAppointments->bookSelf(
-                    $userId, null, $startUtc->format('Y-m-d H:i:s'), $input['reason'] ?? null,
-                )->toArray();
-                return $this->clinicRow($dto);
-            });
+            return $this->clinicRow($this->bookClinicSlot($userId, $startUtc, $input['reason'] ?? null)->toArray());
         }
         return $this->bookGuidance($userId, $startLocal, (string) ($input['type'] ?? 'initial'), $input['reason'] ?? null);
+    }
+
+    /** Legacy clients select a UTC time; a provider hint never reserves a person. */
+    public function bookLegacyClinic(int $userId, string $scheduledAt, ?int $providerId, ?string $reason): \Modules\Clinic\DTOs\AppointmentDto
+    {
+        $start = DateTimeImmutable::createFromFormat('!Y-m-d H:i:s', $scheduledAt, new DateTimeZone('UTC'));
+        if ($start === false || $start->format('Y-m-d H:i:s') !== $scheduledAt) {
+            throw ApiException::validationFailure([['code' => 'validation.field', 'field' => 'scheduled_at', 'message' => 'Use YYYY-MM-DD HH:mm:ss (UTC).']]);
+        }
+        $local = $start->setTimezone(new DateTimeZone(self::LOCAL_TZ));
+        $slots = $this->slots('clinic', $local->format('Y-m-d'), $local->format('Y-m-d'));
+        if (! array_filter($slots, static fn (array $s): bool => $s['starts_at'] === $start->format(DATE_ATOM))) {
+            throw new ApiException('statemachine.schedule.slot_full', 409);
+        }
+        return $this->bookClinicSlot($userId, $start, $reason, $providerId);
+    }
+
+    private function bookClinicSlot(int $userId, DateTimeImmutable $start, ?string $reason, ?int $providerId = null): \Modules\Clinic\DTOs\AppointmentDto
+    {
+        return $this->txn(function () use ($userId, $start, $reason, $providerId) {
+            $this->assertClinicPlace($start, $providerId);
+            $this->assertPatientFree($userId, $start);
+            return $this->clinicAppointments->bookSelf($userId, null, $start->format('Y-m-d H:i:s'), $reason);
+        });
     }
 
     /** @return array<string,mixed> */
@@ -176,18 +194,21 @@ final class PortalAppointmentService extends BaseService
      *
      * @return list<array<string,mixed>>
      */
-    private function clinicSlots(DateTimeImmutable $from, DateTimeImmutable $to): array
+    private function clinicSlots(DateTimeImmutable $from, DateTimeImmutable $to, ?array $eligible = null, bool $current = false): array
     {
-        $schedules = $this->db->table('clinic_staff_schedules')
+        $scheduleQuery = $this->db->table('clinic_staff_schedules')
             ->select('user_id, day_of_week, shift_start, shift_end, effective_from, effective_to')
             ->where('tenant_id', CurrentTenant::id())
-            ->where('is_active', 1)->whereIn('schedule_type', ['regular','on_call'])
-            ->get()->getResultArray();
-        $leave = $this->db->table('clinic_staff_schedules')
+            ->where('is_active', 1)->whereIn('schedule_type', ['regular','on_call']);
+        $schedules = $this->db->query($scheduleQuery->getCompiledSelect() . ($current ? ' FOR UPDATE' : ''))->getResultArray();
+        $leaveQuery = $this->db->table('clinic_staff_schedules')
             ->select('user_id, day_of_week, effective_from, effective_to')
             ->where('tenant_id', CurrentTenant::id())->where('is_active', 1)
-            ->where('schedule_type', 'leave')->get()->getResultArray();
+            ->where('schedule_type', 'leave');
+        $leave = $this->db->query($leaveQuery->getCompiledSelect() . ($current ? ' FOR UPDATE' : ''))->getResultArray();
 
+        $eligible ??= (new \App\Services\SchedulingStaffService())->eligibleIds('clinic');
+        $schedules = array_filter($schedules, static fn (array $s): bool => in_array((int) $s['user_id'], $eligible, true));
         $places = [];
         for ($day = $from; $day <= $to; $day = $day->modify('+1 day')) {
             $dow = (int) $day->format('w');
@@ -206,7 +227,7 @@ final class PortalAppointmentService extends BaseService
             }
         }
 
-        return $this->pooledSlots('clinic', $places, $this->clinicBookedInstants($from, $to));
+        return $this->pooledSlots('clinic', $places, $this->clinicBookedInstants($from, $to, $current));
     }
 
     /**
@@ -225,6 +246,8 @@ final class PortalAppointmentService extends BaseService
             ->where('tenant_id', CurrentTenant::id())->where('is_active', 1)
             ->get()->getResultArray();
 
+        $eligible = (new \App\Services\SchedulingStaffService())->eligibleIds('guidance');
+        $windows = array_filter($windows, static fn (array $w): bool => in_array((int) $w['counsellor_user_id'], $eligible, true));
         $places = [];
         for ($day = $from; $day <= $to; $day = $day->modify('+1 day')) {
             $dow = (int) $day->format('w');
@@ -305,18 +328,20 @@ final class PortalAppointmentService extends BaseService
     }
 
     /** @return list<int> */
-    private function clinicBookedInstants(DateTimeImmutable $from, DateTimeImmutable $to): array
+    private function clinicBookedInstants(DateTimeImmutable $from, DateTimeImmutable $to, bool $current = false): array
     {
         // Padded by a day either side: a late appointment on the previous day
         // still overlaps the first slot of the range.
-        $rows = $this->db->table('clinic_appointments')
+        $query = $this->db->table('clinic_appointments')
             ->select('scheduled_at')
             ->where('tenant_id', CurrentTenant::id())
             ->whereIn('status', ['scheduled','confirmed','checked_in'])
             ->where('archived_at', null)
             ->where('scheduled_at >=', $this->localBoundaryUtc($from->modify('-1 day')->format('Y-m-d'), false))
-            ->where('scheduled_at <=', $this->localBoundaryUtc($to->modify('+1 day')->format('Y-m-d'), true))
-            ->get()->getResultArray();
+            ->where('scheduled_at <=', $this->localBoundaryUtc($to->modify('+1 day')->format('Y-m-d'), true));
+        // Current reads are essential after waiting for another booking's locks:
+        // a REPEATABLE READ snapshot may predate that booking's commit.
+        $rows = $this->db->query($query->getCompiledSelect() . ($current ? ' FOR UPDATE' : ''))->getResultArray();
         $out = [];
         foreach ($rows as $r) $out[] = (new DateTimeImmutable((string) $r['scheduled_at'], new DateTimeZone('UTC')))->getTimestamp();
         return $out;
@@ -347,14 +372,14 @@ final class PortalAppointmentService extends BaseService
      * capacity, then re-derive the day inside the transaction, so the last
      * place cannot be sold twice.
      */
-    private function assertClinicPlace(DateTimeImmutable $startUtc): void
+    private function assertClinicPlace(DateTimeImmutable $startUtc, ?int $providerId = null): void
     {
-        $this->db->query(
-            'SELECT `id` FROM `clinic_staff_schedules` WHERE `tenant_id` = ? AND `is_active` = 1 FOR UPDATE',
-            [CurrentTenant::id()],
-        )->getResultArray();
+        $eligible = (new \App\Services\SchedulingStaffService())->eligibleIds('clinic', true);
+        if ($providerId !== null && ! in_array($providerId, $eligible, true)) {
+            throw ApiException::validationFailure([['code' => 'scheduling.staff.ineligible', 'field' => 'provider_user_id', 'message' => 'The requested provider requires active eligible enrollment.']]);
+        }
         $local = $startUtc->setTimezone(new DateTimeZone(self::LOCAL_TZ));
-        $available = $this->clinicSlots($local, $local);
+        $available = $this->clinicSlots($local, $local, $eligible, true);
         if (! array_filter($available, static fn(array $s): bool => $s['starts_at'] === $startUtc->format(DATE_ATOM))) {
             throw new ApiException('statemachine.schedule.slot_full', 409, [[
                 'code'=>'statemachine.schedule.slot_full','message'=>'That slot was just taken. Choose another time.',
@@ -377,6 +402,7 @@ final class PortalAppointmentService extends BaseService
     private function bookGuidance(int $userId, DateTimeImmutable $local, string $type, ?string $reason): array
     {
         return $this->txn(function () use ($userId, $local, $type, $reason): array {
+            $eligible = (new \App\Services\SchedulingStaffService())->eligibleIds('guidance', true);
             $utc = $local->setTimezone(new DateTimeZone('UTC'));
             $this->assertPatientFree($userId, $utc);
             $this->assertUnderNoShowLimit($userId);
@@ -386,7 +412,7 @@ final class PortalAppointmentService extends BaseService
             $windows=$this->db->query('SELECT `counsellor_user_id` FROM `counselling_availability` WHERE `tenant_id`=? AND `day_of_week`=? AND `is_active`=1 AND `start_time`<=? AND `end_time`>=? FOR UPDATE',[CurrentTenant::id(),(int)$local->format('w'),$local->format('H:i:s'),$end->format('H:i:s')])->getResultArray();
             // Distinct counsellors: two overlapping windows held by one person
             // are one place, matching what the portal offered.
-            $capacity=count(array_unique(array_map(static fn(array $w):int=>(int)$w['counsellor_user_id'],$windows)));
+            $capacity=count(array_intersect($eligible, array_unique(array_map(static fn(array $w):int=>(int)$w['counsellor_user_id'],$windows))));
             if($capacity===0)throw new ApiException('statemachine.schedule.outside_availability',409,[['code'=>'statemachine.schedule.outside_availability','message'=>'No provider is available for that slot.']]);
             $count=$this->db->query('SELECT COUNT(*) AS n FROM `counselling_appointments` WHERE `tenant_id`=? AND `appointment_date`=? AND `status` IN (?,?) AND NOT (?<=`start_time` OR ?>=`end_time`) FOR UPDATE',[CurrentTenant::id(),$local->format('Y-m-d'),'scheduled','confirmed',$end->format('H:i:s'),$local->format('H:i:s')])->getRowArray();
             if((int)($count['n']??0)>=$capacity)throw new ApiException('statemachine.schedule.slot_full',409,[['code'=>'statemachine.schedule.slot_full','message'=>'That slot was just booked. Choose another time.']]);

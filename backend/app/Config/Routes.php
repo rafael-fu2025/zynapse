@@ -33,6 +33,8 @@ $routes->group('api/v1/auth', ['namespace' => 'App\Controllers\Api\Auth'], stati
     $r->post('logout',  'AuthController::logout',  ['filter' => 'api_auth']);
     $r->post('change-password', 'AuthController::changePassword', ['filter' => 'api_auth']);
     $r->get('me',       'AuthController::me',      ['filter' => 'api_auth']);
+    // Public read for the login-page carousel (no JWT — login is pre-auth).
+    $r->get('carousel-slides', 'CarouselPublicController::index');
 });
 
 // ---------------------------------------------------------------------
@@ -41,6 +43,20 @@ $routes->group('api/v1/auth', ['namespace' => 'App\Controllers\Api\Auth'], stati
 $routes->group('api/v1/rbac', ['namespace' => 'App\Controllers\Api\Rbac', 'filter' => 'api_auth'], static function (RouteCollection $r): void {
     $r->get('permissions', 'PermissionController::index');
     $r->get('roles',       'RoleController::index');
+});
+
+$routes->post(
+    'api/v1/archived-records/(:segment)/(:num)/delete-permanently',
+    '\\App\\Controllers\\Api\\ArchivedRecordController::deletePermanently/$1/$2',
+    ['filter' => 'api_auth'],
+);
+
+$routes->group('api/v1/scheduling/staff', ['namespace' => 'App\Controllers\Api', 'filter' => 'api_auth'], static function (RouteCollection $r): void {
+    $r->get('(:segment)/providers', 'SchedulingStaffController::providers/$1');
+    $r->get('(:segment)', 'SchedulingStaffController::index/$1');
+    $r->post('(:segment)/enroll', 'SchedulingStaffController::enroll/$1');
+    $r->post('(:segment)/assignments/(:num)/status', 'SchedulingStaffController::status/$1/$2');
+    $r->post('(:segment)/template', 'SchedulingStaffController::template/$1');
 });
 
 // ---------------------------------------------------------------------
@@ -76,9 +92,21 @@ $routes->group('api/v1/admin', ['namespace' => 'App\Controllers\Api\Admin', 'fil
     $r->post('users',                      'UserController::create');
     $r->post('users/provision',            'UserController::provision');
     $r->post('users/sync-directory',       'UserController::syncDirectory');
+    $r->get('users/sync-directory/jobs/latest', 'UserController::latestSyncJob');
+    $r->get('users/sync-directory/jobs/(:num)', 'UserController::syncJob/$1');
     $r->post('users/(:num)/status',        'UserController::setStatus/$1');
     $r->post('users/(:num)/groups',        'UserController::setGroups/$1');
     $r->post('users/(:num)/reset-password','UserController::resetPassword/$1');
+
+    // Login-page carousel CRUD — `rbac.manage` enforces inside each action
+    // (consistent with UserController). Multipart uploads for create/update,
+    // JSON for delete/toggle/reorder.
+    $r->get('carousel',                            'CarouselController::index');
+    $r->post('carousel',                           'CarouselController::create');
+    $r->post('carousel/(:num)',                    'CarouselController::update/$1');
+    $r->post('carousel/(:num)/delete',             'CarouselController::delete/$1');
+    $r->post('carousel/(:num)/toggle',             'CarouselController::toggle/$1');
+    $r->post('carousel/reorder',                   'CarouselController::reorder');
 });
 
 // ---------------------------------------------------------------------
@@ -94,6 +122,9 @@ $routes->group('api/v1/notifications', ['namespace' => 'App\Controllers\Api\Noti
 // Dashboard — permission-aware counters.
 // ---------------------------------------------------------------------
 $routes->group('api/v1/dashboard', ['namespace' => 'App\Controllers\Api\Dashboard', 'filter' => 'api_auth'], static function (RouteCollection $r): void {
+    $r->get('clinic', 'DashboardController::clinic');
+    $r->get('guidance', 'DashboardController::guidance');
+    $r->get('facilities', 'DashboardController::facilities');
     $r->get('counters', 'DashboardController::counters');
     $r->get('ping',     'DashboardController::ping');
 });

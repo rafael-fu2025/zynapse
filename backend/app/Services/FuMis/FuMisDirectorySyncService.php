@@ -33,7 +33,7 @@ final class FuMisDirectorySyncService extends BaseService
         $this->config = $config ?? new FuMis();
     }
 
-    public function run(string $kind = 'all', bool $dryRun = true, int $pageSize = 100, int $maxPages = 1000): array
+    public function run(string $kind = 'all', bool $dryRun = true, int $pageSize = 100, int $maxPages = 1000, ?callable $fence = null, ?callable $progress = null, ?int $actorId = null): array
     {
         if (! in_array($kind, ['all', 'student', 'employee'], true) || $pageSize < 1 || $pageSize > 100
             || $maxPages < 1 || $maxPages > 10000) {
@@ -78,7 +78,11 @@ final class FuMisDirectorySyncService extends BaseService
                     $fingerprints[$fingerprint] = true;
                     $pageSeen = $seen;
                     $counts = $result['kinds'][$namespace];
-                    $writePage = function () use ($namespace, $profiles, $dryRun, &$counts, &$pageSeen): void {
+                    $writePage = function () use ($namespace, $profiles, $dryRun, &$counts, &$pageSeen, $fence, $progress, $page, $lastPage, $result, $actorId): void {
+                        // Lock ownership before ANY identity changes; progress shares this transaction.
+                        if ($fence !== null) {
+                            $fence();
+                        }
                         foreach ($profiles as $profile) {
                             $key = strtolower($profile['identifier']);
                             $counts['fetched']++;
@@ -91,19 +95,21 @@ final class FuMisDirectorySyncService extends BaseService
                             $pageSeen[$key] = true;
                         }
                         if (! $dryRun) {
-                            Services::auditOutbox()->enqueue('mis.directory_page_synced', 'users', null, null, [
+                            Services::auditOutbox()->enqueue('mis.directory_page_synced', 'users', null, $actorId, [
                                 'reason_code' => 'synapse:mis-sync',
                                 'resource_code' => $namespace,
                                 'outcome' => 'synced',
                             ]);
                         }
+                        $counts['pages']++;
+                        $counts['total_pages'] = $lastPage;
+                        if ($progress !== null) {
+                            $committed = $result['kinds'];
+                            $committed[$namespace] = $counts;
+                            $progress($namespace, $page, $lastPage, $committed);
+                        }
                     };
-                    if ($dryRun) {
-                        $writePage();
-                    } else {
-                        $this->txn($writePage);
-                    }
-                    $counts['pages']++;
+                    $this->txn($writePage);
                     $result['kinds'][$namespace] = $counts;
                     $seen = $pageSeen;
                 }

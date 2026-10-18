@@ -122,12 +122,21 @@ Production must drain the durable outbox and report queue outside HTTP processes
 ```cron
 * * * * * cd /path/to/zynapse/backend && php spark synapse:audit-drain --batch=500 --max-batches=10
 * * * * * cd /path/to/zynapse/backend && php spark synapse:reports-drain --limit=10
+* * * * * cd /path/to/zynapse/backend && php spark synapse:mis-sync-drain --limit=1
 * * * * * cd /path/to/zynapse/backend && php spark synapse:appointments-enqueue-due
 */15 * * * * cd /path/to/zynapse/backend && php spark synapse:bmg-device-watchdog
 15 2 * * * cd /path/to/zynapse/backend && php spark synapse:audit-verify
 ```
 
-The appointment worker promotes Clinic and Guidance bookings into their destination queues at T−15. The reports worker streams CSV rows to disk without holding a transaction open and expires files after 30 days — run a single reports worker. The BMG watchdog sweeps every 15 min (offline / RTC-invalid / missed-run alerts, deduped per episode; threshold `BMG_OFFLINE_AFTER_MIN`, default 20). Route non-zero exits and the nightly verification result to alerting. Full command list: [`backend/README.md`](backend/README.md#cli-workers--commands).
+The appointment worker promotes Clinic and Guidance bookings into their destination queues at T−15. The reports worker streams CSV rows to disk without holding a transaction open and expires files after 30 days — run a single reports worker. The BMG watchdog sweeps every 15 min (offline / RTC-invalid / missed-run alerts, deduped per episode; threshold `BMG_OFFLINE_AFTER_MIN`, default 20). Route non-zero exits and the nightly verification result to alerting. Full command list: [`backend/README.md`](backend/README.md#background-workers).
+
+### MIS directory jobs
+
+The Users page submits Preview and Apply as durable jobs, then polls their status. Run database migrations before deploying the updated API, and run `synapse:mis-sync-drain` on a server that can reach the campus MIS API. Without a worker, jobs remain **queued**; closing the dialog or reloading the browser does not cancel them. The worker is required for both preview and apply. Preview persists job progress but does not change person profiles or memberships.
+
+Only one queued/running sync is admitted per tenant. Apply commits one page at a time, so a failed or interrupted job may have already applied earlier pages. Check its committed counts before retrying. Interrupted jobs are not automatically replayed: a new submission starts a fresh sweep, preserving the existing identity checks and account-state safeguards. Job status and results are available to users with `rbac.manage` in that job's tenant. No person-change or completion notifications are sent.
+
+See the [backend worker documentation](backend/README.md#background-workers) for tenant selection and interruption recovery. The cron entry above is a deployment example, not an automatically installed scheduler.
 
 ## BMG device integration (mechanized tumbler)
 

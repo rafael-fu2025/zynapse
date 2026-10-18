@@ -46,7 +46,7 @@ final class SessionAppointmentLinkContractTest extends TestCase
         $service = $this->read('app/Modules/Counselling/Services/CounsellingService.php');
 
         $this->assertStringContainsString(
-            'public function listSessions(?string $cursor, int $limit, ?int $appointmentId = null, ?string $patientSchoolId = null): array',
+            'public function listSessions(?string $cursor, int $limit, ?int $appointmentId = null, ?string $patientSchoolId = null, bool $archived = false): array',
             $service,
             'The appointment and patient filters must be optional, so the unfiltered list keeps working.',
         );
@@ -133,7 +133,7 @@ final class SessionAppointmentLinkContractTest extends TestCase
         );
         // And it has to reach the service, not just be validated.
         $this->assertStringContainsString(
-            '$this->service->listSessions($cursor !== \'\' ? $cursor : null, $limit, $appointmentId, $patientSchoolId)',
+            '$this->service->listSessions($cursor !== \'\' ? $cursor : null, $limit, $appointmentId, $patientSchoolId, $archived)',
             $controller,
         );
     }

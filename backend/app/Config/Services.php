@@ -105,6 +105,19 @@ class Services extends CoreServices
         return new AuditOutboxService();
     }
 
+    /**
+     * Login-page carousel service. Shared per-request — the service
+     * holds no mutable state, so reuse is safe and avoids a fresh
+     * DB connection per call.
+     */
+    public static function carouselService(bool $getShared = true): \App\Services\Carousel\CarouselService
+    {
+        if ($getShared) {
+            return static::getSharedInstance('carouselService');
+        }
+        return new \App\Services\Carousel\CarouselService();
+    }
+
     public static function auditDrain(bool $getShared = true): AuditDrainService
     {
         if ($getShared) {

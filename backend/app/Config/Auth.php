@@ -22,6 +22,8 @@ class Auth extends ShieldAuth
     public int    $jwtAccessTtl  = 900;
     public int    $jwtRefreshTtl = 2592000;
     public string $jwtAlgorithm  = 'HS256';
+    public string $jwtIssuer     = '';
+    public string $jwtAudience   = 'synapse-api';
 
     /** Refresh-token cookie configuration. */
     public string $refreshCookieName    = 'synapse_rt';
@@ -38,9 +40,17 @@ class Auth extends ShieldAuth
         $this->jwtAccessTtl        = (int) $env('JWT_ACCESS_TTL_SECONDS', 900);
         $this->jwtRefreshTtl       = (int) $env('JWT_REFRESH_TTL_SECONDS', 2592000);
         $this->jwtAlgorithm        = (string) $env('JWT_ALG', 'HS256');
+        $this->jwtIssuer           = (string) $env('JWT_ISSUER', '');
+        $this->jwtAudience         = (string) $env('JWT_AUDIENCE', 'synapse-api');
         $this->refreshCookieName    = (string) $env('REFRESH_COOKIE_NAME', 'synapse_rt');
-        $this->refreshCookieSecure  = (bool) $env('REFRESH_COOKIE_SECURE', '1');
-        $this->refreshCookieHttpOnly = (bool) $env('REFRESH_COOKIE_HTTPONLY', '1');
+        $this->refreshCookieSecure  = filter_var($env('REFRESH_COOKIE_SECURE', '1'), FILTER_VALIDATE_BOOL);
+        $this->refreshCookieHttpOnly = true;
         $this->refreshCookieSameSite = (string) $env('REFRESH_COOKIE_SAMESITE', 'Strict');
+    }
+
+    public static function __set_state(array $array)
+    {
+        $obj = new static();
+        return parent::__set_state(array_merge(get_object_vars($obj), $array));
     }
 }

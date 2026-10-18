@@ -53,10 +53,12 @@ final class Routes implements BaseRoutes
             $r->post('announcements',                 'GuidanceContentController::createAnnouncement');
             $r->post('announcements/(:num)/update',   'GuidanceContentController::updateAnnouncement/$1');
             $r->post('announcements/(:num)/archive',  'GuidanceContentController::archiveAnnouncement/$1');
+            $r->post('announcements/(:num)/unarchive','GuidanceContentController::unarchiveAnnouncement/$1');
             $r->get('services',                       'GuidanceContentController::listServices');
             $r->post('services',                      'GuidanceContentController::createService');
             $r->post('services/(:num)/update',        'GuidanceContentController::updateService/$1');
             $r->post('services/(:num)/archive',       'GuidanceContentController::archiveService/$1');
+            $r->post('services/(:num)/unarchive',     'GuidanceContentController::unarchiveService/$1');
 
             // Surveys engine (2026-09 parity plan Phase B) — builder,
             // publish, responses.
@@ -70,6 +72,7 @@ final class Routes implements BaseRoutes
             $r->post('surveys/(:num)/links/(:num)/patch', 'SurveyController::patchLink/$1/$2');
             $r->post('surveys/(:num)/publish',        'SurveyController::publishSurvey/$1');
             $r->post('surveys/(:num)/archive',        'SurveyController::archiveSurvey/$1');
+            $r->post('surveys/(:num)/unarchive',      'SurveyController::unarchiveSurvey/$1');
             $r->get('surveys/(:num)/responses',       'SurveyController::listResponses/$1');
             $r->get('surveys/(:num)/responses/(:num)', 'SurveyController::responseDetail/$1/$2');
             $r->get('surveys/(:num)/responses/(:num)/screenshots/(:num)', 'SurveyController::downloadScreenshot/$1/$2/$3');

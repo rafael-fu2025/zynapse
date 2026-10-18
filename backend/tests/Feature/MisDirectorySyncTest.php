@@ -232,11 +232,15 @@ final class MisDirectorySyncTest extends FeatureTestCase
             'kind'    => 'student',
             'dry_run' => true,
         ]);
-        $dryRes->assertStatus(200);
+        $dryRes->assertStatus(202);
         $dryData = $this->envelope($dryRes)['data'];
-        $this->assertTrue($dryData['success']);
+        $this->assertSame('queued', $dryData['status']);
         $this->assertTrue($dryData['dry_run']);
-        $this->assertSame(1, $dryData['kinds']['student']['created']);
+        $this->assertSame([], $this->transport->recordedUrls, 'Enqueue must never call MIS');
+        $jobs = new \App\Services\FuMis\MisSyncJobService();
+        $dryResult = $jobs->execute($jobs->claim($dryData['id']));
+        $this->assertSame('completed', $dryResult['status']);
+        $this->assertSame(1, $dryResult['kinds']->student['created']);
 
         $db = Services::database();
         $this->assertSame(0, $db->table('users')->where('student_number', $stuId)->countAllResults());
@@ -246,16 +250,23 @@ final class MisDirectorySyncTest extends FeatureTestCase
             'kind'    => 'student',
             'dry_run' => false,
         ]);
-        $applyRes->assertStatus(200);
+        $applyRes->assertStatus(202);
         $applyData = $this->envelope($applyRes)['data'];
-        $this->assertTrue($applyData['success']);
+        $this->assertSame('queued', $applyData['status']);
         $this->assertFalse($applyData['dry_run']);
+        $result = $jobs->execute($jobs->claim($applyData['id']));
+        $this->assertSame('completed', $result['status']);
+        $this->authed($actorAdmin['token'], 'get', 'api/v1/admin/users/sync-directory/jobs/' . $applyData['id'])->assertStatus(200);
+        $this->authed($actorStudent['token'], 'get', 'api/v1/admin/users/sync-directory/jobs/latest')->assertStatus(403);
 
         $this->assertSame(1, $db->table('users')->where('student_number', $stuId)->countAllResults());
     }
 
     public function testMisAutoSyncServiceRespectsCooldownAndDisabledConfig(): void
     {
+        $db = Services::database();
+        $db->table('tenants')->insert(['name' => 'MIS auto test', 'slug' => 'mis-auto-' . bin2hex(random_bytes(6)), 'is_active' => 1, 'created_at' => date('Y-m-d H:i:s'), 'updated_at' => date('Y-m-d H:i:s')]);
+        \App\Services\CurrentTenant::set((int) $db->insertID());
         $stuId = '2026' . random_int(100000, 999999);
         $this->transport->studentPages = [
             1 => [
@@ -274,12 +285,14 @@ final class MisDirectorySyncTest extends FeatureTestCase
 
         $autoService = new \App\Services\FuMis\MisAutoSyncService($config, $tempCacheDir);
 
-        // First run executes and populates database
         $summary = $autoService->maybeRun(false);
         $this->assertNotNull($summary);
-        $this->assertTrue($summary['success']);
-
+        $this->assertSame('queued', $summary['status']);
+        $this->assertSame([], $this->transport->recordedUrls);
         $db = Services::database();
+        $this->assertSame(0, $db->table('users')->where('student_number', $stuId)->countAllResults());
+        $jobs = new \App\Services\FuMis\MisSyncJobService();
+        $this->assertSame('completed', $jobs->execute($jobs->claim($summary['id']))['status']);
         $this->assertSame(1, $db->table('users')->where('student_number', $stuId)->countAllResults());
 
         // Second run immediately after is skipped due to cooldown
@@ -336,6 +349,161 @@ final class MisDirectorySyncTest extends FeatureTestCase
             static fn (string $url): bool => str_contains($url, '/api/v1/students/login'),
         );
         $this->assertCount(1, $loginCalls, 'Login must only query the specific user login endpoint');
+    }
+
+    public function testAdmissionGuardsAndStaleWorkerCannotReplay(): void
+    {
+        $jobs = new \App\Services\FuMis\MisSyncJobService();
+        $job = $jobs->enqueue('student', true);
+        $this->assertSame($job['id'], $jobs->enqueue('student', true)['id']);
+        try {
+            $jobs->enqueue('employee', true);
+            $this->fail('Conflicting options must fail');
+        } catch (\App\Exceptions\ApiException $e) {
+            $this->assertSame('mis.sync_active', $e->errorCode);
+        }
+        $claim = $jobs->claim($job['id']);
+        $this->assertNull($jobs->claim($job['id']), 'Only one owner can claim');
+        Services::database()->table('mis_sync_jobs')->where('tenant_id', 1)->where('id', $job['id'])
+            ->update(['heartbeat_at' => '2000-01-01 00:00:00']);
+        $this->assertSame('interrupted', $jobs->latest()['status']);
+        $this->assertNull($jobs->enqueue('all', false, 100, 1000, 'auto', 0));
+        $retry = $jobs->enqueue('student', true);
+        $this->assertNotSame($job['id'], $retry['id']);
+        $this->assertSame(0, $retry['current_page']);
+        $this->assertSame('interrupted', $jobs->execute($claim)['status']);
+        $this->assertSame('queued', $jobs->get($retry['id'])['status']);
+        $jobs->execute($jobs->claim($retry['id']));
+    }
+
+    public function testCommittedProgressSurvivesPaginationFailure(): void
+    {
+        $id = '2026' . random_int(100000, 999999);
+        $this->transport->studentPages = [
+            1 => ['data' => [['student_id' => $id, 'first_name' => 'Committed']], 'current_page' => 1, 'max_page' => 2],
+            2 => ['data' => [], 'current_page' => 2, 'max_page' => 3],
+        ];
+        $jobs = new \App\Services\FuMis\MisSyncJobService();
+        $job = $jobs->enqueue('student', false);
+        $result = $jobs->execute($jobs->claim($job['id']));
+        $this->assertSame('failed', $result['status']);
+        $this->assertSame('mis.directory_contract', $result['error']['code']);
+        $this->assertSame(1, $result['current_page']);
+        $this->assertSame(1, $result['kinds']->student['created']);
+        $this->assertSame(1, $result['kinds']->student['pages']);
+        $this->assertSame(1, Services::database()->table('users')->where('tenant_id', 1)->where('student_number', $id)->countAllResults());
+    }
+
+    public function testFailedProgressWriteRollsBackIdentityPageAndSummary(): void
+    {
+        $first = '2026' . random_int(100000, 999999);
+        $second = '2026' . random_int(100000, 999999);
+        $this->transport->studentPages = [
+            1 => ['data' => [['student_id' => $first, 'first_name' => 'First']], 'current_page' => 1, 'max_page' => 2],
+            2 => ['data' => [['student_id' => $second, 'first_name' => 'Second']], 'current_page' => 2, 'max_page' => 2],
+        ];
+        $jobs = new \App\Services\FuMis\MisSyncJobService();
+        $job = $jobs->enqueue('student', false);
+        $claim = $jobs->claim($job['id']);
+        $summary = (new FuMisDirectorySyncService())->run('student', false, 100, 1000,
+            fn () => $jobs->fence($claim),
+            function (string $kind, int $page, int $total, array $kinds) use ($jobs, $claim): void {
+                $jobs->progress($claim, $kind, $page, $total, $kinds);
+                if ($page === 2) {
+                    throw new \RuntimeException('simulated commit failure');
+                }
+            });
+        $this->assertFalse($summary['success']);
+        $this->assertSame(1, $summary['kinds']['student']['pages']);
+        $committed = $jobs->get($job['id']);
+        $this->assertSame(1, $committed['current_page']);
+        $this->assertSame(1, $committed['kinds']->student['created']);
+        $db = Services::database();
+        $this->assertSame(1, $db->table('users')->where('tenant_id', 1)->where('student_number', $first)->countAllResults());
+        $this->assertSame(0, $db->table('users')->where('tenant_id', 1)->where('student_number', $second)->countAllResults());
+        // Settle the deliberately aborted worker; no replay is performed.
+        $db->table('mis_sync_jobs')->where('tenant_id', 1)->where('id', $job['id'])->update(['heartbeat_at' => '2000-01-01 00:00:00']);
+        $this->assertSame('interrupted', $jobs->get($job['id'])['status']);
+    }
+
+    public function testSecondTenantAuthorizationExecutionAndContextRestore(): void
+    {
+        $db = Services::database();
+        $db->table('tenants')->insert(['name' => 'MIS second tenant', 'slug' => 'mis-second-' . bin2hex(random_bytes(6)), 'is_active' => 1, 'created_at' => date('Y-m-d H:i:s'), 'updated_at' => date('Y-m-d H:i:s')]);
+        $tenant = (int) $db->insertID();
+        $this->assertNotSame(1, $tenant);
+        $admin = $this->login(['superadmin']);
+        $db->table('users')->where('id', $admin['userId'])->update(['tenant_id' => $tenant]);
+        $id = '2026' . random_int(100000, 999999);
+        $this->transport->studentPages = [1 => ['data' => [['student_id' => $id, 'first_name' => 'SecondTenant']], 'current_page' => 1, 'max_page' => 1]];
+        $res = $this->authed($admin['token'], 'post', 'api/v1/admin/users/sync-directory', ['kind' => 'student', 'dry_run' => false]);
+        $res->assertStatus(202);
+        $job = $this->envelope($res)['data'];
+        $this->assertSame($tenant, $job['tenant_id']);
+        $this->assertSame([], $this->transport->recordedUrls);
+        \App\Services\CurrentTenant::set(1);
+        $jobs = new \App\Services\FuMis\MisSyncJobService();
+        $results = $jobs->drain(1, $tenant);
+        $this->assertSame('completed', $results[0]['status']);
+        $this->assertSame(1, \App\Services\CurrentTenant::id());
+        $this->assertSame(1, $db->table('users')->where('tenant_id', $tenant)->where('student_number', $id)->countAllResults());
+        $this->assertSame(0, $db->table('users')->where('tenant_id', 1)->where('student_number', $id)->countAllResults());
+        $other = $this->login(['superadmin']);
+        $this->authed($other['token'], 'get', 'api/v1/admin/users/sync-directory/jobs/' . $job['id'])->assertStatus(404);
+        $own = $this->authed($admin['token'], 'get', 'api/v1/admin/users/sync-directory/jobs/' . $job['id']);
+        $own->assertStatus(200);
+        $this->assertSame($tenant, $this->envelope($own)['data']['tenant_id']);
+    }
+
+    public function testHttpValidationRejectsCoercedInputs(): void
+    {
+        $admin = $this->login(['superadmin']);
+        foreach ([['dry_run' => 'false'], ['page_size' => 0], ['max_pages' => 10001], ['page_size' => '10']] as $input) {
+            $this->authed($admin['token'], 'post', 'api/v1/admin/users/sync-directory', $input + ['kind' => 'student', 'dry_run' => true])->assertStatus(422);
+        }
+        $this->assertSame([], $this->transport->recordedUrls);
+    }
+
+    public function testAdminSyncDirectoryRejectsUnknownKind(): void
+    {
+        $actorAdmin = $this->login(['superadmin']);
+
+        $res = $this->authed($actorAdmin['token'], 'post', 'api/v1/admin/users/sync-directory', [
+            'kind'    => 'contractor',
+            'dry_run' => true,
+        ]);
+        $res->assertStatus(422);
+    }
+
+    public function testAdminSyncDirectoryApplyReportsActorTenant(): void
+    {
+        $actorAdmin = $this->login(['superadmin']);
+
+        $stuId = '2026' . random_int(100000, 999999);
+        $this->transport->studentPages = [
+            1 => [
+                'data'         => [['student_id' => $stuId, 'first_name' => 'TenantScopedStudent']],
+                'current_page' => 1,
+                'max_page'     => 1,
+            ],
+        ];
+
+        $res = $this->authed($actorAdmin['token'], 'post', 'api/v1/admin/users/sync-directory', [
+            'kind'    => 'student',
+            'dry_run' => false,
+        ]);
+        $res->assertStatus(202);
+        $data = $this->envelope($res)['data'];
+        $jobs = new \App\Services\FuMis\MisSyncJobService();
+        $this->assertSame('completed', $jobs->execute($jobs->claim($data['id']))['status']);
+
+        $tenantId = (int) Services::database()->table('users')
+            ->select('tenant_id')
+            ->where('student_number', $stuId)
+            ->get()
+            ->getRowArray()['tenant_id'];
+
+        $this->assertSame($tenantId, (int) $data['tenant_id']);
     }
 }
 

@@ -158,13 +158,28 @@ final class UserController extends ApiController
             ]);
         }
 
-        $dryRun = (bool) ($payload['dry_run'] ?? false);
-        $pageSize = filter_var($payload['page_size'] ?? 100, FILTER_VALIDATE_INT) ?: 100;
-        $maxPages = filter_var($payload['max_pages'] ?? 1000, FILTER_VALIDATE_INT) ?: 1000;
+        $dryRun = $payload['dry_run'] ?? false;
+        $pageSize = $payload['page_size'] ?? 100;
+        $maxPages = $payload['max_pages'] ?? 1000;
+        if (! is_bool($dryRun) || ! is_int($pageSize) || ! is_int($maxPages)) {
+            throw ApiException::validationFailure([
+                ['code' => 'validation.field', 'message' => 'dry_run must be boolean; page_size and max_pages must be integers.', 'field' => 'dry_run'],
+            ]);
+        }
+        \App\Services\FuMis\MisSyncJobService::validate($kind, $pageSize, $maxPages);
+        return $this->ok($this->service->syncDirectory($kind, $dryRun, $pageSize, $maxPages), null, 202);
+    }
 
-        $summary = $this->service->syncDirectory($kind, $dryRun, $pageSize, $maxPages);
+    public function latestSyncJob(): ResponseInterface
+    {
+        $this->authorize('rbac.manage');
+        return $this->ok((new \App\Services\FuMis\MisSyncJobService())->latest());
+    }
 
-        return $this->ok($summary, null, 200);
+    public function syncJob(int $id): ResponseInterface
+    {
+        $this->authorize('rbac.manage');
+        return $this->ok((new \App\Services\FuMis\MisSyncJobService())->get($id));
     }
 
     public function setStatus(int $userId): ResponseInterface

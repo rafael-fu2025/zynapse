@@ -283,7 +283,11 @@ final class QueueService extends BaseService
         $userId = \App\Auth\CurrentUser::assert();
 
         return $this->txn(function () use ($id, $newCounsellorUserId, $userId): array {
-            $row = $this->selectForUpdate('counselling_queue_entries', ['tenant_id' => CurrentTenant::id(), 'id' => $id]);
+            $staff = new \App\Services\SchedulingStaffService();
+            $row = $staff->lockResource(
+                'guidance', 'counselling_queue_entries', $id, 'assigned_counsellor_user_id',
+                $newCounsellorUserId !== null ? [$newCounsellorUserId] : [],
+            );
             if ($row === null) {
                 throw new ApiException('resource.not_found', 404, [
                     ['code' => 'resource.not_found', 'message' => "Guidance queue entry #{$id} not found."],
@@ -296,16 +300,7 @@ final class QueueService extends BaseService
             }
 
             if ($newCounsellorUserId !== null) {
-                $target = $this->db->table('users')
-                    ->where('users.tenant_id', CurrentTenant::id())
-                    ->select('id, archived_at, status')
-                    ->where('id', $newCounsellorUserId)
-                    ->get()->getRowArray();
-                if ($target === null || $target['archived_at'] !== null || (string) $target['status'] !== 'active') {
-                    throw new ApiException('validation.invalid', 422, [
-                        ['code' => 'validation.invalid', 'message' => 'Target counsellor must be an active user.', 'field' => 'assigned_counsellor_user_id'],
-                    ]);
-                }
+                $staff->assertAssignable('guidance', $newCounsellorUserId);
             }
 
             $now = $this->utcNow();

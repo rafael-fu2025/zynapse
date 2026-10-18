@@ -35,7 +35,7 @@ final class StaffScheduleService extends BaseService
     /**
      * @return array<int, array<string, mixed>>
      */
-    public function list(?int $userId, bool $includeArchived = false): array
+    public function list(?int $userId, bool $includeArchived = false, ?bool $archived = null): array
     {
         $this->policy->check('schedulesManage');
 
@@ -48,8 +48,8 @@ final class StaffScheduleService extends BaseService
             ->orderBy('s.user_id', 'ASC')
             ->orderBy('s.day_of_week', 'ASC')
             ->orderBy('s.shift_start', 'ASC');
-        if (! $includeArchived) {
-            $builder->where('s.is_active', 1);
+        if ($archived !== null || ! $includeArchived) {
+            $builder->where('s.is_active', $archived === true ? 0 : 1);
         }
         if ($userId !== null) {
             $builder->where('s.user_id', $userId);
@@ -179,8 +179,10 @@ final class StaffScheduleService extends BaseService
         $actor = \App\Auth\CurrentUser::assert();
 
         return $this->txn(function () use ($id, $input, $actor): array {
-            $row = $this->selectForUpdate('clinic_staff_schedules', ['tenant_id' => CurrentTenant::id(), 'id' => $id, 'is_active' => 1]);
-            if ($row === null) {
+            $row = (new \App\Services\SchedulingStaffService())->lockResource(
+                'clinic', 'clinic_staff_schedules', $id, 'user_id', isset($input['user_id']) ? [(int) $input['user_id']] : [],
+            );
+            if ($row === null || (int) $row['is_active'] !== 1) {
                 throw new ApiException('resource.not_found', 404, [
                     ['code' => 'resource.not_found', 'message' => "Staff schedule #{$id} not found."],
                 ]);
@@ -227,8 +229,8 @@ final class StaffScheduleService extends BaseService
         $actor = \App\Auth\CurrentUser::assert();
 
         $this->txn(function () use ($id, $actor): void {
-            $row = $this->selectForUpdate('clinic_staff_schedules', ['tenant_id' => CurrentTenant::id(), 'id' => $id, 'is_active' => 1]);
-            if ($row === null) {
+            $row = (new \App\Services\SchedulingStaffService())->lockResource('clinic', 'clinic_staff_schedules', $id, 'user_id');
+            if ($row === null || (int) $row['is_active'] !== 1) {
                 throw new ApiException('resource.not_found', 404, [
                     ['code' => 'resource.not_found', 'message' => "Staff schedule #{$id} not found."],
                 ]);
@@ -254,7 +256,7 @@ final class StaffScheduleService extends BaseService
         $actor = \App\Auth\CurrentUser::assert();
 
         return $this->txn(function () use ($id, $actor): array {
-            $row = $this->selectForUpdate('clinic_staff_schedules', ['tenant_id' => CurrentTenant::id(), 'id' => $id]);
+            $row = (new \App\Services\SchedulingStaffService())->lockResource('clinic', 'clinic_staff_schedules', $id, 'user_id');
             if ($row === null) {
                 throw new ApiException('resource.not_found', 404, [
                     ['code' => 'resource.not_found', 'message' => "Staff schedule #{$id} not found."],
@@ -264,6 +266,8 @@ final class StaffScheduleService extends BaseService
                 // Idempotent: already active.
                 return $this->getRow($id);
             }
+            $this->assertUserExists((int) $row['user_id']);
+            $this->assertNoOverlap((int) $row['user_id'], (int) $row['day_of_week'], (string) $row['shift_start'], (string) $row['shift_end'], $id);
             $this->db->table('clinic_staff_schedules')->where('clinic_staff_schedules.tenant_id', CurrentTenant::id())->where('id', $id)->update([
                 'is_active'  => 1,
                 'updated_at' => $this->utcNow(),
@@ -286,20 +290,11 @@ final class StaffScheduleService extends BaseService
     }
 
     /**
-     * The roster only references registered auth users; a bogus id
-     * would otherwise surface as a raw DB FK error (500).
+     * Enrollment and current directory eligibility are required, not login access.
      */
     private function assertUserExists(int $userId): void
     {
-        $exists = $this->db->table('users')
-            ->where('users.tenant_id', CurrentTenant::id())
-            ->where('id', $userId)
-            ->countAllResults() > 0;
-        if (! $exists) {
-            throw ApiException::validationFailure([
-                ['code' => 'validation.field', 'message' => 'User #' . $userId . ' does not exist.', 'field' => 'user_id'],
-            ]);
-        }
+        (new \App\Services\SchedulingStaffService())->assertAssignable('clinic', $userId);
     }
 
     /**
@@ -319,7 +314,7 @@ final class StaffScheduleService extends BaseService
         if ($excludeId !== null) {
             $builder->where('id !=', $excludeId);
         }
-        if ($builder->countAllResults() > 0) {
+        if ($this->db->query($builder->select('id')->getCompiledSelect() . ' FOR UPDATE')->getRowArray() !== null) {
             throw ApiException::validationFailure([
                 ['code' => 'validation.conflict', 'message' => 'Shift overlaps an existing active shift for this staff member on that day.', 'field' => 'shift_start'],
             ]);

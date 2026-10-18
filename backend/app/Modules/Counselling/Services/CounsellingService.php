@@ -46,15 +46,18 @@ final class CounsellingService extends BaseService
      *
      * @return array{data: array<int, array<string, mixed>>, next: ?string, count: int}
      */
-    public function listSessions(?string $cursor, int $limit, ?int $appointmentId = null, ?string $patientSchoolId = null): array
+    public function listSessions(?string $cursor, int $limit, ?int $appointmentId = null, ?string $patientSchoolId = null, bool $archived = false): array
     {
         $this->policy->check('list');
+        if ($archived) {
+            $this->policy->check('unarchive');
+        }
 
         $builder = $this->db->table('counselling_sessions')
             ->where('counselling_sessions.tenant_id', CurrentTenant::id())
-            ->select('counselling_sessions.id, counselling_sessions.patient_user_id, counselling_sessions.patient_school_id, counselling_sessions.counsellor_user_id, counselling_sessions.started_at, counselling_sessions.ended_at, counselling_sessions.created_at, u.username AS counsellor_name')
+            ->select('counselling_sessions.id, counselling_sessions.patient_user_id, counselling_sessions.patient_school_id, counselling_sessions.counsellor_user_id, counselling_sessions.started_at, counselling_sessions.ended_at, counselling_sessions.archived_at, counselling_sessions.created_at, u.username AS counsellor_name')
             ->join('users AS u', 'u.id = counselling_sessions.counsellor_user_id', 'left')
-            ->where('counselling_sessions.archived_at', null)
+            ->where('counselling_sessions.archived_at' . ($archived ? ' IS NOT NULL' : ' IS NULL'), null, false)
             ->orderBy('counselling_sessions.created_at', 'DESC')
             ->orderBy('counselling_sessions.id', 'DESC');
 

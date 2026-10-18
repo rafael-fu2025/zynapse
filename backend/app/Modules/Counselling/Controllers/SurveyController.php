@@ -33,7 +33,9 @@ final class SurveyController extends ApiController
     public function listSurveys(): ResponseInterface
     {
         $this->authorize('counselling.surveys.manage');
-        return $this->ok($this->service->listSurveys());
+        $archivedParam = $this->request->getGet('archived');
+        $showArchived = $archivedParam === '1';
+        return $this->ok($this->service->listSurveys($showArchived));
     }
 
     public function showSurvey(int $id): ResponseInterface
@@ -90,6 +92,12 @@ final class SurveyController extends ApiController
     {
         $this->authorize('counselling.surveys.manage');
         return $this->ok($this->service->archiveSurvey($id));
+    }
+
+    public function unarchiveSurvey(int $id): ResponseInterface
+    {
+        $this->authorize('counselling.surveys.manage');
+        return $this->ok($this->service->unarchiveSurvey($id));
     }
 
     // ---- staff: responses -------------------------------------------

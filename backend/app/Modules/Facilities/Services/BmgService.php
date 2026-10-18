@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Modules\Facilities\Services;
 
 use App\Exceptions\ApiException;
+use App\Modules\Shared\ArchiveScope;
 use App\Modules\Shared\BaseService;
 use App\Modules\Shared\ManilaDay;
 use App\Modules\Shared\StateMachineException;
@@ -95,7 +96,7 @@ final class BmgService extends BaseService
     /**
      * @return array<int, array<string, mixed>>
      */
-    public function listUnits(?string $cursor, int $limit, bool $includeArchived = false): array
+    public function listUnits(?string $cursor, int $limit, bool $includeArchived = false, ?bool $archived = null): array
     {
         $this->policy->check('list');
 
@@ -115,9 +116,7 @@ final class BmgService extends BaseService
             ->orderBy('u.created_at', 'DESC')
             ->orderBy('u.id', 'DESC');
 
-        if (! $includeArchived) {
-            $builder->where('u.archived_at', null);
-        }
+        ArchiveScope::apply($builder, $archived === null ? $includeArchived : ($archived ? ArchiveScope::ARCHIVED : ArchiveScope::ACTIVE), 'u.archived_at');
 
         KeysetPaginator::apply($builder, $cursor, $limit, 'u.created_at', 'u.id');
 
@@ -2475,7 +2474,7 @@ final class BmgService extends BaseService
      *
      * @return array{data: list<array<string, mixed>>, next: ?string, count: int}
      */
-    public function listDevices(?string $cursor, int $limit, bool $includeArchived = false): array
+    public function listDevices(?string $cursor, int $limit, bool $includeArchived = false, ?bool $archived = null): array
     {
         $this->policy->check('devices_list');
 
@@ -2486,9 +2485,7 @@ final class BmgService extends BaseService
             ->orderBy('d.created_at', 'DESC')
             ->orderBy('d.id', 'DESC');
 
-        if (! $includeArchived) {
-            $builder->where('d.archived_at', null);
-        }
+        ArchiveScope::apply($builder, $archived === null ? $includeArchived : ($archived ? ArchiveScope::ARCHIVED : ArchiveScope::ACTIVE), 'd.archived_at');
 
         KeysetPaginator::apply($builder, $cursor, $limit, 'd.created_at', 'd.id');
 
@@ -2866,6 +2863,48 @@ final class BmgService extends BaseService
             );
 
             $row = $this->db->table('facilities_bmg_devices')->where('id', $deviceId)->get()->getRowArray() ?? [];
+            return $this->deviceAdminDto($row);
+        });
+    }
+
+    /** Restore the registry entry only; provisioning must issue a fresh token. */
+    public function unarchiveDevice(int $deviceId): array
+    {
+        $this->policy->check('devices_manage');
+
+        return $this->txn(function () use ($deviceId): array {
+            $device = $this->selectForUpdate('facilities_bmg_devices', ['id' => $deviceId, 'tenant_id' => CurrentTenant::id()]);
+            if ($device === null) {
+                throw new ApiException('resource.not_found', 404, [
+                    ['code' => 'resource.not_found', 'message' => 'Device not found.'],
+                ]);
+            }
+            if ($device['archived_at'] === null) {
+                return $this->deviceAdminDto($device);
+            }
+
+            $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
+            $this->db->table('facilities_bmg_devices')
+                ->where('tenant_id', CurrentTenant::id())
+                ->where('id', $deviceId)->update([
+                    'archived_at' => null,
+                    'unit_id' => null,
+                    'status' => 'disabled',
+                    // Discard the credential so enabling later cannot revive the old token.
+                    'token_hash' => hash('sha256', random_bytes(32)),
+                    'token_prefix' => null,
+                    'updated_at' => $now,
+                ]);
+            $this->audit->enqueue(
+                'bmg.device_unarchived',
+                'facilities_bmg_devices',
+                $deviceId,
+                \App\Auth\CurrentUser::assert(),
+                ['resource_code' => (string) $device['code']],
+            );
+            $row = $this->db->table('facilities_bmg_devices')
+                ->where('tenant_id', CurrentTenant::id())
+                ->where('id', $deviceId)->get()->getRowArray() ?? [];
             return $this->deviceAdminDto($row);
         });
     }
@@ -3883,9 +3922,9 @@ final class BmgService extends BaseService
     /**
      * @return array<int, array<string, mixed>>
      */
-    public function listWasteCategories(bool $activeOnly = false): array
+    public function listWasteCategories(bool $activeOnly = false, ?bool $archived = null): array
     {
-        return $this->categories->listWasteCategories($activeOnly);
+        return $this->categories->listWasteCategories($activeOnly, $archived);
     }
 
     /**

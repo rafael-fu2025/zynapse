@@ -112,6 +112,54 @@ final class SurveyTest extends FeatureTestCase
         $archived->assertStatus(200);
     }
 
+    public function testPublishedSurveyRestoreRetainsVersionsAnswersAndStudentGates(): void
+    {
+        $ctx = $this->createPublishedSurvey(bin2hex(random_bytes(3)), ['year_levels' => [2]]);
+        $base = 'api/v1/counselling/surveys/' . $ctx['id'];
+        $student = $this->login([]);
+        db_connect()->table('users')->where('id', $student['userId'])->update(['kind' => 'student', 'year_level' => 2]);
+        $form = $this->authed($student['token'], 'get', 'api/v1/me/guidance/surveys/' . $ctx['id']);
+        $form->assertStatus(200);
+        $questions = $this->envelope($form)['data']['questions'];
+        $this->authed($student['token'], 'post', 'api/v1/me/guidance/surveys/' . $ctx['id'] . '/submit', [
+            'answers' => [
+                ['question_id' => $questions[0]['id'], 'value' => 5],
+                ['question_id' => $questions[3]['id'], 'value' => true],
+            ],
+        ])->assertStatus(201);
+        $versions = db_connect()->table('survey_versions')->where('survey_id', $ctx['id'])->get()->getResultArray();
+        $responses = db_connect()->table('survey_responses')->where('survey_id', $ctx['id'])->get()->getResultArray();
+        $responseId = (int) $responses[0]['id'];
+        $answers = db_connect()->table('survey_answers')->where('response_id', $responseId)->get()->getResultArray();
+
+        $this->authed($ctx['admin']['token'], 'post', $base . '/archive')->assertStatus(200);
+        $hidden = $this->authed($student['token'], 'get', 'api/v1/me/guidance/surveys');
+        $hidden->assertStatus(200);
+        $this->assertNotContains($ctx['id'], array_column($this->envelope($hidden)['data'], 'id'));
+        $this->authed($student['token'], 'get', 'api/v1/me/guidance/surveys/' . $ctx['id'])->assertStatus(404);
+        $this->authed($student['token'], 'post', 'api/v1/me/guidance/surveys/' . $ctx['id'] . '/submit', ['answers' => []])->assertStatus(404);
+        $this->authed($ctx['admin']['token'], 'post', $base . '/unarchive')->assertStatus(200);
+        $detail = $this->authed($ctx['admin']['token'], 'get', $base);
+        $detail->assertStatus(200);
+        $row = $this->envelope($detail)['data'];
+        $this->assertNull($row['archived_at']);
+        $this->assertSame('live', $row['status']);
+        $this->assertSame($ctx['version_id'], $row['version_id']);
+        $this->assertSame([2], $row['year_levels']);
+        $this->assertSame($versions, db_connect()->table('survey_versions')->where('survey_id', $ctx['id'])->get()->getResultArray());
+        $this->assertSame($responses, db_connect()->table('survey_responses')->where('survey_id', $ctx['id'])->get()->getResultArray());
+        $this->assertSame($answers, db_connect()->table('survey_answers')->where('response_id', $responseId)->get()->getResultArray());
+        $this->authed($ctx['admin']['token'], 'post', $base . '/update', ['title' => 'Still immutable'])->assertStatus(409);
+        $this->authed($ctx['admin']['token'], 'post', $base . '/publish')->assertStatus(409);
+        $visible = $this->authed($student['token'], 'get', 'api/v1/me/guidance/surveys');
+        $visible->assertStatus(200);
+        $mine = array_column($this->envelope($visible)['data'], null, 'id');
+        $this->assertTrue($mine[$ctx['id']]['submitted']);
+        $this->authed($student['token'], 'post', 'api/v1/me/guidance/surveys/' . $ctx['id'] . '/submit', [
+            'answers' => [['question_id' => $questions[0]['id'], 'value' => 4]],
+        ])->assertStatus(409);
+    }
+
     public function testPublishWithoutQuestionsIsRejected(): void
     {
         $admin = $this->login(['guidance_admin']);
@@ -224,6 +272,13 @@ final class SurveyTest extends FeatureTestCase
         $ctx = $this->createPublishedSurvey(bin2hex(random_bytes(3)), [
             'close_at' => '2020-01-01 00:00:00',
         ]);
+        $base = 'api/v1/counselling/surveys/' . $ctx['id'];
+        $this->authed($ctx['admin']['token'], 'post', $base . '/archive')->assertStatus(200);
+        $this->authed($ctx['admin']['token'], 'post', $base . '/unarchive')->assertStatus(200);
+        $restored = $this->authed($ctx['admin']['token'], 'get', $base);
+        $restored->assertStatus(200);
+        $this->assertSame('closed', $this->envelope($restored)['data']['status']);
+        $this->assertNull($this->envelope($restored)['data']['archived_at']);
         $student = $this->login([]);
         db_connect()->table('users')->where('id', $student['userId'])->update(['kind' => 'student']);
 

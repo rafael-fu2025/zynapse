@@ -6,238 +6,178 @@ namespace App\Auth;
 
 use CodeIgniter\Database\BaseConnection;
 use Config\Services;
-use DateTimeImmutable;
-use DateTimeZone;
 use RuntimeException;
 
-/**
- * RefreshTokenService — opaque-rotating refresh tokens with a
- * family/replay-detection chain.
- *
- * On every refresh:
- *   1. Look up the supplied token by hash.
- *   2. If it has been revoked (or the row is gone): reject.
- *   3. If it has been replaced before (replaced_by_hash is set):
- *      REPLAY DETECTED — revoke the entire family and reject.
- *   4. Otherwise: mark this hash as replaced, mint a new token in the
- *      same family, write the new hash, return the new plaintext.
- *
- * On login: mint a fresh family_id.
- *
- * Grace window (2026-09-16): cross-tab races (two tabs racing to
- * refresh the same cookie within seconds) are benign, not replays.
- * When a revoked token was replaced < GRACE_WINDOW_SECONDS ago and
- * its replacement is still live, the service returns the replacement
- * instead of revoking the family. Beyond the window, replay semantics
- * are enforced as before.
- */
+/** Opaque rotation with a mandatory, immutable family deadline. */
 final class RefreshTokenService
 {
-    /**
-     * Grace window for cross-tab races. If a revoked token was replaced
-     * less than this many seconds ago AND its replacement is still live,
-     * the duplicate is treated as a benign race rather than a replay
-     * attack. Beyond this window, full replay semantics apply.
-     *
-     * 5 seconds is generous (Web Locks reduce most races to <100ms) but
-     * short enough that a genuine replay hours/days later is still caught.
-     */
-    private const GRACE_WINDOW_SECONDS = 5;
-
     private readonly JwtService $jwt;
     private BaseConnection $db;
+    private readonly RefreshSessionPolicy $policy;
 
     public function __construct(?JwtService $jwt = null, ?BaseConnection $db = null)
     {
         $this->jwt = $jwt ?? Services::jwt();
-        $this->db  = $db ?? Services::database();
+        $this->db = $db ?? Services::database();
+        $this->policy = new RefreshSessionPolicy();
     }
 
-    /**
-     * @return array{plain:string, hash:string, family_id:string, expires_at:string}
-     */
-    public function issue(int $userId, ?string $familyId = null): array
+    /** Mint a NEW family. Only rotate() may mint descendants. */
+    public function issue(int $userId): array
     {
+        $this->begin();
+        try {
+            $user = $this->lockUser($userId);
+            $mint = $this->mint($userId, $this->uuidv4(), time() + $this->policy->maxAgeSeconds(), (int) $user['token_epoch']);
+            $this->complete();
+            return $mint;
+        } catch (\Throwable $e) {
+            $this->db->transRollback();
+            throw $e;
+        }
+    }
+
+    private function mint(int $userId, string $familyId, int $deadline, int $epoch): array
+    {
+        $now = time();
+        $expiresAt = gmdate('Y-m-d H:i:s', $this->policy->refreshExpiry($now, $deadline));
+        $sessionExpiresAt = gmdate('Y-m-d H:i:s', $deadline);
         $env = $this->jwt->issueRefreshToken();
-        $familyId ??= $this->uuidv4();
-        $ttl = (int) (getenv('JWT_REFRESH_TTL_SECONDS') ?: 2592000);
-        $expiresAt = (new DateTimeImmutable('now', new DateTimeZone('UTC')))
-            ->modify('+' . $ttl . ' seconds')
-            ->format('Y-m-d H:i:s');
-
-        $this->db->table('auth_refresh_tokens')->insert([
-            'user_id'    => $userId,
-            'family_id'  => $familyId,
+        if (! $this->db->table('auth_refresh_tokens')->insert([
+            'user_id' => $userId,
+            'family_id' => $familyId,
             'token_hash' => $env['hash'],
-            'created_at' => date('Y-m-d H:i:s'),
+            'created_at' => gmdate('Y-m-d H:i:s', $now),
             'expires_at' => $expiresAt,
+            'session_expires_at' => $sessionExpiresAt,
             'revoked_at' => null,
-        ]);
-
+        ])) {
+            throw new RuntimeException('Refresh token insert failed.');
+        }
         return [
-            'plain'      => $env['plain'],
-            'hash'       => $env['hash'],
-            'family_id'  => $familyId,
+            ...$env,
+            'family_id' => $familyId,
             'expires_at' => $expiresAt,
+            'session_expires_at' => $sessionExpiresAt,
+            'token_epoch' => $epoch,
         ];
     }
 
-    /**
-     * Atomically rotate a token. Returns a structured result:
-     *
-     *   - status 'rotated'  → new pair minted in the same family.
-     *   - status 'replayed' → REPLAY DETECTED, family revoked.
-     *   - status 'invalid'  → token not found / expired / malformed.
-     *
-     * On 'rotated', `mint` contains the new pair. On 'replayed' / 'invalid',
-     * `user_id` is the user whose token was used (if the row existed); this
-     * lets the controller attribute the failure.
-     *
-     * @return array{
-     *     status: 'rotated'|'replayed'|'invalid',
-     *     mint?: array{plain:string, hash:string, family_id:string, expires_at:string},
-     *     family_id?: string,
-     *     user_id?: int|null,
-     *     reason?: string,
-     * }
-     */
+    /** No credential is returned unless the transaction succeeded. */
     public function rotate(string $plain): array
     {
         $hash = $this->jwt->hashRefresh($plain);
-
-        return $this->db->transStart() === false
-            ? ['status' => 'invalid', 'reason' => 'trans_start_failed']
-            : $this->rotateInTxn($hash);
-    }
-
-    /**
-     * @return array{
-     *     status: 'rotated'|'replayed'|'invalid',
-     *     mint?: array{plain:string, hash:string, family_id:string, expires_at:string},
-     *     family_id?: string,
-     *     user_id?: int|null,
-     *     reason?: string,
-     * }
-     */
-    private function rotateInTxn(string $hash): array
-    {
+        $this->begin();
         try {
+            // Locate first, then always lock user BEFORE token rows. Logout uses
+            // the same lock, so it cannot miss a concurrently inserted descendant.
+            $locator = $this->db->table('auth_refresh_tokens')->select('user_id')->where('token_hash', $hash)->get()->getRowArray();
+            if ($locator === null) {
+                $this->db->transRollback();
+                return ['status' => 'invalid', 'reason' => 'not_found'];
+            }
+            $user = $this->lockUser((int) $locator['user_id']);
             $row = $this->db->query(
                 'SELECT * FROM `auth_refresh_tokens` WHERE `token_hash` = ? LIMIT 1 FOR UPDATE',
                 [$hash],
             )->getRowArray();
-
             if ($row === null) {
                 $this->db->transRollback();
                 return ['status' => 'invalid', 'reason' => 'not_found'];
             }
-
-            $now = date('Y-m-d H:i:s');
-
+            $now = time();
+            $identity = ['family_id' => (string) $row['family_id'], 'user_id' => (int) $row['user_id']];
+            // Missing legacy deadlines fail closed, including the grace path.
+            if ($row['session_expires_at'] === null
+                || $this->policy->timestamp($row['session_expires_at']) <= $now
+                || $this->policy->timestamp($row['expires_at']) <= $now) {
+                $this->db->transRollback();
+                return ['status' => 'invalid', 'reason' => 'expired', ...$identity];
+            }
+            $deadline = $this->policy->timestamp($row['session_expires_at']);
             if ($row['revoked_at'] !== null) {
-                // The token has been revoked — but is this a genuine replay
-                // or a benign cross-tab race?
-                //
-                // Grace window: if the revocation happened < GRACE_WINDOW_SECONDS
-                // ago AND the row has a `replaced_by_hash` (i.e. it was rotated,
-                // not explicitly revoked by logout), AND the replacement token is
-                // still live, return the replacement. This prevents two browser
-                // tabs from accidentally nuking each other's session.
-                if (
-                    $row['replaced_by_hash'] !== null
-                    && (time() - strtotime((string) $row['revoked_at'])) < self::GRACE_WINDOW_SECONDS
-                ) {
+                $age = $now - $this->policy->timestamp($row['revoked_at']);
+                if ($row['replaced_by_hash'] !== null && $age >= 0 && $age < $this->policy->graceSeconds()) {
                     $replacement = $this->db->query(
-                        'SELECT * FROM `auth_refresh_tokens` WHERE `token_hash` = ? AND `revoked_at` IS NULL LIMIT 1',
+                        'SELECT * FROM `auth_refresh_tokens` WHERE `token_hash` = ? AND `revoked_at` IS NULL LIMIT 1 FOR UPDATE',
                         [$row['replaced_by_hash']],
                     )->getRowArray();
-
-                    if ($replacement !== null && strtotime((string) $replacement['expires_at']) > time()) {
-                        // The replacement is still live — this is a race, not a replay.
-                        // Return the replacement token's family so the caller can
-                        // issue a new access token. We do NOT issue yet another
-                        // refresh token — the replacement is still valid.
-                        $this->db->transRollback();
-                        return [
-                            'status'    => 'rotated',
-                            'mint'      => [
-                                'plain'      => '', // empty — the caller already has the cookie
-                                'hash'       => (string) $replacement['token_hash'],
-                                'family_id'  => (string) $replacement['family_id'],
-                                'expires_at' => (string) $replacement['expires_at'],
-                            ],
+                    if ($replacement !== null
+                        && (int) $replacement['user_id'] === (int) $row['user_id']
+                        && $replacement['family_id'] === $row['family_id']
+                        && $replacement['session_expires_at'] === $row['session_expires_at']
+                        && $this->policy->timestamp($replacement['expires_at']) > $now) {
+                        $mint = [
+                            'plain' => '', // The racing response must not overwrite the new cookie.
+                            'hash' => (string) $replacement['token_hash'],
                             'family_id' => (string) $replacement['family_id'],
-                            'user_id'   => (int) $replacement['user_id'],
-                            'grace'     => true,
+                            'expires_at' => (string) $replacement['expires_at'],
+                            'session_expires_at' => (string) $replacement['session_expires_at'],
+                            'token_epoch' => (int) $user['token_epoch'],
                         ];
+                        $this->complete();
+                        return ['status' => 'rotated', 'mint' => $mint, 'grace' => true, ...$identity];
                     }
                 }
-
-                // Outside the grace window or replacement is gone/expired:
-                // genuine replay. Kill the entire family, and advance the
-                // user's token epoch so outstanding access tokens are also
-                // invalidated.
-                $this->db->table('auth_refresh_tokens')
-                    ->where('family_id', $row['family_id'])
-                    ->where('revoked_at', null)
-                    ->update(['revoked_at' => $now]);
-                $this->db->table('users')
-                    ->where('id', (int) $row['user_id'])
-                    ->set('token_epoch', 'token_epoch + 1', false)
-                    ->update();
-                $this->db->transComplete();
-                return [
-                    'status'    => 'replayed',
-                    'family_id' => (string) $row['family_id'],
-                    'user_id'   => (int) $row['user_id'],
-                ];
+                $this->db->table('auth_refresh_tokens')->where('family_id', $row['family_id'])
+                    ->where('user_id', (int) $row['user_id'])->where('revoked_at', null)
+                    ->update(['revoked_at' => gmdate('Y-m-d H:i:s', $now)]);
+                $this->db->table('users')->where('id', (int) $row['user_id'])
+                    ->set('token_epoch', 'token_epoch + 1', false)->update();
+                $this->complete();
+                return ['status' => 'replayed', ...$identity];
             }
-
-            if (strtotime((string) $row['expires_at']) < time()) {
-                $this->db->table('auth_refresh_tokens')
-                    ->where('id', $row['id'])
-                    ->update(['revoked_at' => $now]);
-                $this->db->transComplete();
-                return [
-                    'status'    => 'invalid',
-                    'reason'    => 'expired',
-                    'family_id' => (string) $row['family_id'],
-                    'user_id'   => (int) $row['user_id'],
-                ];
-            }
-
-            // Mint a new token in the same family.
-            $userId = (int) $row['user_id'];
-            $familyId = (string) $row['family_id'];
-            $mint = $this->issue($userId, $familyId);
-
-            // Mark the old token as replaced.
-            $this->db->table('auth_refresh_tokens')
-                ->where('id', $row['id'])
-                ->update([
-                    'revoked_at'       => $now,
-                    'replaced_by_hash' => $mint['hash'],
-                ]);
-
-            $this->db->transComplete();
-            return [
-                'status'    => 'rotated',
-                'mint'      => $mint,
-                'family_id' => $familyId,
-                'user_id'   => $userId,
-            ];
-        } catch (\Throwable $t) {
+            $mint = $this->mint((int) $row['user_id'], (string) $row['family_id'], $deadline, (int) $user['token_epoch']);
+            $this->db->table('auth_refresh_tokens')->where('id', $row['id'])->update([
+                'revoked_at' => gmdate('Y-m-d H:i:s', $now),
+                'replaced_by_hash' => $mint['hash'],
+            ]);
+            $this->complete();
+            return ['status' => 'rotated', 'mint' => $mint, ...$identity];
+        } catch (\Throwable $e) {
             $this->db->transRollback();
-            throw $t;
+            throw $e;
         }
     }
 
-    public function revokeAllFor(int $userId): void
+    public function revokeAllFor(int $userId, bool $bumpEpoch = false): void
     {
-        $this->db->table('auth_refresh_tokens')
-            ->where('user_id', $userId)
-            ->where('revoked_at', null)
-            ->update(['revoked_at' => date('Y-m-d H:i:s')]);
+        $this->begin();
+        try {
+            $this->lockUser($userId);
+            $this->db->table('auth_refresh_tokens')->where('user_id', $userId)->where('revoked_at', null)
+                ->update(['revoked_at' => gmdate('Y-m-d H:i:s')]);
+            if ($bumpEpoch) {
+                $this->db->table('users')->where('id', $userId)->set('token_epoch', 'token_epoch + 1', false)->update();
+            }
+            $this->complete();
+        } catch (\Throwable $e) {
+            $this->db->transRollback();
+            throw $e;
+        }
+    }
+
+    private function lockUser(int $userId): array
+    {
+        $user = $this->db->query('SELECT `token_epoch` FROM `users` WHERE `id` = ? FOR UPDATE', [$userId])->getRowArray();
+        if ($user === null) {
+            throw new RuntimeException('Refresh session user no longer exists.');
+        }
+        return $user;
+    }
+
+    private function begin(): void
+    {
+        if (! $this->db->transBegin()) {
+            throw new RuntimeException('Refresh transaction could not start.');
+        }
+    }
+
+    private function complete(): void
+    {
+        if (! $this->db->transStatus() || ! $this->db->transCommit()) {
+            throw new RuntimeException('Refresh transaction failed.');
+        }
     }
 
     private function uuidv4(): string

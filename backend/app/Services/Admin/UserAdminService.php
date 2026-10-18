@@ -367,10 +367,10 @@ final class UserAdminService extends BaseService
     }
 
     /**
-     * Trigger a bulk batch sync of the university directory into local users.
+     * Admit a durable directory job without upstream IO.
      * Accessible by admins holding `rbac.manage`.
      *
-     * @return array<string, mixed> Sync summary {success, dry_run, tenant_id, kinds, error?}
+     * @return array<string, mixed> Public job DTO with committed progress only.
      */
     public function syncDirectory(string $kind = 'all', bool $dryRun = false, int $pageSize = 100, int $maxPages = 1000): array
     {
@@ -379,18 +379,7 @@ final class UserAdminService extends BaseService
             throw ApiException::forbidden('auth.forbidden');
         }
 
-        $syncService = new \App\Services\FuMis\FuMisDirectorySyncService();
-        $summary = $syncService->run($kind, $dryRun, $pageSize, $maxPages);
-
-        if (! $dryRun && ($summary['success'] ?? false)) {
-            $this->audit->enqueue('mis.directory_sync_triggered', 'users', null, $actorId, [
-                'resource_code' => $kind,
-                'reason_code'   => 'admin.sync_directory',
-                'outcome'       => 'completed',
-            ]);
-        }
-
-        return $summary;
+        return (new \App\Services\FuMis\MisSyncJobService($this->db))->enqueue($kind, $dryRun, $pageSize, $maxPages, 'admin', null, $actorId);
     }
 
     /**

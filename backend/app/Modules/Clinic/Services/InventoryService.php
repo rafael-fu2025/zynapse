@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Modules\Clinic\Services;
 
 use App\Exceptions\ApiException;
+use App\Modules\Shared\ArchiveScope;
 use App\Modules\Shared\BaseService;
 use App\Modules\Shared\ManilaDay;
 use App\Pagination\KeysetPaginator;
@@ -36,7 +37,7 @@ final class InventoryService extends BaseService
     /**
      * @return array{data: array<int, array<string, mixed>>, next: ?string, count: int}
      */
-    public function listItems(?string $cursor, int $limit, ?string $q = null, bool $includeArchived = false, bool $lowStockOnly = false): array
+    public function listItems(?string $cursor, int $limit, ?string $q = null, bool $includeArchived = false, bool $lowStockOnly = false, ?bool $archived = null): array
     {
         $this->policy->check('inventoryRead');
 
@@ -46,9 +47,7 @@ final class InventoryService extends BaseService
             ->orderBy('created_at', 'DESC')
             ->orderBy('id', 'DESC');
 
-        if (! $includeArchived) {
-            $builder->where('archived_at', null);
-        }
+        ArchiveScope::apply($builder, $archived === null ? $includeArchived : ($archived ? ArchiveScope::ARCHIVED : ArchiveScope::ACTIVE));
 
         // Frontend "Low stock only" chip — mirrors the DTO's `low_stock`
         // boolean (`quantity_on_hand <= reorder_level`). Both columns are

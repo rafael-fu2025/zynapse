@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Modules\Clinic\Services;
 
 use App\Exceptions\ApiException;
+use App\Modules\Shared\ArchiveScope;
 use App\Modules\Shared\BaseService;
 use App\Modules\Shared\ManilaDay;
 use App\Pagination\KeysetPaginator;
@@ -37,6 +38,7 @@ final class MedicineService extends BaseService
     public function __construct(
         private readonly ClinicPolicy $policy,
         private readonly AuditOutboxService $audit,
+        private readonly ?\Closure $clock = null,
     ) {
         parent::__construct();
     }
@@ -44,7 +46,7 @@ final class MedicineService extends BaseService
     /**
      * @return array{data: array<int, array<string, mixed>>, next: ?string, count: int}
      */
-    public function listMedicines(?string $cursor, int $limit, ?string $q = null, bool $includeArchived = false): array
+    public function listMedicines(?string $cursor, int $limit, ?string $q = null, bool $includeArchived = false, ?bool $archived = null): array
     {
         $this->policy->check('inventoryRead');
 
@@ -54,9 +56,7 @@ final class MedicineService extends BaseService
             ->orderBy('created_at', 'DESC')
             ->orderBy('id', 'DESC');
 
-        if (! $includeArchived) {
-            $builder->where('archived_at', null);
-        }
+        ArchiveScope::apply($builder, $archived === null ? $includeArchived : ($archived ? ArchiveScope::ARCHIVED : ArchiveScope::ACTIVE));
 
         $qTrim = $q !== null ? trim($q) : '';
         if ($qTrim !== '') {
@@ -384,60 +384,9 @@ final class MedicineService extends BaseService
                 ]);
             }
 
-            $today = ManilaDay::today();
-
-            // FEFO order, locked. Raw SQL is the sanctioned escape hatch
-            // for row locking (see BaseService::selectForUpdate).
-            $batches = $this->db->query(
-                'SELECT ' . self::BATCH_COLS . ' FROM `clinic_medicine_batches`'
-                . ' WHERE `tenant_id` = ? AND `medicine_id` = ? AND `status` = ? AND `quantity_remaining` > 0 AND `expiration_date` >= ?'
-                . ' ORDER BY `expiration_date` ASC, `id` ASC FOR UPDATE',
-                [CurrentTenant::id(), $medicineId, 'active', $today],
-            )->getResultArray();
-
-            $available = array_sum(array_map(static fn (array $b): int => (int) $b['quantity_remaining'], $batches));
-            if ($available < $quantity) {
-                throw new ApiException('statemachine.inventory.insufficient_stock', 409, [
-                    ['code' => 'statemachine.inventory.insufficient_stock', 'message' => "Only {$available} unexpired unit(s) on hand.", 'field' => 'quantity'],
-                ]);
-            }
-
-            $now       = $this->utcNow();
-            $remaining = $quantity;
-            $balance   = $this->lastBalance($medicineId);
-
-            foreach ($batches as $batch) {
-                if ($remaining <= 0) {
-                    break;
-                }
-                $take    = min($remaining, (int) $batch['quantity_remaining']);
-                $newQty  = (int) $batch['quantity_remaining'] - $take;
-
-                $this->db->table('clinic_medicine_batches')
-                    ->where('clinic_medicine_batches.tenant_id', CurrentTenant::id())
-                    ->where('id', (int) $batch['id'])
-                    ->update([
-                        'quantity_remaining' => $newQty,
-                        'status'             => $newQty === 0 ? 'depleted' : 'active',
-                    ]);
-
-                $balance -= $take;
-                $this->db->table('clinic_medicine_transactions')->insert([
-                    'tenant_id'            => CurrentTenant::id(),
-                    'medicine_id'          => $medicineId,
-                    'batch_id'             => (int) $batch['id'],
-                    'type'                 => 'dispensed',
-                    'quantity'             => $take,
-                    'balance_after'        => $balance,
-                    'reference_type'       => 'encounter',
-                    'reference_id'         => $encounterId,
-                    'performed_by_user_id' => $userId,
-                    'note'                 => $note,
-                    'created_at'           => $now,
-                ]);
-
-                $remaining -= $take;
-            }
+            (new MedicineFefoAllocator($this->db))->consume(
+                $medicineId, $quantity, $userId, $encounterId, $this->utcNow(), $note,
+            );
 
             $this->audit->enqueue(
                 'clinic.medicine_dispensed',
@@ -1055,8 +1004,8 @@ final class MedicineService extends BaseService
     /**
      * Soft-archive a medicine. Archived rows disappear from the
      * default list, but historical batches/forecasts stay intact
-     * for the audit trail. Hard delete is intentionally NOT
-     * supported — stock history is part of the clinical record.
+     * for the audit trail. The separate permanent-deletion guard only
+     * permits unused catalogue rows — stock history is retained.
      */
     public function archiveMedicine(int $medicineId): MedicineDto
     {
@@ -1136,6 +1085,6 @@ final class MedicineService extends BaseService
 
     private function utcNow(): string
     {
-        return (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
+        return $this->clock !== null ? ($this->clock)() : (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
     }
 }
