@@ -9,32 +9,53 @@ use CodeIgniter\CLI\BaseCommand;
 use CodeIgniter\CLI\CLI;
 
 /**
- * AuditChainVerify — recomputes the `audit_events` hash chain (Phase 6).
+ * AuditChainVerify — recomputes the `audit_events` hash chains.
  *
- *   php spark synapse:audit-verify [--to=N]
+ *   php spark synapse:audit-verify [--to=N] [--tenant=N]
  *
- * Walks id-ascending from genesis, recomputing
- * SHA-256(prev_hash || payload_json) and checking `prev_id` linkage.
- * Exit code 0 = chain intact, 1 = divergence found.
+ * Default verifies everything: the frozen v1 global chain (hash_version = 1)
+ * plus every tenant's v2 per-tenant chain (AuditHashV2 canonical JSON).
+ * --tenant=N narrows to that tenant's v2 chain. Exit 0 = intact, 1 =
+ * divergence found (or bad arguments).
  */
 final class AuditChainVerify extends BaseCommand
 {
     protected $group       = 'SYNAPSE';
     protected $name        = 'synapse:audit-verify';
-    protected $description = 'Verify the audit_events hash chain; report the first divergence.';
-    protected $usage       = 'synapse:audit-verify [--to=N]';
+    protected $description = 'Verify the audit_events hash chains (v1 global + per-tenant v2); report the first divergence.';
+    protected $usage       = 'synapse:audit-verify [--to=N] [--tenant=N]';
     protected $arguments   = [];
     protected $options     = [
-        '--to' => 'Verify up to this event id (inclusive). Default: entire chain.',
+        '--to'     => 'Verify up to this event id (inclusive). Default: entire chain.',
+        '--tenant' => 'Verify only this tenant\'s v2 chain (integer tenant id).',
     ];
 
     public function run(array $params): int
     {
         $to = isset($params['to']) ? (int) $params['to'] : null;
+        $verifier = new AuditChainVerifier();
 
-        $result = (new AuditChainVerifier())->verify($to);
-
-        CLI::write(sprintf('Checked %d event(s).', $result['checked']));
+        if (isset($params['tenant'])) {
+            $tenantId = filter_var($params['tenant'], FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
+            if ($tenantId === false) {
+                CLI::error('--tenant must be a positive integer tenant id.');
+                return 1;
+            }
+            $result = $verifier->verifyTenant($tenantId, $to);
+            CLI::write(sprintf('Checked %d event(s) for tenant %d.', $result['checked'], $tenantId));
+        } else {
+            $result = $verifier->verify($to);
+            CLI::write(sprintf('Checked %d event(s).', $result['checked']));
+            foreach ($result['tenants'] ?? [] as $t) {
+                CLI::write(sprintf(
+                    '  tenant %-4d %s (%d event(s)%s)',
+                    $t['tenant_id'],
+                    $t['ok'] ? 'OK' : 'DIVERGENT',
+                    $t['checked'],
+                    $t['verified_up_to'] !== null ? ', up to id ' . $t['verified_up_to'] : '',
+                ), $t['ok'] ? 'green' : 'red');
+            }
+        }
 
         if ($result['ok']) {
             CLI::write(sprintf(

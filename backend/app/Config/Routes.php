@@ -33,6 +33,19 @@ $routes->group('api/v1/auth', ['namespace' => 'App\Controllers\Api\Auth'], stati
     $r->post('logout',  'AuthController::logout',  ['filter' => 'api_auth']);
     $r->post('change-password', 'AuthController::changePassword', ['filter' => 'api_auth']);
     $r->get('me',       'AuthController::me',      ['filter' => 'api_auth']);
+    // Session inventory — self-scoped refresh-family listing + selective
+    // remote logout (2026-10 audit G-5).
+    $r->get('sessions',          'SessionController::index',  ['filter' => 'api_auth']);
+    $r->post('sessions/revoke',  'SessionController::revoke', ['filter' => 'api_auth']);
+    // TOTP second factor for LOCAL identities (2026-10 audit G-1). The
+    // verify-login route is public like login/refresh: it authenticates via
+    // the short-lived scope=mfa_challenge token in the body.
+    $r->get('mfa/status',        'MfaController::status',        ['filter' => 'api_auth']);
+    $r->post('mfa/setup',        'MfaController::setup',         ['filter' => 'api_auth']);
+    $r->post('mfa/confirm',      'MfaController::confirm',       ['filter' => 'api_auth']);
+    $r->post('mfa/disable',      'MfaController::disable',       ['filter' => 'api_auth']);
+    $r->post('mfa/reset/(:num)', 'MfaController::reset/$1',      ['filter' => 'api_auth']);
+    $r->post('mfa/verify-login', 'MfaController::verifyLogin',   ['filter' => 'api_ratelimit:auth']);
     // Public read for the login-page carousel (no JWT — login is pre-auth).
     $r->get('carousel-slides', 'CarouselPublicController::index');
 });

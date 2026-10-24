@@ -287,7 +287,9 @@ final class CounsellingService extends BaseService
                 }
             }
 
-            $env = $this->crypto->encryptField($plaintext);
+            // AAD binds the ciphertext to its session + tenant (v2 keys);
+            // v1 envelopes ignore the extra argument.
+            $env = $this->crypto->encryptField($plaintext, "counselling_notes|{$sessionId}|" . CurrentTenant::id());
 
             $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
 
@@ -349,6 +351,7 @@ final class CounsellingService extends BaseService
                 $r['notes_cipher'],
                 $r['notes_nonce'],
                 (int) $r['notes_key_version'],
+                "counselling_notes|{$sessionId}|" . CurrentTenant::id(),
             );
             $out[] = (new NoteDto(
                 $sessionId,

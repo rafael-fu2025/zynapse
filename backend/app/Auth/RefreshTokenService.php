@@ -23,12 +23,12 @@ final class RefreshTokenService
     }
 
     /** Mint a NEW family. Only rotate() may mint descendants. */
-    public function issue(int $userId): array
+    public function issue(int $userId, ?DeviceFingerprint $device = null): array
     {
         $this->begin();
         try {
             $user = $this->lockUser($userId);
-            $mint = $this->mint($userId, $this->uuidv4(), time() + $this->policy->maxAgeSeconds(), (int) $user['token_epoch']);
+            $mint = $this->mint($userId, $this->uuidv4(), time() + $this->policy->maxAgeSeconds(), (int) $user['token_epoch'], $device);
             $this->complete();
             return $mint;
         } catch (\Throwable $e) {
@@ -37,20 +37,22 @@ final class RefreshTokenService
         }
     }
 
-    private function mint(int $userId, string $familyId, int $deadline, int $epoch): array
+    private function mint(int $userId, string $familyId, int $deadline, int $epoch, ?DeviceFingerprint $device = null): array
     {
         $now = time();
         $expiresAt = gmdate('Y-m-d H:i:s', $this->policy->refreshExpiry($now, $deadline));
         $sessionExpiresAt = gmdate('Y-m-d H:i:s', $deadline);
         $env = $this->jwt->issueRefreshToken();
         if (! $this->db->table('auth_refresh_tokens')->insert([
-            'user_id' => $userId,
-            'family_id' => $familyId,
-            'token_hash' => $env['hash'],
-            'created_at' => gmdate('Y-m-d H:i:s', $now),
-            'expires_at' => $expiresAt,
+            'user_id'         => $userId,
+            'family_id'       => $familyId,
+            'token_hash'      => $env['hash'],
+            'user_agent_hash' => $device?->userAgentHash,
+            'ip_subnet'       => $device?->ipSubnet,
+            'created_at'      => gmdate('Y-m-d H:i:s', $now),
+            'expires_at'      => $expiresAt,
             'session_expires_at' => $sessionExpiresAt,
-            'revoked_at' => null,
+            'revoked_at'      => null,
         ])) {
             throw new RuntimeException('Refresh token insert failed.');
         }
@@ -64,14 +66,23 @@ final class RefreshTokenService
     }
 
     /** No credential is returned unless the transaction succeeded. */
-    public function rotate(string $plain): array
+    public function rotate(string $plain, ?DeviceFingerprint $device = null): array
     {
         $hash = $this->jwt->hashRefresh($plain);
+        // Transition aid (2026-10 audit G-6): while REFRESH_HMAC_KEY is
+        // being introduced, tokens minted before the switch hash under
+        // JWT_SECRET. Locate by the active hash first; only fall back to
+        // the legacy hash while the keys genuinely differ.
+        $legacyHash = $this->jwt->refreshHmacKeyDiffers() ? $this->jwt->hashRefreshLegacy($plain) : null;
         $this->begin();
         try {
             // Locate first, then always lock user BEFORE token rows. Logout uses
             // the same lock, so it cannot miss a concurrently inserted descendant.
             $locator = $this->db->table('auth_refresh_tokens')->select('user_id')->where('token_hash', $hash)->get()->getRowArray();
+            if ($locator === null && $legacyHash !== null) {
+                $locator = $this->db->table('auth_refresh_tokens')->select('user_id')->where('token_hash', $legacyHash)->get()->getRowArray();
+                $hash = $legacyHash;
+            }
             if ($locator === null) {
                 $this->db->transRollback();
                 return ['status' => 'invalid', 'reason' => 'not_found'];
@@ -127,10 +138,13 @@ final class RefreshTokenService
                 $this->complete();
                 return ['status' => 'replayed', ...$identity];
             }
-            $mint = $this->mint((int) $row['user_id'], (string) $row['family_id'], $deadline, (int) $user['token_epoch']);
+            $mint = $this->mint((int) $row['user_id'], (string) $row['family_id'], $deadline, (int) $user['token_epoch'], $device);
             $this->db->table('auth_refresh_tokens')->where('id', $row['id'])->update([
                 'revoked_at' => gmdate('Y-m-d H:i:s', $now),
                 'replaced_by_hash' => $mint['hash'],
+                // Session-inventory provenance: this row's plaintext was
+                // presented at $now — that is the family's last-seen stamp.
+                'last_used_at' => gmdate('Y-m-d H:i:s', $now),
             ]);
             $this->complete();
             return ['status' => 'rotated', 'mint' => $mint, ...$identity];

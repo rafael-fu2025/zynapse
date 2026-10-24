@@ -252,6 +252,15 @@ const COMMANDS: ReadonlyArray<CommandDef> = [
     run: ({ navigate }) => void navigate('/'),
   },
   {
+    id: 'acct-account-security',
+    label: 'Account security',
+    category: 'Account',
+    keywords: ['mfa', 'totp', 'two-factor', '2fa', 'sessions', 'devices'],
+    icon: <ShieldCheck className="size-4" />,
+    prefetch: '/account/security',
+    run: ({ navigate }) => void navigate('/account/security'),
+  },
+  {
     id: 'acct-change-password',
     label: 'Change password',
     category: 'Account',

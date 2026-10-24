@@ -14,7 +14,10 @@
 
 One account per role — 12 accounts mirroring the 12-role catalog in
 `backend/app/Config/AuthGroups.php`. Every account uses the same dev
-password, `DevPassw0rd!` (override with `SYNAPSE_DEV_PASSWORD`).
+password, read from `SYNAPSE_DEV_PASSWORD`. **No password literal lives in
+this repo**: when `SYNAPSE_DEV_PASSWORD` is unset, the seeder generates a
+random per-run password and prints it exactly once — re-running the seeder
+with a new env value (or unset) re-seeds the roster with that password.
 
 | Email | Username | Group (role) |
 |---|---|---|

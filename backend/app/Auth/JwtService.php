@@ -67,13 +67,18 @@ final class JwtService
     /**
      * Verify a token. Throws on invalid/expired/tampered tokens.
      *
+     * Signing-key overlap window (2026-10 audit G-6): when JWT_SECRET_NEXT
+     * is configured, a signature failure under JWT_SECRET is retried under
+     * JWT_SECRET_NEXT. Rotation procedure: set NEXT → wait ≥ access TTL →
+     * promote NEXT to SECRET → unset. New signatures always use SECRET.
+     *
      * @return array<string, mixed>
      * @throws UnexpectedValueException
      */
     public function verify(string $token): array
     {
         $cfg = config('Config\\Auth');
-        $payload = (array) JWT::decode($token, new Key($this->secret(), $cfg->jwtAlgorithm));
+        $payload = $this->decodeWithFallback($token, $cfg->jwtAlgorithm);
         $audience = $payload['aud'] ?? null;
         $validAudience = $audience === $cfg->jwtAudience
             || (is_array($audience) && in_array($cfg->jwtAudience, $audience, true));
@@ -97,18 +102,58 @@ final class JwtService
      * Issue a refresh token (opaque, base64url of 32 random bytes).
      * The plaintext token is returned to the caller; only its HMAC-SHA-256
      * hash is ever persisted.
+     *
+     * The HMAC key is REFRESH_HMAC_KEY when set (2026-10 audit G-6 —
+     * separating it lets the JWT signing secret rotate without
+     * invalidating every stored refresh hash), else JWT_SECRET (the
+     * pre-separation behaviour).
      */
     public function issueRefreshToken(): array
     {
         $plain = rtrim(strtr(base64_encode(random_bytes(32)), '+/', '-_'), '=');
-        $hash  = hash_hmac('sha256', $plain, $this->secret());
+        $hash  = hash_hmac('sha256', $plain, $this->refreshHmacKey());
 
         return ['plain' => $plain, 'hash' => $hash];
     }
 
+    /**
+     * Hash under the ACTIVE refresh HMAC key.
+     */
     public function hashRefresh(string $plain): string
     {
+        return hash_hmac('sha256', $plain, $this->refreshHmacKey());
+    }
+
+    /**
+     * Hash under the LEGACY key (JWT_SECRET) — used only while
+     * REFRESH_HMAC_KEY is being introduced, so tokens minted before the
+     * switch can still be located during the transition.
+     */
+    public function hashRefreshLegacy(string $plain): string
+    {
         return hash_hmac('sha256', $plain, $this->secret());
+    }
+
+    /**
+     * True when the dedicated refresh key is configured (i.e. the legacy
+     * and active hashes can differ).
+     */
+    public function refreshHmacKeyDiffers(): bool
+    {
+        return getenv('REFRESH_HMAC_KEY') !== false && getenv('REFRESH_HMAC_KEY') !== $this->secret();
+    }
+
+    private function refreshHmacKey(): string
+    {
+        $hex = (string) (getenv('REFRESH_HMAC_KEY') ?: '');
+        if ($hex === '') {
+            return $this->secret();
+        }
+        if (strlen($hex) !== 64 || ! ctype_xdigit($hex)) {
+            throw new \RuntimeException('REFRESH_HMAC_KEY must be a 64-character hex string (32 bytes).');
+        }
+
+        return (string) hex2bin($hex);
     }
 
     private function secret(): string
@@ -120,6 +165,30 @@ final class JwtService
             throw new \RuntimeException('JWT_SECRET must meet the configured HMAC algorithm key length.');
         }
         return $secret;
+    }
+
+    /**
+     * Signature check under JWT_SECRET, retried under JWT_SECRET_NEXT when
+     * configured. Claim STRICTNESS is enforced once, after decoding.
+     *
+     * @return array<string, mixed>
+     */
+    private function decodeWithFallback(string $token, string $algorithm): array
+    {
+        try {
+            return (array) JWT::decode($token, new Key($this->secret(), $algorithm));
+        } catch (\Throwable $primary) {
+            $next = (string) (getenv('JWT_SECRET_NEXT') ?: '');
+            if ($next === '') {
+                throw $primary;
+            }
+            $minimum = ['HS256' => 32, 'HS384' => 48, 'HS512' => 64][$algorithm] ?? null;
+            if ($minimum === null || strlen($next) < $minimum) {
+                throw new \RuntimeException('JWT_SECRET_NEXT must meet the configured HMAC algorithm key length.');
+            }
+
+            return (array) JWT::decode($token, new Key($next, $algorithm));
+        }
     }
 
     private function issuer(): string

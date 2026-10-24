@@ -40,6 +40,36 @@ export function useLogin() {
   });
 }
 
+/**
+ * Second leg of an mfa_required login: exchange the short-lived challenge
+ * token + a 6-digit TOTP code for the real session. Session bootstrap is
+ * identical to useLogin (token, /me, store, cache seed).
+ */
+export function useMfaVerifyLogin() {
+  const setAccessToken = useAuthStore((s) => s.setAccessToken);
+  const setSession = useAuthStore((s) => s.setSession);
+  const navigate = useNavigate();
+  const qc = useQueryClient();
+
+  return useMutation<Session, ApiEnvelopeError, { mfaToken: string; code: string }>({
+    mutationFn: async ({ mfaToken, code }) => {
+      const res = await apiClient.post<{ access_token: string; expires_in: number }>(
+        '/auth/mfa/verify-login',
+        { mfa_token: mfaToken, code },
+      );
+      setAccessToken(res.data.access_token);
+      const me = await apiClient.get<Session>('/auth/me');
+      const parsed = sessionSchema.parse(me.data);
+      setSession({ userId: parsed.id, email: parsed.email, permissions: parsed.permissions });
+      qc.setQueryData(['me'], parsed);
+      return parsed;
+    },
+    onSuccess: () => {
+      navigate('/', { replace: true });
+    },
+  });
+}
+
 export function useLogout() {
   const clear = useAuthStore((s) => s.clear);
   const qc = useQueryClient();

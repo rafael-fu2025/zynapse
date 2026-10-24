@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Services\Audit;
 
+use App\Services\CurrentTenant;
 use Config\Services;
 use DateTimeImmutable;
 use DateTimeZone;
@@ -63,6 +64,10 @@ final class AuditOutboxService
         }
 
         Services::database()->table(SYNAPSE_AUDIT_OUTBOX)->insert([
+            // Tenant stamp so the drain can chain per tenant (v2). CLI
+            // contexts resolve CurrentTenant via env/default, exactly like
+            // the domain services do.
+            'tenant_id'     => CurrentTenant::id(),
             'action_code'   => $actionCode,
             'entity_type'   => $entityType,
             'entity_id'     => $entityId,

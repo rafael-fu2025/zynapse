@@ -22,6 +22,7 @@ final class ProductionSecurityPostureTest extends TestCase
             'REFRESH_COOKIE_SAMESITE' => 'Strict',
             'CORS_ALLOWED_ORIGINS' => 'https://app.example.test,https://admin.example.test',
             'COUNSELLING_KEY' => str_repeat('ab', 32),
+            'MFA_KEY' => str_repeat('cd', 32),
         ];
     }
 
@@ -54,7 +55,19 @@ final class ProductionSecurityPostureTest extends TestCase
             ['CORS_ALLOWED_ORIGINS', 'https://*.example.test'],
             ['CORS_ALLOWED_ORIGINS', 'http://app.example.test'],
             ['COUNSELLING_KEY', str_repeat('zz', 32)],
+            // 2026-10 audit G-1: enforced privileged MFA needs a valid key;
+            // conscious opt-out is the only way past an absent one.
+            ['MFA_KEY', str_repeat('zz', 32)],
+            ['MFA_KEY', ''],
         ];
+    }
+
+    public function testMfaEnforcementCanBeConsciouslyDisabled(): void
+    {
+        $settings = $this->secureSettings();
+        $settings['MFA_KEY'] = '';
+        $settings['MFA_ENFORCE_FOR_PRIVILEGED'] = 'false';
+        self::assertSame([], Boot::productionErrors($settings));
     }
 
     public function testStrongerAlgorithmsRequireLongerKeys(): void

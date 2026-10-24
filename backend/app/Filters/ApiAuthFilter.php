@@ -38,6 +38,13 @@ final class ApiAuthFilter implements FilterInterface
             return $this->reject();
         }
 
+        // MFA challenge tokens (scope=mfa_challenge) are login-step
+        // couriers, NOT access tokens — only POST /auth/mfa/verify-login
+        // (outside this filter) may consume them.
+        if (($payload['scope'] ?? null) === 'mfa_challenge') {
+            return $this->reject();
+        }
+
         $userId = (int) ($payload['sub'] ?? 0);
         if ($userId < 1) {
             return $this->reject();

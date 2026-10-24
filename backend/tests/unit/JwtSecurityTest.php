@@ -127,4 +127,73 @@ final class JwtSecurityTest extends TestCase
         $this->expectException(\RuntimeException::class);
         $this->jwt->sign(42);
     }
+
+    // ---- signing-key overlap window (2026-10 audit G-6) -----------------
+
+    public function testVerifyAcceptsTokensSignedWithTheNextSecretDuringRotation(): void
+    {
+        $next = str_repeat('next-rotation-secret-', 3);
+        putenv('JWT_SECRET_NEXT=' . $next);
+        try {
+            // Minted by a deployment whose SECRET is what we call NEXT —
+            // i.e. promoted before every client token expired.
+            $token = JWT::encode(
+                ['iss' => 'https://api.example.test/', 'aud' => 'synapse-api', 'sub' => '42',
+                 'iat' => time(), 'exp' => time() + 60, 'jti' => 'x', 'epoch' => 0],
+                $next,
+                'HS256',
+            );
+            self::assertSame('42', $this->jwt->verify($token)['sub']);
+        } finally {
+            putenv('JWT_SECRET_NEXT');
+        }
+    }
+
+    public function testGarbageStillRejectedWhenNextSecretIsSet(): void
+    {
+        putenv('JWT_SECRET_NEXT=' . str_repeat('next-rotation-secret-', 3));
+        try {
+            $parts = explode('.', $this->jwt->sign(42));
+            $parts[2][0] = $parts[2][0] === 'A' ? 'B' : 'A';
+            $this->expectException(\UnexpectedValueException::class);
+            $this->jwt->verify(implode('.', $parts));
+        } finally {
+            putenv('JWT_SECRET_NEXT');
+        }
+    }
+
+    // ---- refresh HMAC key separation (2026-10 audit G-6) -----------------
+
+    public function testRefreshHashUsesDedicatedKeyWhenConfigured(): void
+    {
+        $key = str_repeat('ab', 32); // 64 hex chars = 32 bytes
+        putenv('REFRESH_HMAC_KEY=' . $key);
+        try {
+            $env = $this->jwt->issueRefreshToken();
+            self::assertSame(hash_hmac('sha256', $env['plain'], hex2bin($key)), $env['hash']);
+            self::assertNotSame($this->jwt->hashRefreshLegacy($env['plain']), $env['hash']);
+            self::assertTrue($this->jwt->refreshHmacKeyDiffers());
+        } finally {
+            putenv('REFRESH_HMAC_KEY');
+        }
+    }
+
+    public function testRefreshHashFallsBackToJwtSecretWhenDedicatedKeyUnset(): void
+    {
+        putenv('REFRESH_HMAC_KEY');
+        $env = $this->jwt->issueRefreshToken();
+        self::assertSame(hash_hmac('sha256', $env['plain'], (string) getenv('JWT_SECRET')), $env['hash']);
+        self::assertFalse($this->jwt->refreshHmacKeyDiffers());
+    }
+
+    public function testMalformedRefreshHmacKeyFailsClosed(): void
+    {
+        putenv('REFRESH_HMAC_KEY=not-hex');
+        try {
+            $this->expectException(\RuntimeException::class);
+            $this->jwt->issueRefreshToken();
+        } finally {
+            putenv('REFRESH_HMAC_KEY');
+        }
+    }
 }

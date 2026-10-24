@@ -124,12 +124,9 @@ final class TenantScopeFitnessTest extends TestCase
      * @var array<string, int>
      */
     private const BASELINE = [
-        // KNOWN FALSE POSITIVE: the scanner's statement window cannot see
-        // through the $row variable — the referral_referrals INSERT at
-        // ~L211 builds its data array above (L188: 'tenant_id' =>
-        // CurrentTenant::id()) and inserts it at L211. If you touch that
-        // method, inline nothing; just leave this entry as-is.
-        'Modules/Referrals/Services/ReferralService.php' => 1,
+        // Empty since 2026-10-24: the referral_referrals INSERT inlines its
+        // tenant stamp into the statement window (audit G-12), so the
+        // scanner sees it and composer scan:tenancy reports zero sites.
     ];
 
     public function testNoNewUnscopedTenantQuerySites(): void

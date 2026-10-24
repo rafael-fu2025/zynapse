@@ -126,3 +126,48 @@ failed begins, insert failure, poisoned transaction status, and commit failure.
 The delayed-response test checks that a pre-logout rotation retains a revoked
 epoch. The feature bootstrap enforces a
 separate test schema; never run a live `spark migrate` as a test substitute.
+
+## 2026-10 hardening additions (audit G-1/G-5/G-6)
+
+**Cookie path scope.** The refresh cookie is now scoped to
+`REFRESH_COOKIE_PATH` (default `/api/v1/auth`) instead of `/` — the
+credential only ever travels to the endpoints that need it: login sets
+it, refresh reads it, logout clears it.
+
+**Session inventory & selective sign-out.** `auth_refresh_tokens` rows
+now carry device provenance (`user_agent_hash` = first 16 hex of
+SHA-256(User-Agent); `ip_subnet` = IPv4 /24 or IPv6 /64) and every
+rotation stamps `last_used_at`. Two self-scoped endpoints expose it:
+
+- `GET /api/v1/auth/sessions` — active refresh families for the caller,
+  with started/last-used timestamps, provenance, rotation count, and an
+  `is_current` flag for the presented cookie's family.
+- `POST /api/v1/auth/sessions/revoke {family_id}` — revokes one OTHER
+  family (the current family is refused: that is what logout is for).
+  A foreign user's family id is indistinguishable from a nonexistent one.
+
+**Refresh HMAC key separation (`REFRESH_HMAC_KEY`).** Refresh-token
+hashes may use a dedicated 64-hex key instead of `JWT_SECRET`. This
+decouples the two lifecycles: rotating the JWT signing secret no longer
+invalidates every stored refresh hash. During the transition, `rotate()`
+locates tokens by the active hash first, then by the legacy
+(`JWT_SECRET`) hash — but only while the keys actually differ. `Boot.php`
+validates the format in production.
+
+**JWT signing overlap (`JWT_SECRET_NEXT`).** While set, `verify()`
+accepts tokens signed with either `JWT_SECRET` or `JWT_SECRET_NEXT`.
+Rotation procedure: set NEXT → wait ≥ access TTL (15 min default) →
+promote NEXT to SECRET → unset NEXT. New signatures always use SECRET.
+
+**TOTP MFA on the local identity path (G-1).** Local email/password
+accounts (the admin tier) can require a phone-based second factor; the
+MIS-delegated student/employee path is never gated. A successful password
+step for an MFA account returns `401 auth.mfa_required` carrying a
+short-lived `scope=mfa_challenge` token and NO refresh cookie;
+`POST /api/v1/auth/mfa/verify-login` exchanges challenge + 6-digit code
+for the real session. Challenge tokens are rejected by `api_auth`
+everywhere else. Secrets are AES-256-GCM encrypted under `MFA_KEY`
+(enforced by `Boot.php` when `MFA_ENFORCE_FOR_PRIVILEGED=true`);
+privileged groups (`superadmin`, `clinic_admin`, `guidance_admin`,
+`bmg_admin`) are gated by default once enforcement is on. Break-glass
+recovery: `php spark synapse:mfa-reset <email> [--confirm]`.

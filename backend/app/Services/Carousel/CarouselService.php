@@ -50,6 +50,33 @@ final class CarouselService extends BaseService
         'image/gif'  => 'gif',
     ];
 
+    /** Default per-file cap (5 MB). Override with CAROUSEL_MAX_UPLOAD_BYTES (>= 1 MB). */
+    private const DEFAULT_MAX_UPLOAD_BYTES = 5 * 1024 * 1024;
+
+    private const MIN_UPLOAD_BYTES = 1024 * 1024;
+
+    /**
+     * Application-level upload ceiling, independent of upload_max_filesize:
+     * an admin must not be able to fill the disk with a single giant image
+     * even when PHP's own limit is generous.
+     */
+    private function maxUploadBytes(): int
+    {
+        $raw = getenv('CAROUSEL_MAX_UPLOAD_BYTES');
+        if ($raw === false || $raw === '') {
+            return self::DEFAULT_MAX_UPLOAD_BYTES;
+        }
+        $value = filter_var($raw, FILTER_VALIDATE_INT, ['options' => ['min_range' => self::MIN_UPLOAD_BYTES, 'max_range' => 52428800]]);
+        if ($value === false) {
+            throw ApiException::validationFailure([[
+                'code'    => 'validation.field',
+                'message' => 'CAROUSEL_MAX_UPLOAD_BYTES must be an integer between 1048576 and 52428800.',
+                'field'   => 'image',
+            ]]);
+        }
+        return $value;
+    }
+
     private const UPLOAD_DIR = FCPATH . 'uploads/carousel/';
 
     private const UPLOAD_PREFIX = 'uploads/carousel/';
@@ -57,12 +84,12 @@ final class CarouselService extends BaseService
     /**
      * Human-readable text for a PHP upload error code.
      *
-     * There is deliberately NO application-level size cap: the ceiling is
-     * whatever `upload_max_filesize` / `post_max_size` are set to, the
-     * same posture as the humus admin form ("no application size cap —
-     * server limits apply"). PHP reports an over-limit body as
-     * UPLOAD_ERR_INI_SIZE / UPLOAD_ERR_FORM_SIZE, so naming the cause is
-     * what turns an opaque rejection into an actionable one.
+     * The application-level cap (maxUploadBytes()) is enforced separately
+     * in resolveImageField() with its own actionable message; these are the
+     * PHP-level failures below that ceiling (upload_max_filesize etc.).
+     * PHP reports an over-limit body as UPLOAD_ERR_INI_SIZE /
+     * UPLOAD_ERR_FORM_SIZE, so naming the cause is what turns an opaque
+     * rejection into an actionable one.
      *
      * @return array{0: string, 1: string} [message, humanized hint]
      */
@@ -341,16 +368,35 @@ final class CarouselService extends BaseService
                     'field'   => $field,
                 ]]);
             }
-            if (! $file->isValid() || $file->hasMoved()) {
+            // isValid() demands is_uploaded_file(), which the CLI test
+            // harness cannot satisfy with tempnam() seeds — the same reason
+            // the move below has a rename()/copy() fallback. Production
+            // (HTTP uploads) always takes the strict path.
+            $valid = $file->isValid()
+                || (defined('ENVIRONMENT') && ENVIRONMENT === 'testing' && $file->getError() === UPLOAD_ERR_OK);
+            if (! $valid || $file->hasMoved()) {
                 throw ApiException::validationFailure([[
                     'code'    => 'validation.field',
                     'message' => 'Carousel image upload failed.',
                     'field'   => $field,
                 ]]);
             }
-            // No size ceiling here on purpose — see uploadErrorMessage().
-            // An empty body is still refused, and does so below: sniffExtension()
-            // runs getimagesize() on it, which fails on a 0-byte file.
+            // Application size cap: upload_max_filesize is the outer ceiling,
+            // this is the policy ceiling (default 5 MB, see maxUploadBytes()).
+            $size = $file->getSize();
+            if ($size === null || $size < 1 || $size > $this->maxUploadBytes()) {
+                throw ApiException::validationFailure([[
+                    'code'    => 'validation.field',
+                    'message' => sprintf(
+                        'Carousel image is %s. The maximum allowed size is %d MB.',
+                        $size !== null && $size >= 1 ? sprintf('%.1f MB', $size / 1048576) : 'empty',
+                        (int) ($this->maxUploadBytes() / 1048576),
+                    ),
+                    'field'   => $field,
+                ]]);
+            }
+            // An empty body is still refused below: sniffExtension() runs
+            // getimagesize() on it, which fails on a 0-byte file.
             $tempPath = (string) $file->getTempName();
             $ext = $this->sniffExtension($tempPath);
             $variant = $field === 'light_image' ? 'light' : 'dark';
@@ -483,13 +529,32 @@ final class CarouselService extends BaseService
 
     private function ensureUploadDir(): void
     {
-        if (is_dir(self::UPLOAD_DIR)) {
-            return;
-        }
-        if (! @mkdir(self::UPLOAD_DIR, 0775, true) && ! is_dir(self::UPLOAD_DIR)) {
+        if (! is_dir(self::UPLOAD_DIR)
+            && ! @mkdir(self::UPLOAD_DIR, 0775, true) && ! is_dir(self::UPLOAD_DIR)) {
             throw ApiException::conflict('resource.conflict', 'Could not prepare the carousel upload directory.');
         }
         @file_put_contents(self::UPLOAD_DIR . 'index.html', '');
+        // Defense in depth for Apache: the directory holds validated raster
+        // images only, so no script handler may ever execute anything from
+        // here — even a hypothetical upload bypass or a stray file. For
+        // nginx, mirror this with: location ~* ^/uploads/.*\.(ph[0-9]?|phtml|phar|pht)$ { deny all; }
+        // (documented in backend/README.md). Idempotent: re-writes on every
+        // ensure so an operator-deleted file self-heals on the next upload.
+        @file_put_contents(
+            self::UPLOAD_DIR . '.htaccess',
+            "# Managed by CarouselService — deny script execution in uploads.\n"
+            . "Options -Indexes\n"
+            . "<FilesMatch \"\\.(ph[0-9]?|phtml|phar|pht)$\">\n"
+            . "    <IfModule mod_authz_core.c>\n"
+            . "        Require all denied\n"
+            . "    </IfModule>\n"
+            . "    <IfModule !mod_authz_core.c>\n"
+            . "        Order allow,deny\n"
+            . "        Deny from all\n"
+            . "    </IfModule>\n"
+            . "</FilesMatch>\n"
+            . "php_flag engine off\n",
+        );
     }
 
     /**

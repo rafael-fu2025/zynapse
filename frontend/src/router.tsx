@@ -31,6 +31,7 @@ const AnalyticsPage = lazyWithRetry(() => import('@/pages/AnalyticsPage'));
 const AnnouncementsPage = lazyWithRetry(() => import('@/pages/AnnouncementsPage'));
 const AppointmentsPage = lazyWithRetry(() => import('@/pages/AppointmentsPage'));
 const ChangePasswordPage = lazyWithRetry(() => import('@/pages/ChangePasswordPage'));
+const AccountSecurityPage = lazyWithRetry(() => import('@/pages/AccountSecurityPage'));
 const EmployeePortalPage = lazyWithRetry(() => import('@/pages/EmployeePortalPage'));
 const StudentPortalPage = lazyWithRetry(() => import('@/pages/StudentPortalPage'));
 const ClinicPage = lazyWithRetry(() => import('@/pages/ClinicPage'));
@@ -202,6 +203,7 @@ const router = createBrowserRouter([
         ),
       })),
       { path: '/change-password', element: <ChangePasswordPage /> },
+      { path: '/account/security', element: <AccountSecurityPage /> },
       // 403 keeps the shell so the user can navigate somewhere they
       // ARE allowed to be, instead of dead-ending chromeless.
       { path: '/403', element: <ForbiddenPage /> },

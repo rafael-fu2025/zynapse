@@ -40,8 +40,8 @@ CI (`.github/workflows/ci.yml`) runs three parallel jobs and mirrors these exact
   Credentials come from `SYNAPSE_TEST_DB_{HOST,USER,PASS,NAME,PORT}` —
   dotted env names get dropped by GitHub runners.
 - Feature test files live in `tests/Feature/` — capital F, casing matters.
-- Playwright: 13 specs, single Chromium project, serial (`workers: 1`) because
-  the live stack is stateful. 6 mocked specs run in CI; the other 7 are gated
+- Playwright: 29 specs, single Chromium project, serial (`workers: 1`) because
+  the live stack is stateful. 23 mocked specs run in CI; the other 6 are gated
   behind `SYNAPSE_E2E=1` and need a live PHP backend + dev account.
   Override the target with `SYNAPSE_E2E_BASE_URL` to skip dev-server autostart.
 
@@ -57,8 +57,9 @@ CI (`.github/workflows/ci.yml`) runs three parallel jobs and mirrors these exact
   `synapse:notify-drain`, `synapse:audit-drain`, `synapse:reports-drain`,
   `synapse:appointments-enqueue-due`, `synapse:reorder-auto-check`,
   `synapse:bmg-device-watchdog`, `synapse:queue-skip-sweep`,
-  `synapse:smoke`, `synapse:audit-verify`, `synapse:audit-clear`,
-  `synapse:audit-orphans`.
+  `synapse:smoke`, `synapse:audit-verify` (per-tenant via `--tenant=N`),
+  `synapse:audit-clear` (records a wipe marker), `synapse:audit-orphans`,
+  `synapse:mfa-reset` (MFA break-glass recovery).
 
 ## Rules
 

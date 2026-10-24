@@ -6,6 +6,7 @@ import {
   ChevronRight,
   KeyRound,
   ShieldAlert,
+  ShieldOff,
   UserCheck,
   UserCog,
   UserPlus,
@@ -64,6 +65,7 @@ import {
   useAdminUsers,
   useCreateUser,
   useProvisionDirectoryUser,
+  useResetUserMfa,
   useResetUserPassword,
   useSetUserActive,
   useSetUserGroups,
@@ -423,17 +425,23 @@ function UserActions({
   user,
   myId,
   resetPending,
+  mfaResetPending,
+  canResetMfa,
   statusPending,
   onEditRoles,
   onReset,
+  onMfaReset,
   onStatus,
 }: {
   user: AdminUser;
   myId: number | null;
   resetPending: boolean;
+  mfaResetPending: boolean;
+  canResetMfa: boolean;
   statusPending: boolean;
   onEditRoles: () => void;
   onReset: () => void;
+  onMfaReset: () => void;
   onStatus: () => void;
 }) {
   const identity = user.email ?? user.username ?? `user #${user.id}`;
@@ -455,6 +463,14 @@ function UserActions({
             <>
               <DropdownMenuItem className="min-h-11" disabled={resetPending} onSelect={onReset}>
                 <KeyRound aria-hidden /> {resetPending ? 'Resetting password…' : 'Reset password'}
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                className="min-h-11"
+                disabled={!canResetMfa || mfaResetPending}
+                onSelect={onMfaReset}
+              >
+                <ShieldOff aria-hidden />
+                {mfaResetPending ? 'Clearing two-step…' : 'Clear two-step sign-in'}
               </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem
@@ -509,6 +525,8 @@ export default function AdminUsersPage() {
   const list = useAdminUsers(cursor, filters, 25);
   const setActive = useSetUserActive();
   const resetPassword = useResetUserPassword();
+  const resetMfa = useResetUserMfa();
+  const canManagePrivileged = useCan('rbac.privileged.manage');
   const myId = useAuthStore((state) => state.userId);
   const rows = list.data?.data ?? [];
 
@@ -601,6 +619,16 @@ export default function AdminUsersPage() {
           setTempCredential({ email: identity, password: result.temporary_password });
         },
       }),
+    });
+  }
+
+  function requestMfaReset(user: AdminUser) {
+    const identity = user.email ?? `user #${user.id}`;
+    setConfirm({
+      title: `Clear two-step sign-in for ${identity}?`,
+      description: 'Their authenticator enrollment will be removed. Their next sign-in will use only their password — they should enroll again from Account security.',
+      confirmLabel: 'Clear two-step sign-in',
+      run: () => resetMfa.mutate(user.id, { onSuccess: () => setConfirm(null) }),
     });
   }
 
@@ -781,9 +809,12 @@ export default function AdminUsersPage() {
                     user={user}
                     myId={myId}
                     resetPending={resetPassword.isPending && resetPassword.variables === user.id}
+                    mfaResetPending={resetMfa.isPending && resetMfa.variables === user.id}
+                    canResetMfa={canManagePrivileged}
                     statusPending={setActive.isPending && setActive.variables?.id === user.id}
                     onEditRoles={() => handleEditRoles(user)}
                     onReset={() => requestReset(user)}
+                    onMfaReset={() => requestMfaReset(user)}
                     onStatus={() => requestStatusChange(user)}
                   />
                 </article>
@@ -855,9 +886,12 @@ export default function AdminUsersPage() {
                           user={user}
                           myId={myId}
                           resetPending={resetPassword.isPending && resetPassword.variables === user.id}
+                          mfaResetPending={resetMfa.isPending && resetMfa.variables === user.id}
+                          canResetMfa={canManagePrivileged}
                           statusPending={setActive.isPending && setActive.variables?.id === user.id}
                           onEditRoles={() => handleEditRoles(user)}
                           onReset={() => requestReset(user)}
+                          onMfaReset={() => requestMfaReset(user)}
                           onStatus={() => requestStatusChange(user)}
                         />
                       </TableCell>

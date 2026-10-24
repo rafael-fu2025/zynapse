@@ -129,12 +129,16 @@ apiClient.interceptors.response.use(
       return response;
     }
     const status = response.status;
-    throw new ApiEnvelopeError(status, envelope.errors ?? []);
+    throw new ApiEnvelopeError(status, envelope.errors ?? [], envelope.data);
   },
   async (error: AxiosError<ApiEnvelope<unknown>>) => {
     const original = error.config as RetryConfig | undefined;
     const env = error.response?.data;
-    const isLoginRequest = original?.url?.replace(/\?.*$/, '').endsWith('/auth/login') === true;
+    const path = original?.url?.replace(/\?.*$/, '') ?? '';
+    // Login-family endpoints answer definitively — their 401s are the
+    // protocol (bad credentials, MFA challenge), never an expired session
+    // to silently refresh.
+    const isLoginRequest = path.endsWith('/auth/login') || path.endsWith('/auth/mfa/verify-login');
 
     // 401 — try silent refresh once and replay.
     // Invalid login credentials are not an expired session: preserve that
@@ -157,7 +161,8 @@ apiClient.interceptors.response.use(
     // Anything else with envelope shape: convert to ApiEnvelopeError.
     if (env !== undefined && env !== null && typeof env === 'object' && 'errors' in env) {
       const status = error.response?.status ?? 500;
-      throw new ApiEnvelopeError(status, env.errors ?? []);
+      const data = 'data' in env ? (env as { data?: unknown }).data ?? null : null;
+      throw new ApiEnvelopeError(status, env.errors ?? [], data);
     }
 
     // Non-envelope (network error, etc.).

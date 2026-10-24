@@ -4,8 +4,9 @@
  * popover. Falls back to email/username when no patient record
  * is linked.
  */
-import { CirclePower, Moon, Sun } from 'lucide-react';
+import { CirclePower, Moon, ShieldCheck, Sun } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { useLogout, useMe } from '@/hooks/useAuth';
@@ -180,6 +181,15 @@ export function UserMenu() {
             )}
           </div>
         </div>
+        <div className="my-1 h-px bg-border" />
+        <Link
+          to="/account/security"
+          onClick={() => setOpen(false)}
+          className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm text-foreground transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:bg-accent"
+        >
+          <ShieldCheck aria-hidden className="size-4" />
+          <span>Account security</span>
+        </Link>
         <div className="my-1 h-px bg-border" />
         <button
           type="button"

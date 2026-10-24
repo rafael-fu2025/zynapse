@@ -15,6 +15,7 @@ import { useForm } from 'react-hook-form';
 import { ApiEnvelopeError } from '@/api/envelope';
 import { humanizeCode } from '@/api/errorCodes';
 import { LoginCarousel } from '@/components/LoginCarousel';
+import { useMfaVerifyLogin } from '@/hooks/useAuth';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -87,10 +88,17 @@ export default function LoginPage() {
     formState: { errors, isSubmitting },
   } = useForm<LoginInput>({ resolver: zodResolver(loginSchema) });
   const login = useLogin();
+  const mfaVerify = useMfaVerifyLogin();
   const { theme, toggleTheme } = useTheme();
   const [showPassword, setShowPassword] = useState(false);
   const [loginError, setLoginError] = useState<string | null>(null);
   const loginErrorRef = useRef<HTMLDivElement>(null);
+  // Second-factor state: set when the server answers auth.mfa_required
+  // with a challenge token; the form swaps to its code step.
+  const [mfaChallenge, setMfaChallenge] = useState<string | null>(null);
+  const [mfaCode, setMfaCode] = useState('');
+  const [mfaError, setMfaError] = useState<string | null>(null);
+  const mfaErrorRef = useRef<HTMLDivElement>(null);
   const carousel = useCarouselSlides();
   const slides = useMemo<LoginSlide[]>(() => {
     if (carousel.data !== undefined && carousel.data.length > 0) {
@@ -102,6 +110,10 @@ export default function LoginPage() {
   useEffect(() => {
     if (loginError !== null) loginErrorRef.current?.focus();
   }, [loginError]);
+
+  useEffect(() => {
+    if (mfaError !== null) mfaErrorRef.current?.focus();
+  }, [mfaError]);
 
   // Chrome paints autofilled credentials before the Figtree webfont has
   // finished loading and never repaints them when it arrives — the value
@@ -141,10 +153,43 @@ export default function LoginPage() {
     setLoginError(null);
     login.mutate(data, {
       onError: (err) => {
+        // MFA gate: the password was accepted; the server wants a TOTP
+        // code before it will issue any tokens.
+        if (err instanceof ApiEnvelopeError
+          && err.errors[0]?.code === 'auth.mfa_required'
+          && err.data !== null
+          && typeof (err.data as { mfa_token?: unknown }).mfa_token === 'string') {
+          setMfaChallenge((err.data as { mfa_token: string }).mfa_token);
+          setMfaCode('');
+          setMfaError(null);
+          return;
+        }
         setLoginError(describeLoginError(err));
       },
     });
   });
+
+  const onMfaSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (mfaChallenge === null) return;
+    setMfaError(null);
+    mfaVerify.mutate(
+      { mfaToken: mfaChallenge, code: mfaCode.trim() },
+      {
+        onError: (err) => {
+          // A bad/expired challenge sends the user back to step one.
+          if (err instanceof ApiEnvelopeError && err.errors[0]?.code === 'auth.token_revoked') {
+            setMfaChallenge(null);
+            setLoginError('The sign-in request expired. Please sign in again.');
+            return;
+          }
+          setMfaError(err instanceof ApiEnvelopeError && err.errors[0]?.code === 'auth.mfa_invalid'
+            ? 'That code was not accepted. Codes change every 30 seconds — use the current one.'
+            : 'Verification failed. Please try again.');
+        },
+      },
+    );
+  };
 
   // Block the right-click / context menu and drag-start on this page's
   // artwork — the garden photo, the SYNAPSE mark and the service seals.
@@ -237,6 +282,59 @@ export default function LoginPage() {
             </div>
           </div>
 
+          {mfaChallenge !== null ? (
+            <form noValidate onSubmit={onMfaSubmit} className="w-full space-y-4">
+              {mfaError !== null && (
+                <div
+                  ref={mfaErrorRef}
+                  role="alert"
+                  aria-live="assertive"
+                  tabIndex={-1}
+                  className="flex gap-3 rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive outline-none focus-visible:ring-2 focus-visible:ring-destructive/40"
+                >
+                  <AlertCircle aria-hidden className="mt-0.5 size-4 shrink-0" />
+                  <div><p className="font-semibold">Code not accepted</p><p className="mt-0.5">{mfaError}</p></div>
+                </div>
+              )}
+              <div className="space-y-1.5">
+                <Label htmlFor="mfa-code">Authenticator code</Label>
+                <Input
+                  id="mfa-code"
+                  name="code"
+                  type="text"
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  autoFocus
+                  placeholder="6-digit code"
+                  maxLength={6}
+                  value={mfaCode}
+                  onChange={(e) => {
+                    setMfaCode(e.target.value.replace(/[^0-9]/g, ''));
+                    setMfaError(null);
+                  }}
+                  className="text-center text-lg tracking-[0.5em]"
+                />
+                <p className="text-xs text-muted-foreground">
+                  Open your authenticator app and enter the current 6-digit code for your SYNAPSE account.
+                </p>
+              </div>
+              <Button type="submit" className="w-full" disabled={mfaVerify.isPending || mfaCode.length !== 6}>
+                {mfaVerify.isPending && <Loader2 className="animate-spin" />}
+                Verify and sign in
+              </Button>
+              <button
+                type="button"
+                onClick={() => {
+                  setMfaChallenge(null);
+                  setMfaCode('');
+                  setMfaError(null);
+                }}
+                className="w-full text-center text-sm text-muted-foreground underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+              >
+                Sign in as a different user
+              </button>
+            </form>
+          ) : (
           <form noValidate onSubmit={(e) => void onSubmit(e)} className="w-full space-y-4">
             {loginError !== null && (
               <div
@@ -311,6 +409,7 @@ export default function LoginPage() {
               Sign in
             </Button>
           </form>
+          )}
 
           <p className="mt-6 text-center text-xs text-muted-foreground">
             Trouble signing in? Contact your system administrator.

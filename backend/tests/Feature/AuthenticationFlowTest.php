@@ -125,6 +125,34 @@ final class AuthenticationFlowTest extends FeatureTestCase
         $this->assertErrorCode('auth.credentials_invalid', $result);
     }
 
+    public function testLoginRejectsUnknownEmailWithSameEnvelopeAsWrongPassword(): void
+    {
+        // Enumeration resistance: unknown email and wrong password must be
+        // indistinguishable in the response (the timing profile is equalized
+        // separately via the dummy-hash branch in AuthController).
+        $result = $this->withBodyFormat('json')->call(
+            'post',
+            'api/v1/auth/login',
+            ['email' => $this->uniqueEmail('ghost'), 'password' => 'WrongPassword999!'],
+        );
+
+        $result->assertStatus(401);
+        $this->assertErrorCode('auth.credentials_invalid', $result);
+    }
+
+    public function testRefreshCookieIsScopedToTheAuthSubtree(): void
+    {
+        $session = $this->loginFull();
+        $cookie  = $session['response']->response()->getCookie(self::COOKIE_NAME);
+
+        $this->assertInstanceOf(\CodeIgniter\Cookie\Cookie::class, $cookie);
+        // The credential must only ever be sent back to /api/v1/auth/* —
+        // login sets it, refresh reads it, logout clears it. (The Secure
+        // flag is env-dependent in tests and enforced by Boot.php in prod.)
+        $this->assertSame('/api/v1/auth', $cookie->getPath());
+        $this->assertTrue($cookie->isHttpOnly());
+    }
+
     public function testLoginSetsAccessAndRefreshTokens(): void
     {
         $session = $this->loginFull();
@@ -135,7 +163,7 @@ final class AuthenticationFlowTest extends FeatureTestCase
 
         $cookie = $session['response']->response()->getCookie(self::COOKIE_NAME);
         $this->assertInstanceOf(\CodeIgniter\Cookie\Cookie::class, $cookie);
-        $this->assertSame('/', $cookie->getPath());
+        $this->assertSame('/api/v1/auth', $cookie->getPath());
         $this->assertTrue($cookie->isHTTPOnly());
     }
 
