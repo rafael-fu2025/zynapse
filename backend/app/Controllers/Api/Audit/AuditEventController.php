@@ -178,7 +178,9 @@ final class AuditEventController extends ApiController
             throw ApiException::notFound('audit.event_not_found');
         }
 
-        return $this->ok((new AuditChainVerifier())->verify($id));
+        // verifyTo resolves the row's chain family (frozen v1 global walk
+        // vs per-tenant v2) and walks that chain through the id.
+        return $this->ok((new AuditChainVerifier())->verifyTo($id));
     }
 
     private function eventBuilder(bool $withPayload): BaseBuilder

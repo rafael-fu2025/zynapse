@@ -172,7 +172,6 @@ final class ReferralService extends BaseService
             }
 
             $row = [
-                'tenant_id'         => CurrentTenant::id(),
                 'patient_user_id'   => $patientUserId,
                 'patient_school_id' => $patientSchoolId,
                 'source_encounter_id' => $sourceEncounterId,
@@ -190,13 +189,23 @@ final class ReferralService extends BaseService
             ];
 
             if ($notesPlaintext !== null && $notesPlaintext !== '') {
-                $env = $this->crypto->encryptField($notesPlaintext);
+                // AAD binds the ciphertext to its patient + tenant (v2 keys).
+                $env = $this->crypto->encryptField(
+                    $notesPlaintext,
+                    "referral_referrals|{$patientUserId}|" . CurrentTenant::id(),
+                );
                 $row['notes_cipher']      = $env['ciphertext'];
                 $row['notes_nonce']       = $env['nonce'];
                 $row['notes_key_version'] = $env['key_version'];
             }
 
-            $this->db->table('referral_referrals')->insert($row);
+            // Tenant stamp inline so the tenancy scanner sees the scope on
+            // the insert statement itself (scripts/scan-tenant-scope.php
+            // inspects the window after ->table(...), not the row build).
+            $this->db->table('referral_referrals')->insert([
+                'tenant_id' => CurrentTenant::id(),
+                ...$row,
+            ]);
             $id = (int) $this->db->insertID();
 
             $this->audit->enqueue(

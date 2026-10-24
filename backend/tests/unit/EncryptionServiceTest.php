@@ -30,6 +30,7 @@ final class EncryptionServiceTest extends TestCase
     {
         putenv('COUNSELLING_KEY');
         putenv('COUNSELLING_KEY_VERSION');
+        putenv('COUNSELLING_KEY_V1');
         putenv('COUNSELLING_KEY_V2');
     }
 
@@ -105,8 +106,8 @@ final class EncryptionServiceTest extends TestCase
         $svc2 = $this->service();
         $this->assertSame('rotated note', $svc2->decryptField($env['ciphertext'], $env['nonce'], 1));
 
-        // New writes use the active v2 key.
-        $env2 = $svc2->encryptField('fresh note');
+        // New writes use the active v2 key (now AAD-bound).
+        $env2 = $svc2->encryptField('fresh note', 'counselling_notes|7|1');
         $this->assertSame(2, $env2['key_version']);
 
         putenv('COUNSELLING_KEY_V1');
@@ -118,5 +119,77 @@ final class EncryptionServiceTest extends TestCase
 
         $this->expectException(RuntimeException::class);
         $this->service()->encryptField('x');
+    }
+
+    // ---- AAD binding (2026-10 audit G-8) -------------------------------
+
+    private function v2Service(): EncryptionService
+    {
+        putenv('COUNSELLING_KEY_VERSION=2');
+        putenv('COUNSELLING_KEY=' . self::KEY_V2);
+        putenv('COUNSELLING_KEY_V1=' . self::KEY_V1);
+
+        return $this->service();
+    }
+
+    public function testV2EnvelopeRoundTripsWithItsRowBinding(): void
+    {
+        $svc = $this->v2Service();
+        $env = $svc->encryptField('session note', 'counselling_notes|42|1');
+
+        $this->assertSame(2, $env['key_version']);
+        $this->assertSame('session note', $svc->decryptField($env['ciphertext'], $env['nonce'], 2, 'counselling_notes|42|1'));
+    }
+
+    public function testV2CiphertextMovedToAnotherRowFailsToDecrypt(): void
+    {
+        $svc = $this->v2Service();
+        $env = $svc->encryptField('session note', 'counselling_notes|42|1');
+
+        // Same key, wrong row: AAD mismatch must fail closed.
+        $this->expectException(RuntimeException::class);
+        $svc->decryptField($env['ciphertext'], $env['nonce'], 2, 'counselling_notes|43|1');
+    }
+
+    public function testV2CiphertextMovedToAnotherTenantFailsToDecrypt(): void
+    {
+        $svc = $this->v2Service();
+        $env = $svc->encryptField('session note', 'counselling_notes|42|1');
+
+        $this->expectException(RuntimeException::class);
+        $svc->decryptField($env['ciphertext'], $env['nonce'], 2, 'counselling_notes|42|2');
+    }
+
+    public function testV2RequiresAadOnBothSides(): void
+    {
+        $svc = $this->v2Service();
+
+        $encryptThrew = false;
+        try {
+            $svc->encryptField('no binding');
+        } catch (RuntimeException) {
+            $encryptThrew = true;
+        }
+        $this->assertTrue($encryptThrew, 'v2 encrypt without AAD must fail closed.');
+
+        $env = $svc->encryptField('bound', 'row|1|1');
+        $decryptThrew = false;
+        try {
+            $svc->decryptField($env['ciphertext'], $env['nonce'], 2);
+        } catch (RuntimeException) {
+            $decryptThrew = true;
+        }
+        $this->assertTrue($decryptThrew, 'v2 decrypt without AAD must fail closed.');
+    }
+
+    public function testV1EnvelopeStillDecryptsWithoutAad(): void
+    {
+        // Back-compat: the pre-v2 corpus stays readable untouched.
+        $svc = $this->service();
+        $env = $svc->encryptField('legacy note');
+        $this->assertSame(1, $env['key_version']);
+
+        // An AAD argument passed against a v1 envelope is ignored.
+        $this->assertSame('legacy note', $svc->decryptField($env['ciphertext'], $env['nonce'], 1, 'ignored|1|1'));
     }
 }

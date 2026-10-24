@@ -226,6 +226,25 @@ export function useResetUserPassword() {
   });
 }
 
+/**
+ * Clear a user's TOTP enrollment (break-glass recovery for a lost
+ * authenticator). Backend gate: rbac.privileged.manage; the route lives
+ * under /auth/mfa, not /admin/users.
+ */
+export function useResetUserMfa() {
+  const qc = useQueryClient();
+  return useMutation<void, ApiEnvelopeError, number>({
+    mutationFn: async (id) => {
+      await apiClient.post<unknown>(`/auth/mfa/reset/${id}`);
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['admin', 'users'] });
+      toast.success('Two-step sign-in cleared for that account.');
+    },
+    onError: (err) => toast.error(err.errors[0]?.message ?? 'MFA reset failed.'),
+  });
+}
+
 export interface ProvisionDirectoryUserInput {
   identifier: string;
   kind: 'student' | 'employee';

@@ -26,9 +26,14 @@ class Boot
         $errors = ENVIRONMENT === 'production' ? self::productionErrors([
             'JWT_SECRET' => getenv('JWT_SECRET') ?: '',
             'JWT_ALG' => getenv('JWT_ALG') ?: 'HS256',
+            'JWT_SECRET_NEXT' => getenv('JWT_SECRET_NEXT') ?: '',
             'JWT_AUDIENCE' => getenv('JWT_AUDIENCE') === false ? 'synapse-api' : getenv('JWT_AUDIENCE'),
+            'REFRESH_HMAC_KEY' => getenv('REFRESH_HMAC_KEY') ?: '',
             'CORS_ALLOWED_ORIGINS' => getenv('CORS_ALLOWED_ORIGINS') ?: '',
             'COUNSELLING_KEY' => getenv('COUNSELLING_KEY') ?: '',
+            'MFA_KEY' => getenv('MFA_KEY') ?: '',
+            'MFA_ENFORCE_FOR_PRIVILEGED' => getenv('MFA_ENFORCE_FOR_PRIVILEGED') === false
+                ? 'true' : getenv('MFA_ENFORCE_FOR_PRIVILEGED'),
             'app.baseURL' => getenv('app.baseURL') ?: '',
             'app.forceGlobalSecureRequests' => getenv('app.forceGlobalSecureRequests') === false
                 ? 'true' : getenv('app.forceGlobalSecureRequests'),
@@ -65,6 +70,17 @@ class Boot
         if ($minimum === null || strlen((string) ($settings['JWT_SECRET'] ?? '')) < $minimum) {
             $errors[] = 'JWT_SECRET must meet the configured HMAC algorithm key length (32/48/64 bytes).';
         }
+        // Rotation overlap window: optional, but if set it must be as strong
+        // as the primary secret.
+        if ((string) ($settings['JWT_SECRET_NEXT'] ?? '') !== ''
+            && strlen((string) $settings['JWT_SECRET_NEXT']) < $minimum) {
+            $errors[] = 'JWT_SECRET_NEXT must meet the configured HMAC algorithm key length while set.';
+        }
+        // Dedicated refresh HMAC key (G-6): optional; hex-validated when set.
+        if ((string) ($settings['REFRESH_HMAC_KEY'] ?? '') !== ''
+            && (! ctype_xdigit((string) $settings['REFRESH_HMAC_KEY']) || strlen((string) $settings['REFRESH_HMAC_KEY']) !== 64)) {
+            $errors[] = 'REFRESH_HMAC_KEY must be a 64-char hex string while set.';
+        }
         if (trim((string) ($settings['JWT_AUDIENCE'] ?? 'synapse-api')) === '') {
             $errors[] = 'JWT_AUDIENCE must not be empty in production.';
         }
@@ -94,6 +110,13 @@ class Boot
         $hex = (string) ($settings['COUNSELLING_KEY'] ?? '');
         if (strlen($hex) !== 64 || ! ctype_xdigit($hex)) {
             $errors[] = 'COUNSELLING_KEY must be a 64-char hex string in production.';
+        }
+        $mfaEnforced = filter_var($settings['MFA_ENFORCE_FOR_PRIVILEGED'] ?? 'true', FILTER_VALIDATE_BOOL, FILTER_NULL_ON_FAILURE) !== false;
+        if ($mfaEnforced) {
+            $mfaKey = (string) ($settings['MFA_KEY'] ?? '');
+            if (strlen($mfaKey) !== 64 || ! ctype_xdigit($mfaKey)) {
+                $errors[] = 'MFA_KEY must be a 64-char hex string in production while MFA_ENFORCE_FOR_PRIVILEGED is on (set MFA_ENFORCE_FOR_PRIVILEGED=false to consciously disable privileged MFA).';
+            }
         }
         return $errors;
     }

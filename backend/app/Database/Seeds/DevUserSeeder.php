@@ -4,14 +4,15 @@ declare(strict_types=1);
 
 namespace App\Database\Seeds;
 
+use CodeIgniter\CLI\CLI;
 use CodeIgniter\Database\Seeder;
 
 /**
  * DevUserSeeder — DEV/STAGING ONLY. Creates the canonical dev account
  * roster — one account per role in Config\AuthGroups' 12-role catalog,
- * each holding exactly its own group — with password `DevPassw0rd!`
- * (override with SYNAPSE_DEV_PASSWORD). CREDENTIALS.md carries the
- * sign-in matrix.
+ * each holding exactly its own group. The shared password comes from
+ * `SYNAPSE_DEV_PASSWORD`; when unset, a random per-run password is
+ * generated and printed once (no credential literal lives in the repo).
  *
  * The live e2e suite (frontend/e2e, SYNAPSE_E2E=1) contractually signs
  * in as the superadmin, clinic_staff and report_viewer accounts; the
@@ -38,10 +39,20 @@ use CodeIgniter\Database\Seeder;
  */
 final class DevUserSeeder extends Seeder
 {
-    private static function devPassword(): string
+    private static ?string $generatedPassword = null;
+
+    /**
+     * Shared dev password: SYNAPSE_DEV_PASSWORD when provided, otherwise a
+     * random per-run secret generated once and printed below so the value
+     * never needs to live in the repo.
+     */
+    private function devPassword(): string
     {
         $pw = getenv('SYNAPSE_DEV_PASSWORD');
-        return ($pw !== false && $pw !== '') ? $pw : 'DevPassw0rd!';
+        if ($pw !== false && $pw !== '') {
+            return $pw;
+        }
+        return self::$generatedPassword ??= 'dev-' . bin2hex(random_bytes(16));
     }
 
     /** @var array<string, array{username: string, groups: list<string>}> */
@@ -67,10 +78,17 @@ final class DevUserSeeder extends Seeder
         }
 
         $now = date('Y-m-d H:i:s');
+        $password = $this->devPassword();
 
         foreach (self::ACCOUNTS as $email => $spec) {
-            $userId = $this->upsertUser($email, $spec['username'], $now);
+            $userId = $this->upsertUser($email, $spec['username'], $now, $password);
             $this->reconcileGroups((int) $userId, $spec['groups'], $now);
+        }
+
+        if (self::$generatedPassword !== null) {
+            CLI::write('SYNAPSE_DEV_PASSWORD is not set — generated a per-run dev password:', 'yellow');
+            CLI::write('  ' . self::$generatedPassword, 'green');
+            CLI::write('Set SYNAPSE_DEV_PASSWORD in your .env to pin it across runs.', 'dark_gray');
         }
 
         // The admin identity for RBAC purposes is whichever account maps
@@ -92,7 +110,7 @@ final class DevUserSeeder extends Seeder
         }
     }
 
-    private function upsertUser(string $email, string $username, string $now): int
+    private function upsertUser(string $email, string $username, string $now, string $password): int
     {
         $identity = $this->db->table('auth_identities')
             ->where('type', 'email_password')
@@ -100,6 +118,17 @@ final class DevUserSeeder extends Seeder
             ->get()->getRowArray();
 
         if ($identity !== null) {
+            // Adopt the identity, but converge its password to the current
+            // dev password so a rotated SYNAPSE_DEV_PASSWORD (or a fresh
+            // generated one) actually takes effect on re-run.
+            if (! password_verify($password, (string) $identity['secret2'])) {
+                $this->db->table('auth_identities')
+                    ->where('id', (int) $identity['id'])
+                    ->update([
+                        'secret2'    => password_hash($password, PASSWORD_DEFAULT),
+                        'updated_at' => $now,
+                    ]);
+            }
             return (int) $identity['user_id'];
         }
 
@@ -128,7 +157,7 @@ final class DevUserSeeder extends Seeder
             'user_id'    => $userId,
             'type'       => 'email_password',
             'secret'     => $email,
-            'secret2'    => password_hash(self::devPassword(), PASSWORD_DEFAULT),
+            'secret2'    => password_hash($password, PASSWORD_DEFAULT),
             'created_at' => $now,
             'updated_at' => $now,
         ]);

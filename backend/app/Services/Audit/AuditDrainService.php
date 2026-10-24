@@ -17,10 +17,14 @@ use DateTimeZone;
  * `synapse:audit-drain` CLI command and the opportunistic auto-drain
  * hook (Config\Events) so dev/demo logs appear without a cron worker.
  *
- * Guarantees (Phase 6):
- *   - Hash chaining: commit_hash = SHA-256(prev_hash || payload_json),
- *     genesis hashes against 64 zero chars; `prev_id` links each row to
- *     the previous event (verified by `synapse:audit-verify`).
+ * Guarantees:
+ *   - Hash chaining (v2, per tenant — 2026-10 audit G-2): for each tenant,
+ *     commit_hash = AuditHashV2 canonical SHA-256 (fixed-order JSON that
+ *     includes tenant_id and actor/request provenance); genesis hashes
+ *     against 64 zero chars; `prev_id` links each row to the previous event
+ *     of the SAME tenant (verified by `synapse:audit-verify`). Pre-v2 rows
+ *     (hash_version = 1) are frozen on the old global formula and remain
+ *     verifiable by the frozen v1 walk in AuditChainVerifier.
  *   - The chain tail is fetched ONCE per batch and carried forward —
  *     no per-row tail lookup, no broken `prev_id`.
  *   - `SELECT ... FOR UPDATE SKIP LOCKED` — parallel workers never
@@ -74,14 +78,34 @@ final class AuditDrainService
                     break;
                 }
 
-                // Chain tail — once per batch, carried forward per row.
-                $tail = $db->table(SYNAPSE_AUDIT_EVENTS)
-                    ->select('id, commit_hash')
+                /*
+                 * v2 chains: per-tenant. The tails of every tenant present
+                 * in this batch are fetched up front (two small queries),
+                 * then carried forward row-by-row exactly like the v1
+                 * single-chain tail was.
+                 */
+                $tenantIds = [];
+                foreach ($rows as $r) {
+                    $tenantIds[(int) $r['tenant_id']] = true;
+                }
+                $tails = $db->table(SYNAPSE_AUDIT_EVENTS)
+                    ->select('id, tenant_id, commit_hash')
+                    ->where('hash_version', 2)
+                    ->whereIn('tenant_id', array_keys($tenantIds))
                     ->orderBy('id', 'DESC')
-                    ->limit(1)
-                    ->get()->getRowArray();
-                $prevId   = $tail !== null ? (int) $tail['id'] : null;
-                $prevHash = $tail !== null ? (string) $tail['commit_hash'] : str_repeat('0', 64);
+                    ->get()
+                    ->getResultArray();
+                /** @var array<int, array{id:?int, hash:string}> $prevByTenant */
+                $prevByTenant = [];
+                foreach (array_keys($tenantIds) as $tid) {
+                    $prevByTenant[(int) $tid] = ['id' => null, 'hash' => AuditHashV2::GENESIS];
+                }
+                foreach ($tails as $tail) {
+                    $tid = (int) $tail['tenant_id'];
+                    if ($prevByTenant[$tid]['id'] === null || (int) $tail['id'] > $prevByTenant[$tid]['id']) {
+                        $prevByTenant[$tid] = ['id' => (int) $tail['id'], 'hash' => (string) $tail['commit_hash']];
+                    }
+                }
 
                 $batchDrained = 0;
 
@@ -96,11 +120,26 @@ final class AuditDrainService
                         'context'       => json_decode((string) $r['context_json'], true),
                     ], JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
 
-                    $commitHash = hash('sha256', $prevHash . $payload);
+                    $tenantId = (int) $r['tenant_id'];
+                    $prev     = $prevByTenant[$tenantId];
                     $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s.u');
 
+                    $commitHash = AuditHashV2::compute([
+                        'tenant_id'     => $tenantId,
+                        'prev_hash'     => $prev['hash'],
+                        'action_code'   => $r['action_code'],
+                        'entity_type'   => $r['entity_type'],
+                        'entity_id'     => $r['entity_id'],
+                        'actor_user_id' => $r['actor_user_id'],
+                        'request_id'    => $r['request_id'],
+                        'occurred_at'   => (string) $r['created_at'],
+                        'payload_json'  => $payload,
+                    ]);
+
                     $db->table(SYNAPSE_AUDIT_EVENTS)->insert([
-                        'prev_id'       => $prevId,
+                        'hash_version'  => 2,
+                        'tenant_id'     => $tenantId,
+                        'prev_id'       => $prev['id'],
                         'action_code'   => $r['action_code'],
                         'entity_type'   => $r['entity_type'],
                         'entity_id'     => $r['entity_id'],
@@ -112,8 +151,7 @@ final class AuditDrainService
                         'commit_hash'   => $commitHash,
                     ]);
 
-                    $prevId   = (int) $db->insertID();
-                    $prevHash = $commitHash;
+                    $prevByTenant[$tenantId] = ['id' => (int) $db->insertID(), 'hash' => $commitHash];
 
                     $db->table(SYNAPSE_AUDIT_OUTBOX)
                         ->where('id', $r['id'])

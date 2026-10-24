@@ -6,8 +6,10 @@ namespace App\Controllers\Api\Auth;
 
 use App\Auth\AccountStateService;
 use App\Auth\CurrentUser;
+use App\Auth\DeviceFingerprint;
 use App\Auth\JwtService;
 use App\Auth\LoginThrottleService;
+use App\Auth\Mfa\MfaService;
 use App\Auth\RefreshTokenService;
 use App\Auth\RefreshSessionPolicy;
 use App\Controllers\Api\ApiController;
@@ -22,12 +24,21 @@ use Config\Services;
 
 final class AuthController extends ApiController
 {
+    /**
+     * Bcrypt digest of an unguessable random string. Only ever fed to
+     * password_verify() for unknown emails so the login timing profile
+     * matches the wrong-password branch. The preimage is unknowable, so
+     * this is not a credential for anything.
+     */
+    private const DUMMY_PASSWORD_HASH = '$2y$10$HiJvC1zJqA58l6WSvw0y0eZToyAyCSrChBTI.YaRtF6JUcFBiV5j.';
+
     private readonly JwtService $jwt;
     private readonly RefreshTokenService $refreshTokens;
     private readonly AuditOutboxService $audit;
     private readonly LoginThrottleService $throttle;
     private readonly AccountStateService $accountState;
     private readonly ?FuMisAuthService $fuMis;
+    private readonly ?MfaService $mfa;
 
     public function __construct(
         ?JwtService $jwt = null,
@@ -36,6 +47,7 @@ final class AuthController extends ApiController
         ?LoginThrottleService $throttle = null,
         ?AccountStateService $accountState = null,
         ?FuMisAuthService $fuMis = null,
+        ?MfaService $mfa = null,
     ) {
         $this->jwt           = $jwt ?? Services::jwt();
         $this->refreshTokens = $refreshTokens ?? Services::refreshTokenService();
@@ -43,6 +55,7 @@ final class AuthController extends ApiController
         $this->throttle      = $throttle ?? new LoginThrottleService();
         $this->accountState  = $accountState ?? new AccountStateService();
         $this->fuMis         = $fuMis;
+        $this->mfa           = $mfa;
     }
 
     /**
@@ -188,6 +201,11 @@ final class AuthController extends ApiController
 
         $users = Services::getAuthProvider();
         $user  = $users->findByCredentials(['email' => $payload['email']]);
+        if ($user === null) {
+            // Equalize timing with the wrong-password branch below so an
+            // unknown email is not distinguishable by response latency.
+            password_verify($payload['password'], self::DUMMY_PASSWORD_HASH);
+        }
         if ($user === null || ! password_verify($payload['password'], (string) $user->password_hash)) {
             $this->throttle->registerFailure($payload['email']);
             $this->audit->enqueue(
@@ -206,6 +224,20 @@ final class AuthController extends ApiController
         }
 
         $this->throttle->clear($payload['email']);
+
+        // Second factor gate (2026-10 audit G-1): local identities with an
+        // enabled TOTP enrollment — or privileged-group members while
+        // enforcement is on — complete login via the MFA challenge flow.
+        // NO refresh cookie and NO usable access token are issued here; the
+        // challenge token carries scope=mfa_challenge and is rejected by
+        // ApiAuthFilter everywhere except POST /auth/mfa/verify-login.
+        // The MIS identifier path never reaches this branch by design.
+        $mfa = $this->mfa ?? new MfaService();
+        if ($mfa->loginRequiresMfa((int) $user->id)) {
+            $challenge = $this->jwt->sign((int) $user->id, (int) $state['token_epoch'], ['scope' => 'mfa_challenge']);
+
+            return $this->respondMfaRequired($payload['email'], $challenge);
+        }
 
         Services::database()->table('users')->where('id', (int) $user->id)->update([
             'last_active' => date('Y-m-d H:i:s'),
@@ -237,7 +269,7 @@ final class AuthController extends ApiController
             throw ApiException::unauthorized('auth.refresh_missing');
         }
 
-        $result = $this->refreshTokens->rotate($refresh);
+        $result = $this->refreshTokens->rotate($refresh, DeviceFingerprint::fromRequest($this->request));
 
         if ($result['status'] === 'replayed') {
             $this->audit->enqueue(
@@ -493,7 +525,8 @@ final class AuthController extends ApiController
 
     private function finalizeAuth(int $userId, ?array $preIssued = null): ResponseInterface
     {
-        $refresh = $preIssued ?? $this->refreshTokens->issue($userId);
+        $device = DeviceFingerprint::fromRequest($this->request);
+        $refresh = $preIssued ?? $this->refreshTokens->issue($userId, $device);
         $access = $this->sessionAccessToken($userId, $refresh);
 
         $this->response->setCookie([
@@ -519,11 +552,61 @@ final class AuthController extends ApiController
         return $this->jwt->sign($userId, (int) $refresh['token_epoch'], ['session_exp' => $deadline]);
     }
 
+    /**
+     * 401 + auth.mfa_required envelope carrying the short-lived challenge
+     * token. Deliberately a data-bearing 401 (not an exception) so the SPA
+     * login form can flip to its code step from the envelope alone.
+     */
+    private function respondMfaRequired(string $email, string $challenge): ResponseInterface
+    {
+        $this->audit->enqueue(
+            'auth.mfa_challenge_issued',
+            'auth_mfa',
+            null,
+            null,
+            ['auth_method' => 'password', 'outcome' => 'mfa_required', ...$this->provenance()],
+        );
+
+        return Services::response()->setStatusCode(401)->setJSON([
+            'success' => false,
+            'data'    => ['mfa_token' => $challenge],
+            'errors'  => [[
+                'code'    => \App\Exceptions\ApiErrorCode::AUTH_MFA_REQUIRED,
+                'message' => 'Enter the 6-digit code from your authenticator app.',
+            ]],
+            'meta'    => null,
+        ]);
+    }
+
+    /**
+     * Session issuance after a completed MFA challenge — invoked by
+     * MfaController::verifyLogin so token/cookie semantics live in one place.
+     */
+    public function completeMfaLogin(int $userId): ResponseInterface
+    {
+        Services::database()->table('users')->where('id', $userId)->update([
+            'last_active' => date('Y-m-d H:i:s'),
+        ]);
+
+        $this->audit->enqueue(
+            'auth.login_succeeded',
+            'auth_sessions',
+            $userId,
+            $userId,
+            ['auth_method' => 'password+mfa', 'outcome' => 'success', ...$this->provenance()],
+        );
+
+        return $this->finalizeAuth($userId);
+    }
+
     private function refreshCookieAttributes(): array
     {
         return [
             'name' => (string) (getenv('REFRESH_COOKIE_NAME') ?: 'synapse_rt'),
-            'path' => '/',
+            // Scoped to the auth subtree so the credential is never sent to
+            // any other endpoint. Login/refresh/logout all live under
+            // /api/v1/auth.
+            'path' => (string) (getenv('REFRESH_COOKIE_PATH') ?: '/api/v1/auth'),
             'secure' => filter_var(getenv('REFRESH_COOKIE_SECURE') ?: '1', FILTER_VALIDATE_BOOL),
             'httponly' => true,
             'samesite' => (string) (getenv('REFRESH_COOKIE_SAMESITE') ?: 'Strict'),

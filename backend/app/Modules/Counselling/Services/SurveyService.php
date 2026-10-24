@@ -605,6 +605,12 @@ final class SurveyService extends BaseService
                 (string) $response['payload_cipher'],
                 (string) $response['payload_nonce'],
                 (int) $response['payload_key_version'],
+                sprintf(
+                    'survey_responses|%d:%d|%d',
+                    (int) $response['survey_id'],
+                    (int) $response['student_user_id'],
+                    (int) $response['tenant_id'],
+                ),
             ),
             true,
         );
@@ -916,7 +922,9 @@ final class SurveyService extends BaseService
             }
 
             $snapshot = json_encode($payload, JSON_THROW_ON_ERROR);
-            $env = $this->crypto->encryptField($snapshot);
+            $tenantId = CurrentTenant::id();
+            // AAD binds the ciphertext to its survey + student + tenant (v2 keys).
+            $env = $this->crypto->encryptField($snapshot, "survey_responses|{$surveyId}:{$studentUserId}|{$tenantId}");
             $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
 
             $this->db->table('survey_responses')->insert([

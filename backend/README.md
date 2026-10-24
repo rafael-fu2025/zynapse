@@ -60,14 +60,18 @@ Key `.env` variables (full annotated template in `.env.example`):
 | Variable | Purpose |
 |---|---|
 | `JWT_SECRET` / `JWT_ALG` / `JWT_ACCESS_TTL_SECONDS` / `JWT_REFRESH_TTL_SECONDS` | HMAC signing + lifetimes (900 s / 30 d defaults, capped by absolute session deadline); minimum key length 32/48/64 bytes for HS256/384/512 |
+| `JWT_SECRET_NEXT` | Optional rotation overlap: tokens signed with NEXT also verify while it is set (set → wait ≥ access TTL → promote → unset) |
+| `REFRESH_HMAC_KEY` | Optional dedicated 64-hex key for refresh-token hashing, so JWT_SECRET can rotate without invalidating stored refresh hashes |
 | `JWT_ISSUER` / `JWT_AUDIENCE` | Exact issuer (defaults to `app.baseURL`) and expected audience (`synapse-api`); legacy JWTs without audience are rejected |
 | `JWT_SESSION_MAX_AGE_SECONDS` / `JWT_REFRESH_GRACE_SECONDS` | Immutable session lifetime (12 h default) and bounded rotation grace (0–5 s, default 5) |
-| `COUNSELLING_KEY` / `COUNSELLING_KEY_VERSION` | AES-256-GCM note encryption. Rotate by bumping the version, inserting a `counselling_key_versions` row, and exposing the retired key as `COUNSELLING_KEY_V1` etc. |
+| `COUNSELLING_KEY` / `COUNSELLING_KEY_VERSION` | AES-256-GCM note encryption. Rotate by bumping the version, inserting a `counselling_key_versions` row, and exposing the retired key as `COUNSELLING_KEY_V1` etc. Version 2 (`COUNSELLING_KEY_V2`) binds envelopes to their row via GCM AAD — a ciphertext moved between rows or tenants fails to decrypt; v1 rows stay readable |
+| `MFA_KEY` / `MFA_ENFORCE_FOR_PRIVILEGED` | TOTP second factor for local (admin) identities. Enforcement on (default) requires a valid 64-hex `MFA_KEY` in production (Boot.php); the MIS-delegated path is never gated |
 
-| `REFRESH_COOKIE_*` | Refresh cookie attributes (`synapse_rt`, Secure, HttpOnly, SameSite=Strict) |
+| `REFRESH_COOKIE_*` | Refresh cookie attributes (`synapse_rt`, Secure, HttpOnly, SameSite=Strict, path scoped to `/api/v1/auth`) |
 | `CORS_ALLOWED_ORIGINS` | Explicit HTTPS origin allowlist required in production; no wildcards (enforced by `Config\Boot`) |
 | `RATELIMIT_GLOBAL_PER_MIN` / `RATELIMIT_AUTH_PER_MIN` | Fixed-window buckets (600 / 30) |
 | `LOGIN_LOCKOUT_MAX_FAILURES` / `LOGIN_LOCKOUT_WINDOW_SECONDS` | Per-account lockout (5 failures / 900 s) |
+| `CAROUSEL_MAX_UPLOAD_BYTES` | Application-level carousel image cap (default 5 MB, min 1 MB, max 50 MB) in front of `upload_max_filesize` |
 
 Production preflight requires an HTTPS `app.baseURL`, enabled
 `app.forceGlobalSecureRequests`, Secure refresh cookies, and `SameSite=Strict`.
@@ -392,7 +396,7 @@ Production drains the durable outbox and report queue outside HTTP processes:
 15 2 * * * cd /path/to/zynapse/backend && php spark synapse:audit-verify
 ```
 
-- The audit drain uses `FOR UPDATE SKIP LOCKED`, carries the hash-chain tail across batches (no N+1), and ejects poison rows via `attempt_count`/`last_error`.
+- The audit drain uses `FOR UPDATE SKIP LOCKED`, carries per-tenant hash-chain tails across batches (no N+1), and ejects poison rows via `attempt_count`/`last_error`. Chain v2 (2026-10): each tenant's events hash as one canonical-JSON chain including `tenant_id` and actor/request provenance (`AuditHashV2`); pre-v2 rows stay verifiable on the frozen global formula. `synapse:audit-verify` walks both families — `--tenant=N` narrows to one tenant's chain — and `synapse:audit-clear` records the pre-wipe chain tail in `audit_wipe_markers` (which the truncate cannot touch) before reseeding a v2 genesis row.
 - The appointment worker idempotently enqueues due Guidance bookings at T−15. Clinic confirmation and check-in remain staff-actioned; check-in opens the linked encounter and queue entry.
 - The skip sweep resolves a skipped clinic patient's 60-minute recall window to no-show. It is idempotent (every candidate re-validated under a row lock), so the `post_system` hook can run the same sweep concurrently on dev/demo machines without double-writing.
 - The reports worker claims queued jobs, streams aggregate CSV rows to disk without holding a transaction open, records provenance and row counts, and expires files after 30 days. Run **one** reports worker unless the claim is upgraded to `SKIP LOCKED`.
@@ -409,7 +413,31 @@ States are queued, running, completed, failed and interrupted. Counts/current pa
 
 `php spark synapse:mis-sync` uses the same admission guard and executes the admitted job synchronously in CLI (including an equivalent queued job). It remains dry-run by default; `--apply --confirm` is required for production writes. `SYNAPSE_TENANT_ID` selects its tenant. HTTP dry-run and apply only enqueue; a worker is required for execution. Feature tests apply only against their isolated MySQL/MariaDB test schema, never the development schema; a pre-provisioned non-migrating run must receive the queue migration separately.
 
-Commands include: `synapse:smoke`, `synapse:audit-drain`, `synapse:audit-verify`, `synapse:audit-clear`, `synapse:audit-orphans`, `synapse:reports-drain`, `synapse:appointments-enqueue-due`, `synapse:queue-skip-sweep`, `synapse:notify-drain`, `synapse:reorder-auto-check`, `synapse:bmg-device-watchdog`.
+Commands include: `synapse:smoke`, `synapse:audit-drain`, `synapse:audit-verify`, `synapse:audit-clear`, `synapse:audit-orphans`, `synapse:reports-drain`, `synapse:appointments-enqueue-due`, `synapse:queue-skip-sweep`, `synapse:notify-drain`, `synapse:reorder-auto-check`, `synapse:bmg-device-watchdog`, `synapse:mfa-reset` (TOTP break-glass recovery for local admin accounts: clears an enrollment, tenant-scoped, `--confirm` required in production, audited).
+
+## 2026-10 security remediations
+
+The comparative-audit remediation (branch `feat/superadmin`) added, beyond the
+worker notes above:
+
+- **Per-tenant audit chains (v2) + wipe evidence** — see Background workers.
+  HTTP surface unchanged: `GET /api/v1/audit/verify` now reports per-tenant
+  chain status and honors the row's chain family via `verify/{id}`.
+- **Session inventory** — `GET /api/v1/auth/sessions`,
+  `POST /api/v1/auth/sessions/revoke` (self-scoped; see
+  [Refresh-session security](REFRESH_SECURITY.md)). SPA surface:
+  Account security page.
+- **TOTP MFA for local identities** — `/api/v1/auth/mfa/{status,setup,confirm,disable,reset/(:num),verify-login}`.
+  Privileged groups are gated by default (`MFA_ENFORCE_FOR_PRIVILEGED`);
+  the MIS path is never gated. Challenge tokens (`scope=mfa_challenge`)
+  are refused by `api_auth` everywhere except `verify-login`.
+- **Upload hardening** — carousel images carry an application size cap
+  (`CAROUSEL_MAX_UPLOAD_BYTES`, default 5 MB) and the uploads directory
+  ships a `.htaccess` denying script execution (Apache). For nginx, mirror
+  it with: `location ~* ^/uploads/.*\.(ph[0-9]?|phtml|phar|pht)$ { deny all; }`.
+- **Key management** — `REFRESH_HMAC_KEY` (refresh-hash independence),
+  `JWT_SECRET_NEXT` (signing rotation overlap), counselling key v2 with
+  GCM AAD row binding. All validated by the production Boot preflight.
 
 ## Tests
 

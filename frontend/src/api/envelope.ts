@@ -28,13 +28,21 @@ export interface ApiEnvelope<T> {
 export class ApiEnvelopeError extends Error {
   public readonly httpStatus: number;
   public readonly errors: ApiError[];
+  /**
+   * Envelope `data` of the FAILED response when present. Usually null;
+   * one deliberate exception: the MFA login challenge (401
+   * auth.mfa_required) carries { mfa_token } so the login form can flip
+   * to its code step.
+   */
+  public readonly data: unknown;
 
-  constructor(httpStatus: number, errors: unknown) {
+  constructor(httpStatus: number, errors: unknown, data: unknown = null) {
     const normalized = normalizeApiErrors(errors, httpStatus);
     super(normalized[0]?.message ?? `HTTP ${httpStatus}`);
     this.name = 'ApiEnvelopeError';
     this.httpStatus = httpStatus;
     this.errors = normalized;
+    this.data = data;
   }
 }
 

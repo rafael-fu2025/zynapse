@@ -447,6 +447,12 @@ final class GuidanceFollowupService extends BaseService
                 (string) $response['payload_cipher'],
                 (string) $response['payload_nonce'],
                 (int) $response['payload_key_version'],
+                sprintf(
+                    'survey_responses|%d:%d|%d',
+                    (int) $response['survey_id'],
+                    (int) $response['student_user_id'],
+                    (int) $response['tenant_id'],
+                ),
             ),
             true,
         );

@@ -32,6 +32,14 @@ class EncryptionService
     public const NONCE_BYTES = 12;
     public const TAG_BYTES   = 16;
 
+    /**
+     * Envelopes written at key_version >= 2 bind additional authenticated
+     * data — "{table}|{entity_id}|{tenant_id}" — so a ciphertext moved
+     * between rows/tenants fails to decrypt even under the right key
+     * (2026-10 audit G-8). Version 1 rows stay AAD-less and decryptable.
+     */
+    public const AAD_MIN_VERSION = 2;
+
     /** @var array<int, string> Per-request cache of version -> key_ref. */
     private array $keyRefCache = [];
 
@@ -40,14 +48,20 @@ class EncryptionService
      * in three separate columns: `ciphertext`, `nonce`, `key_version`.
      * `ciphertext` already carries the GCM tag as its final 16 bytes.
      *
+     * @param string|null $aad Required when the active version is >= 2
+     *        (caller-supplied row binding). Ignored for version 1.
      * @return array{ciphertext:string,nonce:string,key_version:int}
      */
-    public function encryptField(string $plaintext): array
+    public function encryptField(string $plaintext, ?string $aad = null): array
     {
         $version = $this->activeVersion();
         $key     = $this->keyFor($version);
         $nonce   = random_bytes(self::NONCE_BYTES);
         $tag     = '';
+
+        if ($version >= self::AAD_MIN_VERSION && ($aad === null || $aad === '')) {
+            throw new RuntimeException('Encrypted fields at key_version >= 2 require AAD (row binding).');
+        }
 
         $ciphertext = openssl_encrypt(
             $plaintext,
@@ -56,8 +70,8 @@ class EncryptionService
             OPENSSL_RAW_DATA,
             $nonce,
             $tag,
-            '', // No additional authenticated data (AAD) for v1.
-            self::TAG_BYTES
+            $version >= self::AAD_MIN_VERSION ? $aad : '',
+            self::TAG_BYTES,
         );
 
         if ($ciphertext === false || strlen($tag) !== self::TAG_BYTES) {
@@ -74,8 +88,11 @@ class EncryptionService
     /**
      * Decrypt a previously-stored envelope. `$ciphertext` is the stored
      * column value: raw ciphertext with the GCM tag appended.
+     *
+     * @param string|null $aad The SAME row binding the encryption used;
+     *        required (and enforced) for key_version >= 2 envelopes.
      */
-    public function decryptField(string $ciphertext, string $nonce, int $keyVersion): string
+    public function decryptField(string $ciphertext, string $nonce, int $keyVersion, ?string $aad = null): string
     {
         if (strlen($ciphertext) <= self::TAG_BYTES) {
             throw new RuntimeException('Ciphertext too short; missing GCM tag.');
@@ -85,6 +102,10 @@ class EncryptionService
         $body = substr($ciphertext, 0, -self::TAG_BYTES);
         $key  = $this->keyFor($keyVersion);
 
+        if ($keyVersion >= self::AAD_MIN_VERSION && ($aad === null || $aad === '')) {
+            throw new RuntimeException('Decryption at key_version >= 2 requires the AAD row binding.');
+        }
+
         $plaintext = openssl_decrypt(
             $body,
             self::CIPHER,
@@ -92,6 +113,7 @@ class EncryptionService
             OPENSSL_RAW_DATA,
             $nonce,
             $tag,
+            $keyVersion >= self::AAD_MIN_VERSION ? $aad : '',
         );
 
         if ($plaintext === false) {
@@ -119,12 +141,67 @@ class EncryptionService
         $ref = $this->keyRefCache[$version] ??= $this->lookupKeyRef($version)
             ?? ($version === $this->activeVersion() ? 'COUNSELLING_KEY' : 'COUNSELLING_KEY_V' . $version);
 
+        return $this->materialFor($ref, $version);
+    }
+
+    /**
+     * Encrypt under an EXPLICIT env key ref (no version table involved).
+     * Used by subsystems outside the counselling key-version lifecycle —
+     * e.g. the MFA secrets (MFA_KEY). Same AES-256-GCM envelope as
+     * encryptField(), minus the key_version (the caller owns the ref).
+     *
+     * @return array{ciphertext:string,nonce:string}
+     */
+    public function encryptWith(string $keyRef, string $plaintext): array
+    {
+        $key   = $this->materialFor($keyRef, null);
+        $nonce = random_bytes(self::NONCE_BYTES);
+        $tag   = '';
+
+        $ciphertext = openssl_encrypt(
+            $plaintext,
+            self::CIPHER,
+            $key,
+            OPENSSL_RAW_DATA,
+            $nonce,
+            $tag,
+            '', // No AAD for v1 envelopes (see Phase 5 notes).
+            self::TAG_BYTES,
+        );
+        if ($ciphertext === false || strlen($tag) !== self::TAG_BYTES) {
+            throw new RuntimeException('Encryption failed.');
+        }
+
+        return ['ciphertext' => $ciphertext . $tag, 'nonce' => $nonce];
+    }
+
+    /** Decrypt an encryptWith() envelope. */
+    public function decryptWith(string $keyRef, string $ciphertext, string $nonce): string
+    {
+        if (strlen($ciphertext) <= self::TAG_BYTES) {
+            throw new RuntimeException('Ciphertext too short; missing GCM tag.');
+        }
+        $tag  = substr($ciphertext, -self::TAG_BYTES);
+        $body = substr($ciphertext, 0, -self::TAG_BYTES);
+        $key  = $this->materialFor($keyRef, null);
+
+        $plaintext = openssl_decrypt($body, self::CIPHER, $key, OPENSSL_RAW_DATA, $nonce, $tag);
+        if ($plaintext === false) {
+            throw new RuntimeException('Decryption failed; data may be tampered or key rotated.');
+        }
+
+        return $plaintext;
+    }
+
+    /** Validate and load the 64-hex material for an env key ref. */
+    private function materialFor(string $ref, ?int $version): string
+    {
         $hex = (string) (getenv($ref) ?: '');
         if (strlen($hex) !== 64 || ! ctype_xdigit($hex)) {
             throw new RuntimeException(sprintf(
-                'Key env "%s" (version %d) must be a 64-character hex string (32 bytes).',
+                'Key env "%s"%s must be a 64-character hex string (32 bytes).',
                 $ref,
-                $version,
+                $version !== null ? sprintf(' (version %d)', $version) : '',
             ));
         }
 

@@ -59,6 +59,14 @@
         <env name="RATELIMIT_GLOBAL_PER_MIN" value="100000" force="true"/>
         <env name="RATELIMIT_AUTH_PER_MIN" value="100000" force="true"/>
         <env name="LOGIN_LOCKOUT_MAX_FAILURES" value="100000" force="true"/>
+        <!-- Privileged-MFA enforcement is OFF for the suite: most tests sign
+             in as admin-group users and would otherwise hit the MFA gate.
+             MfaFlowTest opts enforcement back ON locally for its gating
+             assertions. Enrolled users remain gated regardless. NOTE: "0"
+             not "false" — PHPUnit casts literal "false" to a boolean and
+             putenv() renders it as '', which the service reads as "unset"
+             (secure default ON). -->
+        <env name="MFA_ENFORCE_FOR_PRIVILEGED" value="0" force="true"/>
         <!--
           Audit/notification auto-drain needs no flag here: the post_system
           hook in app/Config/Events.php is guarded by `! is_cli()`, and
@@ -75,6 +83,7 @@
         <env name="REFERRAL_HMAC_KEY" value="feature-suite-referral-hmac-key-0123456789"/>
         <env name="COUNSELLING_KEY" value="f1e2d3c4b5a6978897a6b5c4d3e2f1e0a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4"/>
         <env name="COUNSELLING_KEY_VERSION" value="1"/>
+        <env name="MFA_KEY" value="4444e3d5c87482954784ee7e6e2bf499dd5abb1877991f8931b646f27e7dbab6"/>
         <env name="SYNAPSE_TENANT_ID" value="1"/>
     </php>
 </phpunit>
